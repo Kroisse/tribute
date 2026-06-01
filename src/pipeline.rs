@@ -480,29 +480,28 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     // Debug-only regression guard: re-check use-chain consistency after every
     // shared pass. step 1+2 (#710) made this invariant hold across the shared
     // middle-end; this catches any future pass that reintroduces a leak. The
-    // callback fires inside the per-pass `pass` tracing span, so the error is
-    // auto-tagged with the offending pass name. Compiled out in release.
+    // verifier only reports; the PassManager panics with the offending pass's
+    // name on `Err`. Compiled out in release.
     if cfg!(debug_assertions) {
         pm.with_verifier(|ctx, op| {
             let Some(module) = Module::new(ctx, op) else {
-                return;
+                return Ok(());
             };
             let result = trunk_ir::validation::validate_use_chains(ctx, module);
-            if !result.is_ok() {
-                tracing::error!(
-                    "use-chain regression: {} error(s); first: {}",
-                    result.use_chain_errors.len(),
-                    result
-                        .use_chain_errors
-                        .first()
-                        .map(|e| e.to_string())
-                        .unwrap_or_default(),
-                );
-                debug_assert!(
-                    result.is_ok(),
-                    "use-chain inconsistency introduced by a shared pass \
-                     (see the error log above for the pass name)"
-                );
+            if result.is_ok() {
+                Ok(())
+            } else {
+                Err(trunk_ir::pass::VerifyError {
+                    message: format!(
+                        "use-chain regression: {} error(s); first: {}",
+                        result.use_chain_errors.len(),
+                        result
+                            .use_chain_errors
+                            .first()
+                            .map(|e| e.to_string())
+                            .unwrap_or_default(),
+                    ),
+                })
             }
         });
     }

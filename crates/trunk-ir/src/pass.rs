@@ -64,13 +64,32 @@ impl<P: Pass> ErasedPass<P::Target> for P {
     }
 }
 
+/// Error returned by a verifier when a pass leaves the IR in an invalid state.
+///
+/// The [`PassManager`] turns an `Err` into a panic that names the offending
+/// pass, so the verifier itself only describes *what* is wrong (typically a
+/// summary of one or more validation failures), not *how* to react.
+#[derive(Debug)]
+pub struct VerifyError {
+    pub message: String,
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
 /// Verifier callback invoked after each pass to check IR invariants.
 ///
-/// In debug builds, callers typically register
-/// [`crate::validation::validate_call_arity`] or a stricter checker so any
-/// pass that breaks an invariant is blamed immediately rather than masked
-/// by a later pass.
-type VerifierFn = dyn Fn(&IrContext, OpRef);
+/// Returns `Ok(())` when the IR is consistent, or [`VerifyError`] describing
+/// the violation. In debug builds, callers typically register a checker (e.g.
+/// wrapping [`crate::validation::validate_use_chains`]) so any pass that breaks
+/// an invariant is blamed immediately rather than masked by a later pass; the
+/// [`PassManager`] panics with the offending pass's name on `Err`.
+type VerifierFn = dyn Fn(&IrContext, OpRef) -> Result<(), VerifyError>;
 
 /// Object-safe runner that applies a typed nested manager to a parent op.
 ///
@@ -198,7 +217,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
     where
-        F: Fn(&IrContext, OpRef) + 'static,
+        F: Fn(&IrContext, OpRef) -> Result<(), VerifyError> + 'static,
     {
         self.verifier = Some(Box::new(verifier));
         self
@@ -263,8 +282,10 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
                 // a stale OpRef, so stop dispatch here.
                 return;
             }
-            if let Some(v) = verifier {
-                v(ctx, target.op_ref());
+            if let Some(v) = verifier
+                && let Err(e) = v(ctx, target.op_ref())
+            {
+                panic!("pass `{}` broke an IR invariant: {}", pass.name(), e);
             }
         }
         let parent_op = target.op_ref();
@@ -514,6 +535,7 @@ mod tests {
             .add_pass(CountingPass::<func::Func>::new(after_count.clone()))
             .with_verifier(move |_ctx, _op| {
                 v_clone.set(v_clone.get() + 1);
+                Ok(())
             });
         pm.run(&mut ctx, module);
 
@@ -558,6 +580,7 @@ mod tests {
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.with_verifier(move |_ctx, _op| {
             inv_clone.set(inv_clone.get() + 1);
+            Ok(())
         });
         pm.run(&mut ctx, module);
 
@@ -582,6 +605,7 @@ mod tests {
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
         pm.with_verifier(move |_ctx, _op| {
             inv_clone.set(inv_clone.get() + 1);
+            Ok(())
         });
         pm.run(&mut ctx, module);
 
@@ -653,9 +677,11 @@ mod tests {
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()))
             .with_verifier(move |_ctx, _op| {
                 nested_clone.set(nested_clone.get() + 1);
+                Ok(())
             });
         pm.with_verifier(move |_ctx, _op| {
             root_clone.set(root_clone.get() + 1);
+            Ok(())
         });
         pm.run(&mut ctx, module);
 
@@ -685,6 +711,7 @@ mod tests {
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
         pm.with_verifier(move |_ctx, op| {
             seen_clone.borrow_mut().push(op);
+            Ok(())
         });
         pm.run(&mut ctx, module);
 
@@ -712,5 +739,24 @@ mod tests {
         // reflects the most recent set, which here is the func pass's
         // first invocation).
         assert!(count.get() >= 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "pass `counting` broke an IR invariant: boom")]
+    fn verifier_err_panics_naming_the_pass() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let dummy = Rc::new(Cell::new(0));
+        let mut pm = PassManager::new();
+        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.with_verifier(|_ctx, _op| {
+            Err(VerifyError {
+                message: "boom".to_string(),
+            })
+        });
+        // The verifier returns Err after the pass; the PassManager must panic
+        // and name the offending pass.
+        pm.run(&mut ctx, module);
     }
 }
