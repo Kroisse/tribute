@@ -823,18 +823,20 @@ mod tests {
 
     #[test]
     fn verifier_ok_lets_pipeline_proceed() {
-        // An always-Ok verifier must not interfere: every pass still runs.
+        // An always-Ok verifier must not interfere: every pass still runs, in
+        // order. (CountingPass can't prove this — its mirror only holds the
+        // latest per-instance count — so use the order recorder.)
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
 
-        let count = Rc::new(Cell::new(0));
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
         let mut pm = PassManager::new();
-        pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
-        pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
+        pm.add_pass(recorder::<core::Module>("a", order.clone()));
+        pm.add_pass(recorder::<core::Module>("b", order.clone()));
         pm.with_verifier(|_ctx, _op| Ok(()));
         pm.run(&mut ctx, module);
 
-        // Both module passes ran (mirror set on each invocation).
-        assert!(count.get() >= 1);
+        // Both module passes ran, in registration order.
+        assert_eq!(*order.borrow(), vec!["a", "b"]);
     }
 }
