@@ -84,15 +84,17 @@ pub fn inline_single_call(
             .ok_or(InlineError::CallOpDetached)?;
         let new_ret = func::r#return(ctx, call_loc, ret_values);
         ctx.insert_op_before(caller_block, call_op, new_ret.op_ref());
-        ctx.detach_op(call_op);
+        // tail call is a terminator (no results), so erasing it clears its
+        // operand use-chain without dangling-result concerns. #710
+        crate::rewrite::erase_op(ctx, call_op);
     } else {
         // Regular call: RAUW each call result with its mapped return value,
-        // then detach the original call op.
+        // then erase the original call op (clears its operand use-chain). #710
         let call_results: Vec<_> = ctx.op_results(call_op).to_vec();
         for (call_result, ret_val) in call_results.iter().zip(ret_values.iter()) {
             ctx.replace_all_uses(*call_result, *ret_val);
         }
-        ctx.detach_op(call_op);
+        crate::rewrite::erase_op(ctx, call_op);
     }
 
     Ok(())
