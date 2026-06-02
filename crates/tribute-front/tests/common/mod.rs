@@ -3,6 +3,7 @@
 
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
+use tribute_front::ast::{Decl, Expr, ExprKind, Module, ResolvedRef, Stmt, TypedRef};
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
@@ -108,6 +109,170 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         node_types_map,
     );
     print_module(&ir, module.op())
+}
+
+#[salsa::tracked]
+fn tdnr_function_summary_inner<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    function_name: String,
+) -> TdnrSummary {
+    let parsed = tribute_front::query::parsed_ast(db, source);
+    assert!(parsed.is_some(), "Should parse successfully");
+
+    let parsed = parsed.unwrap();
+    let ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+
+    let prelude = load_prelude(db);
+
+    let mut env = tribute_front::resolve::build_env(db, &ast);
+    if let Some(ref p) = prelude {
+        env.merge(&p.env);
+    }
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
+
+    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
+    if let Some(ref p) = prelude {
+        checker.inject_prelude(&p.exports);
+    }
+    let result = checker.check_module(resolved);
+
+    let module = tribute_front::tdnr::resolve_tdnr(db, result.module, std::iter::empty());
+    let body = function_body(&module, &function_name);
+    let mut summary = TdnrSummary::default();
+    collect_tdnr_summary(db, body, &mut summary);
+    summary
+}
+
+/// Run the AST pipeline through TDNR and summarize one function body.
+///
+/// This intentionally stops before IR lowering so tests can inspect unresolved
+/// `MethodCall` nodes. IR lowering panics on those nodes by design.
+pub fn tdnr_function_summary(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    function_name: &str,
+) -> TdnrSummary {
+    tdnr_function_summary_inner(db, source, function_name.to_owned())
+}
+
+fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Expr<TypedRef<'db>> {
+    module
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Function(func) if func.name == name => Some(&func.body),
+            _ => None,
+        })
+        .expect("function should exist")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::Update)]
+pub struct TdnrSummary {
+    pub method_calls: Vec<String>,
+    pub calls: Vec<TdnrCall>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct TdnrCall {
+    pub target: String,
+    pub arg_count: usize,
+}
+
+fn collect_tdnr_summary<'db>(
+    db: &'db dyn salsa::Database,
+    expr: &Expr<TypedRef<'db>>,
+    summary: &mut TdnrSummary,
+) {
+    match &*expr.kind {
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Var(TypedRef {
+                resolved: ResolvedRef::Function { id },
+                ..
+            }) = &*callee.kind
+            {
+                summary.calls.push(TdnrCall {
+                    target: id.qualified(db).to_string(),
+                    arg_count: args.len(),
+                });
+            }
+            collect_tdnr_summary(db, callee, summary);
+            for arg in args {
+                collect_tdnr_summary(db, arg, summary);
+            }
+        }
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            summary.method_calls.push(method.to_string());
+            collect_tdnr_summary(db, receiver, summary);
+            for arg in args {
+                collect_tdnr_summary(db, arg, summary);
+            }
+        }
+        ExprKind::Record { fields, spread, .. } => {
+            for (_, field) in fields {
+                collect_tdnr_summary(db, field, summary);
+            }
+            if let Some(spread) = spread {
+                collect_tdnr_summary(db, spread, summary);
+            }
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Let { value, .. } | Stmt::Expr { expr: value, .. } => {
+                        collect_tdnr_summary(db, value, summary);
+                    }
+                }
+            }
+            collect_tdnr_summary(db, value, summary);
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_tdnr_summary(db, lhs, summary);
+            collect_tdnr_summary(db, rhs, summary);
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            collect_tdnr_summary(db, scrutinee, summary);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_tdnr_summary(db, guard, summary);
+                }
+                collect_tdnr_summary(db, &arm.body, summary);
+            }
+        }
+        ExprKind::Lambda { body, .. } => collect_tdnr_summary(db, body, summary),
+        ExprKind::Handle { body, handlers } => {
+            collect_tdnr_summary(db, body, summary);
+            for handler in handlers {
+                collect_tdnr_summary(db, &handler.body, summary);
+            }
+        }
+        ExprKind::Resume { arg, .. } => collect_tdnr_summary(db, arg, summary),
+        ExprKind::Tuple(elements) | ExprKind::List(elements) => {
+            for element in elements {
+                collect_tdnr_summary(db, element, summary);
+            }
+        }
+        ExprKind::Cons { args, .. } => {
+            for arg in args {
+                collect_tdnr_summary(db, arg, summary);
+            }
+        }
+        ExprKind::Var(_)
+        | ExprKind::NatLit(_)
+        | ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::Nil
+        | ExprKind::RuneLit(_)
+        | ExprKind::Error => {}
+    }
 }
 
 /// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)

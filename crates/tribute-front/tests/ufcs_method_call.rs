@@ -7,7 +7,9 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir};
+use self::common::{
+    TdnrCall, TdnrSummary, run_ast_pipeline, run_ast_pipeline_with_ir, tdnr_function_summary,
+};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -105,6 +107,143 @@ fn test() -> Nat {
     );
 
     run_ast_pipeline(db, source);
+}
+
+// ========================================================================
+// TDNR AST Tests (verify MethodCall -> Call before IR lowering)
+// ========================================================================
+
+/// Covers TDNR's resolved, ambiguous, unresolved, and nested-module paths.
+#[salsa_test]
+fn test_tdnr_method_resolution_cases(db: &salsa::DatabaseImpl) {
+    let field_accessor = SourceCst::from_source_str(
+        db,
+        "field_accessor.trb",
+        r#"
+struct Point { x: Nat, y: Nat }
+
+fn test(p: Point) -> Nat {
+    p.x
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, field_accessor, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Point::x".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
+
+    let user_defined = SourceCst::from_source_str(
+        db,
+        "user_defined.trb",
+        r#"
+struct Counter { value: Nat }
+
+pub mod Counter {
+    pub fn add(c: Counter, n: Nat) -> Nat {
+        c.value
+    }
+}
+
+fn test(c: Counter) -> Nat {
+    c.add(2)
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, user_defined, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Counter::add".to_owned(),
+                arg_count: 2,
+            }],
+        }
+    );
+
+    let ambiguous = SourceCst::from_source_str(
+        db,
+        "ambiguous.trb",
+        r#"
+struct Thing { value: Nat }
+
+pub mod A {
+    pub fn pick(t: Thing) -> Nat { t.value }
+}
+
+pub mod B {
+    pub fn pick(t: Thing) -> Nat { t.value }
+}
+
+fn test(t: Thing) -> Nat {
+    t.pick()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, ambiguous, "test"),
+        TdnrSummary {
+            method_calls: vec!["pick".to_owned()],
+            calls: vec![],
+        }
+    );
+
+    let unresolved = SourceCst::from_source_str(
+        db,
+        "unresolved.trb",
+        r#"
+struct Thing { value: Nat }
+
+fn test(t: Thing) -> Nat {
+    t.missing()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, unresolved, "test"),
+        TdnrSummary {
+            method_calls: vec!["missing".to_owned()],
+            calls: vec![],
+        }
+    );
+
+    let nested_module = SourceCst::from_source_str(
+        db,
+        "nested_module.trb",
+        r#"
+struct Item { value: Nat }
+
+pub mod Outer {
+    pub fn score(i: Item) -> Nat {
+        i.value
+    }
+}
+
+fn test(i: Item) -> Nat {
+    i.score()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, nested_module, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Outer::score".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
 }
 
 // ========================================================================
