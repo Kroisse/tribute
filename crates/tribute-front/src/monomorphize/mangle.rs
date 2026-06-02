@@ -1,6 +1,5 @@
 use std::fmt;
 
-use tribute_core::fmt::joined_by;
 use trunk_ir::Symbol;
 
 use crate::ast::{Type, TypeKind};
@@ -44,28 +43,22 @@ fn write_type_mangled(
         TypeKind::Named { name, args } => {
             name.with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
-                write!(
-                    f,
-                    "$0${}$1",
-                    joined_by("$", args, |arg, f| write_type_mangled(db, *arg, f))
-                )?;
+                f.write_str("$0$")?;
+                write_type_mangled_list(db, args, f)?;
+                f.write_str("$1")?;
             }
             Ok(())
         }
         TypeKind::Func { params, result, .. } => {
-            write!(
-                f,
-                "Fn$0${}$1$",
-                joined_by("$", params, |p, f| write_type_mangled(db, *p, f))
-            )?;
+            f.write_str("Fn$0$")?;
+            write_type_mangled_list(db, params, f)?;
+            f.write_str("$1$")?;
             write_type_mangled(db, *result, f)
         }
         TypeKind::Tuple(elems) => {
-            write!(
-                f,
-                "Tup$0${}$1",
-                joined_by("$", elems, |e, f| write_type_mangled(db, *e, f))
-            )
+            f.write_str("Tup$0$")?;
+            write_type_mangled_list(db, elems, f)?;
+            f.write_str("$1")
         }
         TypeKind::BoundVar { index } => write!(f, "T{index}"),
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
@@ -73,6 +66,20 @@ fn write_type_mangled(
         }
         TypeKind::Error => f.write_str("error"),
     }
+}
+
+fn write_type_mangled_list(
+    db: &dyn salsa::Database,
+    types: &[Type<'_>],
+    f: &mut impl fmt::Write,
+) -> fmt::Result {
+    for (index, ty) in types.iter().enumerate() {
+        if index > 0 {
+            f.write_char('$')?;
+        }
+        write_type_mangled(db, *ty, f)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use itertools::Itertools;
 use salsa::Accumulator as _;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
@@ -181,9 +182,9 @@ impl<'db> Resolver<'db> {
         let message = if similar.is_empty() {
             format!("unresolved name `{}`", name)
         } else {
-            let suggestions = tribute_core::fmt::joined_by(", ", &similar, |s, f| {
-                s.with_str(|name| write!(f, "`{}`", name))
-            });
+            let suggestions = similar
+                .iter()
+                .format_with(", ", |s, f| s.with_str(|name| f(&format_args!("`{name}`"))));
             format!("unresolved name `{}`; did you mean {}?", name, suggestions)
         };
 
