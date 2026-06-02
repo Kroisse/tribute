@@ -64,13 +64,50 @@ impl<P: Pass> ErasedPass<P::Target> for P {
     }
 }
 
+/// Error returned by a verifier when a pass leaves the IR in an invalid state.
+///
+/// The [`PassManager`] turns an `Err` into a panic that names the offending
+/// pass, so the verifier itself only describes *what* is wrong (typically a
+/// summary of one or more validation failures), not *how* to react.
+#[derive(Debug)]
+pub struct VerifyError {
+    pub message: String,
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for VerifyError {}
+
 /// Verifier callback invoked after each pass to check IR invariants.
 ///
-/// In debug builds, callers typically register
-/// [`crate::validation::validate_call_arity`] or a stricter checker so any
-/// pass that breaks an invariant is blamed immediately rather than masked
-/// by a later pass.
-type VerifierFn = dyn Fn(&IrContext, OpRef);
+/// Returns `Ok(())` when the IR is consistent, or [`VerifyError`] describing
+/// the violation. In debug builds, callers typically register a checker (e.g.
+/// wrapping [`crate::validation::validate_use_chains`]) so any pass that breaks
+/// an invariant is blamed immediately rather than masked by a later pass; the
+/// [`PassManager`] panics with the offending pass's name on `Err`.
+type VerifierFn = dyn Fn(&IrContext, OpRef) -> Result<(), VerifyError>;
+
+/// Observation-only hook invoked after each pass, mirroring the verifier's
+/// timing and propagation but without a result.
+///
+/// Receives the context, the pass name, and the target op. Intended for
+/// profiling/debugging and for exercising the manager's dispatch mechanics in
+/// tests without abusing the verifier (which is for IR-invariant checking).
+type InstrumentFn = dyn Fn(&IrContext, &str, OpRef);
+
+/// Post-pass hooks threaded through the dispatch tree: a checking [`VerifierFn`]
+/// and an observation-only [`InstrumentFn`]. Both follow the same timing,
+/// propagation, and stale-target skip rules. Copyable since it only holds
+/// borrows.
+#[derive(Clone, Copy, Default)]
+struct PostPassHooks<'a> {
+    verifier: Option<&'a VerifierFn>,
+    instrumentation: Option<&'a InstrumentFn>,
+}
 
 /// Object-safe runner that applies a typed nested manager to a parent op.
 ///
@@ -78,7 +115,7 @@ type VerifierFn = dyn Fn(&IrContext, OpRef);
 /// manager once per target-typed op. Wraps [`PassManager<T>`] for any
 /// `T: DialectOp + 'static`.
 trait NestedRunner: Any {
-    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef, verifier: Option<&VerifierFn>);
+    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef, hooks: PostPassHooks<'_>);
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
@@ -87,7 +124,7 @@ struct TypedNested<T: DialectOp + 'static> {
 }
 
 impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
-    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef, verifier: Option<&VerifierFn>) {
+    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef, hooks: PostPassHooks<'_>) {
         // Collect targets fresh on each entry so passes that erase or
         // append ops don't leave stale refs in our worklist.
         let targets = collect_targets::<T>(ctx, parent_op);
@@ -97,7 +134,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
             if !T::matches(ctx, target.op_ref()) {
                 continue;
             }
-            self.pm.run_on_target_with(ctx, target, verifier);
+            self.pm.run_on_target_with(ctx, target, hooks);
         }
     }
 
@@ -148,6 +185,7 @@ pub struct PassManager<Root: DialectOp + 'static = core::Module> {
     passes: Vec<Box<dyn ErasedPass<Root>>>,
     nested: Vec<Box<dyn NestedRunner>>,
     verifier: Option<Box<VerifierFn>>,
+    instrumentation: Option<Box<InstrumentFn>>,
 }
 
 impl<Root: DialectOp + 'static> Default for PassManager<Root> {
@@ -162,6 +200,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             passes: Vec::new(),
             nested: Vec::new(),
             verifier: None,
+            instrumentation: None,
         }
     }
 
@@ -198,9 +237,21 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
     where
-        F: Fn(&IrContext, OpRef) + 'static,
+        F: Fn(&IrContext, OpRef) -> Result<(), VerifyError> + 'static,
     {
         self.verifier = Some(Box::new(verifier));
+        self
+    }
+
+    /// Register an observation-only instrumentation callback invoked after each
+    /// pass on this manager and any nested manager (same timing/propagation as
+    /// the verifier). Unlike the verifier it cannot fail the run — use it for
+    /// profiling/debugging. Replaces any previously installed instrumentation.
+    pub fn with_instrumentation<F>(&mut self, instrumentation: F) -> &mut Self
+    where
+        F: Fn(&IrContext, &str, OpRef) + 'static,
+    {
+        self.instrumentation = Some(Box::new(instrumentation));
         self
     }
 
@@ -208,36 +259,39 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// `target`. Pass-level ordering is registration order; nested
     /// managers run after the parent's own passes.
     pub fn run(&mut self, ctx: &mut IrContext, target: Root) {
-        // Split-borrow `verifier` from `passes`/`nested` so we can hand
-        // the verifier reference down to nested runners while iterating
-        // the pass vec mutably.
+        // Split-borrow the hooks from `passes`/`nested` so we can hand
+        // their references down to nested runners while iterating the pass
+        // vec mutably.
         let Self {
             passes,
             nested,
             verifier,
+            instrumentation,
         } = self;
-        let verifier_ref: Option<&VerifierFn> = verifier.as_deref();
-        Self::run_passes(ctx, target, passes, nested, verifier_ref);
+        let hooks = PostPassHooks {
+            verifier: verifier.as_deref(),
+            instrumentation: instrumentation.as_deref(),
+        };
+        Self::run_passes(ctx, target, passes, nested, hooks);
     }
 
-    /// Entry point used by nested managers, threading a parent-supplied
-    /// verifier through the call tree.
-    fn run_on_target_with(
-        &mut self,
-        ctx: &mut IrContext,
-        target: Root,
-        parent_verifier: Option<&VerifierFn>,
-    ) {
+    /// Entry point used by nested managers, threading parent-supplied hooks
+    /// through the call tree.
+    fn run_on_target_with(&mut self, ctx: &mut IrContext, target: Root, parent: PostPassHooks<'_>) {
         let Self {
             passes,
             nested,
             verifier,
+            instrumentation,
         } = self;
-        // A locally-installed verifier overrides any inherited one;
+        // A locally-installed hook overrides any inherited one;
         // otherwise inherit. This lets a nested manager opt into a
         // stricter checker for its sub-tree without affecting siblings.
-        let verifier_ref: Option<&VerifierFn> = verifier.as_deref().or(parent_verifier);
-        Self::run_passes(ctx, target, passes, nested, verifier_ref);
+        let hooks = PostPassHooks {
+            verifier: verifier.as_deref().or(parent.verifier),
+            instrumentation: instrumentation.as_deref().or(parent.instrumentation),
+        };
+        Self::run_passes(ctx, target, passes, nested, hooks);
     }
 
     fn run_passes(
@@ -245,7 +299,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         target: Root,
         passes: &mut [Box<dyn ErasedPass<Root>>],
         nested: &mut [Box<dyn NestedRunner>],
-        verifier: Option<&VerifierFn>,
+        hooks: PostPassHooks<'_>,
     ) {
         // Capture attachment state at entry so we can detect a pass that
         // detaches/erases its own target (parent_block went from Some→None).
@@ -263,13 +317,18 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
                 // a stale OpRef, so stop dispatch here.
                 return;
             }
-            if let Some(v) = verifier {
-                v(ctx, target.op_ref());
+            if let Some(inst) = hooks.instrumentation {
+                inst(ctx, pass.name(), target.op_ref());
+            }
+            if let Some(v) = hooks.verifier
+                && let Err(e) = v(ctx, target.op_ref())
+            {
+                panic!("pass `{}` broke an IR invariant: {}", pass.name(), e);
             }
         }
         let parent_op = target.op_ref();
         for n in nested.iter_mut() {
-            n.run(ctx, parent_op, verifier);
+            n.run(ctx, parent_op, hooks);
         }
     }
 }
@@ -484,8 +543,8 @@ mod tests {
     }
 
     /// When a pass erases its own target mid-pipeline, the manager must
-    /// stop dispatching on that target — subsequent passes, the verifier,
-    /// and nested managers would otherwise see a stale OpRef.
+    /// stop dispatching on that target — subsequent passes, hooks, and
+    /// nested managers would otherwise see a stale OpRef.
     #[test]
     fn nested_pass_skips_dispatch_when_pass_erases_own_target() {
         let (mut ctx, loc) = test_ctx();
@@ -505,22 +564,23 @@ mod tests {
         }
 
         let after_count = Rc::new(Cell::new(0));
-        let verifier_inv = Rc::new(Cell::new(0));
-        let v_clone = verifier_inv.clone();
+        let instrument_inv = Rc::new(Cell::new(0));
+        let inv_clone = instrument_inv.clone();
 
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(EraseSelf)
             .add_pass(CountingPass::<func::Func>::new(after_count.clone()))
-            .with_verifier(move |_ctx, _op| {
-                v_clone.set(v_clone.get() + 1);
+            .with_instrumentation(move |_ctx, _name, _op| {
+                inv_clone.set(inv_clone.get() + 1);
             });
         pm.run(&mut ctx, module);
 
         // EraseSelf runs once per func (f1, f2) and invalidates the target
-        // each time, so the following pass and the verifier must be skipped.
+        // each time, so the following pass and the instrumentation hook must
+        // be skipped.
         assert_eq!(after_count.get(), 0);
-        assert_eq!(verifier_inv.get(), 0);
+        assert_eq!(instrument_inv.get(), 0);
     }
 
     /// `Pass::run` takes `&mut self`, so a pass can accumulate per-instance
@@ -545,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn verifier_runs_after_each_module_pass() {
+    fn instrumentation_runs_after_each_module_pass() {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
 
@@ -556,17 +616,17 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
-        pm.with_verifier(move |_ctx, _op| {
+        pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
         pm.run(&mut ctx, module);
 
-        // Verifier fires once after each of the 2 module-level passes.
+        // Instrumentation fires once after each of the 2 module-level passes.
         assert_eq!(invocations.get(), 2);
     }
 
     #[test]
-    fn verifier_propagates_to_nested_passes() {
+    fn instrumentation_propagates_to_nested_passes() {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
         append_func(&mut ctx, module, loc, "f1");
@@ -580,12 +640,12 @@ mod tests {
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
-        pm.with_verifier(move |_ctx, _op| {
+        pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
         pm.run(&mut ctx, module);
 
-        // 1 module pass + 2 funcs * 1 nested pass = 3 verifier calls.
+        // 1 module pass + 2 funcs * 1 nested pass = 3 instrumentation calls.
         assert_eq!(invocations.get(), 3);
     }
 
@@ -635,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_verifier_overrides_inherited() {
+    fn nested_instrumentation_overrides_inherited() {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
         append_func(&mut ctx, module, loc, "f1");
@@ -651,24 +711,24 @@ mod tests {
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()))
-            .with_verifier(move |_ctx, _op| {
+            .with_instrumentation(move |_ctx, _name, _op| {
                 nested_clone.set(nested_clone.get() + 1);
             });
-        pm.with_verifier(move |_ctx, _op| {
+        pm.with_instrumentation(move |_ctx, _name, _op| {
             root_clone.set(root_clone.get() + 1);
         });
         pm.run(&mut ctx, module);
 
-        // Root verifier fires only for the module-level pass (1 call),
-        // because the nested manager installs its own and does not
-        // inherit the root's.
+        // Root instrumentation fires only for the module-level pass (1 call),
+        // because the nested manager installs its own and does not inherit
+        // the root's.
         assert_eq!(root_inv.get(), 1);
-        // Nested verifier fires per func target (2 calls).
+        // Nested instrumentation fires per func target (2 calls).
         assert_eq!(nested_inv.get(), 2);
     }
 
     #[test]
-    fn verifier_receives_target_op_refs() {
+    fn instrumentation_receives_pass_name_and_target_op() {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
         let f1 = append_func(&mut ctx, module, loc, "f1");
@@ -676,21 +736,28 @@ mod tests {
         let module_op = module.op_ref();
 
         let dummy = Rc::new(Cell::new(0));
-        let seen: Rc<RefCell<Vec<OpRef>>> = Rc::new(RefCell::new(Vec::new()));
+        let seen: Rc<RefCell<Vec<(String, OpRef)>>> = Rc::new(RefCell::new(Vec::new()));
         let seen_clone = seen.clone();
 
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
-        pm.with_verifier(move |_ctx, op| {
-            seen_clone.borrow_mut().push(op);
+        pm.with_instrumentation(move |_ctx, name, op| {
+            seen_clone.borrow_mut().push((name.to_string(), op));
         });
         pm.run(&mut ctx, module);
 
-        // Module pass → verifier(module_op), then nested manager walks
-        // for func ops → verifier(f1), verifier(f2).
-        assert_eq!(*seen.borrow(), vec![module_op, f1, f2]);
+        // Module pass → hook("counting", module_op), then nested manager walks
+        // for func ops → hook("counting", f1), hook("counting", f2).
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                ("counting".to_string(), module_op),
+                ("counting".to_string(), f1),
+                ("counting".to_string(), f2),
+            ]
+        );
     }
 
     #[test]
@@ -712,5 +779,64 @@ mod tests {
         // reflects the most recent set, which here is the func pass's
         // first invocation).
         assert!(count.get() >= 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "pass `counting` broke an IR invariant: boom")]
+    fn verifier_err_panics_naming_the_pass() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let dummy = Rc::new(Cell::new(0));
+        let mut pm = PassManager::new();
+        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.with_verifier(|_ctx, _op| {
+            Err(VerifyError {
+                message: "boom".to_string(),
+            })
+        });
+        // The verifier returns Err after the pass; the PassManager must panic
+        // and name the offending pass.
+        pm.run(&mut ctx, module);
+    }
+
+    #[test]
+    #[should_panic(expected = "pass `counting` broke an IR invariant")]
+    fn verifier_err_in_nested_pass_panics() {
+        // A verifier installed on the root propagates into nested managers and
+        // still fails the run when a nested pass leaves the IR invalid.
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+
+        let dummy = Rc::new(Cell::new(0));
+        let mut pm = PassManager::new();
+        pm.nest::<func::Func>()
+            .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
+        pm.with_verifier(|_ctx, _op| {
+            Err(VerifyError {
+                message: "nested boom".to_string(),
+            })
+        });
+        pm.run(&mut ctx, module);
+    }
+
+    #[test]
+    fn verifier_ok_lets_pipeline_proceed() {
+        // An always-Ok verifier must not interfere: every pass still runs, in
+        // order. (CountingPass can't prove this — its mirror only holds the
+        // latest per-instance count — so use the order recorder.)
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut pm = PassManager::new();
+        pm.add_pass(recorder::<core::Module>("a", order.clone()));
+        pm.add_pass(recorder::<core::Module>("b", order.clone()));
+        pm.with_verifier(|_ctx, _op| Ok(()));
+        pm.run(&mut ctx, module);
+
+        // Both module passes ran, in registration order.
+        assert_eq!(*order.borrow(), vec!["a", "b"]);
     }
 }

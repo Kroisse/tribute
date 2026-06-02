@@ -477,6 +477,33 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
         .add_pass(tribute_passes::tail_resumptive::ConvertTailResumptive)
         .add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch)
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
+    // Debug-only regression guard: re-check use-chain consistency after every
+    // shared pass. step 1+2 (#710) made this invariant hold across the shared
+    // middle-end; this catches any future pass that reintroduces a leak. The
+    // verifier only reports; the PassManager panics with the offending pass's
+    // name on `Err`. Compiled out in release.
+    if cfg!(debug_assertions) {
+        pm.with_verifier(|ctx, op| {
+            let Some(module) = Module::new(ctx, op) else {
+                return Ok(());
+            };
+            let result = trunk_ir::validation::validate_use_chains(ctx, module);
+            if result.is_ok() {
+                return Ok(());
+            }
+            Err(trunk_ir::pass::VerifyError {
+                message: format!(
+                    "use-chain regression: {} error(s); first: {}",
+                    result.use_chain_errors.len(),
+                    result
+                        .use_chain_errors
+                        .first()
+                        .map(|e| e.to_string())
+                        .unwrap_or_default(),
+                ),
+            })
+        });
+    }
     pm.run(&mut ctx, core_module);
 
     Some((ctx, m))
