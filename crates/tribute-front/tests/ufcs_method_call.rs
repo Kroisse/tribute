@@ -7,7 +7,9 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir, tdnr_function_summary};
+use self::common::{
+    TdnrCall, TdnrSummary, run_ast_pipeline, run_ast_pipeline_with_ir, tdnr_function_summary,
+};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -128,7 +130,13 @@ fn test(p: Point) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, field_accessor, "test"),
-        "methods: []\ncalls: [\"Point::x\"]"
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Point::x".to_owned(),
+                arg_count: 1,
+            }],
+        }
     );
 
     let user_defined = SourceCst::from_source_str(
@@ -151,7 +159,13 @@ fn test(c: Counter) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, user_defined, "test"),
-        "methods: []\ncalls: [\"Counter::add\"]"
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Counter::add".to_owned(),
+                arg_count: 2,
+            }],
+        }
     );
 
     let ambiguous = SourceCst::from_source_str(
@@ -176,7 +190,10 @@ fn test(t: Thing) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, ambiguous, "test"),
-        "methods: [\"pick\"]\ncalls: []"
+        TdnrSummary {
+            method_calls: vec!["pick".to_owned()],
+            calls: vec![],
+        }
     );
 
     let unresolved = SourceCst::from_source_str(
@@ -193,7 +210,10 @@ fn test(t: Thing) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, unresolved, "test"),
-        "methods: [\"missing\"]\ncalls: []"
+        TdnrSummary {
+            method_calls: vec!["missing".to_owned()],
+            calls: vec![],
+        }
     );
 
     let nested_module = SourceCst::from_source_str(
@@ -216,7 +236,13 @@ fn test(i: Item) -> Nat {
 
     assert_eq!(
         tdnr_function_summary(db, nested_module, "test"),
-        "methods: []\ncalls: [\"Outer::score\"]"
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "Outer::score".to_owned(),
+                arg_count: 1,
+            }],
+        }
     );
 }
 

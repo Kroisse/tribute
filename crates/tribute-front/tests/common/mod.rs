@@ -116,7 +116,7 @@ fn tdnr_function_summary_inner<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     function_name: String,
-) -> String {
+) -> TdnrSummary {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -142,7 +142,7 @@ fn tdnr_function_summary_inner<'db>(
     let body = function_body(&module, &function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);
-    format!("methods: {:?}\ncalls: {:?}", summary.methods, summary.calls)
+    summary
 }
 
 /// Run the AST pipeline through TDNR and summarize one function body.
@@ -153,7 +153,7 @@ pub fn tdnr_function_summary(
     db: &dyn salsa::Database,
     source: SourceCst,
     function_name: &str,
-) -> String {
+) -> TdnrSummary {
     tdnr_function_summary_inner(db, source, function_name.to_owned())
 }
 
@@ -168,10 +168,16 @@ fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Ex
         .expect("function should exist")
 }
 
-#[derive(Default)]
-struct TdnrSummary {
-    methods: Vec<String>,
-    calls: Vec<String>,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::Update)]
+pub struct TdnrSummary {
+    pub method_calls: Vec<String>,
+    pub calls: Vec<TdnrCall>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct TdnrCall {
+    pub target: String,
+    pub arg_count: usize,
 }
 
 fn collect_tdnr_summary<'db>(
@@ -186,7 +192,10 @@ fn collect_tdnr_summary<'db>(
                 ..
             }) = &*callee.kind
             {
-                summary.calls.push(id.qualified(db).to_string());
+                summary.calls.push(TdnrCall {
+                    target: id.qualified(db).to_string(),
+                    arg_count: args.len(),
+                });
             }
             collect_tdnr_summary(db, callee, summary);
             for arg in args {
@@ -198,7 +207,7 @@ fn collect_tdnr_summary<'db>(
             method,
             args,
         } => {
-            summary.methods.push(method.to_string());
+            summary.method_calls.push(method.to_string());
             collect_tdnr_summary(db, receiver, summary);
             for arg in args {
                 collect_tdnr_summary(db, arg, summary);
