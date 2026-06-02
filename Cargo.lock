@@ -1494,7 +1494,6 @@ dependencies = [
 name = "tribute-core"
 version = "0.1.0"
 dependencies = [
- "itertools",
  "salsa",
  "serde",
  "target-lexicon",
@@ -1508,6 +1507,7 @@ dependencies = [
  "fluent-uri",
  "im",
  "insta",
+ "itertools",
  "proptest",
  "ropey",
  "salsa",

@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use tribute_core::fmt::joined_by;
+use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -200,24 +200,32 @@ impl fmt::Display for TypeKind<'_> {
             Self::Named { name, args } => {
                 name.with_str(|s| f.write_str(s))?;
                 if !args.is_empty() {
-                    let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                    let args = args
+                        .iter()
+                        .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
                     write!(f, "({args})")
                 } else {
                     Ok(())
                 }
             }
             Self::Func { params, result, .. } => {
-                let params = joined_by(", ", params, |ty, f| write!(f, "{}", ty.kind(db)));
+                let params = params
+                    .iter()
+                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
                 write!(f, "fn({params}) -> {}", result.kind(db))
             }
             Self::Tuple(elems) => {
-                let elems = joined_by(", ", elems, |ty, f| write!(f, "{}", ty.kind(db)));
+                let elems = elems
+                    .iter()
+                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
                 write!(f, "#({elems})")
             }
             Self::BoundVar { index } => write!(f, "_{}", index),
             Self::UniVar { .. } => f.write_str("_"),
             Self::App { ctor, args } => {
-                let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                let args = args
+                    .iter()
+                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
                 write!(f, "{}({args})", ctor.kind(db))
             }
             Self::Continuation { arg, result, .. } => {
@@ -359,7 +367,10 @@ impl fmt::Display for Effect<'_> {
             if self.args.is_empty() {
                 name.with_str(|s| f.write_str(s))
             } else {
-                let args = joined_by(", ", &self.args, |ty, f| write!(f, "{}", ty.kind(db)));
+                let args = self
+                    .args
+                    .iter()
+                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
                 name.with_str(|s| write!(f, "{}({args})", s))
             }
         })
