@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use itertools::Itertools;
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource};
@@ -80,7 +81,7 @@ impl std::fmt::Display for SolveError<'_> {
                     if effects.is_empty() {
                         "{{}}".to_string()
                     } else {
-                        format!("{{{}}}", tribute_core::fmt::joined(", ", effects.iter()))
+                        format!("{{{}}}", effects.iter().format(", "))
                     }
                 };
                 write!(

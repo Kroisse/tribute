@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use itertools::Itertools;
 use salsa::Accumulator;
-use tribute_core::fmt::joined;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 use crate::ast::{
@@ -151,7 +151,7 @@ impl<'db> TypeChecker<'db> {
                 Diagnostic::new(
                     format!(
                         "function 'main' has unhandled effects: {}",
-                        joined(", ", effects)
+                        effects.iter().format(", ")
                     ),
                     self.get_span(func.id),
                     DiagnosticSeverity::Error,
@@ -185,7 +185,7 @@ impl<'db> TypeChecker<'db> {
                         format!(
                             "function '{}' uses undeclared effects: {}",
                             func.name,
-                            joined(", ", undeclared),
+                            undeclared.format(", "),
                         ),
                         self.get_span(func.id),
                         DiagnosticSeverity::Error,
