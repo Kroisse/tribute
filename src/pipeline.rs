@@ -489,20 +489,19 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
             };
             let result = trunk_ir::validation::validate_use_chains(ctx, module);
             if result.is_ok() {
-                Ok(())
-            } else {
-                Err(trunk_ir::pass::VerifyError {
-                    message: format!(
-                        "use-chain regression: {} error(s); first: {}",
-                        result.use_chain_errors.len(),
-                        result
-                            .use_chain_errors
-                            .first()
-                            .map(|e| e.to_string())
-                            .unwrap_or_default(),
-                    ),
-                })
+                return Ok(());
             }
+            Err(trunk_ir::pass::VerifyError {
+                message: format!(
+                    "use-chain regression: {} error(s); first: {}",
+                    result.use_chain_errors.len(),
+                    result
+                        .use_chain_errors
+                        .first()
+                        .map(|e| e.to_string())
+                        .unwrap_or_default(),
+                ),
+            })
         });
     }
     pm.run(&mut ctx, core_module);
