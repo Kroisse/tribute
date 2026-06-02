@@ -162,7 +162,7 @@ fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Ex
         .decls
         .iter()
         .find_map(|decl| match decl {
-            Decl::Function(func) if func.name.to_string() == name => Some(&func.body),
+            Decl::Function(func) if func.name == name => Some(&func.body),
             _ => None,
         })
         .expect("function should exist")
