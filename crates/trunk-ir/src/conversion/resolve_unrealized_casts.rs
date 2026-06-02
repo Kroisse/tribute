@@ -153,10 +153,10 @@ impl CastResolver {
         // Get the cast result value
         let cast_result = ctx.op_result(op, 0);
 
-        // If types are the same, just RAUW and remove the cast
+        // If types are the same, just RAUW and erase the cast
         if from_type == to_type {
             ctx.replace_all_uses(cast_result, input_value);
-            ctx.remove_op_from_block(block, op);
+            crate::rewrite::erase_op(ctx, op);
             self.resolved_count += 1;
             return;
         }
@@ -172,7 +172,7 @@ impl CastResolver {
                 }
                 // RAUW the cast result with the materialized value
                 ctx.replace_all_uses(cast_result, mat.value);
-                ctx.remove_op_from_block(block, op);
+                crate::rewrite::erase_op(ctx, op);
                 self.resolved_count += 1;
             }
             None => {

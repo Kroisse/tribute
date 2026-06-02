@@ -381,10 +381,12 @@ impl GlobalDcePass {
                     && !reachable.contains(&func_name)
                 {
                     removed.push(func_name);
-                    ctx.remove_op_from_block(block, op);
-                    // Note: we don't call ctx.remove_op because the func
-                    // has regions/results that may have complex ownership.
-                    // Detaching from the block is sufficient for DCE.
+                    // Erase the unreachable function: `erase_op` clears the
+                    // operand use-chains of the func and its body subtree, so
+                    // dead funcs don't leave stale uses behind (#710). Func
+                    // scopes are independent (SSA), so clearing the body's
+                    // operand uses cannot affect other reachable functions.
+                    crate::rewrite::erase_op(ctx, op);
                 }
             }
         }

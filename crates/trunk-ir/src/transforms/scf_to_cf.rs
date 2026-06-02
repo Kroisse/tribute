@@ -445,7 +445,7 @@ fn replace_yield_with_br(
                 let br = cf::br(ctx, loc, values, target);
 
                 // Replace yield with br in-place
-                ctx.remove_op_from_block(block, op);
+                crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             }
         }
@@ -470,13 +470,13 @@ fn replace_continue_break(
                 let cont_op = scf::Continue::from_op(ctx, op).unwrap();
                 let values: Vec<_> = cont_op.values(ctx).to_vec();
                 let br = cf::br(ctx, loc, values, header);
-                ctx.remove_op_from_block(block, op);
+                crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             } else if scf::Break::matches(ctx, op) {
                 let break_op = scf::Break::from_op(ctx, op).unwrap();
                 let value = break_op.value(ctx);
                 let br = cf::br(ctx, loc, [value], exit);
-                ctx.remove_op_from_block(block, op);
+                crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             } else {
                 // Recurse into nested regions for continue/break replacement,

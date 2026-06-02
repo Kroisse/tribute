@@ -207,13 +207,12 @@ fn apply_splice(
     for region in regions {
         let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
         for block in blocks {
-            // Reverse so a block-internal op is removed before any op
-            // that depends on its results, satisfying `remove_op`'s
-            // "no remaining uses" precondition.
+            // Reverse so a block-internal op is erased before any op that
+            // depends on its results, satisfying `remove_op`'s "no remaining
+            // uses" precondition.
             let remaining: Vec<OpRef> = ctx.block(block).ops.to_vec();
             for orphan in remaining.into_iter().rev() {
-                ctx.detach_op(orphan);
-                ctx.remove_op(orphan);
+                crate::rewrite::erase_op(ctx, orphan);
             }
         }
     }
