@@ -1,111 +1,44 @@
-# Tribute (Compiler) — Agent Notes
+# Tribute Agent Notes
 
-## Source of Truth (Language + Compiler Design)
+## Source of Truth
 
-The documents under `new-plans/` are the **source of truth** for Tribute's
-current language and compiler design. If code/tests/older docs conflict,
-**treat `new-plans/` as authoritative** and align implementation afterward.
+The documents under `new-plans/` are authoritative for Tribute's current
+language and compiler design. If code, tests, or older docs conflict with
+`new-plans/`, follow `new-plans/` and align the implementation afterward.
 
-- `new-plans/design.md`: high-level goals and direction
-- `new-plans/syntax.md`: surface syntax (keywords, literals, `case`, `handle`,
-  UFCS, etc.)
-- `new-plans/types.md`: `struct`/`enum`, records, UFCS/field access rules
-- `new-plans/text.md`: Text (UTF-8 rope), Bytes, Rune types
-- `new-plans/modules.md`: module system (`::`), `use`, name resolution
-- `new-plans/abilities.md`: abilities (= algebraic effects),
-  syntax and semantics
-- `new-plans/type-inference.md`: row-polymorphic effect typing +
-  bidirectional typing
-- `new-plans/ir.md`: TrunkIR (multi-level dialect IR) and pipeline
-- `new-plans/implementation.md`: ability implementation strategy
-  (evidence passing, prompts/continuations)
-- `new-plans/cranelift-backend.md`: Cranelift native backend architecture
+Key design docs:
 
-## Project Overview (Updated)
+- `new-plans/design.md`
+- `new-plans/syntax.md`
+- `new-plans/types.md`
+- `new-plans/modules.md`
+- `new-plans/abilities.md`
+- `new-plans/type-inference.md`
+- `new-plans/ir.md`
+- `new-plans/implementation.md`
+- `new-plans/cranelift-backend.md`
 
-Tribute targets a functional language with **static types, type inference,
-and abilities (algebraic effects)**.
+## Working Rules
 
-- **Syntax style**: ML semantics with C/Rust-style syntax
-  (`fn`, `{}`, `;`, `struct`/`enum`, `::`, UFCS `.`)
-- **Effects/Abilities**: Unison-style abilities
-  (delimited, one-shot continuations)
-- **IR**: TrunkIR multi-level dialect IR
-  (`src`/`ability`/`adt` → `cont`/`func`/`scf` …)
-- **Targets**: Cranelift (native) + WasmGC
-- **File extension (spec)**: `.trb`
-  - This repo may still contain legacy `.trb` examples
-    (migration in progress).
-
-## Codebase Structure
-
-See `.claude/rules/` for detailed documentation:
-
-- `crates.md` - Crate structure and responsibilities
-- `pipeline.md` - Compilation pipeline stages
-- `ir.md` - TrunkIR dialect system
-- `conventions.md` - Code conventions and patterns
-
-## Commit Guidelines
-
-- Follow the Conventional Commits format.
-- Issue titles should not use prefix (e.g., `feat:`). Use labels instead.
-
-## GitHub Issues
-
-Implementation tasks are tracked in GitHub Issues.
-Use `gh issue list` to browse.
-
-### Labels
-
-| Label | Description |
-| ----- | ----------- |
-| `ability` | Effect system and abilities (#23-26) |
-| `type-system` | Type checking and inference |
-| `syntax` | Parser and syntax features |
-| `lsp` | Language Server Protocol (#31-37) |
-| `wasm` | WebAssembly backend (#38-41) |
-| `cranelift` | Cranelift native backend |
-| `good first issue` | Good for newcomers |
-| `enhancement` | New feature |
-| `bug` | Something isn't working |
-
-### Finding Work
-
-```bash
-gh issue list                        # All open issues
-gh issue list --label "good first issue"  # Beginner-friendly
-gh issue list --label ability        # Effect system work
-gh issue list --label wasm           # Wasm backend work
-```
+- When changing language, type, ability, module, IR, or backend rules, update
+  the relevant `new-plans/*.md` file first.
+- Use `.claude/rules/` for crate structure, pipeline, IR, and code convention
+  reference material.
+- Use the `tribute-testing` skill for test commands, Salsa test patterns,
+  nextest, and snapshot testing.
+- Implementation work is tracked in GitHub Issues. Use `gh issue list` when
+  looking for open work.
 
 ## Common Commands
 
 ```bash
-# Build
 cargo build
-
-# Enable debug logging (use --log instead of RUST_LOG)
+cargo test
 cargo run -- --log=debug compile file.trb
 cargo run -- --log=tribute_front::typeck=trace compile file.trb
 ```
 
-For test commands and patterns, see the `tribute-testing` skill.
+## Tree-sitter
 
-## Tree-sitter Grammar Development
-
-The grammar source of truth is in a separate repository:
+The tree-sitter grammar source of truth is maintained separately:
 <https://github.com/Kroisse/tree-sitter-tribute/blob/main/grammar.js>
-
-```bash
-# Manual generation: run from the tree-sitter-tribute repo
-tree-sitter generate
-tree-sitter test
-tree-sitter build-wasm
-```
-
-## Notes for Agents
-
-- When changing language/type/ability/module rules: update `new-plans/*.md`
-  first, then align implementation/tests.
-- See `.claude/rules/conventions.md` for code patterns and conventions.
