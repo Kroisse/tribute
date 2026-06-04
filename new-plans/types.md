@@ -6,6 +6,25 @@
 
 Tribute는 `struct`와 `enum` 두 키워드로 타입을 선언한다.
 
+## Primitive Numeric Types
+
+`Float`는 IEEE 754 부동소수점 값을 표현한다. 현재 산술/비교 연산은
+기본 연산자 subset만 정의한다.
+
+Float 비교는 C/Rust 스타일 NaN 의미를 따른다:
+
+| 연산자 | IR predicate | NaN 포함 시 결과 |
+| ------ | ------------ | ---------------- |
+| `==`   | `oeq`        | `False`          |
+| `!=`   | `une`        | `True`           |
+| `<`    | `olt`        | `False`          |
+| `<=`   | `ole`        | `False`          |
+| `>`    | `ogt`        | `False`          |
+| `>=`   | `oge`        | `False`          |
+
+전체 ordered/unordered predicate 집합은 아직 surface language에 노출하지
+않는다.
+
 ### Struct (Product Type)
 
 ```rust

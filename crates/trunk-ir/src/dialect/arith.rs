@@ -4,7 +4,7 @@
 //! - Integer arithmetic: `addi`, `subi`, `muli`, `divsi`/`divui`, `remsi`/`remui`, `negi`
 //! - Float arithmetic: `addf`, `subf`, `mulf`, `divf`, `negf`
 //! - Integer comparison: `cmpi` with predicate attribute (eq, ne, slt, sle, sgt, sge, ult, ule, ugt, uge)
-//! - Float comparison: `cmpf` with predicate attribute (oeq, one, olt, ole, ogt, oge)
+//! - Float comparison: `cmpf` with predicate attribute (oeq, une, olt, ole, ogt, oge)
 
 // === Pure operation registrations ===
 crate::register_pure_op!(arith.r#const);

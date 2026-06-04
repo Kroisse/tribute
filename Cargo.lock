@@ -1567,6 +1567,7 @@ name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
  "cranelift-entity",
+ "derive_more",
  "insta",
  "inventory",
  "itertools",
