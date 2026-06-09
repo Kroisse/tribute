@@ -192,8 +192,8 @@ fn main() {
     let a = 1.5
     let b = 1.5
     case a == b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
@@ -210,8 +210,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a < b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
@@ -228,8 +228,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a != b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
@@ -246,8 +246,8 @@ fn main() {
     let a = 2.0
     let b = 1.0
     case a > b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
@@ -264,8 +264,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a <= b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
@@ -282,11 +282,50 @@ fn main() {
     let a = 2.0
     let b = 2.0
     case a >= b {
-        true -> __tribute_print_int(1)
-        false -> __tribute_print_int(0)
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
     }
 }
 "#,
         "1",
+    );
+}
+
+#[test]
+fn test_float_comparison_nan_semantics() {
+    assert_native_output(
+        "float_cmp_nan_semantics.trb",
+        r#"
+fn main() {
+    let nan = 0.0 / 0.0
+    let x = 1.0
+
+    case nan == x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+    case nan != x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+    case nan < x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+    case nan <= x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+    case nan > x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+    case nan >= x {
+        True -> __tribute_print_int(1)
+        False -> __tribute_print_int(0)
+    }
+}
+"#,
+        "0\n1\n0\n0\n0\n0",
     );
 }

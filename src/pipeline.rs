@@ -494,9 +494,9 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
             Err(trunk_ir::pass::VerifyError {
                 message: format!(
                     "use-chain regression: {} error(s); first: {}",
-                    result.use_chain_errors.len(),
+                    result.errors.len(),
                     result
-                        .use_chain_errors
+                        .errors
                         .first()
                         .map(|e| e.to_string())
                         .unwrap_or_default(),
@@ -528,11 +528,7 @@ fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conversio
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
-            tracing::warn!(
-                "Value integrity errors after lowering: stale={:?}, use_chain={:?}",
-                result.stale_errors,
-                result.use_chain_errors
-            );
+            tracing::warn!("Value integrity errors after lowering: {:?}", result.errors);
         }
     }
 
@@ -586,9 +582,8 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conv
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
-                "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
-                result.stale_errors,
-                result.use_chain_errors
+                "Value integrity errors after evidence_to_native: {:?}",
+                result.errors
             );
         }
     }

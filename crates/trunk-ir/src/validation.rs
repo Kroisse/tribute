@@ -14,6 +14,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use derive_more::{Display, Error};
+
 use super::context::IrContext;
 use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
@@ -25,46 +27,32 @@ use crate::Symbol;
 // Error types
 // ============================================================================
 
-/// Describes a stale or invalid value found during validation.
-pub struct StaleValueError {
-    /// Name of the function containing the stale reference.
-    pub function_name: String,
-    /// Full name of the consuming operation (e.g., "func.call").
-    pub consumer_op: String,
-    /// Index of the stale operand within the consuming operation.
-    pub operand_index: usize,
-    /// Human-readable description of the stale value.
-    pub stale_value_description: String,
+/// Describes an IR validation error.
+#[derive(Display, Error)]
+pub enum ValidationError {
+    /// A stale or invalid value was found during scope validation.
+    #[display(
+        "stale value in @{function_name}: operand #{operand_index} of {consumer_op} references {stale_value_description}"
+    )]
+    StaleValue {
+        /// Name of the function containing the stale reference.
+        function_name: String,
+        /// Full name of the consuming operation (e.g., "func.call").
+        consumer_op: String,
+        /// Index of the stale operand within the consuming operation.
+        operand_index: usize,
+        /// Human-readable description of the stale value.
+        stale_value_description: String,
+    },
+    /// A use-chain inconsistency was found.
+    #[display("{message}")]
+    UseChain { message: String },
+    /// An operation-level semantic validation error was found.
+    #[display("{message}")]
+    Operation { message: String },
 }
 
-impl fmt::Display for StaleValueError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "stale value in @{}: operand #{} of {} references {}",
-            self.function_name, self.operand_index, self.consumer_op, self.stale_value_description,
-        )
-    }
-}
-
-impl fmt::Debug for StaleValueError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-/// Describes a use-chain inconsistency.
-pub struct UseChainError {
-    pub message: String,
-}
-
-impl fmt::Display for UseChainError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl fmt::Debug for UseChainError {
+impl fmt::Debug for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
@@ -72,13 +60,12 @@ impl fmt::Debug for UseChainError {
 
 /// Result of validation.
 pub struct ValidationResult {
-    pub stale_errors: Vec<StaleValueError>,
-    pub use_chain_errors: Vec<UseChainError>,
+    pub errors: Vec<ValidationError>,
 }
 
 impl ValidationResult {
     pub fn is_ok(&self) -> bool {
-        self.stale_errors.is_empty() && self.use_chain_errors.is_empty()
+        self.errors.is_empty()
     }
 }
 
@@ -87,21 +74,9 @@ impl fmt::Display for ValidationResult {
         if self.is_ok() {
             return write!(f, "validation passed");
         }
-        if !self.stale_errors.is_empty() {
-            writeln!(f, "{} stale value(s) found:", self.stale_errors.len())?;
-            for err in &self.stale_errors {
-                writeln!(f, "  - {}", err)?;
-            }
-        }
-        if !self.use_chain_errors.is_empty() {
-            writeln!(
-                f,
-                "{} use-chain error(s) found:",
-                self.use_chain_errors.len()
-            )?;
-            for err in &self.use_chain_errors {
-                writeln!(f, "  - {}", err)?;
-            }
+        writeln!(f, "{} validation error(s) found:", self.errors.len())?;
+        for err in &self.errors {
+            writeln!(f, "  - {}", err)?;
         }
         Ok(())
     }
@@ -161,7 +136,7 @@ fn check_operands_in_region(
     region: RegionRef,
     outer_visible: &HashSet<ValueRef>,
     function_name: &str,
-    errors: &mut Vec<StaleValueError>,
+    errors: &mut Vec<ValidationError>,
 ) {
     // Extend with values defined at this region level (shallow – no sub-regions).
     let mut visible = outer_visible.clone();
@@ -172,7 +147,7 @@ fn check_operands_in_region(
             for (i, &operand) in ctx.op_operands(op).iter().enumerate() {
                 if !visible.contains(&operand) {
                     let data = ctx.op(op);
-                    errors.push(StaleValueError {
+                    errors.push(ValidationError::StaleValue {
                         function_name: function_name.to_string(),
                         consumer_op: format!("{}.{}", data.dialect, data.name),
                         operand_index: i,
@@ -198,25 +173,19 @@ pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationRe
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
-            return ValidationResult {
-                stale_errors: errors,
-                use_chain_errors: vec![],
-            };
+            return ValidationResult { errors };
         }
     };
 
     validate_functions_in_region(ctx, body, &mut errors);
 
-    ValidationResult {
-        stale_errors: errors,
-        use_chain_errors: vec![],
-    }
+    ValidationResult { errors }
 }
 
 fn validate_functions_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    errors: &mut Vec<StaleValueError>,
+    errors: &mut Vec<ValidationError>,
 ) {
     let func_dialect = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
@@ -268,10 +237,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
-            return ValidationResult {
-                stale_errors: vec![],
-                use_chain_errors: errors,
-            };
+            return ValidationResult { errors };
         }
     };
 
@@ -293,7 +259,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
             .any(|u| u.user == op && u.operand_index == idx);
         if !found {
             let data = ctx.op(op);
-            errors.push(UseChainError {
+            errors.push(ValidationError::UseChain {
                 message: format!(
                     "operand #{} of {}.{} ({:?}) uses {:?} but no use-chain entry exists",
                     idx, data.dialect, data.name, op, val,
@@ -323,7 +289,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
     for &val in &checked_values {
         for u in ctx.uses(val) {
             if !actual_uses.contains(&(val, u.user, u.operand_index)) {
-                errors.push(UseChainError {
+                errors.push(ValidationError::UseChain {
                     message: format!(
                         "use-chain entry for {:?} claims use by {:?} operand #{}, but no such operand exists",
                         val, u.user, u.operand_index,
@@ -333,10 +299,65 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
         }
     }
 
-    ValidationResult {
-        stale_errors: vec![],
-        use_chain_errors: errors,
+    ValidationResult { errors }
+}
+
+// ============================================================================
+// Operation semantic validation
+// ============================================================================
+
+/// Validate operation-level semantic constraints that are independent of
+/// value scope/use-chain integrity.
+pub fn validate_operation_semantics(ctx: &IrContext, module: Module) -> ValidationResult {
+    let mut errors = Vec::new();
+
+    let body = match module.body(ctx) {
+        Some(r) => r,
+        None => {
+            return ValidationResult { errors };
+        }
+    };
+
+    walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        validate_arith_cmpf_predicate(ctx, op, &mut errors);
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+
+    ValidationResult { errors }
+}
+
+fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let data = ctx.op(op);
+    if data.dialect != Symbol::new("arith") || data.name != Symbol::new("cmpf") {
+        return;
     }
+
+    let Some(super::types::Attribute::Symbol(predicate)) =
+        data.attributes.get(&Symbol::new("predicate"))
+    else {
+        errors.push(ValidationError::Operation {
+            message: "arith.cmpf requires symbol predicate attribute".to_string(),
+        });
+        return;
+    };
+
+    if !is_allowed_cmpf_predicate(*predicate) {
+        errors.push(ValidationError::Operation {
+            message: format!(
+                "arith.cmpf has unsupported predicate '{}'; supported predicates are oeq, une, olt, ole, ogt, oge",
+                predicate,
+            ),
+        });
+    }
+}
+
+fn is_allowed_cmpf_predicate(predicate: Symbol) -> bool {
+    predicate == Symbol::new("oeq")
+        || predicate == Symbol::new("une")
+        || predicate == Symbol::new("olt")
+        || predicate == Symbol::new("ole")
+        || predicate == Symbol::new("ogt")
+        || predicate == Symbol::new("oge")
 }
 
 fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<ValueRef>) {
@@ -509,10 +530,11 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
-    ValidationResult {
-        stale_errors: scope.stale_errors,
-        use_chain_errors: uses.use_chain_errors,
-    }
+    let ops = validate_operation_semantics(ctx, module);
+    let mut errors = scope.errors;
+    errors.extend(uses.errors);
+    errors.extend(ops.errors);
+    ValidationResult { errors }
 }
 
 /// Debug-only validation that panics on any error.
@@ -561,6 +583,44 @@ mod tests {
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
         crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+    }
+
+    fn stale_value_errors(result: &ValidationResult) -> Vec<(&str, &str, &str)> {
+        result
+            .errors
+            .iter()
+            .filter_map(|error| {
+                let ValidationError::StaleValue {
+                    function_name,
+                    consumer_op,
+                    stale_value_description,
+                    ..
+                } = error
+                else {
+                    return None;
+                };
+
+                Some((
+                    function_name.as_str(),
+                    consumer_op.as_str(),
+                    stale_value_description.as_str(),
+                ))
+            })
+            .collect()
+    }
+
+    fn operation_error_messages(result: &ValidationResult) -> Vec<&str> {
+        result
+            .errors
+            .iter()
+            .filter_map(|error| {
+                let ValidationError::Operation { message } = error else {
+                    return None;
+                };
+
+                Some(message.as_str())
+            })
+            .collect()
     }
 
     /// Build a valid module: fn add() { 40 + 2 }
@@ -688,13 +748,10 @@ mod tests {
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale op result");
-        assert_eq!(result.stale_errors.len(), 1);
-        assert_eq!(result.stale_errors[0].function_name, "func_b");
-        assert!(
-            result.stale_errors[0]
-                .stale_value_description
-                .contains("arith.const")
-        );
+        let stale_errors = stale_value_errors(&result);
+        assert_eq!(stale_errors.len(), 1);
+        assert_eq!(stale_errors[0].0, "func_b");
+        assert!(stale_errors[0].2.contains("arith.const"));
     }
 
     #[test]
@@ -761,13 +818,10 @@ mod tests {
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale block arg");
-        assert_eq!(result.stale_errors.len(), 1);
-        assert_eq!(result.stale_errors[0].function_name, "func_b");
-        assert!(
-            result.stale_errors[0]
-                .stale_value_description
-                .contains("block arg")
-        );
+        let stale_errors = stale_value_errors(&result);
+        assert_eq!(stale_errors.len(), 1);
+        assert_eq!(stale_errors[0].0, "func_b");
+        assert!(stale_errors[0].2.contains("block arg"));
     }
 
     #[test]
@@ -951,9 +1005,10 @@ mod tests {
             !result.is_ok(),
             "Cross-function value ref should be invalid"
         );
-        assert_eq!(result.stale_errors.len(), 2);
-        for err in &result.stale_errors {
-            assert_eq!(err.function_name, "func_b");
+        let stale_errors = stale_value_errors(&result);
+        assert_eq!(stale_errors.len(), 2);
+        for (function_name, _, _) in stale_errors {
+            assert_eq!(function_name, "func_b");
         }
     }
 
@@ -1026,8 +1081,9 @@ mod tests {
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale ref in wasm.func body");
-        assert_eq!(result.stale_errors.len(), 1);
-        assert_eq!(result.stale_errors[0].function_name, "func_b");
+        let stale_errors = stale_value_errors(&result);
+        assert_eq!(stale_errors.len(), 1);
+        assert_eq!(stale_errors[0].0, "func_b");
     }
 
     /// A value defined inside a nested region must not be visible in the outer
@@ -1138,9 +1194,10 @@ mod tests {
             !result.is_ok(),
             "Value defined only in inner region must not be visible in outer scope"
         );
-        assert_eq!(result.stale_errors.len(), 1);
-        assert_eq!(result.stale_errors[0].function_name, "bad_scope");
-        assert!(result.stale_errors[0].consumer_op.contains("return"));
+        let stale_errors = stale_value_errors(&result);
+        assert_eq!(stale_errors.len(), 1);
+        assert_eq!(stale_errors[0].0, "bad_scope");
+        assert!(stale_errors[0].1.contains("return"));
     }
 
     #[test]
@@ -1360,5 +1417,53 @@ mod tests {
             "Should detect args to zero-param function"
         );
         assert!(diagnostics[0].message.contains("1 argument(s), expected 0"));
+    }
+
+    #[test]
+    fn cmpf_subset_predicate_passes() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
+    %2 = arith.cmpf %0, %1 {predicate = @une} : core.i1
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_semantics(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn cmpf_unsupported_predicate_is_rejected() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
+    %2 = arith.cmpf %0, %1 {predicate = @ueq} : core.i1
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_semantics(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("unsupported predicate 'ueq'"));
+    }
+
+    #[test]
+    fn validate_all_includes_cmpf_predicate_errors() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
+    %2 = arith.cmpf %0, %1 {predicate = @one} : core.i1
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_all(&ctx, module);
+        assert!(!result.is_ok());
+        assert_eq!(operation_error_messages(&result).len(), 1);
     }
 }
