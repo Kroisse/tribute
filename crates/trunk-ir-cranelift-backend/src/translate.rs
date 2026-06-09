@@ -14,7 +14,7 @@ use cranelift_module::{
     DataDescription, FuncId, Linkage, Module as CraneliftModule, default_libcall_names,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::Triple;
+use target_lexicon::{OperatingSystem, Triple};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif as arena_clif;
@@ -343,7 +343,7 @@ fn emit_module_impl(
     rodata: &[RodataEntry],
 ) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
-    let triple = Triple::host();
+    let triple = host_object_triple();
     let mut flag_builder = settings::builder();
     flag_builder
         .set("is_pic", "true")
@@ -579,6 +579,14 @@ fn emit_module_impl(
     Ok(bytes)
 }
 
+fn host_object_triple() -> Triple {
+    let mut triple = Triple::host();
+    if let OperatingSystem::Darwin(version) = triple.operating_system {
+        triple.operating_system = OperatingSystem::MacOSX(version);
+    }
+    triple
+}
+
 /// Collect all `clif.func` operations from a Module.
 fn collect_clif_funcs(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut funcs = Vec::new();
@@ -665,5 +673,16 @@ mod tests {
 
         // Same input → same output (deterministic)
         assert_eq!(mangle_native_name("main"), mangle_native_name("main"));
+    }
+
+    #[test]
+    fn host_object_triple_uses_macosx_for_darwin() {
+        let triple = host_object_triple();
+        if cfg!(target_os = "macos") {
+            assert!(matches!(
+                triple.operating_system,
+                OperatingSystem::MacOSX(_)
+            ));
+        }
     }
 }
