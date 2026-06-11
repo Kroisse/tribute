@@ -247,32 +247,18 @@ TrunkIR [wasm.*]                     TrunkIR [clif.*]
 
 - **네이티브 GC**: 자체 GC 구현 불필요
 - **Tail calls**: WASM 3.0에서 표준화
-- **Stack Switching** (Phase 3): delimited continuation 네이티브 지원 예정
 - **크로스 플랫폼**: 브라우저 + WASI 런타임
 
 ### Effect 구현 전략
 
-#### 현재 (Stack Switching 없음)
+WasmGC는 현재 주요 구현 경로가 아니다. 다시 활성화할 경우에도
+언어 레벨 effect lowering은 shared middle-end의 tail-call CPS 전략을 따른다.
+따라서 WasmGC backend의 과제는 stack switching을 직접 사용해 effect를
+구현하는 것이 아니라, 이미 lowered된 closure/evidence/call_indirect IR을
+WasmGC 타입과 table 기반 호출로 정확히 emit하는 것이다.
 
-Asyncify 변환 또는 CPS 변환 필요 (복잡함)
-
-#### 미래 (Stack Switching 도입 후)
-
-```wasm
-;; Prompt 설치
-(cont.new $handler_type
-  (block $prompt
-    ;; body 실행
-    ;; effect 발생 시 suspend
-  )
-)
-
-;; Effect 수행 (shift)
-(suspend $effect_tag)
-
-;; Handler에서 resume
-(resume $cont (local.get $value))
-```
+과거의 yield bubbling / `YieldResult` trampoline 설계는 폐기된 대안으로
+보존하되, 새 구현의 기준으로 삼지 않는다.
 
 ### 코드 생성
 
@@ -307,7 +293,7 @@ WASM 백엔드와 동일한 구조를 유지한다:
 
 ```text
 tribute-passes/src/native/       Tribute 전용 native lowering
-  cont → libmprompt 호출, evidence, boxing(RC)
+  evidence runtime adaptation, boxing(RC)
   + func/arith/scf/adt/mem → clif.* dialect 변환
 
 trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
@@ -317,26 +303,16 @@ trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
 - `clif.*` dialect은 Cranelift IR과 1:1 대응 (`wasm.*`과 대칭)
 - `trunk-ir-cranelift-backend`은 `trunk-ir`만 의존 (Tribute 독립적)
 
-### Effect 구현 전략: libmprompt
+### Effect 구현 전략: Tail-Call CPS
 
-[libmprompt](https://github.com/koka-lang/libmprompt) (Koka 언어의 effect 런타임)을
-사용하여 `cont.*` dialect을 직접 변환한다. WASM의 trampoline과 달리
-라이브 변수 캡처/state struct가 불필요 — libmprompt가 스택 자체를 관리.
+현재 native 구현은 libmprompt나 `cont.*` dialect 직접 lowering을 사용하지
+않는다. Frontend/shared middle-end에서 continuation을 closure로 명시화하고,
+effect operation은 evidence lookup 후 handler dispatch closure로 tail-call한다.
 
-```c
-// libmprompt C FFI
-void* mp_prompt(mp_prompt_t* p, mp_start_fun_t* fun, void* arg);
-void* mp_yield(mp_prompt_t* p, mp_yield_fun_t* fun, void* arg);
-void* mp_resume(mp_resume_t* r, void* result);
-void  mp_resume_drop(mp_resume_t* r);
-```
-
-핵심 변환:
-
-- `cont.push_prompt` → `mp_prompt` 호출
-- `cont.shift` → `mp_yield` 호출
-- `cont.resume` → `mp_resume` 호출
-- `cont.drop` → `mp_resume_drop` 호출
+- `fn` ability operation → `ability.call` → `tr_dispatch_fn` 직접 호출
+- `op` ability operation → `ability.perform` → `handler_dispatch` closure 호출
+- `handle` boundary → evidence에 `tr_dispatch_fn`과 `handler_dispatch`를 가진
+  marker 삽입
 
 ### 메모리 관리: Reference Counting
 
@@ -364,9 +340,11 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 - [ ] Ability 타입 추론
 - [ ] Effect Dialect
 - [ ] Handler 문법 파싱
-- [ ] Delimited continuation lowering
-  - [ ] Cranelift: setjmp + 스택 복사
-  - [ ] WasmGC: CPS 또는 Stack Switching
+- [ ] Tail-call CPS effect lowering
+  - [ ] Evidence propagation
+  - [ ] `fn` operation direct dispatch
+  - [ ] `op` operation handler dispatch closure
+  - [ ] Backend별 evidence runtime adaptation
 
 ### Phase 3: 최적화
 

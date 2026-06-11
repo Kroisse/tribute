@@ -173,10 +173,9 @@ Handler가 **항상 즉시 `k(value)`로 끝나면** (tail-resumptive), continua
 ```rust
 fn state_get(ev: *Evidence) -> s {
     let marker = (*ev).get(STATE_ID)
-    shift(marker.prompt(), |k| {
-        let op_table = &OP_TABLES[marker.op_table_index]
-        (op_table.get)(k)  // k를 캡처하고 handler 호출
-    })
+    let handler = marker.handler_dispatch
+    let k = capture_continuation()
+    handler(k, hash(State, get), Nil)
 }
 ```
 
@@ -185,8 +184,8 @@ fn state_get(ev: *Evidence) -> s {
 ```rust
 fn state_get_optimized(ev: *Evidence) -> s {
     let marker = (*ev).get(STATE_ID)
-    let op_table = &OP_TABLES[marker.op_table_index]
-    (op_table.get_value)()  // 직접 값 반환, shift 없음!
+    let tr_dispatch = marker.tr_dispatch_fn
+    tr_dispatch(hash(State, get), Nil)  // continuation capture 없음
 }
 ```
 

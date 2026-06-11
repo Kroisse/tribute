@@ -1,204 +1,143 @@
 # CPS 기반 Effect Handling 파이프라인
 
-## 핵심 설계: ability.handle + ability.perform
+이 문서는 현재 구현 기준의 ability lowering 전략을 설명한다.
 
-### ability.perform
+핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
+WasmGC yield bubbling, `YieldResult` 중심 trampoline, `cont.*` dialect 직접
+lowering은 현재 경로가 아니다.
 
-Effect operation 수행을 위한 high-level op. CPS 변환에서 explicit
-continuation과 함께 사용:
+## 핵심 설계
 
-```text
-ability.perform @State, @get, [%args], %continuation_closure
-```
+### `fn` operation: direct dispatch
 
-- Lowering: evidence lookup → ShiftInfo/Continuation 구성 → `YieldResult::Shift` 반환
-- Block terminator 성격 (CPS에서 이후 코드는 없음 — continuation closure에 포함)
-
-### ability.handle_dispatch
-
-CPS에서 done handler는 body의 최외곽 continuation closure가 됨.
-따라서 handle expression에서 done region이 분리되어, **handler dispatch만 담당**:
+`fn`으로 선언된 ability operation은 tail-resumptive임을 선언부에서 보장한다.
+호출 지점은 continuation을 만들지 않고 `ability.call`로 내려간다.
 
 ```text
-// 1. done handler → closure로 생성
-%done_k = closure.new @handle_done, [captures]
-
-// 2. evidence 설정
-%tag = call @__tribute_next_tag()
-%new_ev = call @__tribute_evidence_extend(%ev, %marker)
-
-// 3. CPS body를 done_k와 함께 호출 → YieldResult 반환
-%yr = call @handle_body(%new_ev, %done_k)
-
-// 4. handler dispatch (Shift만 처리, Done은 body CPS chain에서 처리됨)
-ability.handle_dispatch %yr, %tag {
-  handler @get {
-    ^bb0(%k: Closure, %value):
-      func.call_indirect %k(42)    // resume = call continuation closure
-  }
-}
+%result = ability.call %arg
+  { ability_ref = @Console, op_name = @print }
 ```
 
-## 파이프라인
+`lower_ability_perform`는 이를 다음 형태로 낮춘다:
 
 ```text
-ast_to_ir (CPS for effectful bodies, closure.lambda 생성)
-→ evidence_params → lower_closure_lambda → closure_lower → evidence_calls
-→ tail_resumptive → ability lowering (ability.perform → YieldResult)
-→ lambda_flattening → dce → resolve_casts → emit
+%marker = ability.evidence_lookup %ev { ability_ref = @Console }
+%tr_dispatch = adt.struct_get %marker, 2
+%fn = adt.struct_get %tr_dispatch, 0
+%env = adt.struct_get %tr_dispatch, 1
+%op_idx = arith.const <hash(Console, print)>
+%result = func.call_indirect %fn(%ev, %env, %op_idx, %arg_anyref)
 ```
 
-### ast_to_ir: `lower_block_cps()`
+즉 `fn` operation은 CPS 변환, continuation allocation, resume dispatch를
+우회한다.
 
-- 각 statement를 순회, effectful call 감지
-- Effect point 발견 시: 나머지 stmts + value를 body region으로 만들어
-  `closure.lambda` 생성 (lambda lifting은 별도 pass가 처리)
-- 자연스러운 재귀: 분기/case arm 내 effect도 동일하게 처리
+### `op` operation: tail-call CPS dispatch
 
-### handle expression
-
-- done handler → `closure.lambda`로 생성 (CPS body의 outermost continuation)
-- body → CPS 모드로 lowering (done_k를 continuation으로 전달)
-- handler arms → ability.handle_dispatch region으로 생성
-
-### 소스 lambda 처리
-
-CPS continuation뿐 아니라 소스 레벨 lambda도 `closure.lambda`로 처리:
-
-```tribute
-let f = fn(x) { x + captured_var }
-```
-
-ast_to_ir → `closure.lambda [%captured_var] { ^bb0(%x): ... }`
-→ lower_closure_lambda pass → `closure.new @lambda_0, [%captured_var]`
-
-## closure.lambda
-
-### 설계
+`op`으로 선언된 general operation은 명시적인 continuation closure와 함께
+`ability.perform`으로 내려간다.
 
 ```text
-// closure.lambda: body region + captures → closure value
-%k = closure.lambda [%x, %y] {
-  ^bb0(%param: anyref):
-    %r = arith.add %x, %param
-    scf.yield %r
-}
-
-// lower_closure_lambda pass에 의해 변환:
-func.func @__lambda_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
-  %x = adt.struct_get %env, 0 : anyref
-  %y = adt.struct_get %env, 1 : anyref
-  %r = arith.add %x, %param
-  func.return %r
-}
-%k = closure.new @__lambda_0, [%x, %y]
+%result = ability.perform %continuation, %arg
+  { ability_ref = @State, op_name = @get }
 ```
 
-**위치**: closure dialect (tribute-ir) — language-agnostic하며 `closure.new`의
-pre-lifted 버전으로 자연스럽게 위치.
-
-### lower_closure_lambda pass
-
-**위치**: `crates/tribute-passes/src/lower_closure_lambda.rs`
-
-역할:
-
-1. 모듈 내 모든 `closure.lambda` op 수집
-2. 각 lambda의 body region을 top-level `func.func`으로 추출
-3. Captures를 env struct로 패킹
-4. `closure.lambda` → `closure.new` 치환
-
-## 조건 분기 안의 effect
-
-```tribute
-fn foo() ->{State} Int {
-  let x = State::get()
-  if x > 0 {
-    State::set(x - 1)      // ← 분기 안의 effect
-    x
-  } else { 0 }
-}
-```
-
-AST에서 각 분기는 독립된 expression. `lower_block_cps`가 재귀적으로
-각 분기에 CPS splitting 적용:
+`lower_ability_perform`는 evidence에서 `handler_dispatch` closure를 찾고,
+그 closure로 tail-call한다:
 
 ```text
-fn foo(k) {
-  ability.perform @State, @get, [], closure.lambda @foo_k1, [k]
-}
-fn foo_k1(ev, env, x) {             // continuation after get
-  if x > 0 {
-    // if-branch에 effect → 재귀적 CPS splitting
-    ability.perform @State, @set, [x-1], closure.lambda @foo_k2, [x, env.k]
-  } else {
-    func.call_indirect env.k(0)      // pure → 직접 continuation 호출
-  }
-}
-fn foo_k2(ev, env, _) {             // continuation after set
-  func.call_indirect env.k(env.x)
-}
+%marker = ability.evidence_lookup %ev { ability_ref = @State }
+%handler = adt.struct_get %marker, 3
+%fn = adt.struct_get %handler, 0
+%env = adt.struct_get %handler, 1
+%op_idx = arith.const <hash(State, get)>
+%result = func.call_indirect %fn(%ev, %env, %continuation_anyref, %op_idx, %arg_anyref)
+func.return %result
 ```
 
-분기 안의 effect에 특별한 처리가 필요 없음 — AST 순회가 자연스럽게 재귀.
+Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
+`ability.perform` 이후의 같은 function-body ops는 dead code가 된다.
 
-## 공통 구성요소
+### `handle`: evidence extension + handler closures
 
-### Lambda Flattening / Inlining
+`handle` lowering은 두 종류의 dispatch closure를 만든다.
 
-Done 경로에서 single-use closure를 인라인:
+- `handler_dispatch`: `(k, op_idx, value) -> anyref`
+  - general `op` handlers용
+  - `resume`은 continuation closure 호출로 lowering된다.
+- `tr_dispatch_fn`: `(op_idx, value) -> anyref`
+  - `fn` handlers용
+  - continuation 없이 handler 결과가 inline result가 된다.
+
+`resolve_evidence`는 handler boundary에서 새 marker를 만들어 evidence를
+확장한다.
 
 ```text
-// Before: closure 생성 + 즉시 호출
-%k = closure.new @cont_fn, %env
-func.call_indirect %k(%value)
-
-// After: body 직접 삽입, closure allocation 제거
-// @cont_fn의 body가 인라인됨
+struct Marker {
+    ability_id: i32,
+    prompt_tag: i32,
+    tr_dispatch_fn: ptr,
+    handler_dispatch: ptr,
+}
 ```
 
-Lambda flattening은 **general inlining의 특수한 경우** (single-use closure).
-Heuristic 불필요 — single-use closure는 항상 flattening이 이득.
+Evidence는 ability id 기준으로 정렬된 marker 배열이며, handler 설치 시
+새 evidence 값을 만든다.
 
-- **단기**: 별도 lambda flattening pass로 구현 (패턴 매칭만으로 가능, 단순)
-- **장기**: General inlining pass를 만들 때 single-use closure 인라인을 포함하여
-  통합. Lambda flattening pass는 제거.
+### `ability.handle_dispatch`
 
-### YieldResult 타입 시스템
+현재 구현에서 `ability.handle_dispatch`는 runtime dispatch loop가 아니다.
+Effect 발생 시점에서 이미 handler closure로 tail-call되므로,
+`lower_handle_dispatch`는 body result에 `done` handler를 적용하는 역할만 한다.
 
-- YieldResult { Done(anyref), Shift(ShiftInfo) }
-- ShiftInfo { value, prompt, op_idx, continuation }
-- Continuation은 CPS closure로 표현
+## Shared Middle-End Pipeline
 
-### tail_resumptive 상호작용
+현재 shared pipeline의 핵심 순서는 다음과 같다.
 
-handler 쪽 (ability.suspend → ability.yield)에서 동작 — CPS 변환과 직교.
+```text
+ast_to_ir
+→ lower_closure_lambda
+→ intrinsic_to_arith
+→ closure_lower
+→ lower_ability_perform
+→ convert_tail_resumptive
+→ resolve_evidence
+→ lower_handle_dispatch
+→ backend-specific lowering
+```
 
-- ability.yield arm: handler 값 함수 직접 호출 → continuation 즉시 호출
-- lambda_flattening이 즉시 호출 패턴 인라인
+`ast_to_ir` 단계에서 effectful function과 closure는 evidence parameter와
+CPS calling convention을 반영한 IR로 생성된다. 이후 backend는 이미 lowered된
+`func.call_indirect`, evidence runtime calls, closure representation을 각 타겟에
+맞게 낮춘다.
 
-## 장기 방향
+## Backend Implications
 
-### ability dialect 정리
+### Native
 
-- evidence_lookup/extend → `func.call @__tribute_*` (직접 호출)
-- handler_table/entry → adt 기반 정적 데이터
-- **ability.perform + ability.handle_dispatch**: 의미 있는 semantic markers로 유지
+Native target은 현재 주 개발 경로다. Evidence runtime은 `tribute-runtime`의
+`__tribute_evidence_*` C ABI 함수로 제공되고, native lowering은 marker field
+접근을 runtime lookup helper로 바꾼다.
 
-### core.Func effect row 분리 (미해결)
+### WasmGC
 
-현재 `core.Func<Return, Params>`에 `effect?: Type` attribute가 있음
-(`crates/trunk-ir/src/dialect/core.rs:25`). trunk-ir은 language-agnostic이어야
-하므로, effect row를 tribute-specific 타입으로 분리하는 것이 바람직.
+WasmGC도 원칙적으로 같은 shared middle-end를 사용할 수 있다. 다만 현재
+WasmGC backend에는 이전 yield bubbling/trampoline 설계의 흔적이 남아 있으므로,
+WasmGC를 다시 주요 경로로 올리기 전에 다음을 정리해야 한다.
 
-선택지:
+- `Step`, `Continuation`, `ResumeWrapper` builtin 타입의 실제 필요 여부
+- Marker field 문서와 구현의 4-field layout 일치
+- closure table index 기반 `call_indirect`가 handler/tr dispatch closure에
+  일관되게 적용되는지 검증
 
-- `tribute_rt.Func` 타입에 effect row 이동
-- Effect row를 `func.func` op attribute로 이동
-- 현재 상태 유지 (optional이므로 trunk-ir은 무시 가능)
+## 폐기된 접근
 
-## 열린 설계 질문
+다음 접근은 현재 구현 기준의 active path가 아니다.
 
-1. **CPS 함수 시그니처와 evidence 패스 호환**: continuation param 위치
-2. **Pure/effectful 경계**: handle expression에서 CPS → direct style 전환
-3. **core.Func effect row**: trunk-ir에서 분리할지 여부
+- WasmGC yield bubbling
+- Koka-style `YieldResult { Done, Shift }`를 effectful return type으로 전파
+- `cont_to_yield_bubbling` pass
+- `cont.*` dialect를 libmprompt 또는 stack switching으로 직접 lowering
+
+관련 과거 설계는 git history에서 확인할 수 있지만, 새 구현 작업의 기준으로
+사용하지 않는다.

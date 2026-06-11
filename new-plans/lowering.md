@@ -789,7 +789,7 @@ func.constant(string) → clif.symbol_addr(@data_symbol)
 
 ```mermaid
 flowchart TB
-    input["TrunkIR Module\n(cont.*, func.*, arith.*, scf.*, adt.*, mem.*)"]
+    input["TrunkIR Module\n(func.*, arith.*, scf.*, adt.*, mem.*, evidence runtime calls)"]
     arith["arith_to_clif\nclif.iadd, clif.iconst 등"]
     scf["scf_to_clif\nclif.brif, clif.jump, clif.br_table"]
     adt["adt_to_clif\nclif.load, clif.store, clif.call @malloc"]

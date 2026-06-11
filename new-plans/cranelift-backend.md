@@ -59,7 +59,7 @@ graph TD
 
 ```mermaid
 flowchart TB
-    input["TrunkIR Module\n(cont.*, func.*, arith.*, scf.*, adt.*)"]
+    input["TrunkIR Module\n(func.*, arith.*, scf.*, adt.*, evidence runtime calls)"]
 
     subgraph native_passes["tribute-passes/src/native/"]
         cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]

@@ -765,7 +765,8 @@ text.to_bytes()
 1. **클로저 표현**: `func.closure_new`의 구체적인 환경 캡처 방식
 2. **Effect row 표현**: IR에서 effect polymorphism 표현 방식
 3. **디버그 정보**: Source map 생성 방식
-4. **Wasm Stack Switching**: effect handling의 wasm lowering 전략
+4. **WasmGC 재활성화 조건**: shared tail-call CPS IR을 WasmGC closure/table/evidence
+   representation으로 안정적으로 lowering하는 전략
 
 ## Recent Changes
 
