@@ -19,15 +19,16 @@ core.module @test {
           %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
           %5 = closure.new %4 {func_ref = @"test::__lambda_0"} : !t1
           %6 = func.call %0, %5 {callee = @read} : tribute_rt.anyref
-          scf.yield %6
-      } {
-          %7 = arith.const {value = false} : core.i1
+          %7 = core.unrealized_conversion_cast %6 : core.i1
           scf.yield %7
+      } {
+          %8 = arith.const {value = false} : core.i1
+          scf.yield %8
       }
-      %8 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
-      %9 = core.unrealized_conversion_cast %1 : !t1
-      %10 = func.call_indirect %9, %8 : tribute_rt.anyref
-      func.return %10
+      %9 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+      %10 = core.unrealized_conversion_cast %1 : !t1
+      %11 = func.call_indirect %10, %9 : tribute_rt.anyref
+      func.return %11
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

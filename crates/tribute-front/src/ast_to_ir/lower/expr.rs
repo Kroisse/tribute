@@ -1767,7 +1767,10 @@ fn build_short_circuit_rhs_region<'db>(
     };
 
     let yield_val = match rhs_val {
-        Some(v) => v,
+        Some(v) => {
+            let mut builder = IrBuilder::new(builder.ctx, builder.ir, block);
+            builder.cast_if_needed(location, v, bool_ty)
+        }
         None => {
             let op = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(false));
             builder.ir.push_op(block, op.op_ref());

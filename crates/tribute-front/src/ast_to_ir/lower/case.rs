@@ -15,11 +15,7 @@ use crate::ast::{Arm, Expr, LiteralPattern, Pattern, PatternKind, ResolvedRef, T
 use super::super::context::IrLoweringCtx;
 use super::{IrBuilder, get_or_create_tuple_type, is_irrefutable_pattern, resolve_enum_type_attr};
 
-/// Lower an arm body to the value yielded by its `scf.if` region.
-///
-/// A CPS call inside the arm must first produce the arm's value, so isolate it
-/// from the continuation surrounding the whole case expression.
-fn lower_case_arm_body<'db>(
+fn lower_case_region_expr_with_local_done_k<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     expr: Expr<TypedRef<'db>>,
@@ -32,6 +28,29 @@ fn lower_case_arm_body<'db>(
     let result = super::expr::lower_block_cps_for_expr(builder, expr).map(|(value, _)| value);
     builder.ctx.done_k = outer_done_k;
     result
+}
+
+/// Lower an arm body to the value yielded by its `scf.if` region.
+///
+/// A CPS call inside the arm must first produce the arm's value, so isolate it
+/// from the continuation surrounding the whole case expression.
+fn lower_case_arm_body<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    lower_case_region_expr_with_local_done_k(builder, location, expr)
+}
+
+/// Lower a guard condition inside the already-matched arm region.
+fn lower_case_guard_condition<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    let bool_ty = builder.ctx.bool_type(builder.ir);
+    let value = lower_case_region_expr_with_local_done_k(builder, location, expr)?;
+    Some(builder.cast_if_needed(location, value, bool_ty))
 }
 
 /// Lower a case expression as a chain of `scf.if` operations.
@@ -300,7 +319,7 @@ fn build_guarded_arm_region<'db>(
         // 2. Evaluate guard condition
         let guard_cond = {
             let mut builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_expr(&mut builder, guard_expr.clone())
+            lower_case_guard_condition(&mut builder, location, guard_expr.clone())
         };
         let guard_cond = match guard_cond {
             Some(v) => v,
