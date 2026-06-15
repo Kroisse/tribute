@@ -13,7 +13,9 @@ use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{BlockData, RegionData};
 
-use crate::ast::{BinOpKind, Expr, ExprKind, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef};
+use crate::ast::{
+    BinOpKind, Expr, ExprKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef,
+};
 
 use tribute_ir::dialect::{ability, closure};
 
@@ -720,35 +722,68 @@ pub(super) fn lower_expr<'db>(
     }
 }
 
-/// CPS-lower an expression (used by handle body lowering).
+fn evaluated_expr_any<'db>(
+    expr: &Expr<TypedRef<'db>>,
+    predicate: &mut impl FnMut(&Expr<TypedRef<'db>>) -> bool,
+) -> bool {
+    if predicate(expr) {
+        return true;
+    }
+
+    match &*expr.kind {
+        ExprKind::Call { callee, args } => {
+            evaluated_expr_any(callee, predicate)
+                || args.iter().any(|arg| evaluated_expr_any(arg, predicate))
+        }
+        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+            args.iter().any(|arg| evaluated_expr_any(arg, predicate))
+        }
+        ExprKind::Record { fields, spread, .. } => {
+            spread
+                .as_ref()
+                .is_some_and(|expr| evaluated_expr_any(expr, predicate))
+                || fields
+                    .iter()
+                    .any(|(_, expr)| evaluated_expr_any(expr, predicate))
+        }
+        ExprKind::Block { stmts, value } => {
+            stmts.iter().any(|stmt| match stmt {
+                Stmt::Let { value, .. } => evaluated_expr_any(value, predicate),
+                Stmt::Expr { expr, .. } => evaluated_expr_any(expr, predicate),
+            }) || evaluated_expr_any(value, predicate)
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            evaluated_expr_any(lhs, predicate) || evaluated_expr_any(rhs, predicate)
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            evaluated_expr_any(scrutinee, predicate)
+                || arms.iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|guard| evaluated_expr_any(guard, predicate))
+                        || evaluated_expr_any(&arm.body, predicate)
+                })
+        }
+        ExprKind::Resume { arg, .. } => evaluated_expr_any(arg, predicate),
+        ExprKind::MethodCall { receiver, args, .. } => {
+            evaluated_expr_any(receiver, predicate)
+                || args.iter().any(|arg| evaluated_expr_any(arg, predicate))
+        }
+        // These introduce independently lowered evaluation domains.
+        ExprKind::Lambda { .. } | ExprKind::Handle { .. } => false,
+        _ => false,
+    }
+}
+
+/// Check whether evaluating an expression can execute a call that needs CPS.
 ///
-/// Like `lower_block_cps` but works on a single expression, wrapping it in
-/// a trivial block if needed.
-/// Check if an expression (or its sub-block) contains calls that need CPS
-/// transformation (effectful function calls or closure calls).
-pub(super) fn body_contains_cps_call<'db>(
+/// This does not descend into lambdas or handlers, which establish their own
+/// lowering domains.
+pub(super) fn contains_cps_call_in_evaluation<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
 ) -> bool {
-    match &*expr.kind {
-        ExprKind::Block { stmts, value } => {
-            stmts.iter().any(|s| is_cps_call_stmt(ctx, s)) || body_contains_cps_call(ctx, value)
-        }
-        ExprKind::Call { callee, .. } => {
-            if let ExprKind::Var(tr) = &*callee.kind {
-                if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. }) {
-                    return false; // Handled by existing CPS
-                }
-                // All closure calls need CPS
-                if matches!(&tr.resolved, ResolvedRef::Local { .. }) {
-                    return !matches!(tr.ty.kind(ctx.db), TypeKind::Continuation { .. });
-                }
-                return is_callee_effectful_by_definition(ctx, tr);
-            }
-            false
-        }
-        _ => false,
-    }
+    evaluated_expr_any(expr, &mut |expr| is_cps_call_expr(ctx, expr))
 }
 
 /// Lower a function body expression with CPS transformation for effectful functions.
@@ -759,49 +794,21 @@ pub(super) fn lower_block_cps_for_body<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
 ) -> Option<(ValueRef, bool)> {
-    // Delegate to lower_block_cps_for_expr — effectful call detection
-    // is already integrated into lower_block_cps via is_effectful_call_stmt.
+    // Effectful call detection is already integrated into lower_block_cps.
     lower_block_cps_for_expr(builder, expr)
 }
 
+/// CPS-lower an expression, using an empty statement list for non-block forms.
+///
+/// This keeps direct-call handling and nested-call lifting in the same block
+/// CPS state machine instead of maintaining a second expression-only path.
 pub(super) fn lower_block_cps_for_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
 ) -> Option<(ValueRef, bool)> {
     match *expr.kind {
         ExprKind::Block { stmts, value } => lower_block_cps(builder, stmts, value),
-        _ => {
-            // Non-block expression: check if it's a direct ability op call
-            if let Some(result) = super::expr::try_lower_value_ability_op(builder, &expr) {
-                return Some((result, true));
-            }
-            // Check if it's an effectful named function call (needs CPS with done_k)
-            if builder.ctx.done_k.is_some()
-                && let ExprKind::Call { callee: c, .. } = &*expr.kind
-                && let ExprKind::Var(tr) = &*c.kind
-                && !matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
-                && is_callee_effectful_by_definition(builder.ctx, tr)
-                && let Some(result) = try_lower_value_effectful_call(builder, expr.clone())
-            {
-                return Some((result, true));
-            }
-            // Reject nested ability-op subexpressions that would bypass CPS.
-            // Full expression-level CPS lifting is not yet implemented.
-            if contains_nested_ability_op(&expr) {
-                let location = builder.location(expr.id);
-                Diagnostic::new(
-                    "ability operation in nested expression position is not yet supported; \
-                          extract to a let binding",
-                    location.span,
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::Lowering,
-                )
-                .accumulate(builder.db());
-                return None;
-            }
-            let result = lower_expr(builder, expr)?;
-            Some((result, false))
-        }
+        _ => lower_block_cps(builder, vec![], expr),
     }
 }
 
@@ -837,6 +844,19 @@ fn lower_block_cps<'db>(
     let mut stmts_iter = stmts.into_iter().peekable();
 
     while let Some(stmt) = stmts_iter.peek() {
+        if builder.ctx.done_k.is_some()
+            && let Some((lifted_stmt, rebuilt_stmt)) =
+                lift_nested_cps_call_from_stmt(builder.ctx, stmt.clone())
+        {
+            let mut remaining = vec![rebuilt_stmt];
+            remaining.extend(stmts_iter.skip(1));
+            return if is_direct_ability_op_stmt(&lifted_stmt) {
+                lower_cps_ability_op(builder, lifted_stmt, remaining, value).map(|r| (r, true))
+            } else {
+                lower_cps_call(builder, lifted_stmt, remaining, value).map(|r| (r, true))
+            };
+        }
+
         if is_direct_ability_op_stmt(stmt) {
             let stmt = stmts_iter.next().unwrap();
             let remaining: Vec<_> = stmts_iter.collect();
@@ -888,8 +908,214 @@ fn lower_block_cps<'db>(
         let result = lower_expr(builder, value)?;
         return Some((result, true));
     }
+    if builder.ctx.done_k.is_some()
+        && !builder.ctx.cps_handler_mode
+        && is_cps_call_expr(builder.ctx, &value)
+    {
+        let result = lower_expr(builder, value)?;
+        return Some((result, true));
+    }
+
+    if builder.ctx.done_k.is_some()
+        && let Some((lifted_stmt, rebuilt_value)) =
+            lift_nested_cps_call(builder.ctx, value.clone(), false)
+    {
+        return if is_direct_ability_op_stmt(&lifted_stmt) {
+            lower_cps_ability_op(builder, lifted_stmt, vec![], rebuilt_value).map(|r| (r, true))
+        } else {
+            lower_cps_call(builder, lifted_stmt, vec![], rebuilt_value).map(|r| (r, true))
+        };
+    }
 
     lower_expr(builder, value).map(|r| (r, false))
+}
+
+fn is_cps_call_expr<'db>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    expr: &Expr<TypedRef<'db>>,
+) -> bool {
+    let ExprKind::Call { callee, .. } = &*expr.kind else {
+        return false;
+    };
+    let ExprKind::Var(tr) = &*callee.kind else {
+        return true;
+    };
+    match &tr.resolved {
+        ResolvedRef::AbilityOp {
+            kind: crate::ast::OpDeclKind::Op,
+            ..
+        } => true,
+        ResolvedRef::AbilityOp { .. } => false,
+        ResolvedRef::Local { .. } => !matches!(tr.ty.kind(ctx.db), TypeKind::Continuation { .. }),
+        _ => is_callee_effectful_by_definition(ctx, tr),
+    }
+}
+
+fn make_lifted_call<'db>(
+    ctx: &mut super::super::context::IrLoweringCtx<'db>,
+    call: Expr<TypedRef<'db>>,
+) -> Option<(Stmt<TypedRef<'db>>, Expr<TypedRef<'db>>)> {
+    let ty = *ctx.get_node_type(call.id)?;
+    let local_id = ctx.next_local_id();
+    let name = Symbol::new("__cps_tmp");
+    let pattern = Pattern::new(
+        call.id,
+        PatternKind::Bind {
+            name,
+            local_id: Some(local_id),
+        },
+    );
+    let replacement = Expr::new(
+        call.id,
+        ExprKind::Var(TypedRef::new(ResolvedRef::local(local_id, name), ty)),
+    );
+    let stmt = Stmt::Let {
+        id: call.id,
+        pattern,
+        ty: None,
+        value: call,
+    };
+    Some((stmt, replacement))
+}
+
+fn lift_nested_cps_call_from_stmt<'db>(
+    ctx: &mut super::super::context::IrLoweringCtx<'db>,
+    stmt: Stmt<TypedRef<'db>>,
+) -> Option<(Stmt<TypedRef<'db>>, Stmt<TypedRef<'db>>)> {
+    match stmt {
+        Stmt::Let {
+            id,
+            pattern,
+            ty,
+            value,
+        } => {
+            let (lifted, value) = lift_nested_cps_call(ctx, value, false)?;
+            Some((
+                lifted,
+                Stmt::Let {
+                    id,
+                    pattern,
+                    ty,
+                    value,
+                },
+            ))
+        }
+        Stmt::Expr { id, expr } => {
+            let (lifted, expr) = lift_nested_cps_call(ctx, expr, false)?;
+            Some((lifted, Stmt::Expr { id, expr }))
+        }
+    }
+}
+
+fn lift_nested_cps_call<'db>(
+    ctx: &mut super::super::context::IrLoweringCtx<'db>,
+    expr: Expr<TypedRef<'db>>,
+    include_self: bool,
+) -> Option<(Stmt<TypedRef<'db>>, Expr<TypedRef<'db>>)> {
+    let id = expr.id;
+    let original = expr.clone();
+    let rebuilt = match *expr.kind {
+        ExprKind::Call { callee, mut args } => {
+            if let Some((lifted, callee)) = lift_nested_cps_call(ctx, callee.clone(), true) {
+                return Some((lifted, Expr::new(id, ExprKind::Call { callee, args })));
+            }
+            for index in 0..args.len() {
+                if let Some((lifted, arg)) = lift_nested_cps_call(ctx, args[index].clone(), true) {
+                    args[index] = arg;
+                    return Some((lifted, Expr::new(id, ExprKind::Call { callee, args })));
+                }
+            }
+            Expr::new(id, ExprKind::Call { callee, args })
+        }
+        ExprKind::Cons { ctor, mut args } => {
+            for index in 0..args.len() {
+                if let Some((lifted, arg)) = lift_nested_cps_call(ctx, args[index].clone(), true) {
+                    args[index] = arg;
+                    return Some((lifted, Expr::new(id, ExprKind::Cons { ctor, args })));
+                }
+            }
+            Expr::new(id, ExprKind::Cons { ctor, args })
+        }
+        ExprKind::Tuple(mut elements) => {
+            for index in 0..elements.len() {
+                if let Some((lifted, element)) =
+                    lift_nested_cps_call(ctx, elements[index].clone(), true)
+                {
+                    elements[index] = element;
+                    return Some((lifted, Expr::new(id, ExprKind::Tuple(elements))));
+                }
+            }
+            Expr::new(id, ExprKind::Tuple(elements))
+        }
+        ExprKind::Record {
+            type_name,
+            mut fields,
+            spread,
+        } => {
+            let mut spread = spread;
+            if let Some(spread_expr) = spread.clone()
+                && let Some((lifted, replacement)) = lift_nested_cps_call(ctx, spread_expr, true)
+            {
+                spread = Some(replacement);
+                return Some((
+                    lifted,
+                    Expr::new(
+                        id,
+                        ExprKind::Record {
+                            type_name,
+                            fields,
+                            spread,
+                        },
+                    ),
+                ));
+            }
+            for index in 0..fields.len() {
+                if let Some((lifted, field)) =
+                    lift_nested_cps_call(ctx, fields[index].1.clone(), true)
+                {
+                    fields[index].1 = field;
+                    return Some((
+                        lifted,
+                        Expr::new(
+                            id,
+                            ExprKind::Record {
+                                type_name,
+                                fields,
+                                spread,
+                            },
+                        ),
+                    ));
+                }
+            }
+            Expr::new(
+                id,
+                ExprKind::Record {
+                    type_name,
+                    fields,
+                    spread,
+                },
+            )
+        }
+        ExprKind::BinOp { op, lhs, rhs } => {
+            if let Some((lifted, lhs)) = lift_nested_cps_call(ctx, lhs.clone(), true) {
+                return Some((lifted, Expr::new(id, ExprKind::BinOp { op, lhs, rhs })));
+            }
+            Expr::new(id, ExprKind::BinOp { op, lhs, rhs })
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            if let Some((lifted, scrutinee)) = lift_nested_cps_call(ctx, scrutinee.clone(), true) {
+                return Some((lifted, Expr::new(id, ExprKind::Case { scrutinee, arms })));
+            }
+            Expr::new(id, ExprKind::Case { scrutinee, arms })
+        }
+        _ => original.clone(),
+    };
+
+    if include_self && is_cps_call_expr(ctx, &rebuilt) {
+        make_lifted_call(ctx, rebuilt)
+    } else {
+        None
+    }
 }
 
 /// Try to CPS-transform a value expression that is a direct ability op call.
@@ -997,81 +1223,6 @@ fn try_lower_value_effectful_call<'db>(
     Some(call_result)
 }
 
-/// Check if an expression contains a nested CPS ability op call (not at the top level).
-///
-/// Returns true if any subexpression (argument, operand, etc.) is a call to
-/// an `op` ability operation (which requires CPS). `fn` operations are excluded
-/// because they use direct calls without CPS.
-fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
-    match &*expr.kind {
-        ExprKind::Call { callee, args } => {
-            // Check args (not callee — a direct call is fine, handled elsewhere)
-            let callee_is_cps_ability_op = matches!(
-                &*callee.kind,
-                ExprKind::Var(tr) if matches!(
-                    &tr.resolved,
-                    ResolvedRef::AbilityOp { kind: crate::ast::OpDeclKind::Op, .. }
-                )
-            );
-            if !callee_is_cps_ability_op {
-                // Non-CPS-ability-op call: check callee (e.g. foo(bar)(emit()))
-                // and args for nested ability ops
-                contains_ability_op(callee) || args.iter().any(contains_ability_op)
-            } else {
-                // Direct CPS ability op call at top level — not "nested"
-                false
-            }
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => contains_ability_op(lhs) || contains_ability_op(rhs),
-        ExprKind::Tuple(elems) => elems.iter().any(contains_ability_op),
-        ExprKind::Block { stmts, value } => {
-            stmts.iter().any(|s| match s {
-                Stmt::Let { value, .. } => contains_ability_op(value),
-                Stmt::Expr { expr, .. } => contains_ability_op(expr),
-            }) || contains_ability_op(value)
-        }
-        ExprKind::Case { scrutinee, arms } => {
-            contains_ability_op(scrutinee) || arms.iter().any(|a| contains_ability_op(&a.body))
-        }
-        ExprKind::Record { fields, .. } => fields.iter().any(|(_, v)| contains_ability_op(v)),
-        _ => false,
-    }
-}
-
-/// Check if an expression IS or CONTAINS an `op` ability op call (CPS-requiring).
-///
-/// `fn` operations use direct calls and do not trigger CPS transformation.
-fn contains_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
-    match &*expr.kind {
-        ExprKind::Call { callee, args } => {
-            if let ExprKind::Var(tr) = &*callee.kind
-                && matches!(
-                    &tr.resolved,
-                    ResolvedRef::AbilityOp {
-                        kind: crate::ast::OpDeclKind::Op,
-                        ..
-                    }
-                )
-            {
-                return true;
-            }
-            contains_ability_op(callee) || args.iter().any(contains_ability_op)
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => contains_ability_op(lhs) || contains_ability_op(rhs),
-        ExprKind::Block { stmts, value } => {
-            stmts.iter().any(|s| match s {
-                Stmt::Let { value, .. } => contains_ability_op(value),
-                Stmt::Expr { expr, .. } => contains_ability_op(expr),
-            }) || contains_ability_op(value)
-        }
-        ExprKind::Tuple(elems) => elems.iter().any(contains_ability_op),
-        ExprKind::Case { scrutinee, arms } => {
-            contains_ability_op(scrutinee) || arms.iter().any(|a| contains_ability_op(&a.body))
-        }
-        _ => false,
-    }
-}
-
 /// Check if a statement contains a direct ability op call that requires CPS.
 ///
 /// `fn` operations are excluded because they use direct calls (no CPS).
@@ -1116,23 +1267,7 @@ fn is_cps_call_stmt<'db>(
         Stmt::Let { value, .. } => value,
         Stmt::Expr { expr, .. } => expr,
     };
-    let ExprKind::Call { callee, .. } = &*call_expr.kind else {
-        return false;
-    };
-    let ExprKind::Var(tr) = &*callee.kind else {
-        return false;
-    };
-    // Skip ability ops — they are handled by is_direct_ability_op_stmt
-    if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. }) {
-        return false;
-    }
-    // All local closure calls need CPS (closures always have done_k)
-    if matches!(&tr.resolved, ResolvedRef::Local { .. }) {
-        // But skip continuation resume calls
-        return !matches!(tr.ty.kind(ctx.db), TypeKind::Continuation { .. });
-    }
-    // For named functions, check if effectful by definition
-    is_callee_effectful_by_definition(ctx, tr)
+    is_cps_call_expr(ctx, call_expr) && !is_direct_ability_op_stmt(stmt)
 }
 
 /// Check if a callee is effectful based on its function **definition** (TypeScheme),
@@ -1318,9 +1453,7 @@ fn lower_cps_call<'db>(
     let ExprKind::Call { callee, args } = *call_expr.kind else {
         unreachable!("ICE: lower_cps_call called with non-call expression");
     };
-    let ExprKind::Var(typed_ref) = *callee.kind else {
-        unreachable!("ICE: lower_cps_call called with non-var callee");
-    };
+    let callee_kind = *callee.kind;
 
     // Lower arguments
     let mut arg_values = builder.collect_args(args)?;
@@ -1330,7 +1463,10 @@ fn lower_cps_call<'db>(
         .ctx
         .get_node_type(call_expr_id)
         .map(|t| builder.ctx.convert_type(builder.ir, *t))
-        .unwrap_or_else(|| builder.call_result_type(&typed_ref.ty));
+        .unwrap_or_else(|| match &callee_kind {
+            ExprKind::Var(typed_ref) => builder.call_result_type(&typed_ref.ty),
+            _ => builder.ctx.anyref_type(builder.ir),
+        });
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
@@ -1345,38 +1481,62 @@ fn lower_cps_call<'db>(
         value,
     )?;
 
-    match &typed_ref.resolved {
-        ResolvedRef::Function { id } => {
-            let callee_name = id.qualified(builder.db());
+    match callee_kind {
+        ExprKind::Var(typed_ref) => match &typed_ref.resolved {
+            ResolvedRef::Function { id } => {
+                let callee_name = id.qualified(builder.db());
 
-            // Insert casts for arguments using type scheme information
-            cast_args_from_signature(builder, location, callee_name, &mut arg_values);
+                // Insert casts for arguments using type scheme information
+                cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
-            // Call effectful function with evidence + continuation as first args
-            let evidence = super::get_or_create_evidence(builder, location);
-            let mut cps_args = vec![evidence, continuation];
-            cps_args.append(&mut arg_values);
+                // Call effectful function with evidence + continuation as first args
+                let evidence = super::get_or_create_evidence(builder, location);
+                let mut cps_args = vec![evidence, continuation];
+                cps_args.append(&mut arg_values);
 
-            let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
-            builder.ir.push_op(builder.block, call_op.op_ref());
-            Some(call_op.result(builder.ir))
-        }
-        ResolvedRef::Local { id, .. } => {
-            let callee_val = builder.ctx.lookup(*id)?;
+                let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
+                builder.ir.push_op(builder.block, call_op.op_ref());
+                Some(call_op.result(builder.ir))
+            }
+            ResolvedRef::Local { id, .. } => {
+                let callee_val = builder.ctx.lookup(*id)?;
 
-            // Insert casts for arguments
-            if let TypeKind::Func { params, .. } = typed_ref.ty.kind(builder.db()) {
-                for (i, param_ty) in params.iter().enumerate() {
-                    if i < arg_values.len() {
-                        let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
-                        arg_values[i] = builder.cast_if_needed(location, arg_values[i], target_ty);
+                // Insert casts for arguments
+                if let TypeKind::Func { params, .. } = typed_ref.ty.kind(builder.db()) {
+                    for (i, param_ty) in params.iter().enumerate() {
+                        if i < arg_values.len() {
+                            let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
+                            arg_values[i] =
+                                builder.cast_if_needed(location, arg_values[i], target_ty);
+                        }
                     }
                 }
-            }
 
-            // Cast callee to CPS closure type so closure_lower extracts
-            // the correct return type (anyref, not the source-level type).
-            let mut cps_param_types = vec![anyref_ty]; // done_k
+                // Cast callee to CPS closure type so closure_lower extracts
+                // the correct return type (anyref, not the source-level type).
+                let mut cps_param_types = vec![anyref_ty]; // done_k
+                cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
+                let cps_func_ty = builder
+                    .ctx
+                    .func_type(builder.ir, &cps_param_types, anyref_ty);
+                let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
+                let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
+
+                // Call closure with continuation as first arg (done_k)
+                let mut cps_args = vec![continuation];
+                cps_args.append(&mut arg_values);
+
+                let call_op =
+                    func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+                builder.ir.push_op(builder.block, call_op.op_ref());
+                Some(call_op.result(builder.ir))
+            }
+            _ => unreachable!("ICE: lower_cps_call with unexpected callee kind"),
+        },
+        callee_kind => {
+            let callee = Expr::new(call_expr_id, callee_kind);
+            let callee_val = lower_expr(builder, callee)?;
+            let mut cps_param_types = vec![anyref_ty];
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
             let cps_func_ty = builder
                 .ctx
@@ -1384,16 +1544,13 @@ fn lower_cps_call<'db>(
             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
             let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
-            // Call closure with continuation as first arg (done_k)
             let mut cps_args = vec![continuation];
             cps_args.append(&mut arg_values);
-
             let call_op =
                 func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
             builder.ir.push_op(builder.block, call_op.op_ref());
             Some(call_op.result(builder.ir))
         }
-        _ => unreachable!("ICE: lower_cps_call with unexpected callee kind"),
     }
 }
 
@@ -1599,7 +1756,14 @@ fn build_short_circuit_rhs_region<'db>(
 
     let rhs_val = {
         let mut inner = IrBuilder::new(builder.ctx, builder.ir, block);
-        lower_expr(&mut inner, rhs)
+        let outer_done_k = inner.ctx.done_k;
+        if outer_done_k.is_some() && contains_cps_call_in_evaluation(inner.ctx, &rhs) {
+            let identity_done_k = super::create_identity_done_k(&mut inner, location);
+            inner.ctx.done_k = Some(identity_done_k);
+        }
+        let result = lower_block_cps_for_expr(&mut inner, rhs).map(|(value, _)| value);
+        inner.ctx.done_k = outer_done_k;
+        result
     };
 
     let yield_val = match rhs_val {

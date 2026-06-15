@@ -1,0 +1,80 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: ir_text
+---
+core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+
+  func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      func.return %2
+  }
+  func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+  func.func @"test::__lambda_1"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+  func.func @"test::__lambda_2"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+  func.func @run() -> core.i32 {
+      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
+          %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
+              %4 = core.unrealized_conversion_cast %3 : core.i32
+              %5 = arith.const {value = 1} : core.i32
+              %6 = func.call %4, %5 {callee = @"Int::+"} : core.i32
+              %7 = core.unrealized_conversion_cast %6 : tribute_rt.anyref
+              %8 = core.unrealized_conversion_cast %1 : !t0
+              %9 = func.call_indirect %8, %7 : tribute_rt.anyref
+              func.return %9
+          }
+          %10 = adt.ref_null {type = !t1} : !t1
+          %11 = func.call %10, %2 {callee = @read} : tribute_rt.anyref
+          func.return %11
+      }
+      %12 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %13 = closure.new %12 {func_ref = @"test::__lambda_0"} : !t0
+      %14 = func.call_indirect %0, %13 : tribute_rt.anyref
+      %15 = closure.lambda(%16: tribute_rt.anyref, %17: core.i32, %18: tribute_rt.anyref) -> tribute_rt.anyref {
+          %19 = arith.const {value = 1} : core.i1
+          %20 = scf.if %19 : tribute_rt.anyref {
+              %21 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+              %22 = closure.new %21 {func_ref = @"test::__lambda_2"} : !t0
+              %23 = arith.const {value = 41} : core.i32
+              %24 = core.unrealized_conversion_cast %23 : tribute_rt.anyref
+              %25 = core.unrealized_conversion_cast %16 : !t0
+              %26 = func.call_indirect %25, %24 : tribute_rt.anyref
+              scf.yield %26
+          } {
+              func.unreachable
+          }
+          func.return %20
+      }
+      %27 = arith.const {value = 0} : tribute_rt.anyref
+      %28 = ability.handle_dispatch %14, %15, %27 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+          ability.done {
+            ^bb7(%29: tribute_rt.anyref):
+              %30 = core.unrealized_conversion_cast %29 : core.i32
+              scf.yield %30
+          }
+          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+            ^bb8(%31: tribute_rt.anyref, %32: tribute_rt.anyref):
+              %33 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+              %34 = closure.new %33 {func_ref = @"test::__lambda_1"} : !t0
+              %35 = arith.const {value = 41} : core.i32
+              %36 = core.unrealized_conversion_cast %35 : tribute_rt.anyref
+              %37 = core.unrealized_conversion_cast %31 : !t0
+              %38 = func.call_indirect %37, %36 : tribute_rt.anyref
+              scf.yield %38
+          }
+      }
+      %39 = core.unrealized_conversion_cast %28 : core.i32
+      func.return %39
+  }
+  func.func @main() -> core.nil {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}
