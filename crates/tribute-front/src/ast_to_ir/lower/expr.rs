@@ -844,7 +844,7 @@ fn lower_block_cps<'db>(
     let mut stmts_iter = stmts.into_iter().peekable();
 
     while let Some(stmt) = stmts_iter.peek() {
-        if builder.ctx.done_k.is_some()
+        if can_lower_cps_call_in_current_context(builder.ctx)
             && let Some((lifted_stmt, rebuilt_stmt)) =
                 lift_nested_cps_call_from_stmt(builder.ctx, stmt.clone())
         {
@@ -865,9 +865,7 @@ fn lower_block_cps<'db>(
 
         // CPS-transform effectful calls and closure calls when done_k is set.
         // Skip in handler arm bodies (cps_handler_mode) — need scf.yield terminator.
-        if builder.ctx.done_k.is_some()
-            && !builder.ctx.cps_handler_mode
-            && is_cps_call_stmt(builder.ctx, stmt)
+        if can_lower_cps_call_in_current_context(builder.ctx) && is_cps_call_stmt(builder.ctx, stmt)
         {
             let stmt = stmts_iter.next().unwrap();
             let remaining: Vec<_> = stmts_iter.collect();
@@ -887,8 +885,7 @@ fn lower_block_cps<'db>(
     // If so, treat it as a CPS call: done_k is passed to the callee, which will
     // call it internally. The caller must NOT call done_k again (is_cps = true).
     // Skip in handler arm context (cps_handler_mode) — result flows to scf.yield.
-    if builder.ctx.done_k.is_some()
-        && !builder.ctx.cps_handler_mode
+    if can_lower_cps_call_in_current_context(builder.ctx)
         && let ExprKind::Call { callee: c, .. } = &*value.kind
         && let ExprKind::Var(tr) = &*c.kind
         && !matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
@@ -898,8 +895,7 @@ fn lower_block_cps<'db>(
         return Some((result, true));
     }
     // All local closure calls are CPS (closures always have done_k)
-    if builder.ctx.done_k.is_some()
-        && !builder.ctx.cps_handler_mode
+    if can_lower_cps_call_in_current_context(builder.ctx)
         && let ExprKind::Call { callee: c, .. } = &*value.kind
         && let ExprKind::Var(tr) = &*c.kind
         && matches!(&tr.resolved, ResolvedRef::Local { .. })
@@ -908,15 +904,12 @@ fn lower_block_cps<'db>(
         let result = lower_expr(builder, value)?;
         return Some((result, true));
     }
-    if builder.ctx.done_k.is_some()
-        && !builder.ctx.cps_handler_mode
-        && is_cps_call_expr(builder.ctx, &value)
-    {
+    if can_lower_cps_call_in_current_context(builder.ctx) && is_cps_call_expr(builder.ctx, &value) {
         let result = lower_expr(builder, value)?;
         return Some((result, true));
     }
 
-    if builder.ctx.done_k.is_some()
+    if can_lower_cps_call_in_current_context(builder.ctx)
         && let Some((lifted_stmt, rebuilt_value)) =
             lift_nested_cps_call(builder.ctx, value.clone(), false)
     {
@@ -928,6 +921,10 @@ fn lower_block_cps<'db>(
     }
 
     lower_expr(builder, value).map(|r| (r, false))
+}
+
+fn can_lower_cps_call_in_current_context(ctx: &super::super::context::IrLoweringCtx<'_>) -> bool {
+    ctx.done_k.is_some() && !ctx.cps_handler_mode
 }
 
 fn is_cps_call_expr<'db>(
@@ -1453,6 +1450,7 @@ fn lower_cps_call<'db>(
     let ExprKind::Call { callee, args } = *call_expr.kind else {
         unreachable!("ICE: lower_cps_call called with non-call expression");
     };
+    let callee_id = callee.id;
     let callee_kind = *callee.kind;
 
     // Lower arguments
@@ -1534,7 +1532,7 @@ fn lower_cps_call<'db>(
             _ => unreachable!("ICE: lower_cps_call with unexpected callee kind"),
         },
         callee_kind => {
-            let callee = Expr::new(call_expr_id, callee_kind);
+            let callee = Expr::new(callee_id, callee_kind);
             let callee_val = lower_expr(builder, callee)?;
             let mut cps_param_types = vec![anyref_ty];
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
