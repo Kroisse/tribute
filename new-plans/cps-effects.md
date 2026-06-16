@@ -58,6 +58,35 @@ func.return %result
 Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
 `ability.perform` 이후의 같은 function-body ops는 dead code가 된다.
 
+### 중첩 표현식의 CPS lifting
+
+CPS 호출이 더 큰 표현식 안에 중첩된 경우 `ast_to_ir`는 호출을 직접
+lowering하지 않는다. 대신 현재 평가 영역 안에서 첫 CPS 호출을 synthetic
+let binding으로 끌어올린 뒤 기존 block CPS lowering을 적용한다.
+
+```text
+consume(effectful(), pure_arg)
+
+→ let __cps_tmp = effectful()
+  consume(__cps_tmp, pure_arg)
+```
+
+이 변환은 소스의 좌에서 우 평가 순서를 보존한다. 호출 callee와 arguments,
+tuple/constructor/record 요소, case scrutinee처럼 항상 평가되는 strict
+subexpression만 현재 영역으로 끌어올린다.
+
+다음 위치는 별도의 control-flow 또는 effect 경계이므로 바깥 영역으로
+hoist하지 않는다.
+
+- short-circuit 연산의 RHS
+- case arm과 guard
+- lambda body
+- handle body와 handler arm
+
+각 영역은 진입 시 자체적으로 같은 CPS lifting을 수행한다. 따라서 실행되지
+않을 branch의 effectful call이 미리 실행되거나, handler boundary 밖의
+continuation에 잘못 포함되어서는 안 된다.
+
 ### `handle`: evidence extension + handler closures
 
 `handle` lowering은 두 종류의 dispatch closure를 만든다.

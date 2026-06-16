@@ -235,7 +235,7 @@ fn build_cps_body<'db>(
     }
 
     // Check if the body contains effectful function calls that need CPS.
-    let body_needs_done_k = super::expr::body_contains_cps_call(builder.ctx, body);
+    let body_needs_done_k = super::expr::contains_cps_call_in_evaluation(builder.ctx, body);
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Build body closure entry block.
@@ -583,7 +583,8 @@ fn build_cps_suspend_handler_region<'db>(
         // Evaluate the handler body
         let body_result = {
             let mut builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_expr(&mut builder, handler.body.clone())
+            super::expr::lower_block_cps_for_expr(&mut builder, handler.body.clone())
+                .map(|(value, _)| value)
         };
 
         scope.done_k = prev_done_k;
@@ -989,7 +990,8 @@ fn build_fn_handler_arm_for_dispatch<'db>(
         // Evaluate the handler body
         {
             let mut inner_builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_expr(&mut inner_builder, handler.body.clone())
+            super::expr::lower_block_cps_for_expr(&mut inner_builder, handler.body.clone())
+                .map(|(value, _)| value)
         }
     };
 

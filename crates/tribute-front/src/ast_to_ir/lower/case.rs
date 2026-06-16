@@ -15,6 +15,44 @@ use crate::ast::{Arm, Expr, LiteralPattern, Pattern, PatternKind, ResolvedRef, T
 use super::super::context::IrLoweringCtx;
 use super::{IrBuilder, get_or_create_tuple_type, is_irrefutable_pattern, resolve_enum_type_attr};
 
+fn lower_case_region_expr_with_local_done_k<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    let outer_done_k = builder.ctx.done_k;
+    if outer_done_k.is_some() && super::expr::contains_cps_call_in_evaluation(builder.ctx, &expr) {
+        let identity_done_k = super::create_identity_done_k(builder, location);
+        builder.ctx.done_k = Some(identity_done_k);
+    }
+    let result = super::expr::lower_block_cps_for_expr(builder, expr).map(|(value, _)| value);
+    builder.ctx.done_k = outer_done_k;
+    result
+}
+
+/// Lower an arm body to the value yielded by its `scf.if` region.
+///
+/// A CPS call inside the arm must first produce the arm's value, so isolate it
+/// from the continuation surrounding the whole case expression.
+fn lower_case_arm_body<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    lower_case_region_expr_with_local_done_k(builder, location, expr)
+}
+
+/// Lower a guard condition inside the already-matched arm region.
+fn lower_case_guard_condition<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    let bool_ty = builder.ctx.bool_type(builder.ir);
+    let value = lower_case_region_expr_with_local_done_k(builder, location, expr)?;
+    Some(builder.cast_if_needed(location, value, bool_ty))
+}
+
 /// Lower a case expression as a chain of `scf.if` operations.
 pub(super) fn lower_case_chain<'db>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -48,7 +86,7 @@ pub(super) fn lower_case_chain<'db>(
                 &last.pattern,
             );
             let mut builder = IrBuilder::new(&mut scope, builder.ir, builder.block);
-            super::expr::lower_expr(&mut builder, last.body.clone())
+            lower_case_arm_body(&mut builder, location, last.body.clone())
         }
         [first, rest @ ..] => {
             // Multi-arm: pattern check → then/else regions → scf.if
@@ -281,7 +319,7 @@ fn build_guarded_arm_region<'db>(
         // 2. Evaluate guard condition
         let guard_cond = {
             let mut builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_expr(&mut builder, guard_expr.clone())
+            lower_case_guard_condition(&mut builder, location, guard_expr.clone())
         };
         let guard_cond = match guard_cond {
             Some(v) => v,
@@ -303,7 +341,7 @@ fn build_guarded_arm_region<'db>(
             });
             let result = {
                 let mut builder = IrBuilder::new(&mut scope, ir, inner_block);
-                let val = super::expr::lower_expr(&mut builder, arm.body.clone());
+                let val = lower_case_arm_body(&mut builder, location, arm.body.clone());
                 val.map(|v| builder.cast_if_needed(location, v, result_ty))
             };
             let yield_val = match result {
@@ -374,7 +412,7 @@ fn build_arm_region<'db>(
         bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
 
         let mut builder = IrBuilder::new(&mut scope, ir, block);
-        let val = super::expr::lower_expr(&mut builder, arm.body.clone());
+        let val = lower_case_arm_body(&mut builder, location, arm.body.clone());
         val.map(|v| builder.cast_if_needed(location, v, result_ty))
     };
 
