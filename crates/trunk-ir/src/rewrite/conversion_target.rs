@@ -17,15 +17,31 @@ pub enum LegalityCheck {
     Legal,
     /// The operation is illegal (must be converted).
     Illegal,
+    /// The target has no rule for this operation.
+    Unknown,
 }
 
 /// Dynamic legality check function signature.
 type DynamicCheckFn = dyn Fn(&IrContext, OpRef) -> Option<LegalityCheck>;
 
+/// Conversion verification mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionMode {
+    /// Verify that no explicitly illegal operations remain.
+    ///
+    /// Unknown operations are allowed because another conversion pass may own
+    /// them.
+    Partial,
+    /// Verify that every operation is explicitly legal.
+    ///
+    /// Illegal and unknown operations both fail full conversion.
+    Full,
+}
+
 /// Conversion target — defines which ops/dialects are legal or illegal.
 ///
-/// After pattern application, `verify()` walks the module and checks that
-/// no illegal operations remain.
+/// After pattern application, partial verification checks that no illegal
+/// operations remain. Full verification additionally rejects unknown operations.
 pub struct ConversionTarget {
     /// Entire dialects marked as legal.
     legal_dialects: HashSet<Symbol>,
@@ -40,7 +56,10 @@ pub struct ConversionTarget {
 }
 
 impl ConversionTarget {
-    /// Create a new empty conversion target (everything is legal by default).
+    /// Create a new empty conversion target.
+    ///
+    /// Operations that do not match any target rule are reported as
+    /// [`LegalityCheck::Unknown`].
     pub fn new() -> Self {
         Self {
             legal_dialects: HashSet::new(),
@@ -98,7 +117,7 @@ impl ConversionTarget {
     /// 1. Dynamic checks (first non-None wins)
     /// 2. Specific op rules (legal_ops / illegal_ops)
     /// 3. Dialect rules (legal_dialects / illegal_dialects)
-    /// 4. Default: Legal
+    /// 4. Default: Unknown
     pub fn is_legal(&self, ctx: &IrContext, op: OpRef) -> LegalityCheck {
         // 1. Dynamic checks
         for check in &self.dynamic_checks {
@@ -127,28 +146,54 @@ impl ConversionTarget {
         }
 
         // 4. Default
-        LegalityCheck::Legal
+        LegalityCheck::Unknown
     }
 
     /// Verify that no illegal operations remain in the module.
     ///
-    /// Returns a list of illegal operations found.
+    /// This is partial conversion verification: unknown operations are allowed
+    /// because they may belong to dialects outside the current conversion step.
     pub fn verify(&self, ctx: &IrContext, module_body: crate::refs::RegionRef) -> Vec<IllegalOp> {
-        let mut illegal = Vec::new();
+        self.verify_mode(ctx, module_body, ConversionMode::Partial)
+    }
+
+    /// Verify that every operation in the module is legal for this target.
+    pub fn verify_full(
+        &self,
+        ctx: &IrContext,
+        module_body: crate::refs::RegionRef,
+    ) -> Vec<IllegalOp> {
+        self.verify_mode(ctx, module_body, ConversionMode::Full)
+    }
+
+    /// Verify a module body under the requested conversion mode.
+    pub fn verify_mode(
+        &self,
+        ctx: &IrContext,
+        module_body: crate::refs::RegionRef,
+        mode: ConversionMode,
+    ) -> Vec<IllegalOp> {
+        let mut failures = Vec::new();
 
         let _ = walk::walk_region::<()>(ctx, module_body, &mut |op| {
-            if self.is_legal(ctx, op) == LegalityCheck::Illegal {
+            let legality = self.is_legal(ctx, op);
+            let failed = match mode {
+                ConversionMode::Partial => legality == LegalityCheck::Illegal,
+                ConversionMode::Full => legality != LegalityCheck::Legal,
+            };
+            if failed {
                 let data = ctx.op(op);
-                illegal.push(IllegalOp {
+                failures.push(IllegalOp {
                     op,
                     dialect: data.dialect,
                     name: data.name,
+                    legality,
                 });
             }
             std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
         });
 
-        illegal
+        failures
     }
 }
 
@@ -158,16 +203,92 @@ impl Default for ConversionTarget {
     }
 }
 
-/// An illegal operation found during verification.
+/// An operation that failed conversion target verification.
 #[derive(Debug)]
 pub struct IllegalOp {
     pub op: OpRef,
     pub dialect: Symbol,
     pub name: Symbol,
+    pub legality: LegalityCheck,
 }
 
 impl std::fmt::Display for IllegalOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{} ({})", self.dialect, self.name, self.op)
+        write!(
+            f,
+            "{}.{} ({}, {:?})",
+            self.dialect, self.name, self.op, self.legality
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::OperationDataBuilder;
+    use crate::location::Span;
+    use crate::types::Location;
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn make_op(ctx: &mut IrContext, loc: Location, dialect: Symbol, name: Symbol) -> OpRef {
+        let op_data = OperationDataBuilder::new(loc, dialect, name).build(ctx);
+        ctx.create_op(op_data)
+    }
+
+    fn make_region(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> crate::refs::RegionRef {
+        use crate::context::{BlockData, RegionData};
+        use crate::smallvec::smallvec;
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in ops {
+            ctx.push_op(block, op);
+        }
+        ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        })
+    }
+
+    #[test]
+    fn unspecified_operations_are_unknown() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new();
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Unknown);
+    }
+
+    #[test]
+    fn partial_verification_allows_unknown_operations() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let region = make_region(&mut ctx, loc, vec![op]);
+        let target = ConversionTarget::new();
+
+        assert!(target.verify(&ctx, region).is_empty());
+    }
+
+    #[test]
+    fn full_verification_rejects_unknown_operations() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let region = make_region(&mut ctx, loc, vec![op]);
+        let target = ConversionTarget::new();
+
+        let failures = target.verify_full(&ctx, region);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].legality, LegalityCheck::Unknown);
     }
 }

@@ -1,16 +1,16 @@
 //! IR validation for Cranelift backend.
 //!
 //! This module validates that IR is ready for emission:
-//! - All operations must be in the `clif` dialect (error)
+//! - All operations must be explicitly legal for the native backend boundary.
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
-use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::{ConversionTarget, Module};
 
 use crate::{CompilationError, CompilationResult};
+
+const NATIVE_BACKEND_READY_BOUNDARY: &str = "native-backend-ready";
 
 /// Validation error details.
 #[derive(Debug)]
@@ -26,74 +26,105 @@ impl std::fmt::Display for ValidationError {
 
 /// Validate that a module's IR is ready for Cranelift emission.
 ///
-/// This function checks that all operations are in the `clif` dialect
-/// (except allowed exceptions like `core.module`).
+/// This function checks that all operations are explicitly legal for the
+/// native backend boundary.
 ///
 /// Returns an error if validation fails, preventing emission.
 pub fn validate_clif_ir(ctx: &IrContext, module: Module) -> CompilationResult<()> {
-    let mut errors: Vec<String> = Vec::new();
+    let Some(body) = module.body(ctx) else {
+        return Err(CompilationError::ir_validation("Module has no body region"));
+    };
 
-    if let Some(body) = module.body(ctx) {
-        validate_region(ctx, body, &mut errors);
-    } else {
-        errors.push("Module has no body region".to_string());
+    let target = native_backend_ready_target();
+    let failures = target.verify_full(ctx, body);
+
+    if failures.is_empty() {
+        return Ok(());
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        let message = format!(
-            "IR validation failed with {} error(s):\n  - {}",
-            errors.len(),
-            errors.join("\n  - ")
-        );
-        Err(CompilationError::ir_validation(message))
-    }
+    let errors: Vec<String> = failures
+        .into_iter()
+        .map(|op| format!("{} in boundary {}", op, NATIVE_BACKEND_READY_BOUNDARY))
+        .collect();
+    let message = format!(
+        "IR validation failed for boundary {NATIVE_BACKEND_READY_BOUNDARY} with {} error(s):\n  - {}",
+        errors.len(),
+        errors.join("\n  - ")
+    );
+    Err(CompilationError::ir_validation(message))
 }
 
-fn validate_region(ctx: &IrContext, region: RegionRef, errors: &mut Vec<String>) {
-    let region_data = ctx.region(region);
-    for &block in &region_data.blocks {
-        validate_block(ctx, block, errors);
-    }
+/// Conversion target for IR that is ready for Cranelift emission.
+pub fn native_backend_ready_target() -> ConversionTarget {
+    let mut target = ConversionTarget::new();
+    target.add_legal_dialect("clif");
+    target.add_legal_op("core", "module");
+    target
 }
 
-fn validate_block(ctx: &IrContext, block: BlockRef, errors: &mut Vec<String>) {
-    let block_data = ctx.block(block);
-    for &op in &block_data.ops {
-        validate_operation(ctx, op, errors);
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::OperationDataBuilder;
+    use trunk_ir::context::{BlockData, IrContext, RegionData};
+    use trunk_ir::location::Span;
+    use trunk_ir::smallvec::smallvec;
+    use trunk_ir::symbol::Symbol;
+    use trunk_ir::types::{Attribute, Location};
 
-fn validate_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
-    let op_data = ctx.op(op);
-    let dialect = op_data.dialect;
-    let name = op_data.name;
-
-    if !is_allowed_dialect(ctx, op) {
-        errors.push(format!("Non-clif operation found: {}.{}", dialect, name));
-    }
-
-    // Recursively validate nested regions
-    for &region in &op_data.regions {
-        validate_region(ctx, region, errors);
-    }
-}
-
-fn is_allowed_dialect(ctx: &IrContext, op: OpRef) -> bool {
-    let clif_dialect = Symbol::new("clif");
-    let core_dialect = Symbol::new("core");
-    let module_name = Symbol::new("module");
-    let op_data = ctx.op(op);
-
-    if op_data.dialect == clif_dialect {
-        return true;
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
     }
 
-    // Allow core.module at the top level
-    if op_data.dialect == core_dialect && op_data.name == module_name {
-        return true;
+    fn make_module(ctx: &mut IrContext, loc: Location, dialect: &str, name: &str) -> Module {
+        let op_data = OperationDataBuilder::new(
+            loc,
+            Symbol::from_dynamic(dialect),
+            Symbol::from_dynamic(name),
+        )
+        .build(ctx);
+        let op = ctx.create_op(op_data);
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(block, op);
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .region(region)
+                .build(ctx);
+        let module_op = ctx.create_op(module_data);
+        Module::new(ctx, module_op).expect("test module should be valid")
     }
 
-    false
+    #[test]
+    fn native_backend_ready_allows_clif_ops() {
+        let (mut ctx, loc) = test_ctx();
+        let module = make_module(&mut ctx, loc, "clif", "func");
+
+        validate_clif_ir(&ctx, module).unwrap();
+    }
+
+    #[test]
+    fn native_backend_ready_rejects_unknown_ops() {
+        let (mut ctx, loc) = test_ctx();
+        let module = make_module(&mut ctx, loc, "arith", "add");
+
+        let err = validate_clif_ir(&ctx, module).unwrap_err().to_string();
+        assert!(err.contains("native-backend-ready"));
+        assert!(err.contains("arith.add"));
+        assert!(err.contains("Unknown"));
+    }
 }

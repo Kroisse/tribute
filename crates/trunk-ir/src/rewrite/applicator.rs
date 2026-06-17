@@ -5,7 +5,7 @@
 //! `parent_block` validity to skip deleted ops.
 
 use super::Module;
-use super::conversion_target::{ConversionTarget, IllegalOp, LegalityCheck};
+use super::conversion_target::{ConversionMode, ConversionTarget, IllegalOp, LegalityCheck};
 use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
@@ -32,11 +32,32 @@ impl ApplyResult {
         module: Module,
         target: &ConversionTarget,
     ) -> Result<(), Vec<IllegalOp>> {
+        self.verify_mode(ctx, module, target, ConversionMode::Partial)
+    }
+
+    /// Verify that every operation is legal for the target.
+    pub fn verify_full(
+        &self,
+        ctx: &IrContext,
+        module: Module,
+        target: &ConversionTarget,
+    ) -> Result<(), Vec<IllegalOp>> {
+        self.verify_mode(ctx, module, target, ConversionMode::Full)
+    }
+
+    /// Verify the result under a specific conversion mode.
+    pub fn verify_mode(
+        &self,
+        ctx: &IrContext,
+        module: Module,
+        target: &ConversionTarget,
+        mode: ConversionMode,
+    ) -> Result<(), Vec<IllegalOp>> {
         let body = match module.body(ctx) {
             Some(r) => r,
             None => return Ok(()),
         };
-        let illegal = target.verify(ctx, body);
+        let illegal = target.verify_mode(ctx, body, mode);
         if illegal.is_empty() {
             Ok(())
         } else {
@@ -127,8 +148,24 @@ impl PatternApplicator {
         &self.type_converter
     }
 
-    /// Apply patterns and verify the result.
+    /// Apply patterns using partial conversion semantics.
+    ///
+    /// Verification fails only for operations that are explicitly illegal in
+    /// the target. Unknown operations may remain for later conversion passes.
     pub fn apply(
+        &self,
+        ctx: &mut IrContext,
+        module: Module,
+        target: &ConversionTarget,
+    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        self.apply_partial_conversion(ctx, module, target)
+    }
+
+    /// Apply patterns using partial conversion semantics.
+    ///
+    /// Verification fails only for operations that are explicitly illegal in
+    /// the target. Unknown operations may remain for later conversion passes.
+    pub fn apply_partial_conversion(
         &self,
         ctx: &mut IrContext,
         module: Module,
@@ -136,6 +173,21 @@ impl PatternApplicator {
     ) -> Result<ApplyResult, Vec<IllegalOp>> {
         let result = self.apply_partial(ctx, module);
         result.verify(ctx, module, target)?;
+        Ok(result)
+    }
+
+    /// Apply patterns using full conversion semantics.
+    ///
+    /// Verification fails for both explicitly illegal operations and unknown
+    /// operations. Use this at named pipeline boundaries.
+    pub fn apply_full_conversion(
+        &self,
+        ctx: &mut IrContext,
+        module: Module,
+        target: &ConversionTarget,
+    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        let result = self.apply_partial(ctx, module);
+        result.verify_full(ctx, module, target)?;
         Ok(result)
     }
 
@@ -429,5 +481,25 @@ mod tests {
         let new_result = ctx.op_result(ops[0], 0);
         let op2_operands = ctx.op_operands(ops[1]);
         assert_eq!(op2_operands[0], new_result);
+    }
+
+    #[test]
+    fn full_conversion_rejects_unknown_ops() {
+        let (mut ctx, loc) = test_ctx();
+
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("unknown"), Symbol::new("op"))
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+        let module = make_module(&mut ctx, loc, vec![op]);
+
+        let applicator = PatternApplicator::new(TypeConverter::new());
+        let target = ConversionTarget::new();
+
+        let failures = match applicator.apply_full_conversion(&mut ctx, module, &target) {
+            Ok(_) => panic!("full conversion should reject unknown ops"),
+            Err(failures) => failures,
+        };
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].legality, LegalityCheck::Unknown);
     }
 }
