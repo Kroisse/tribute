@@ -1470,6 +1470,7 @@ dependencies = [
  "derive_more",
  "fluent-uri",
  "insta",
+ "itertools",
  "lsp-server",
  "lsp-types",
  "ropey",
