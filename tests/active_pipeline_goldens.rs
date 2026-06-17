@@ -44,6 +44,7 @@ fn is_active_pipeline_function(header: &str) -> bool {
         "\"direct_fn_native::__lambda",
         "\"resumptive_op::__lambda",
         "\"resumptive_op_native::__lambda",
+        "\"mixed_nested::__lambda",
         "\"mixed_nested_native::__lambda",
     ];
 
@@ -68,7 +69,7 @@ fn filter_ir_for_active_pipeline(ir_text: &str) -> String {
             continue;
         }
 
-        if !line.starts_with("  func.func ") {
+        if !line.trim_start().starts_with("func.func ") {
             continue;
         }
 
@@ -217,6 +218,12 @@ fn shared_pipeline_direct_fn_ability_call(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn shared_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_shared_pipeline_ir(db, "resumptive_op.trb", RESUMPTIVE_OP_SOURCE);
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
+fn shared_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
+    let ir_text = snapshot_shared_pipeline_ir(db, "mixed_nested.trb", MIXED_NESTED_SOURCE);
     assert_snapshot!(ir_text);
 }
 
