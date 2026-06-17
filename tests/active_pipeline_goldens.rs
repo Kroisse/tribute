@@ -3,7 +3,10 @@
 //! These snapshots intentionally target textual IR at named pipeline stages:
 //! shared middle-end IR and native-target IR.
 
+use std::fmt::Write;
+
 use insta::assert_snapshot;
+use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
 use tribute::pipeline::{compile_with_diagnostics, dump_ir};
@@ -14,11 +17,12 @@ fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
     assert!(
         diagnostics.is_empty(),
         "{stage} emitted diagnostics:\n{}",
-        diagnostics
-            .iter()
-            .map(|diagnostic| format!("  - [{}] {}", diagnostic.phase, diagnostic.inner.message))
-            .collect::<Vec<_>>()
-            .join("\n")
+        diagnostics.iter().format_with("\n", |diagnostic, f| {
+            f(&format_args!(
+                "  - [{}] {}",
+                diagnostic.phase, diagnostic.inner.message
+            ))
+        })
     );
 }
 
@@ -59,13 +63,20 @@ fn brace_delta(line: &str) -> isize {
     })
 }
 
+fn append_line(output: &mut String, line: &str) {
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    write!(output, "{line}").expect("fmt::Write to String never fails");
+}
+
 fn filter_ir_for_active_pipeline(ir_text: &str) -> String {
-    let mut output = Vec::new();
+    let mut output = String::new();
     let mut lines = ir_text.lines().peekable();
 
     while let Some(line) = lines.next() {
         if line.starts_with("core.module ") || line.trim_start().starts_with('!') {
-            output.push(line.to_owned());
+            append_line(&mut output, line);
             continue;
         }
 
@@ -74,27 +85,28 @@ fn filter_ir_for_active_pipeline(ir_text: &str) -> String {
         }
 
         let include_function = is_active_pipeline_function(line);
-        let mut function_lines = vec![line.to_owned()];
         let mut depth = brace_delta(line);
+
+        if include_function {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            append_line(&mut output, line);
+        }
 
         while depth > 0 {
             let body_line = lines
                 .next()
                 .expect("function body should close before the module ends");
             depth += brace_delta(body_line);
-            function_lines.push(body_line.to_owned());
-        }
-
-        if include_function {
-            if !output.last().is_some_and(|line| line.is_empty()) {
-                output.push(String::new());
+            if include_function {
+                append_line(&mut output, body_line);
             }
-            output.extend(function_lines);
         }
     }
 
-    output.push("}".to_owned());
-    output.join("\n")
+    append_line(&mut output, "}");
+    output
 }
 
 fn snapshot_shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> String {

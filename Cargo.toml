@@ -95,6 +95,7 @@ trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
 
