@@ -15,7 +15,8 @@ use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, LegalityCheck, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -26,10 +27,38 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     let intrinsic_names: HashSet<Symbol> = [Symbol::from_dynamic("__bytes_get_or_panic")].into();
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
-    applicator = applicator
-        .add_pattern(BytesGetOrPanicPattern)
-        .add_pattern(BytesIntrinsicFuncDeclPattern { intrinsic_names });
-    applicator.apply_partial(ctx, module);
+    applicator =
+        applicator
+            .add_pattern(BytesGetOrPanicPattern)
+            .add_pattern(BytesIntrinsicFuncDeclPattern {
+                intrinsic_names: intrinsic_names.clone(),
+            });
+
+    let mut target = ConversionTarget::new();
+    target.add_dynamic_check(move |ctx, op| {
+        if let Ok(call_op) = arena_func::Call::from_op(ctx, op)
+            && intrinsic_names.contains(&call_op.callee(ctx))
+        {
+            return Some(LegalityCheck::Illegal);
+        }
+
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let attrs = &ctx.op(op).attributes;
+            let is_intrinsic = matches!(
+                attrs.get(&Symbol::new("abi")),
+                Some(Attribute::String(s)) if s == "intrinsic"
+            );
+            if is_intrinsic && intrinsic_names.contains(&func_op.sym_name(ctx)) {
+                return Some(LegalityCheck::Illegal);
+            }
+        }
+
+        None
+    });
+
+    applicator
+        .apply_partial_conversion(ctx, module, &target)
+        .expect("intrinsic_to_native should remove native intrinsics it owns");
 }
 
 /// Pattern that lowers `func.call @__bytes_get_or_panic(bytes, index)` to

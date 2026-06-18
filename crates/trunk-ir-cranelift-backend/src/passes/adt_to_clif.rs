@@ -34,7 +34,7 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 
@@ -46,14 +46,10 @@ use trunk_ir::types::TypeDataBuilder;
 /// The `type_converter` parameter is used to determine field sizes for
 /// layout computation.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::rewrite::ConversionTarget;
-
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("adt");
+    let target = adt_to_clif_target();
 
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(target)
+        .with_target(adt_to_clif_target())
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
         .add_pattern(VariantIsPattern)
@@ -62,7 +58,24 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(RefNullPattern)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern);
-    applicator.apply_partial(ctx, module);
+    applicator
+        .apply_partial_conversion(ctx, module, &target)
+        .expect("adt_to_clif should remove all illegal ADT operations it owns");
+}
+
+fn adt_to_clif_target() -> ConversionTarget {
+    let mut target = ConversionTarget::new();
+    target.add_legal_dialect("clif");
+    target.add_illegal_dialect("adt");
+    target.add_legal_op("adt", "struct_new");
+    target.add_legal_op("adt", "variant_new");
+    target.add_legal_op("adt", "array_new");
+    target.add_legal_op("adt", "array_get");
+    target.add_legal_op("adt", "array_set");
+    target.add_legal_op("adt", "array_len");
+    target.add_legal_op("adt", "string_const");
+    target.add_legal_op("adt", "bytes_const");
+    target
 }
 
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {

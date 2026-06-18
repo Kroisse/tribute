@@ -149,22 +149,18 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         })
         .add_pattern(UnboxBoolPattern { i32_ty });
 
-    applicator.apply_partial(ctx, module);
+    let target = tribute_rt_to_clif_target();
+    applicator
+        .apply_partial_conversion(ctx, module, &target)
+        .expect("tribute_rt_to_clif should remove all illegal tribute_rt operations");
+}
 
-    // Verify: tribute_rt.* ops (except retain/release) should be gone
+fn tribute_rt_to_clif_target() -> ConversionTarget {
     let mut target = ConversionTarget::new();
     target.add_illegal_dialect("tribute_rt");
     target.add_legal_op("tribute_rt", "retain");
     target.add_legal_op("tribute_rt", "release");
-
-    if let Some(body) = module.body(ctx) {
-        let illegal = target.verify(ctx, body);
-        assert!(
-            illegal.is_empty(),
-            "lower (tribute_rt_to_clif): unconverted tribute_rt.* ops remain: {:?}",
-            illegal,
-        );
-    }
+    target
 }
 
 // =============================================================================

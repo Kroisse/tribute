@@ -15,27 +15,32 @@ use trunk_ir::dialect::clif as arena_clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::rewrite::ConversionTarget;
-
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("arith");
+    let target = arith_to_clif_target();
 
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(target)
+        .with_target(arith_to_clif_target())
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern);
-    applicator.apply_partial(ctx, module);
+    applicator
+        .apply_partial_conversion(ctx, module, &target)
+        .expect("arith_to_clif should remove all illegal arith operations");
+}
+
+fn arith_to_clif_target() -> ConversionTarget {
+    let mut target = ConversionTarget::new();
+    target.add_legal_dialect("clif");
+    target.add_illegal_dialect("arith");
+    target
 }
 
 /// Classify arena type into integer vs float category (for clif lowering).

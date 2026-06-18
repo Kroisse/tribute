@@ -25,7 +25,7 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -240,7 +240,12 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &NativeConstAnalysis
         });
     }
 
-    applicator.apply_partial(ctx, module);
+    let mut target = ConversionTarget::new();
+    target.add_illegal_op("adt", "bytes_const");
+    target.add_illegal_op("adt", "string_const");
+    applicator
+        .apply_partial_conversion(ctx, module, &target)
+        .expect("const_to_native should remove native constant operations it owns");
 }
 
 /// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.
