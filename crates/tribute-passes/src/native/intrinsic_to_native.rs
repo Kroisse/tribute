@@ -34,8 +34,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
                 intrinsic_names: intrinsic_names.clone(),
             });
 
-    let mut target = ConversionTarget::new();
-    target.add_dynamic_check(move |ctx, op| {
+    let target = ConversionTarget::new().dynamic_check(move |ctx, op| {
         if let Ok(call_op) = arena_func::Call::from_op(ctx, op)
             && intrinsic_names.contains(&call_op.callee(ctx))
         {
@@ -57,7 +56,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     });
 
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .with_target(target)
+        .apply_partial_conversion(ctx, module)
         .expect("intrinsic_to_native should remove native intrinsics it owns");
 }
 

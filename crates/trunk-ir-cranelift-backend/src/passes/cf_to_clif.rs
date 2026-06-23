@@ -16,22 +16,20 @@ use trunk_ir::rewrite::{
 
 /// Lower cf dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    let target = cf_to_clif_target();
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(cf_to_clif_target())
+        .with_auto_type_conversion(true)
         .add_pattern(CfBrPattern)
-        .add_pattern(CfCondBrPattern);
+        .add_pattern(CfCondBrPattern)
+        .with_target(cf_to_clif_target());
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .apply_partial_conversion(ctx, module)
         .expect("cf_to_clif should remove all illegal cf operations");
 }
 
 fn cf_to_clif_target() -> ConversionTarget {
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("cf");
-    target
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("cf")
 }
 
 /// Pattern: `cf.br` -> `clif.jump`

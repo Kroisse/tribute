@@ -21,26 +21,24 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    let target = arith_to_clif_target();
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(arith_to_clif_target())
+        .with_auto_type_conversion(true)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
-        .add_pattern(ArithConversionPattern);
+        .add_pattern(ArithConversionPattern)
+        .with_target(arith_to_clif_target());
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .apply_partial_conversion(ctx, module)
         .expect("arith_to_clif should remove all illegal arith operations");
 }
 
 fn arith_to_clif_target() -> ConversionTarget {
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("arith");
-    target
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("arith")
 }
 
 /// Classify arena type into integer vs float category (for clif lowering).

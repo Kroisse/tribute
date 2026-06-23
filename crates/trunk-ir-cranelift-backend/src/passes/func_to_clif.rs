@@ -26,27 +26,25 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     adapt_closure_structs(ctx, module);
 
     // Phase 2: Lower func dialect to clif dialect
-    let target = func_to_clif_target();
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(func_to_clif_target())
+        .with_auto_type_conversion(true)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern);
+        .add_pattern(FuncConstantPattern)
+        .with_target(func_to_clif_target());
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .apply_partial_conversion(ctx, module)
         .expect("func_to_clif should remove all illegal func operations");
 }
 
 fn func_to_clif_target() -> ConversionTarget {
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("func");
-    target
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("func")
 }
 
 fn adapt_closure_structs(ctx: &mut IrContext, module: Module) {

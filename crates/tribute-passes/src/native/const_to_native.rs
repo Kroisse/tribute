@@ -240,11 +240,12 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &NativeConstAnalysis
         });
     }
 
-    let mut target = ConversionTarget::new();
-    target.add_illegal_op("adt", "bytes_const");
-    target.add_illegal_op("adt", "string_const");
+    let target = ConversionTarget::new()
+        .illegal_op("adt", "bytes_const")
+        .illegal_op("adt", "string_const");
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .with_target(target)
+        .apply_partial_conversion(ctx, module)
         .expect("const_to_native should remove native constant operations it owns");
 }
 

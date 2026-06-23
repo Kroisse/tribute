@@ -64,11 +64,12 @@ pub fn lower(
             i32_ty,
         });
 
-    let mut target = ConversionTarget::new();
-    target.add_illegal_op("adt", "struct_new");
-    target.add_illegal_op("adt", "variant_new");
+    let target = ConversionTarget::new()
+        .illegal_op("adt", "struct_new")
+        .illegal_op("adt", "variant_new");
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .with_target(target)
+        .apply_partial_conversion(ctx, module)
         .expect("adt_rc_header should remove ADT constructors it owns");
 }
 

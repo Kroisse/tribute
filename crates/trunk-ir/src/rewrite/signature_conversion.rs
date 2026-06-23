@@ -344,7 +344,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         assert!(result.reached_fixpoint);
         // 1 block arg converted by applicator + 1 pattern match
         assert!(result.total_changes >= 1);
@@ -383,7 +386,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         assert!(result.reached_fixpoint);
         assert_eq!(result.total_changes, 0);
     }
@@ -402,7 +408,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(WasmFuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         assert!(result.reached_fixpoint);
         // 2 block args converted by applicator + 1 pattern match
         assert!(result.total_changes >= 1);
@@ -439,7 +448,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         // 1 block arg converted + 1 pattern match
         assert!(result.total_changes >= 1);
 
@@ -465,7 +477,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(WasmFuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         // Pattern should not match due to arity mismatch.
         // Block arg type still gets converted by the applicator.
         assert!(result.reached_fixpoint);
@@ -491,7 +506,10 @@ mod tests {
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
         let target = ConversionTarget::new();
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         // Pattern should not match due to arity mismatch.
         // Block arg type still gets converted by the applicator.
         assert!(result.reached_fixpoint);

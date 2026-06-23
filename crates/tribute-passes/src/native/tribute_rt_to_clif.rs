@@ -151,16 +151,16 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
     let target = tribute_rt_to_clif_target();
     applicator
-        .apply_partial_conversion(ctx, module, &target)
+        .with_target(target)
+        .apply_partial_conversion(ctx, module)
         .expect("tribute_rt_to_clif should remove all illegal tribute_rt operations");
 }
 
 fn tribute_rt_to_clif_target() -> ConversionTarget {
-    let mut target = ConversionTarget::new();
-    target.add_illegal_dialect("tribute_rt");
-    target.add_legal_op("tribute_rt", "retain");
-    target.add_legal_op("tribute_rt", "release");
-    target
+    ConversionTarget::new()
+        .illegal_dialect("tribute_rt")
+        .legal_op("tribute_rt", "retain")
+        .legal_op("tribute_rt", "release")
 }
 
 // =============================================================================

@@ -70,6 +70,39 @@ impl ConversionTarget {
         }
     }
 
+    /// Mark an entire dialect as legal and return the updated target.
+    pub fn legal_dialect(mut self, dialect: &str) -> Self {
+        self.add_legal_dialect(dialect);
+        self
+    }
+
+    /// Mark an entire dialect as illegal and return the updated target.
+    pub fn illegal_dialect(mut self, dialect: &str) -> Self {
+        self.add_illegal_dialect(dialect);
+        self
+    }
+
+    /// Mark a specific operation as legal and return the updated target.
+    pub fn legal_op(mut self, dialect: &str, op_name: &str) -> Self {
+        self.add_legal_op(dialect, op_name);
+        self
+    }
+
+    /// Mark a specific operation as illegal and return the updated target.
+    pub fn illegal_op(mut self, dialect: &str, op_name: &str) -> Self {
+        self.add_illegal_op(dialect, op_name);
+        self
+    }
+
+    /// Add a dynamic legality check and return the updated target.
+    pub fn dynamic_check(
+        mut self,
+        f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
+    ) -> Self {
+        self.add_dynamic_check(f);
+        self
+    }
+
     /// Mark an entire dialect as legal.
     pub fn add_legal_dialect(&mut self, dialect: &str) {
         self.legal_dialects.insert(Symbol::from_dynamic(dialect));
@@ -268,6 +301,19 @@ mod tests {
         let target = ConversionTarget::new();
 
         assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Unknown);
+    }
+
+    #[test]
+    fn fluent_rules_preserve_operation_precedence() {
+        let (mut ctx, loc) = test_ctx();
+        let allowed = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("allowed"));
+        let rejected = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("rejected"));
+        let target = ConversionTarget::new()
+            .illegal_dialect("test")
+            .legal_op("test", "allowed");
+
+        assert_eq!(target.is_legal(&ctx, allowed), LegalityCheck::Legal);
+        assert_eq!(target.is_legal(&ctx, rejected), LegalityCheck::Illegal);
     }
 
     #[test]
