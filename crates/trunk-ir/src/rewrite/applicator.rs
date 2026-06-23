@@ -71,16 +71,10 @@ pub struct PatternApplicator {
     patterns: Vec<Box<dyn RewritePattern>>,
     max_iterations: usize,
     type_converter: TypeConverter,
-    /// Optional conversion target for legality checks.
-    /// When set, legal operations are skipped for cast insertion and pattern matching.
-    target: Option<ConversionTarget>,
+    /// Conversion target used for legality-aware rewriting and verification.
+    target: ConversionTarget,
     /// Whether to automatically convert block argument types and insert
     /// `unrealized_conversion_cast` for operand type mismatches.
-    ///
-    /// This is automatically enabled when a conversion target is set via
-    /// `with_target()`, since dialect conversion always implies type conversion.
-    /// Non-conversion passes that only use the type converter for pattern queries
-    /// should leave this disabled (the default).
     auto_type_conversion: bool,
 }
 
@@ -91,21 +85,20 @@ impl PatternApplicator {
             patterns: Vec::new(),
             max_iterations: 10,
             type_converter,
-            target: None,
+            target: ConversionTarget::default(),
             auto_type_conversion: false,
         }
     }
 
-    /// Set the conversion target for legality-aware processing.
-    ///
-    /// When a target is set, the applicator skips cast insertion and
-    /// pattern matching for operations that are already legal.
-    /// Also enables automatic type conversion (block arg conversion +
-    /// cast insertion).
+    /// Set the conversion target for legality-aware rewriting and verification.
     pub fn with_target(mut self, target: ConversionTarget) -> Self {
-        self.target = Some(target);
-        self.auto_type_conversion = true;
+        self.target = target;
         self
+    }
+
+    /// Mutably access the configured conversion target.
+    pub fn conversion_target_mut(&mut self) -> &mut ConversionTarget {
+        &mut self.target
     }
 
     /// Add a rewrite pattern.
@@ -128,10 +121,8 @@ impl PatternApplicator {
     ///
     /// When enabled, block argument types are converted and
     /// `unrealized_conversion_cast` ops are inserted for operand type
-    /// mismatches before pattern matching.  This is automatically enabled
-    /// by [`with_target()`](Self::with_target), but can also be set
-    /// independently for passes that need type conversion without a
-    /// conversion target.
+    /// mismatches before pattern matching. This is independent of conversion
+    /// target legality and must be enabled explicitly by passes that need it.
     pub fn with_auto_type_conversion(mut self, enable: bool) -> Self {
         self.auto_type_conversion = enable;
         self
@@ -148,50 +139,9 @@ impl PatternApplicator {
         &self.type_converter
     }
 
-    /// Apply patterns using partial conversion semantics.
-    ///
-    /// Verification fails only for operations that are explicitly illegal in
-    /// the target. Unknown operations may remain for later conversion passes.
-    pub fn apply(
-        &self,
-        ctx: &mut IrContext,
-        module: Module,
-        target: &ConversionTarget,
-    ) -> Result<ApplyResult, Vec<IllegalOp>> {
-        self.apply_partial_conversion(ctx, module, target)
-    }
-
-    /// Apply patterns using partial conversion semantics.
-    ///
-    /// Verification fails only for operations that are explicitly illegal in
-    /// the target. Unknown operations may remain for later conversion passes.
-    pub fn apply_partial_conversion(
-        &self,
-        ctx: &mut IrContext,
-        module: Module,
-        target: &ConversionTarget,
-    ) -> Result<ApplyResult, Vec<IllegalOp>> {
-        let result = self.apply_partial(ctx, module);
-        result.verify(ctx, module, target)?;
-        Ok(result)
-    }
-
-    /// Apply patterns using full conversion semantics.
-    ///
-    /// Verification fails for both explicitly illegal operations and unknown
-    /// operations. Use this at named pipeline boundaries.
-    pub fn apply_full_conversion(
-        &self,
-        ctx: &mut IrContext,
-        module: Module,
-        target: &ConversionTarget,
-    ) -> Result<ApplyResult, Vec<IllegalOp>> {
-        let result = self.apply_partial(ctx, module);
-        result.verify_full(ctx, module, target)?;
-        Ok(result)
-    }
-
     /// Apply patterns without verification.
+    ///
+    /// The configured target still skips operations classified as legal.
     pub fn apply_partial(&self, ctx: &mut IrContext, module: Module) -> ApplyResult {
         let mut total_changes = 0;
         let mut iterations = 0;
@@ -214,6 +164,34 @@ impl PatternApplicator {
             total_changes,
             reached_fixpoint: false,
         }
+    }
+
+    /// Apply patterns using partial conversion semantics.
+    ///
+    /// Verification fails only for operations that are explicitly illegal in
+    /// the target. Unknown operations may remain for later conversion passes.
+    pub fn apply_partial_conversion(
+        &self,
+        ctx: &mut IrContext,
+        module: Module,
+    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        let result = self.apply_partial(ctx, module);
+        result.verify(ctx, module, &self.target)?;
+        Ok(result)
+    }
+
+    /// Apply patterns using full conversion semantics.
+    ///
+    /// Verification fails for both explicitly illegal operations and unknown
+    /// operations. Use this at named pipeline boundaries.
+    pub fn apply_full_conversion(
+        &self,
+        ctx: &mut IrContext,
+        module: Module,
+    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        let result = self.apply_partial(ctx, module);
+        result.verify_full(ctx, module, &self.target)?;
+        Ok(result)
     }
 
     /// Run a single iteration over all operations.
@@ -290,9 +268,8 @@ impl PatternApplicator {
             }
 
             // Skip cast insertion and pattern matching for legal operations
-            let is_legal = self.target.as_ref().is_some_and(|t| {
-                t.has_constraints() && t.is_legal(ctx, op) == LegalityCheck::Legal
-            });
+            let is_legal = self.target.has_constraints()
+                && self.target.is_legal(ctx, op) == LegalityCheck::Legal;
 
             if !is_legal {
                 // Step 2: Insert conversion casts for operand type mismatches.
@@ -439,7 +416,10 @@ mod tests {
         target.add_legal_dialect("test");
         target.add_illegal_op("test", "source");
 
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        let result = applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
         assert!(result.reached_fixpoint);
         assert_eq!(result.total_changes, 1);
 
@@ -472,7 +452,10 @@ mod tests {
         let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(RenamePattern);
 
         let target = ConversionTarget::new();
-        applicator.apply(&mut ctx, module, &target).unwrap();
+        applicator
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
 
         // op2's operand should now point to the replacement op's result
         let ops = module.ops(&ctx);
@@ -495,11 +478,47 @@ mod tests {
         let applicator = PatternApplicator::new(TypeConverter::new());
         let target = ConversionTarget::new();
 
-        let failures = match applicator.apply_full_conversion(&mut ctx, module, &target) {
+        let failures = match applicator
+            .with_target(target)
+            .apply_full_conversion(&mut ctx, module)
+        {
             Ok(_) => panic!("full conversion should reject unknown ops"),
             Err(failures) => failures,
         };
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].legality, LegalityCheck::Unknown);
+    }
+
+    #[test]
+    fn mutable_conversion_target_skips_legal_ops() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+        let module = make_module(&mut ctx, loc, vec![op]);
+
+        let mut applicator =
+            PatternApplicator::new(TypeConverter::new()).add_pattern(RenamePattern);
+        applicator
+            .conversion_target_mut()
+            .add_legal_op("test", "source");
+
+        let result = applicator
+            .apply_partial_conversion(&mut ctx, module)
+            .unwrap();
+
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(ctx.op(module.ops(&ctx)[0]).name, Symbol::new("source"));
+    }
+
+    #[test]
+    fn conversion_target_does_not_enable_auto_type_conversion() {
+        let applicator = PatternApplicator::new(TypeConverter::new());
+        let applicator = applicator.with_target(ConversionTarget::new());
+
+        assert!(!applicator.auto_type_conversion);
     }
 }

@@ -16,32 +16,35 @@ use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Attribute;
 
 /// Lower func dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::rewrite::ConversionTarget;
-
     // Phase 1: Adapt closure structs for native backend
     adapt_closure_structs(ctx, module);
 
     // Phase 2: Lower func dialect to clif dialect
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("func");
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(target)
+        .with_auto_type_conversion(true)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern);
-    applicator.apply_partial(ctx, module);
+        .add_pattern(FuncConstantPattern)
+        .with_target(func_to_clif_target());
+    applicator
+        .apply_partial_conversion(ctx, module)
+        .expect("func_to_clif should remove all illegal func operations");
+}
+
+fn func_to_clif_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("func")
 }
 
 fn adapt_closure_structs(ctx: &mut IrContext, module: Module) {

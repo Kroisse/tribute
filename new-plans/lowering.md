@@ -10,6 +10,8 @@ the boundaries they claim to establish.
 | ---- | ---- |
 | Pass shape | Dialect-specific passes, not one monolithic lowerer |
 | Rewriting | `PatternApplicator` fixpoint rewrites |
+| Conversion | One configured target controls rewriting and verification |
+| Type adaptation | Explicit opt-in, independent of conversion legality |
 | State | Precomputed analyses or immutable plans, not mutable pass state |
 | Boundaries | `ConversionTarget` verification, not `Module<Phase>` types |
 
@@ -29,8 +31,9 @@ pipeline boundaries instead of open-coding legality rules per pass.
 ## Pattern Rewriting
 
 Patterns match one operation family and mutate through `PatternRewriter`.
-`PatternApplicator` walks nested regions, applies patterns to a fixpoint, and
-optionally performs conversion-target-aware type adaptation.
+`PatternApplicator` walks nested regions and applies patterns to a fixpoint. Its
+conversion target controls legality-aware rewriting and final verification.
+Type adaptation is enabled separately when a pass needs it.
 
 Rules:
 

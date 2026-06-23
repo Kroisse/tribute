@@ -26,7 +26,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
-use trunk_ir::rewrite::{Module, PatternApplicator, RewritePattern};
+use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, RewritePattern};
 use trunk_ir::types::TypeDataBuilder;
 
 /// Name of the runtime allocation function.
@@ -64,7 +64,13 @@ pub fn lower(
             i32_ty,
         });
 
-    applicator.apply_partial(ctx, module);
+    let target = ConversionTarget::new()
+        .illegal_op("adt", "struct_new")
+        .illegal_op("adt", "variant_new");
+    applicator
+        .with_target(target)
+        .apply_partial_conversion(ctx, module)
+        .expect("adt_rc_header should remove ADT constructors it owns");
 }
 
 /// Pattern for `adt.struct_new(fields...)` -> heap allocation + RC header + stores.

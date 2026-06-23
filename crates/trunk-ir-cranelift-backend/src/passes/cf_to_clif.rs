@@ -11,22 +11,25 @@ use trunk_ir::dialect::cf as arena_cf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
 /// Lower cf dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::rewrite::ConversionTarget;
-
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("cf");
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(target)
+        .with_auto_type_conversion(true)
         .add_pattern(CfBrPattern)
-        .add_pattern(CfCondBrPattern);
-    applicator.apply_partial(ctx, module);
+        .add_pattern(CfCondBrPattern)
+        .with_target(cf_to_clif_target());
+    applicator
+        .apply_partial_conversion(ctx, module)
+        .expect("cf_to_clif should remove all illegal cf operations");
+}
+
+fn cf_to_clif_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("cf")
 }
 
 /// Pattern: `cf.br` -> `clif.jump`

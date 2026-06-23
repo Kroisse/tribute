@@ -9,22 +9,25 @@ use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
 /// Lower mem dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::rewrite::ConversionTarget;
-
-    let mut target = ConversionTarget::new();
-    target.add_legal_dialect("clif");
-    target.add_illegal_dialect("mem");
-
     let applicator = PatternApplicator::new(type_converter)
-        .with_target(target)
+        .with_auto_type_conversion(true)
         .add_pattern(MemLoadPattern)
-        .add_pattern(MemStorePattern);
-    applicator.apply_partial(ctx, module);
+        .add_pattern(MemStorePattern)
+        .with_target(mem_to_clif_target());
+    applicator
+        .apply_partial_conversion(ctx, module)
+        .expect("mem_to_clif should remove all illegal mem operations");
+}
+
+fn mem_to_clif_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .legal_dialect("clif")
+        .illegal_dialect("mem")
 }
 
 struct MemLoadPattern;
