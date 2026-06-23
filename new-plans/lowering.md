@@ -28,6 +28,10 @@ Shared lowering passes must not call unchecked `apply_partial` when their API or
 name claims to complete a lowering stage. Use named `ConversionTarget`s for
 pipeline boundaries instead of open-coding legality rules per pass.
 
+The shared effect pipeline establishes the `ability-lowered` partial boundary
+after `LowerHandleDispatch`: residual `ability.*` operations are illegal, while
+operations owned by later lowering stages remain unknown and are allowed.
+
 ## Pattern Rewriting
 
 Patterns match one operation family and mutate through `PatternRewriter`.

@@ -14,17 +14,34 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Location;
 
 use tribute_ir::dialect::ability;
 
-/// Lower all `ability.handle_dispatch` ops in the module.
+const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
+
+/// Conversion target for IR after shared ability lowering.
+pub fn ability_lowered_target() -> ConversionTarget {
+    ConversionTarget::new().illegal_dialect("ability")
+}
+
+/// Lower all `ability.handle_dispatch` ops and establish the ability boundary.
 pub(crate) fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
-    let applicator =
-        PatternApplicator::new(TypeConverter::new()).add_pattern(LowerHandleDispatchPattern);
-    applicator.apply_partial(ctx, module);
+    let applicator = PatternApplicator::new(TypeConverter::new())
+        .with_target(ability_lowered_target())
+        .add_pattern(LowerHandleDispatchPattern);
+    applicator
+        .apply_partial_conversion(ctx, module)
+        .unwrap_or_else(|failures| {
+            let errors: Vec<String> = failures.into_iter().map(|op| op.to_string()).collect();
+            panic!(
+                "IR conversion failed for boundary {ABILITY_LOWERED_BOUNDARY} with {} error(s):\n  - {}",
+                errors.len(),
+                errors.join("\n  - ")
+            );
+        });
 }
 
 /// PassManager-friendly wrapper for [`lower_handle_dispatch`].
@@ -247,5 +264,49 @@ mod tests {
 
         let ir_text = print_module(&ctx, module.op());
         assert_snapshot!(ir_text);
+    }
+
+    #[test]
+    fn final_conversion_allows_unknown_non_ability_ops() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run() -> core.i32 {
+    %value = arith.const {value = 42} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+
+        lower_handle_dispatch(&mut ctx, module);
+    }
+
+    #[test]
+    fn final_conversion_reports_residual_ability_op() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
+    %result = ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+    func.return %result
+  }
+}"#,
+        );
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lower_handle_dispatch(&mut ctx, module);
+        }))
+        .expect_err("residual ability operation should fail final conversion");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .expect("conversion failure should use a string panic payload");
+
+        assert!(message.contains("ability-lowered"));
+        assert!(message.contains("ability.perform"));
+        assert!(message.contains("Illegal"));
     }
 }
