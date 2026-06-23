@@ -20,7 +20,9 @@
 //! func.return %result
 //! ```
 //!
-//! Uses `PatternApplicator` for declarative op-level rewriting.
+//! Uses `PatternApplicator` for declarative op-level rewriting. This is an
+//! intermediate best-effort pass: the final `ability-lowered` boundary is
+//! established by `LowerHandleDispatch` after evidence resolution.
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -56,7 +58,10 @@ impl CommonTypes {
     }
 }
 
-/// Lower all `ability.perform` and `ability.call` ops in the module.
+/// Lower all currently legalizable `ability.perform` and `ability.call` ops.
+///
+/// Residual ability operations are allowed here and rejected at the final
+/// `ability-lowered` boundary.
 pub(crate) fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
     let types = CommonTypes::new(ctx);
     let applicator = PatternApplicator::new(TypeConverter::new())

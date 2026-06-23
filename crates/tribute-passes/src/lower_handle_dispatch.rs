@@ -3,7 +3,8 @@
 //! In the tail-call CPS design, effect operations are handled via tail calls
 //! to handler_dispatch closures (see `lower_ability_perform`). By the time
 //! `ability.handle_dispatch` is reached, the body result is already the final
-//! value. This pass simply applies the done handler to the body result.
+//! value. This pass applies the done handler to the body result and, as the
+//! final shared ability conversion, establishes the `ability-lowered` boundary.
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
@@ -28,6 +29,9 @@ pub fn ability_lowered_target() -> ConversionTarget {
 }
 
 /// Lower all `ability.handle_dispatch` ops and establish the ability boundary.
+///
+/// The final partial conversion rejects every residual `ability.*` operation
+/// while allowing unknown operations owned by later lowering stages.
 pub(crate) fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(ability_lowered_target())
