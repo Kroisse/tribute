@@ -3,7 +3,7 @@
 //! Defines legality rules for dialect conversion: which operations/dialects
 //! are legal, illegal, or dynamically checked.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use derive_more::Error;
 
@@ -53,8 +53,12 @@ pub struct ConversionTarget {
     legal_ops: HashSet<(Symbol, Symbol)>,
     /// Specific operations marked as illegal: (dialect, op_name).
     illegal_ops: HashSet<(Symbol, Symbol)>,
-    /// Dynamic legality checks for specific operations.
-    dynamic_checks: Vec<Box<DynamicCheckFn>>,
+    /// Dynamic legality checks for specific operations: (dialect, op_name).
+    dynamic_ops: HashMap<(Symbol, Symbol), Box<DynamicCheckFn>>,
+    /// Dynamic legality checks for entire dialects.
+    dynamic_dialects: HashMap<Symbol, Box<DynamicCheckFn>>,
+    /// Dynamic fallback for operations not decided by op or dialect rules.
+    dynamic_unknown: Option<Box<DynamicCheckFn>>,
 }
 
 impl ConversionTarget {
@@ -68,7 +72,9 @@ impl ConversionTarget {
             illegal_dialects: HashSet::new(),
             legal_ops: HashSet::new(),
             illegal_ops: HashSet::new(),
-            dynamic_checks: Vec::new(),
+            dynamic_ops: HashMap::new(),
+            dynamic_dialects: HashMap::new(),
+            dynamic_unknown: None,
         }
     }
 
@@ -96,45 +102,157 @@ impl ConversionTarget {
         self
     }
 
-    /// Add a dynamic legality check and return the updated target.
-    pub fn dynamic_check(
+    /// Add a dynamic legality check for a specific operation and return the updated target.
+    pub fn dynamic_op(
+        mut self,
+        dialect: &str,
+        op_name: &str,
+        f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
+    ) -> Self {
+        self.add_dynamic_op(dialect, op_name, f);
+        self
+    }
+
+    /// Add a dynamic legality check for an entire dialect and return the updated target.
+    pub fn dynamic_dialect(
+        mut self,
+        dialect: &str,
+        f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
+    ) -> Self {
+        self.add_dynamic_dialect(dialect, f);
+        self
+    }
+
+    /// Add a dynamic fallback for operations not decided by op or dialect rules.
+    pub fn dynamic_unknown(
         mut self,
         f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
     ) -> Self {
-        self.add_dynamic_check(f);
+        self.add_dynamic_unknown(f);
         self
     }
 
     /// Mark an entire dialect as legal.
     pub fn add_legal_dialect(&mut self, dialect: &str) {
-        self.legal_dialects.insert(Symbol::from_dynamic(dialect));
+        let dialect = Symbol::from_dynamic(dialect);
+        assert!(
+            !self.illegal_dialects.contains(&dialect),
+            "dialect `{dialect}` is already registered as illegal"
+        );
+        assert!(
+            self.legal_dialects.insert(dialect),
+            "dialect `{dialect}` is already registered as legal"
+        );
     }
 
     /// Mark an entire dialect as illegal.
     pub fn add_illegal_dialect(&mut self, dialect: &str) {
-        self.illegal_dialects.insert(Symbol::from_dynamic(dialect));
+        let dialect = Symbol::from_dynamic(dialect);
+        assert!(
+            !self.legal_dialects.contains(&dialect),
+            "dialect `{dialect}` is already registered as legal"
+        );
+        assert!(
+            self.illegal_dialects.insert(dialect),
+            "dialect `{dialect}` is already registered as illegal"
+        );
     }
 
     /// Mark a specific operation as legal.
     pub fn add_legal_op(&mut self, dialect: &str, op_name: &str) {
-        self.legal_ops
-            .insert((Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name)));
+        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        assert!(
+            !self.illegal_ops.contains(&key),
+            "operation `{}.{}` is already registered as illegal",
+            key.0,
+            key.1
+        );
+        assert!(
+            self.legal_ops.insert(key),
+            "operation `{}.{}` is already registered as legal",
+            key.0,
+            key.1
+        );
     }
 
     /// Mark a specific operation as illegal.
     pub fn add_illegal_op(&mut self, dialect: &str, op_name: &str) {
-        self.illegal_ops
-            .insert((Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name)));
+        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        assert!(
+            !self.legal_ops.contains(&key),
+            "operation `{}.{}` is already registered as legal",
+            key.0,
+            key.1
+        );
+        assert!(
+            self.illegal_ops.insert(key),
+            "operation `{}.{}` is already registered as illegal",
+            key.0,
+            key.1
+        );
     }
 
-    /// Add a dynamic legality check.
+    /// Add a dynamic legality check for a specific operation.
     ///
-    /// Return `Some(Legal)` or `Some(Illegal)` to override, `None` to defer.
-    pub fn add_dynamic_check(
+    /// Return `Some(Legal)` or `Some(Illegal)` to decide, `None` to defer to
+    /// the static operation rule and then lower-precedence tiers.
+    pub fn add_dynamic_op(
+        &mut self,
+        dialect: &str,
+        op_name: &str,
+        f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
+    ) {
+        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        match self.dynamic_ops.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(Box::new(f));
+            }
+            Entry::Occupied(entry) => {
+                let key = entry.key();
+                panic!(
+                    "operation `{}.{}` already has a dynamic legality rule",
+                    key.0, key.1
+                );
+            }
+        }
+    }
+
+    /// Add a dynamic legality check for an entire dialect.
+    ///
+    /// Return `Some(Legal)` or `Some(Illegal)` to decide, `None` to defer to
+    /// the static dialect rule and then lower-precedence tiers.
+    pub fn add_dynamic_dialect(
+        &mut self,
+        dialect: &str,
+        f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
+    ) {
+        let dialect = Symbol::from_dynamic(dialect);
+        match self.dynamic_dialects.entry(dialect) {
+            Entry::Vacant(entry) => {
+                entry.insert(Box::new(f));
+            }
+            Entry::Occupied(entry) => {
+                panic!(
+                    "dialect `{}` already has a dynamic legality rule",
+                    entry.key()
+                );
+            }
+        }
+    }
+
+    /// Add a dynamic fallback for operations not decided by operation or dialect rules.
+    ///
+    /// Return `Some(Legal)` or `Some(Illegal)` to decide, `None` to leave the
+    /// operation unknown.
+    pub fn add_dynamic_unknown(
         &mut self,
         f: impl Fn(&IrContext, OpRef) -> Option<LegalityCheck> + 'static,
     ) {
-        self.dynamic_checks.push(Box::new(f));
+        assert!(
+            self.dynamic_unknown.is_none(),
+            "unknown operations already have a dynamic legality rule"
+        );
+        self.dynamic_unknown = Some(Box::new(f));
     }
 
     /// Check if this target has any constraints (legal/illegal dialects/ops/checks).
@@ -143,26 +261,30 @@ impl ConversionTarget {
             || !self.illegal_dialects.is_empty()
             || !self.legal_ops.is_empty()
             || !self.illegal_ops.is_empty()
-            || !self.dynamic_checks.is_empty()
+            || !self.dynamic_ops.is_empty()
+            || !self.dynamic_dialects.is_empty()
+            || self.dynamic_unknown.is_some()
     }
 
     /// Check if a specific operation is legal.
     ///
     /// Resolution order:
-    /// 1. Dynamic checks (first non-None wins)
-    /// 2. Specific op rules (legal_ops / illegal_ops)
-    /// 3. Dialect rules (legal_dialects / illegal_dialects)
-    /// 4. Default: Unknown
+    /// 1. Operation dynamic rule.
+    /// 2. Operation static rule.
+    /// 3. Dialect dynamic rule.
+    /// 4. Dialect static rule.
+    /// 5. Unknown-operation dynamic fallback.
+    /// 6. Default: Unknown.
     pub fn is_legal(&self, ctx: &IrContext, op: OpRef) -> LegalityCheck {
-        // 1. Dynamic checks
-        for check in &self.dynamic_checks {
-            if let Some(result) = check(ctx, op) {
-                return result;
-            }
-        }
-
         let data = ctx.op(op);
         let key = (data.dialect, data.name);
+
+        // 1. Operation dynamic rule.
+        if let Some(check) = self.dynamic_ops.get(&key)
+            && let Some(result) = check(ctx, op)
+        {
+            return result;
+        }
 
         // 2. Specific op rules
         if self.legal_ops.contains(&key) {
@@ -172,7 +294,14 @@ impl ConversionTarget {
             return LegalityCheck::Illegal;
         }
 
-        // 3. Dialect rules
+        // 3. Dialect dynamic rule.
+        if let Some(check) = self.dynamic_dialects.get(&data.dialect)
+            && let Some(result) = check(ctx, op)
+        {
+            return result;
+        }
+
+        // 4. Dialect rules
         if self.legal_dialects.contains(&data.dialect) {
             return LegalityCheck::Legal;
         }
@@ -180,7 +309,14 @@ impl ConversionTarget {
             return LegalityCheck::Illegal;
         }
 
-        // 4. Default
+        // 5. Unknown-operation dynamic fallback.
+        if let Some(check) = &self.dynamic_unknown
+            && let Some(result) = check(ctx, op)
+        {
+            return result;
+        }
+
+        // 6. Default
         LegalityCheck::Unknown
     }
 
@@ -355,6 +491,136 @@ mod tests {
 
         assert_eq!(target.is_legal(&ctx, allowed), LegalityCheck::Legal);
         assert_eq!(target.is_legal(&ctx, rejected), LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn dynamic_registration_order_does_not_change_structural_precedence() {
+        let (mut ctx, loc) = test_ctx();
+        let special = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("special"));
+        let ordinary = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("ordinary"));
+
+        let op_then_dialect = ConversionTarget::new()
+            .dynamic_op("test", "special", |_, _| Some(LegalityCheck::Illegal))
+            .dynamic_dialect("test", |_, _| Some(LegalityCheck::Legal));
+        let dialect_then_op = ConversionTarget::new()
+            .dynamic_dialect("test", |_, _| Some(LegalityCheck::Legal))
+            .dynamic_op("test", "special", |_, _| Some(LegalityCheck::Illegal));
+
+        assert_eq!(
+            op_then_dialect.is_legal(&ctx, special),
+            LegalityCheck::Illegal
+        );
+        assert_eq!(
+            dialect_then_op.is_legal(&ctx, special),
+            LegalityCheck::Illegal
+        );
+        assert_eq!(
+            op_then_dialect.is_legal(&ctx, ordinary),
+            LegalityCheck::Legal
+        );
+        assert_eq!(
+            dialect_then_op.is_legal(&ctx, ordinary),
+            LegalityCheck::Legal
+        );
+    }
+
+    #[test]
+    fn dynamic_operation_rule_precedes_static_operation_rule() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target =
+            ConversionTarget::new()
+                .legal_op("test", "op")
+                .dynamic_op("test", "op", |_, _| Some(LegalityCheck::Illegal));
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn dynamic_operation_rule_can_defer_to_static_operation_rule() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new()
+            .illegal_dialect("test")
+            .legal_op("test", "op")
+            .dynamic_op("test", "op", |_, _| None);
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
+    }
+
+    #[test]
+    fn operation_rule_precedes_dynamic_dialect_rule() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new()
+            .legal_op("test", "op")
+            .dynamic_dialect("test", |_, _| Some(LegalityCheck::Illegal));
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
+    }
+
+    #[test]
+    fn dynamic_dialect_rule_can_defer_to_static_dialect_rule() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new()
+            .illegal_dialect("test")
+            .dynamic_dialect("test", |_, _| None);
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn unknown_dynamic_fallback_handles_otherwise_unknown_operations() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new().dynamic_unknown(|_, _| Some(LegalityCheck::Legal));
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
+    }
+
+    #[test]
+    fn unknown_dynamic_fallback_does_not_override_static_rules() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new()
+            .illegal_dialect("test")
+            .dynamic_unknown(|_, _| Some(LegalityCheck::Legal));
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn unknown_dynamic_fallback_can_defer_to_unknown() {
+        let (mut ctx, loc) = test_ctx();
+        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
+        let target = ConversionTarget::new().dynamic_unknown(|_, _| None);
+
+        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Unknown);
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered as legal")]
+    fn conflicting_static_operation_registration_panics() {
+        let mut target = ConversionTarget::new();
+        target.add_legal_op("test", "op");
+        target.add_illegal_op("test", "op");
+    }
+
+    #[test]
+    #[should_panic(expected = "already has a dynamic legality rule")]
+    fn duplicate_dynamic_operation_registration_panics() {
+        let mut target = ConversionTarget::new();
+        target.add_dynamic_op("test", "op", |_, _| Some(LegalityCheck::Legal));
+        target.add_dynamic_op("test", "op", |_, _| Some(LegalityCheck::Illegal));
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown operations already have a dynamic legality rule")]
+    fn duplicate_unknown_dynamic_registration_panics() {
+        let mut target = ConversionTarget::new();
+        target.add_dynamic_unknown(|_, _| Some(LegalityCheck::Legal));
+        target.add_dynamic_unknown(|_, _| Some(LegalityCheck::Illegal));
     }
 
     #[test]
