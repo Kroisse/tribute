@@ -55,10 +55,10 @@ operations owned by later lowering stages remain unknown and are allowed.
 5. unknown-operation dynamic fallback
 6. `Unknown`
 
-Dynamic rules return `Some(Legal)` or `Some(Illegal)` to decide at that tier.
-Returning `None` defers to the next structural tier. Re-registering the same
-static or dynamic key is invalid; operation-level rules may intentionally
-override dialect-level rules.
+Dynamic rules return `Legal` or `Illegal` to decide at that tier. Returning
+`Defer` continues to the next structural tier. Re-registering the same static
+or dynamic key is invalid; operation-level rules may intentionally override
+dialect-level rules.
 
 ## Pattern Rewriting
 
