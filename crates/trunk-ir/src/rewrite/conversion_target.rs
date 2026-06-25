@@ -5,6 +5,8 @@
 
 use std::collections::HashSet;
 
+use derive_more::Error;
+
 use crate::context::IrContext;
 use crate::refs::OpRef;
 use crate::symbol::Symbol;
@@ -252,6 +254,45 @@ impl std::fmt::Display for IllegalOp {
             "{}.{} ({}, {:?})",
             self.dialect, self.name, self.op, self.legality
         )
+    }
+}
+
+/// Error at a named conversion boundary.
+#[derive(Debug, Error)]
+pub struct ConversionError {
+    boundary: &'static str,
+    operations: Vec<IllegalOp>,
+}
+
+impl ConversionError {
+    pub fn new(boundary: &'static str, operations: Vec<IllegalOp>) -> Self {
+        Self {
+            boundary,
+            operations,
+        }
+    }
+
+    pub fn boundary(&self) -> &'static str {
+        self.boundary
+    }
+
+    pub fn operations(&self) -> &[IllegalOp] {
+        &self.operations
+    }
+}
+
+impl std::fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "conversion boundary `{}` failed with {} error(s):",
+            self.boundary,
+            self.operations.len()
+        )?;
+        for operation in &self.operations {
+            writeln!(f, "  - {operation}")?;
+        }
+        Ok(())
     }
 }
 

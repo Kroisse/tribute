@@ -26,7 +26,9 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
 use trunk_ir::rewrite::type_converter::TypeConverter;
-use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, RewritePattern};
+use trunk_ir::rewrite::{
+    ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
+};
 use trunk_ir::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
@@ -105,7 +107,11 @@ fn box_value(
 ///
 /// This is a partial lowering: only box/unbox operations are converted.
 /// `retain`/`release` ops pass through (handled by a future RC lowering pass).
-pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+pub fn lower(
+    ctx: &mut IrContext,
+    module: Module,
+    type_converter: TypeConverter,
+) -> Result<(), ConversionError> {
     // Pre-intern types for patterns
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
@@ -152,8 +158,8 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     let target = tribute_rt_to_clif_target();
     applicator
         .with_target(target)
-        .apply_partial_conversion(ctx, module)
-        .expect("tribute_rt_to_clif should remove all illegal tribute_rt operations");
+        .apply_partial_conversion(ctx, module, "tribute-rt-to-clif")?;
+    Ok(())
 }
 
 fn tribute_rt_to_clif_target() -> ConversionTarget {
@@ -451,7 +457,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        lower(&mut ctx, module, tc);
+        lower(&mut ctx, module, tc).unwrap();
         print_module(&ctx, module.op())
     }
 
@@ -571,7 +577,7 @@ mod tests {
 }"#;
         let module = parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        lower(&mut ctx, module, tc);
+        lower(&mut ctx, module, tc).unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(

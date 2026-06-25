@@ -5,7 +5,9 @@
 //! `parent_block` validity to skip deleted ops.
 
 use super::Module;
-use super::conversion_target::{ConversionMode, ConversionTarget, IllegalOp, LegalityCheck};
+use super::conversion_target::{
+    ConversionError, ConversionMode, ConversionTarget, IllegalOp, LegalityCheck,
+};
 use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
@@ -166,31 +168,39 @@ impl PatternApplicator {
         }
     }
 
-    /// Apply patterns using partial conversion semantics.
+    /// Apply patterns using partial conversion semantics at a named boundary.
     ///
     /// Verification fails only for operations that are explicitly illegal in
     /// the target. Unknown operations may remain for later conversion passes.
+    /// Failures are reported as [`ConversionError`] with `boundary` attached.
     pub fn apply_partial_conversion(
         &self,
         ctx: &mut IrContext,
         module: Module,
-    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        boundary: &'static str,
+    ) -> Result<ApplyResult, ConversionError> {
         let result = self.apply_partial(ctx, module);
-        result.verify(ctx, module, &self.target)?;
+        result
+            .verify(ctx, module, &self.target)
+            .map_err(|operations| ConversionError::new(boundary, operations))?;
         Ok(result)
     }
 
-    /// Apply patterns using full conversion semantics.
+    /// Apply patterns using full conversion semantics at a named boundary.
     ///
     /// Verification fails for both explicitly illegal operations and unknown
-    /// operations. Use this at named pipeline boundaries.
+    /// operations. Use this at named pipeline boundaries. Failures are reported
+    /// as [`ConversionError`] with `boundary` attached.
     pub fn apply_full_conversion(
         &self,
         ctx: &mut IrContext,
         module: Module,
-    ) -> Result<ApplyResult, Vec<IllegalOp>> {
+        boundary: &'static str,
+    ) -> Result<ApplyResult, ConversionError> {
         let result = self.apply_partial(ctx, module);
-        result.verify_full(ctx, module, &self.target)?;
+        result
+            .verify_full(ctx, module, &self.target)
+            .map_err(|operations| ConversionError::new(boundary, operations))?;
         Ok(result)
     }
 
@@ -418,7 +428,7 @@ mod tests {
 
         let result = applicator
             .with_target(target)
-            .apply_partial_conversion(&mut ctx, module)
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
         assert!(result.reached_fixpoint);
         assert_eq!(result.total_changes, 1);
@@ -454,7 +464,7 @@ mod tests {
         let target = ConversionTarget::new();
         applicator
             .with_target(target)
-            .apply_partial_conversion(&mut ctx, module)
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
 
         // op2's operand should now point to the replacement op's result
@@ -478,15 +488,17 @@ mod tests {
         let applicator = PatternApplicator::new(TypeConverter::new());
         let target = ConversionTarget::new();
 
-        let failures = match applicator
-            .with_target(target)
-            .apply_full_conversion(&mut ctx, module)
-        {
+        let error = match applicator.with_target(target).apply_full_conversion(
+            &mut ctx,
+            module,
+            "test-boundary",
+        ) {
             Ok(_) => panic!("full conversion should reject unknown ops"),
-            Err(failures) => failures,
+            Err(error) => error,
         };
-        assert_eq!(failures.len(), 1);
-        assert_eq!(failures[0].legality, LegalityCheck::Unknown);
+        assert_eq!(error.boundary(), "test-boundary");
+        assert_eq!(error.operations().len(), 1);
+        assert_eq!(error.operations()[0].legality, LegalityCheck::Unknown);
     }
 
     #[test]
@@ -507,7 +519,7 @@ mod tests {
             .add_legal_op("test", "source");
 
         let result = applicator
-            .apply_partial_conversion(&mut ctx, module)
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
 
         assert_eq!(result.total_changes, 0);

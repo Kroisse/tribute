@@ -29,7 +29,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -73,8 +73,9 @@ impl Pass for LowerClosureLambda {
         "lower-closure-lambda"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         lower_closure_lambda(ctx, target.into());
+        Ok(())
     }
 }
 

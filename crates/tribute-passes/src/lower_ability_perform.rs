@@ -28,7 +28,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
@@ -80,8 +80,9 @@ impl Pass for LowerAbilityPerform {
         "lower-ability-perform"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         lower_ability_perform(ctx, target.into());
+        Ok(())
     }
 }
 

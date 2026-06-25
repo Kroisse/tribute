@@ -12,10 +12,11 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
 };
 use trunk_ir::types::Location;
 
@@ -32,20 +33,15 @@ pub fn ability_lowered_target() -> ConversionTarget {
 ///
 /// The final partial conversion rejects every residual `ability.*` operation
 /// while allowing unknown operations owned by later lowering stages.
-pub(crate) fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_handle_dispatch(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), ConversionError> {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(ability_lowered_target())
         .add_pattern(LowerHandleDispatchPattern);
-    applicator
-        .apply_partial_conversion(ctx, module)
-        .unwrap_or_else(|failures| {
-            let errors: Vec<String> = failures.into_iter().map(|op| op.to_string()).collect();
-            panic!(
-                "IR conversion failed for boundary {ABILITY_LOWERED_BOUNDARY} with {} error(s):\n  - {}",
-                errors.len(),
-                errors.join("\n  - ")
-            );
-        });
+    applicator.apply_partial_conversion(ctx, module, ABILITY_LOWERED_BOUNDARY)?;
+    Ok(())
 }
 
 /// PassManager-friendly wrapper for [`lower_handle_dispatch`].
@@ -58,8 +54,8 @@ impl Pass for LowerHandleDispatch {
         "lower-handle-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
-        lower_handle_dispatch(ctx, target.into());
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+        lower_handle_dispatch(ctx, target.into()).map_err(Into::into)
     }
 }
 
@@ -175,9 +171,11 @@ fn inline_done_body(
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use trunk_ir::Symbol;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::LegalityCheck;
 
     /// Basic handle_dispatch with a done handler that passes through the result.
     #[test]
@@ -205,7 +203,7 @@ mod tests {
 }"#,
         );
 
-        lower_handle_dispatch(&mut ctx, module);
+        lower_handle_dispatch(&mut ctx, module).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
         assert_snapshot!(ir_text);
@@ -236,7 +234,7 @@ mod tests {
 }"#,
         );
 
-        lower_handle_dispatch(&mut ctx, module);
+        lower_handle_dispatch(&mut ctx, module).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
         assert_snapshot!(ir_text);
@@ -264,7 +262,7 @@ mod tests {
 }"#,
         );
 
-        lower_handle_dispatch(&mut ctx, module);
+        lower_handle_dispatch(&mut ctx, module).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
         assert_snapshot!(ir_text);
@@ -283,7 +281,7 @@ mod tests {
 }"#,
         );
 
-        lower_handle_dispatch(&mut ctx, module);
+        lower_handle_dispatch(&mut ctx, module).unwrap();
     }
 
     #[test]
@@ -299,18 +297,13 @@ mod tests {
 }"#,
         );
 
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            lower_handle_dispatch(&mut ctx, module);
-        }))
-        .expect_err("residual ability operation should fail final conversion");
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .expect("conversion failure should use a string panic payload");
+        let error = lower_handle_dispatch(&mut ctx, module)
+            .expect_err("residual ability operation should fail final conversion");
 
-        assert!(message.contains("ability-lowered"));
-        assert!(message.contains("ability.perform"));
-        assert!(message.contains("Illegal"));
+        assert_eq!(error.boundary(), "ability-lowered");
+        assert_eq!(error.operations().len(), 1);
+        assert_eq!(error.operations()[0].dialect, Symbol::new("ability"));
+        assert_eq!(error.operations()[0].name, Symbol::new("perform"));
+        assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 }
