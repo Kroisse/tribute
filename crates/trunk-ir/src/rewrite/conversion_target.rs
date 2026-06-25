@@ -74,6 +74,10 @@ pub struct ConversionTarget {
     legal_ops: HashSet<(Symbol, Symbol)>,
     /// Specific operations marked as illegal: (dialect, op_name).
     illegal_ops: HashSet<(Symbol, Symbol)>,
+    /// Statically legal operations whose nested regions are recursively legal.
+    recursive_legal_ops: HashSet<(Symbol, Symbol)>,
+    /// Dynamically legal operations whose nested regions are recursively legal.
+    recursive_dynamic_ops: HashSet<(Symbol, Symbol)>,
     /// Dynamic legality checks for specific operations: (dialect, op_name).
     dynamic_ops: HashMap<(Symbol, Symbol), Box<DynamicCheckFn>>,
     /// Dynamic legality checks for entire dialects.
@@ -93,6 +97,8 @@ impl ConversionTarget {
             illegal_dialects: HashSet::new(),
             legal_ops: HashSet::new(),
             illegal_ops: HashSet::new(),
+            recursive_legal_ops: HashSet::new(),
+            recursive_dynamic_ops: HashSet::new(),
             dynamic_ops: HashMap::new(),
             dynamic_dialects: HashMap::new(),
             dynamic_unknown: None,
@@ -120,6 +126,18 @@ impl ConversionTarget {
     /// Mark a specific operation as illegal and return the updated target.
     pub fn illegal_op(mut self, dialect: &str, op_name: &str) -> Self {
         self.add_illegal_op(dialect, op_name);
+        self
+    }
+
+    /// Mark a statically legal operation as recursively legal and return the updated target.
+    pub fn recursive_legal_op(mut self, dialect: &str, op_name: &str) -> Self {
+        self.add_recursive_legal_op(dialect, op_name);
+        self
+    }
+
+    /// Mark a dynamically legal operation as recursively legal and return the updated target.
+    pub fn recursive_dynamic_op(mut self, dialect: &str, op_name: &str) -> Self {
+        self.add_recursive_dynamic_op(dialect, op_name);
         self
     }
 
@@ -213,6 +231,27 @@ impl ConversionTarget {
         );
     }
 
+    /// Mark a statically legal operation as recursively legal.
+    ///
+    /// The operation must already be registered as statically legal. Dynamic
+    /// legality still takes precedence: if a dynamic rule marks the operation
+    /// illegal, the recursive marker does not apply.
+    pub fn add_recursive_legal_op(&mut self, dialect: &str, op_name: &str) {
+        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        assert!(
+            self.legal_ops.contains(&key),
+            "operation `{}.{}` must be registered as legal before recursive legality",
+            key.0,
+            key.1
+        );
+        assert!(
+            self.recursive_legal_ops.insert(key),
+            "operation `{}.{}` is already registered as recursively legal",
+            key.0,
+            key.1
+        );
+    }
+
     /// Add a dynamic legality check for a specific operation.
     ///
     /// Return `Legal` or `Illegal` to decide, `Defer` to continue to the static
@@ -236,6 +275,26 @@ impl ConversionTarget {
                 );
             }
         }
+    }
+
+    /// Mark a dynamically legal operation as recursively legal.
+    ///
+    /// The operation must already have a dynamic operation rule. The recursive
+    /// marker applies only when that rule returns `Legal`.
+    pub fn add_recursive_dynamic_op(&mut self, dialect: &str, op_name: &str) {
+        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        assert!(
+            self.dynamic_ops.contains_key(&key),
+            "operation `{}.{}` must have a dynamic legality rule before dynamic recursive legality",
+            key.0,
+            key.1
+        );
+        assert!(
+            self.recursive_dynamic_ops.insert(key),
+            "operation `{}.{}` is already registered as dynamically recursively legal",
+            key.0,
+            key.1
+        );
     }
 
     /// Add a dynamic legality check for an entire dialect.
@@ -281,6 +340,8 @@ impl ConversionTarget {
             || !self.illegal_dialects.is_empty()
             || !self.legal_ops.is_empty()
             || !self.illegal_ops.is_empty()
+            || !self.recursive_legal_ops.is_empty()
+            || !self.recursive_dynamic_ops.is_empty()
             || !self.dynamic_ops.is_empty()
             || !self.dynamic_dialects.is_empty()
             || self.dynamic_unknown.is_some()
@@ -340,6 +401,21 @@ impl ConversionTarget {
         LegalityCheck::Unknown
     }
 
+    /// Check whether a legal operation makes its nested regions recursively legal.
+    pub fn is_recursively_legal(&self, ctx: &IrContext, op: OpRef) -> bool {
+        let data = ctx.op(op);
+        let key = (data.dialect, data.name);
+
+        if self.recursive_dynamic_ops.contains(&key)
+            && let Some(check) = self.dynamic_ops.get(&key)
+            && check(ctx, op) == LegalityDecision::Legal
+        {
+            return true;
+        }
+
+        self.recursive_legal_ops.contains(&key) && self.is_legal(ctx, op) == LegalityCheck::Legal
+    }
+
     /// Verify that no illegal operations remain in the module.
     ///
     /// This is partial conversion verification: unknown operations are allowed
@@ -381,7 +457,12 @@ impl ConversionTarget {
                     legality,
                 });
             }
-            std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+            let action = if self.is_recursively_legal(ctx, op) {
+                walk::WalkAction::Skip
+            } else {
+                walk::WalkAction::Advance
+            };
+            std::ops::ControlFlow::Continue(action)
         });
 
         failures
@@ -489,6 +570,20 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         })
+    }
+
+    fn make_container_op(
+        ctx: &mut IrContext,
+        loc: Location,
+        dialect: Symbol,
+        name: Symbol,
+        nested_ops: Vec<OpRef>,
+    ) -> OpRef {
+        let region = make_region(ctx, loc, nested_ops);
+        let op_data = OperationDataBuilder::new(loc, dialect, name)
+            .region(region)
+            .build(ctx);
+        ctx.create_op(op_data)
     }
 
     #[test]
@@ -620,6 +715,154 @@ mod tests {
     }
 
     #[test]
+    fn recursive_legal_op_skips_full_verification_of_descendants() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new()
+            .legal_op("test", "container")
+            .recursive_legal_op("test", "container");
+
+        assert!(target.verify_full(&ctx, region).is_empty());
+    }
+
+    #[test]
+    fn legal_op_without_recursive_marker_checks_descendants() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new().legal_op("test", "container");
+
+        let failures = target.verify_full(&ctx, region);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].op, nested);
+    }
+
+    #[test]
+    fn recursive_legal_op_skips_partial_verification_of_illegal_descendants() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("illegal"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new()
+            .legal_op("test", "container")
+            .recursive_legal_op("test", "container")
+            .illegal_op("test", "illegal");
+
+        assert!(target.verify(&ctx, region).is_empty());
+    }
+
+    #[test]
+    fn recursive_legal_op_skips_multiple_nested_levels() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let inner = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("inner"),
+            vec![nested],
+        );
+        let outer = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("outer"),
+            vec![inner],
+        );
+        let region = make_region(&mut ctx, loc, vec![outer]);
+        let target = ConversionTarget::new()
+            .legal_op("test", "outer")
+            .recursive_legal_op("test", "outer");
+
+        assert!(target.verify_full(&ctx, region).is_empty());
+    }
+
+    #[test]
+    fn dynamic_recursive_op_applies_when_dynamic_rule_returns_legal() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new()
+            .dynamic_op("test", "container", |_, _| LegalityDecision::Legal)
+            .recursive_dynamic_op("test", "container");
+
+        assert!(target.verify_full(&ctx, region).is_empty());
+    }
+
+    #[test]
+    fn dynamic_recursive_op_does_not_apply_when_dynamic_rule_defers() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new()
+            .legal_op("test", "container")
+            .dynamic_op("test", "container", |_, _| LegalityDecision::Defer)
+            .recursive_dynamic_op("test", "container");
+
+        let failures = target.verify_full(&ctx, region);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].op, nested);
+    }
+
+    #[test]
+    fn dynamic_illegal_rule_prevents_static_recursive_legality() {
+        let (mut ctx, loc) = test_ctx();
+        let nested = make_op(&mut ctx, loc, Symbol::new("unknown"), Symbol::new("op"));
+        let parent = make_container_op(
+            &mut ctx,
+            loc,
+            Symbol::new("test"),
+            Symbol::new("container"),
+            vec![nested],
+        );
+        let region = make_region(&mut ctx, loc, vec![parent]);
+        let target = ConversionTarget::new()
+            .legal_op("test", "container")
+            .recursive_legal_op("test", "container")
+            .dynamic_op("test", "container", |_, _| LegalityDecision::Illegal);
+
+        let failures = target.verify_full(&ctx, region);
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].op, parent);
+        assert_eq!(failures[1].op, nested);
+    }
+
+    #[test]
     #[should_panic(expected = "already registered as legal")]
     fn conflicting_static_operation_registration_panics() {
         let mut target = ConversionTarget::new();
@@ -641,6 +884,20 @@ mod tests {
         let mut target = ConversionTarget::new();
         target.add_dynamic_unknown(|_, _| LegalityDecision::Legal);
         target.add_dynamic_unknown(|_, _| LegalityDecision::Illegal);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be registered as legal")]
+    fn recursive_legal_op_requires_static_legal_op() {
+        let mut target = ConversionTarget::new();
+        target.add_recursive_legal_op("test", "op");
+    }
+
+    #[test]
+    #[should_panic(expected = "must have a dynamic legality rule")]
+    fn recursive_dynamic_op_requires_dynamic_op() {
+        let mut target = ConversionTarget::new();
+        target.add_recursive_dynamic_op("test", "op");
     }
 
     #[test]
