@@ -12,7 +12,9 @@ pub mod signature_conversion;
 pub mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
-pub use conversion_target::{ConversionMode, ConversionTarget, IllegalOp, LegalityCheck};
+pub use conversion_target::{
+    ConversionError, ConversionMode, ConversionTarget, IllegalOp, LegalityCheck,
+};
 pub use helpers::{erase_op, inline_region_blocks, split_block};
 pub use pattern::RewritePattern;
 pub use rewriter::PatternRewriter;

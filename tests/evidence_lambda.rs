@@ -27,7 +27,7 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
         .expect("frontend output must be a core.module");
     let mut pm = trunk_ir::pass::PassManager::new();
     pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda);
-    pm.run(&mut ctx, core_module);
+    pm.run(&mut ctx, core_module).unwrap();
     (ctx, m)
 }
 

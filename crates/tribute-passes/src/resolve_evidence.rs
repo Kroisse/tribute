@@ -19,7 +19,7 @@ use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -970,8 +970,9 @@ impl Pass for ResolveEvidenceDispatch {
         "resolve-evidence-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         resolve_evidence_dispatch(ctx, target.into());
+        Ok(())
     }
 }
 

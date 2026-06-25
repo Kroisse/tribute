@@ -78,27 +78,22 @@ use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core as core_dialect;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::PassManager;
+use trunk_ir::pass::{PassError, PassManager, PassResult};
+use trunk_ir::rewrite::ConversionError;
 use trunk_ir::{IrContext, Module};
-/// Error when illegal operations remain after lowering.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConversionError {
-    illegal_ops: Vec<IllegalOp>,
+
+/// Error returned while dumping shared or target-specific IR.
+#[derive(Debug, Clone, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+#[display("{message}")]
+pub struct DumpIrError {
+    message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IllegalOp {
-    dialect: String,
-    name: String,
-}
-
-impl std::fmt::Display for ConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Illegal operations remain after lowering:")?;
-        for op in &self.illegal_ops {
-            writeln!(f, "  - {}.{}", op.dialect, op.name)?;
+impl From<PassError> for DumpIrError {
+    fn from(error: PassError) -> Self {
+        Self {
+            message: error.to_string(),
         }
-        Ok(())
     }
 }
 
@@ -416,15 +411,17 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, Module)> {
-    let (mut ctx, m) = compile_frontend(db, source)?;
+) -> PassResult<Option<(IrContext, Module)>> {
+    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+        return Ok(None);
+    };
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
-    pm.run(&mut ctx, core_module);
-    Some((ctx, m))
+    pm.run(&mut ctx, core_module)?;
+    Ok(Some((ctx, m)))
 }
 
 /// Run pipeline through closure lower (for testing).
@@ -434,16 +431,18 @@ pub fn run_through_evidence_params(
 pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, Module)> {
-    let (mut ctx, m) = compile_frontend(db, source)?;
+) -> PassResult<Option<(IrContext, Module)>> {
+    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+        return Ok(None);
+    };
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
         .add_pass(tribute_passes::closure_lower::LowerClosures);
-    pm.run(&mut ctx, core_module);
-    Some((ctx, m))
+    pm.run(&mut ctx, core_module)?;
+    Ok(Some((ctx, m)))
 }
 
 // =============================================================================
@@ -457,8 +456,13 @@ pub fn run_through_closure_lower(
 ///
 /// Returns the arena session so that backend-specific pipelines can continue
 /// without a Salsa↔Arena round-trip.
-fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(IrContext, Module)> {
-    let (mut ctx, m) = compile_frontend(db, source)?;
+fn run_shared_pipeline(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> PassResult<Option<(IrContext, Module)>> {
+    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+        return Ok(None);
+    };
 
     // Middle-end passes, sequenced through the PassManager (#268).
     // Registration order == execution order.
@@ -480,8 +484,8 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     // Debug-only regression guard: re-check use-chain consistency after every
     // shared pass. step 1+2 (#710) made this invariant hold across the shared
     // middle-end; this catches any future pass that reintroduces a leak. The
-    // verifier only reports; the PassManager panics with the offending pass's
-    // name on `Err`. Compiled out in release.
+    // verifier only reports; the PassManager returns the offending pass's name
+    // with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
         pm.with_verifier(|ctx, op| {
             let Some(module) = Module::new(ctx, op) else {
@@ -504,9 +508,9 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
             })
         });
     }
-    pm.run(&mut ctx, core_module);
+    pm.run(&mut ctx, core_module)?;
 
-    Some((ctx, m))
+    Ok(Some((ctx, m)))
 }
 
 /// Validate call arity and report mismatches as diagnostics.
@@ -520,10 +524,20 @@ fn validate_and_report_arity(db: &dyn salsa::Database, ctx: &IrContext, m: Modul
     }
 }
 
+fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
+    Diagnostic::new(
+        format!("Pipeline failed: {error}"),
+        Span::new(0, 0),
+        DiagnosticSeverity::Error,
+        CompilationPhase::Lowering,
+    )
+    .accumulate(db);
+}
+
 /// Lower continuation ops and run cleanup passes shared by both backends.
 ///
 /// Effects are handled via tail-call CPS through handler_dispatch closures.
-fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     // Validation runs in debug mode.
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
@@ -552,7 +566,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
-fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     run_lowering_pipeline(ctx, m)?;
 
     // General function inlining. The pass is single-block-only and cf-free,
@@ -566,7 +580,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 }
 
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
-fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     run_lowering_pipeline(ctx, m)?;
 
     // General function inlining. Single-block-only (no `cf` dialect
@@ -601,8 +615,8 @@ pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,
     native: bool,
-) -> Result<String, ConversionError> {
-    let Some((mut ctx, m)) = run_shared_pipeline(db, source) else {
+) -> Result<String, DumpIrError> {
+    let Some((mut ctx, m)) = run_shared_pipeline(db, source)? else {
         return Ok(String::new());
     };
     validate_and_report_arity(db, &ctx, m);
@@ -624,7 +638,14 @@ pub fn dump_ir(
 /// Returns the raw WASM bytes on success, or `None` with diagnostics accumulated.
 #[salsa::tracked]
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
-    let (mut ctx, m) = run_shared_pipeline(db, source)?;
+    let (mut ctx, m) = match run_shared_pipeline(db, source) {
+        Ok(Some(result)) => result,
+        Ok(None) => return None,
+        Err(error) => {
+            report_pass_error(db, &error);
+            return None;
+        }
+    };
     validate_and_report_arity(db, &ctx, m);
 
     if let Err(e) = run_wasm_target_pipeline(&mut ctx, m) {
@@ -681,10 +702,12 @@ fn compile_module_to_native(
     // Lower adt.string_const → adt.variant_new + bytes alloc,
     // and adt.bytes_const → clif alloc + rodata reference.
     let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
-    tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis);
+    tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis)
+        .map_err(native_conversion_failure)?;
 
     // Phase -0.3 - Lower bytes intrinsic calls to mem.load operations
-    tribute_passes::native::intrinsic_to_native::lower(ctx, module);
+    tribute_passes::native::intrinsic_to_native::lower(ctx, module)
+        .map_err(native_conversion_failure)?;
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
@@ -693,14 +716,14 @@ fn compile_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        func_to_clif::lower(ctx, module, type_converter);
+        func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        cf_to_clif::lower(ctx, module, type_converter);
+        cf_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 1.9-1.95 - RTTI + ADT RC header
@@ -713,35 +736,37 @@ fn compile_module_to_native(
             module,
             type_converter,
             &rtti_map.type_to_idx,
-        );
+        )
+        .map_err(native_conversion_failure)?;
     }
 
     // Phase 2 - Lower ADT struct access operations to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        adt_to_clif::lower(ctx, module, type_converter);
+        adt_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        arith_to_clif::lower(ctx, module, type_converter);
+        arith_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 2.6 - Lower mem dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        mem_to_clif::lower(ctx, module, type_converter);
+        mem_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 2.7-2.8 - tribute_rt_to_clif + RC insertion
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter);
+        tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter)
+            .map_err(native_conversion_failure)?;
         tribute_passes::native::rc_insertion::insert_rc(ctx, module);
     }
 
@@ -789,6 +814,12 @@ fn compile_module_to_native(
     emit_module_to_native(ctx, module, &rodata)
 }
 
+fn native_conversion_failure(
+    error: ConversionError,
+) -> trunk_ir_cranelift_backend::CompilationError {
+    trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+}
+
 /// Compile to native object bytes.
 ///
 /// Runs the full pipeline (frontend → shared passes → native lowering → emit)
@@ -801,7 +832,14 @@ pub fn compile_to_native_binary<'db>(
     source: SourceCst,
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
-    let (mut ctx, m) = run_shared_pipeline(db, source)?;
+    let (mut ctx, m) = match run_shared_pipeline(db, source) {
+        Ok(Some(result)) => result,
+        Ok(None) => return None,
+        Err(error) => {
+            report_pass_error(db, &error);
+            return None;
+        }
+    };
     validate_and_report_arity(db, &ctx, m);
 
     if let Err(e) = run_native_target_pipeline(&mut ctx, m) {
@@ -916,8 +954,10 @@ pub fn parse_and_lower_ast<'db>(
 #[salsa::tracked]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
     // Run the shared pipeline; diagnostics are accumulated as side effects
-    if let Some((ctx, m)) = run_shared_pipeline(db, source) {
-        validate_and_report_arity(db, &ctx, m);
+    match run_shared_pipeline(db, source) {
+        Ok(Some((ctx, m))) => validate_and_report_arity(db, &ctx, m),
+        Ok(None) => {}
+        Err(error) => report_pass_error(db, &error),
     }
 }
 
@@ -927,7 +967,10 @@ fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
 /// resolve-evidence passes) and returns arena IR. Does NOT run
 /// target-specific passes (WASM/native), making it suitable for
 /// diagnostic-only compilation ("none" target).
-pub fn compile_ast(db: &dyn salsa::Database, source: SourceCst) -> Option<(IrContext, Module)> {
+pub fn compile_ast(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> PassResult<Option<(IrContext, Module)>> {
     run_shared_pipeline(db, source)
 }
 
@@ -945,7 +988,7 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
         .collect();
 
     // Run the pipeline again for the actual result (Salsa memoizes, so this is cheap)
-    let module = run_shared_pipeline(db, source);
+    let module = run_shared_pipeline(db, source).ok().flatten();
 
     CompilationResult {
         module,
@@ -1025,7 +1068,7 @@ mod tests {
     fn test_full_pipeline(db: &salsa::DatabaseImpl) {
         let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
-        let result = compile_ast(db, source);
+        let result = compile_ast(db, source).expect("pipeline should not fail");
         assert!(result.is_some(), "Should compile successfully");
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));

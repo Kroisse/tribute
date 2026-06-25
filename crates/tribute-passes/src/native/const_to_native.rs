@@ -25,7 +25,8 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -206,9 +207,13 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 ///
 /// `adt.string_const("hello")` becomes the above bytes lowering +
 /// `adt.variant_new(type=String, tag=Leaf, %bytes_payload)`
-pub fn lower(ctx: &mut IrContext, module: Module, analysis: &NativeConstAnalysis) {
+pub fn lower(
+    ctx: &mut IrContext,
+    module: Module,
+    analysis: &NativeConstAnalysis,
+) -> Result<(), ConversionError> {
     if analysis.is_empty() {
-        return;
+        return Ok(());
     }
 
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
@@ -245,8 +250,8 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &NativeConstAnalysis
         .illegal_op("adt", "string_const");
     applicator
         .with_target(target)
-        .apply_partial_conversion(ctx, module)
-        .expect("const_to_native should remove native constant operations it owns");
+        .apply_partial_conversion(ctx, module, "const-to-native")?;
+    Ok(())
 }
 
 /// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.

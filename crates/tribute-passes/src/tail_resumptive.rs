@@ -15,7 +15,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -154,8 +154,9 @@ impl Pass for ConvertTailResumptive {
         "convert-tail-resumptive"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         convert_tail_resumptive(ctx, target.into());
+        Ok(())
     }
 }
 

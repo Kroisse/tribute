@@ -14,6 +14,17 @@ the boundaries they claim to establish.
 | Type adaptation | Explicit opt-in, independent of conversion legality |
 | State | Precomputed analyses or immutable plans, not mutable pass state |
 | Boundaries | `ConversionTarget` verification, not `Module<Phase>` types |
+| Failure | Structured pass errors propagated by `PassManager` |
+
+## Pass Failures
+
+Expected pass failures return a typed source through the pass `run` result; they
+do not panic. `PassManager` attaches the failing pass name as `PassError`, stops
+before later passes or nested managers, and propagates `PassResult<T>` to the
+compiler pipeline. Verifier failures use the same path.
+
+Instrumentation runs only after a pass succeeds. The verifier then runs on the
+successful result; a verifier failure stops the pipeline before further work.
 
 ## Conversion Modes
 
@@ -27,6 +38,7 @@ legal by the boundary target.
 Shared lowering passes must not call unchecked `apply_partial` when their API or
 name claims to complete a lowering stage. Use named `ConversionTarget`s for
 pipeline boundaries instead of open-coding legality rules per pass.
+Failed boundaries report `rewrite::ConversionError`.
 
 The shared effect pipeline establishes the `ability-lowered` partial boundary
 after `LowerHandleDispatch`: residual `ability.*` operations are illegal, while

@@ -204,7 +204,8 @@ fn main() { }
 
         // Run through evidence params to get arena IR
         let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed");
+            .expect("run_through_evidence_params should succeed")
+            .expect("frontend should produce a module");
 
         // Check for func.call_indirect in the module
         let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
@@ -404,7 +405,8 @@ fn main() { }
 
         // Run through evidence params to get arena IR for structural checks
         let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed");
+            .expect("run_through_evidence_params should succeed")
+            .expect("frontend should produce a module");
 
         // Verify the module has a lifted function (name starts with __lambda_)
         let func_dialect = Symbol::new("func");
@@ -466,7 +468,8 @@ fn main() { }
 
         // Run through evidence params to get arena IR
         let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed");
+            .expect("run_through_evidence_params should succeed")
+            .expect("frontend should produce a module");
 
         // Check for closure.new in the output
         let has_closure_new = check_for_closure_new_in_module(&ctx, m);
@@ -550,7 +553,8 @@ fn main() { }
 
         // Run through evidence params to get arena IR
         let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed");
+            .expect("run_through_evidence_params should succeed")
+            .expect("frontend should produce a module");
 
         // Check for func.call_indirect in the module
         let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
@@ -600,7 +604,8 @@ fn main() { }
 
         // Run through evidence params to get arena IR
         let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed");
+            .expect("run_through_evidence_params should succeed")
+            .expect("frontend should produce a module");
 
         // Check that apply function has func.call_indirect
         let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
@@ -692,7 +697,8 @@ fn main() { }
 
         // Run through closure lower to get arena IR
         let (ctx, m) = run_through_closure_lower(db, source_file)
-            .expect("run_through_closure_lower should succeed");
+            .expect("run_through_closure_lower should succeed")
+            .expect("frontend should produce a module");
 
         // Check that closure operations are lowered
         let lowered_ops = check_for_lowered_closure_ops_in_module(&ctx, m);

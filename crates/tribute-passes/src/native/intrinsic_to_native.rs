@@ -15,15 +15,15 @@ use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
-    ConversionTarget, LegalityCheck, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, LegalityCheck, Module, PatternApplicator, PatternRewriter,
+    RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower bytes intrinsic calls to native mem operations.
 ///
 /// Also removes `func.func` declarations for bytes intrinsics.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     let intrinsic_names: HashSet<Symbol> = [Symbol::from_dynamic("__bytes_get_or_panic")].into();
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
@@ -57,8 +57,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 
     applicator
         .with_target(target)
-        .apply_partial_conversion(ctx, module)
-        .expect("intrinsic_to_native should remove native intrinsics it owns");
+        .apply_partial_conversion(ctx, module, "intrinsic-to-native")?;
+    Ok(())
 }
 
 /// Pattern that lowers `func.call @__bytes_get_or_panic(bytes, index)` to

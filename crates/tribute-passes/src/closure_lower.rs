@@ -29,7 +29,7 @@ use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
@@ -637,7 +637,8 @@ impl Pass for LowerClosures {
         "lower-closures"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         lower_closures(ctx, target.into());
+        Ok(())
     }
 }

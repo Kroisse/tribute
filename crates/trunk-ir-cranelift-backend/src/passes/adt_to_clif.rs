@@ -34,7 +34,8 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
 
@@ -45,7 +46,11 @@ use trunk_ir::types::TypeDataBuilder;
 ///
 /// The `type_converter` parameter is used to determine field sizes for
 /// layout computation.
-pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+pub fn lower(
+    ctx: &mut IrContext,
+    module: Module,
+    type_converter: TypeConverter,
+) -> Result<(), ConversionError> {
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
@@ -57,9 +62,8 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
         .with_target(adt_to_clif_target());
-    applicator
-        .apply_partial_conversion(ctx, module)
-        .expect("adt_to_clif should remove all illegal ADT operations it owns");
+    applicator.apply_partial_conversion(ctx, module, "adt-to-clif")?;
+    Ok(())
 }
 
 fn adt_to_clif_target() -> ConversionTarget {
@@ -394,7 +398,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
-        super::lower(&mut ctx, module, type_converter);
+        super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
     }
 

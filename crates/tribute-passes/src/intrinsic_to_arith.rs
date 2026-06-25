@@ -12,7 +12,7 @@ use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::Pass;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -46,8 +46,9 @@ impl Pass for LowerIntrinsicToArith {
         "lower-intrinsic-to-arith"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
         lower_intrinsic_to_arith(ctx, target.into());
+        Ok(())
     }
 }
 

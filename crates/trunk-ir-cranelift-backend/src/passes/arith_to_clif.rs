@@ -15,12 +15,17 @@ use trunk_ir::dialect::clif as arena_clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower arith dialect to clif dialect.
-pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+pub fn lower(
+    ctx: &mut IrContext,
+    module: Module,
+    type_converter: TypeConverter,
+) -> Result<(), ConversionError> {
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(ArithConstPattern)
@@ -30,9 +35,8 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern)
         .with_target(arith_to_clif_target());
-    applicator
-        .apply_partial_conversion(ctx, module)
-        .expect("arith_to_clif should remove all illegal arith operations");
+    applicator.apply_partial_conversion(ctx, module, "arith-to-clif")?;
+    Ok(())
 }
 
 fn arith_to_clif_target() -> ConversionTarget {
@@ -505,7 +509,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
-        super::lower(&mut ctx, module, type_converter);
+        super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
     }
 
