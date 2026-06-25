@@ -266,6 +266,10 @@ impl PatternApplicator {
                 continue;
             }
 
+            if self.target.has_constraints() && self.target.is_recursively_legal(ctx, op) {
+                continue;
+            }
+
             // First, recurse into nested regions
             let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
             for region in regions {
@@ -379,6 +383,34 @@ mod tests {
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).expect("test module should be valid")
+    }
+
+    fn make_container(ctx: &mut IrContext, loc: Location, nested_ops: Vec<OpRef>) -> OpRef {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in nested_ops {
+            ctx.push_op(block, op);
+        }
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let container_data =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("container"))
+                .region(region)
+                .build(ctx);
+        ctx.create_op(container_data)
+    }
+
+    fn first_nested_op(ctx: &IrContext, op: OpRef) -> OpRef {
+        let region = ctx.op(op).regions[0];
+        let block = ctx.region(region).blocks[0];
+        ctx.block(block).ops[0]
     }
 
     /// Pattern: rename test.source → test.target
@@ -524,6 +556,58 @@ mod tests {
 
         assert_eq!(result.total_changes, 0);
         assert_eq!(ctx.op(module.ops(&ctx)[0]).name, Symbol::new("source"));
+    }
+
+    #[test]
+    fn legal_container_without_recursive_marker_rewrites_descendants() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let nested_data =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let nested = ctx.create_op(nested_data);
+        let container = make_container(&mut ctx, loc, vec![nested]);
+        let module = make_module(&mut ctx, loc, vec![container]);
+
+        let target = ConversionTarget::new().legal_op("test", "container");
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
+            .unwrap();
+
+        assert_eq!(result.total_changes, 1);
+        let rewritten = first_nested_op(&ctx, container);
+        assert_eq!(ctx.op(rewritten).name, Symbol::new("target"));
+    }
+
+    #[test]
+    fn recursive_legal_container_skips_descendant_rewrites() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let nested_data =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let nested = ctx.create_op(nested_data);
+        let container = make_container(&mut ctx, loc, vec![nested]);
+        let module = make_module(&mut ctx, loc, vec![container]);
+
+        let target = ConversionTarget::new()
+            .legal_op("test", "container")
+            .recursive_legal_op("test", "container");
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .with_target(target)
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
+            .unwrap();
+
+        assert_eq!(result.total_changes, 0);
+        let skipped = first_nested_op(&ctx, container);
+        assert_eq!(ctx.op(skipped).name, Symbol::new("source"));
     }
 
     #[test]

@@ -60,6 +60,19 @@ Dynamic rules return `Legal` or `Illegal` to decide at that tier. Returning
 or dynamic key is invalid; operation-level rules may intentionally override
 dialect-level rules.
 
+## Recursive Legality
+
+A legal operation may be marked recursively legal. Conversion verification and
+pattern application then treat the operation as an opaque legal boundary: the
+operation itself is checked, but its nested regions are not inspected by that
+conversion target.
+
+Recursive legality applies in both partial and full conversion modes. Without
+the recursive marker, descendants of a legal operation are still visited and
+checked normally. Static recursive legality requires the same operation to be
+registered as statically legal. Dynamic recursive legality is operation-specific
+and applies only when that operation's dynamic rule returns `Legal`.
+
 ## Pattern Rewriting
 
 Patterns match one operation family and mutate through `PatternRewriter`.
