@@ -44,6 +44,22 @@ The shared effect pipeline establishes the `ability-lowered` partial boundary
 after `LowerHandleDispatch`: residual `ability.*` operations are illegal, while
 operations owned by later lowering stages remain unknown and are allowed.
 
+## Legality Precedence
+
+`ConversionTarget` legality is structural, not callback-order based:
+
+1. operation dynamic rule
+2. operation static rule
+3. dialect dynamic rule
+4. dialect static rule
+5. unknown-operation dynamic fallback
+6. `Unknown`
+
+Dynamic rules return `Legal` or `Illegal` to decide at that tier. Returning
+`Defer` continues to the next structural tier. Re-registering the same static
+or dynamic key is invalid; operation-level rules may intentionally override
+dialect-level rules.
+
 ## Pattern Rewriting
 
 Patterns match one operation family and mutate through `PatternRewriter`.
