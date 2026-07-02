@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use tribute_ir::dialect::ability::{self as arena_ability, MarkerField, evidence_abi};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::{core as arena_core, wasm as wasm_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -188,6 +188,7 @@ impl RewritePattern for EvidenceExtendPattern {
         let prompt_tag_attr = extend_op.prompt_tag(ctx);
 
         let i32_ty = intern_i32(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
         let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
         // Create: %ability_id = wasm.i32_const(ability_id)
@@ -200,11 +201,19 @@ impl RewritePattern for EvidenceExtendPattern {
         };
         let prompt_tag_const = wasm_dialect::i32_const(ctx, loc, i32_ty, prompt_tag_val);
 
-        // Create: %tr_dispatch_fn = wasm.i32_const(0)  (null, unused for now)
-        let tr_dispatch_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        // Create a core.ptr-typed null for tr_dispatch_fn (unused for now).
+        let tr_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        let tr_dispatch_null =
+            arena_core::unrealized_conversion_cast(ctx, loc, tr_dispatch_zero.result(ctx), ptr_ty);
 
-        // Create: %handler_dispatch = wasm.i32_const(0)  (null, unused for now)
-        let handler_dispatch_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        // Create a core.ptr-typed null for handler_dispatch (unused for now).
+        let handler_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        let handler_dispatch_null = arena_core::unrealized_conversion_cast(
+            ctx,
+            loc,
+            handler_dispatch_zero.result(ctx),
+            ptr_ty,
+        );
 
         // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
         let marker_op = wasm_dialect::struct_new(
@@ -213,8 +222,8 @@ impl RewritePattern for EvidenceExtendPattern {
             [
                 ability_id_const.result(ctx),
                 prompt_tag_const.result(ctx),
-                tr_dispatch_const.result(ctx),
-                handler_dispatch_const.result(ctx),
+                tr_dispatch_null.result(ctx),
+                handler_dispatch_null.result(ctx),
             ],
             marker_ty,
             MARKER_IDX,
@@ -232,8 +241,10 @@ impl RewritePattern for EvidenceExtendPattern {
         let call_result = call_op.results(ctx)[0];
         rewriter.insert_op(ability_id_const.op_ref());
         rewriter.insert_op(prompt_tag_const.op_ref());
-        rewriter.insert_op(tr_dispatch_const.op_ref());
-        rewriter.insert_op(handler_dispatch_const.op_ref());
+        rewriter.insert_op(tr_dispatch_zero.op_ref());
+        rewriter.insert_op(tr_dispatch_null.op_ref());
+        rewriter.insert_op(handler_dispatch_zero.op_ref());
+        rewriter.insert_op(handler_dispatch_null.op_ref());
         rewriter.insert_op(marker_op.op_ref());
         rewriter.insert_op(call_op.op_ref());
         rewriter.erase_op(vec![call_result]);
