@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
@@ -101,7 +101,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
-            if let Ok(const_op) = arena_func::Constant::from_op(ctx, op) {
+            if let Ok(const_op) = func::Constant::from_op(ctx, op) {
                 refs.push(const_op.func_ref(ctx));
             }
 
@@ -179,7 +179,7 @@ impl RewritePattern for FuncFuncPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func_op) = func::Func::from_op(ctx, op) else {
             return false;
         };
 
@@ -207,7 +207,7 @@ impl RewritePattern for FuncCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
 
@@ -235,7 +235,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_call_indirect) = arena_func::CallIndirect::from_op(ctx, op) else {
+        let Ok(_call_indirect) = func::CallIndirect::from_op(ctx, op) else {
             return false;
         };
 
@@ -261,7 +261,7 @@ impl RewritePattern for FuncReturnPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_return_op) = arena_func::Return::from_op(ctx, op) else {
+        let Ok(_return_op) = func::Return::from_op(ctx, op) else {
             return false;
         };
 
@@ -284,7 +284,7 @@ impl RewritePattern for FuncTailCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail_call_op) = arena_func::TailCall::from_op(ctx, op) else {
+        let Ok(tail_call_op) = func::TailCall::from_op(ctx, op) else {
             return false;
         };
 
@@ -308,7 +308,7 @@ impl RewritePattern for FuncUnreachablePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_unreachable_op) = arena_func::Unreachable::from_op(ctx, op) else {
+        let Ok(_unreachable_op) = func::Unreachable::from_op(ctx, op) else {
             return false;
         };
 
@@ -335,7 +335,7 @@ impl RewritePattern for FuncConstantPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arena_func::Constant::from_op(ctx, op) else {
+        let Ok(const_op) = func::Constant::from_op(ctx, op) else {
             return false;
         };
 

@@ -10,9 +10,9 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -75,7 +75,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
     builder = builder.param(i64_ty).param(ptr_ty);
     builder = builder.attr(
@@ -99,7 +99,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    arena_core::ptr(ctx).as_type_ref()
+    core::ptr(ctx).as_type_ref()
 }
 
 fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
@@ -118,7 +118,7 @@ impl RewritePattern for FuncFuncPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_func::Func::from_op(ctx, op).is_err() {
+        if func::Func::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -161,9 +161,8 @@ impl RewritePattern for FuncFuncPattern {
                 let new_ret = ret_ty.map(|r| tc.convert_type_or_identity(ctx, r));
 
                 // Build new func type in Layout A: params[0] = return type
-                let ret_ty = new_ret.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
-                let new_func_ty =
-                    arena_core::func(ctx, ret_ty, new_params.iter().copied()).as_type_ref();
+                let ret_ty = new_ret.unwrap_or_else(|| core::nil(ctx).as_type_ref());
+                let new_func_ty = core::func(ctx, ret_ty, new_params.iter().copied()).as_type_ref();
                 new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
             }
         }
@@ -192,7 +191,7 @@ impl RewritePattern for FuncCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
 
@@ -221,7 +220,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_func::CallIndirect::from_op(ctx, op).is_err() {
+        if func::CallIndirect::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -239,8 +238,8 @@ impl RewritePattern for FuncCallIndirectPattern {
 
         // Build sig type matching translate_signature layout:
         // params[0] = return type, params[1..] = parameter types
-        let ret_ty = result_ty.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
-        let sig_ty = arena_core::func(ctx, ret_ty, param_types.iter().copied()).as_type_ref();
+        let ret_ty = result_ty.unwrap_or_else(|| core::nil(ctx).as_type_ref());
+        let sig_ty = core::func(ctx, ret_ty, param_types.iter().copied()).as_type_ref();
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -266,7 +265,7 @@ impl RewritePattern for FuncReturnPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_func::Return::from_op(ctx, op).is_err() {
+        if func::Return::from_op(ctx, op).is_err() {
             return false;
         }
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -290,7 +289,7 @@ impl RewritePattern for FuncTailCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail_call) = arena_func::TailCall::from_op(ctx, op) else {
+        let Ok(tail_call) = func::TailCall::from_op(ctx, op) else {
             return false;
         };
 
@@ -319,11 +318,11 @@ impl RewritePattern for FuncUnreachablePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_func::Unreachable::from_op(ctx, op).is_err() {
+        if func::Unreachable::from_op(ctx, op).is_err() {
             return false;
         }
         let loc = ctx.op(op).location;
-        let new_op = arena_clif::trap(ctx, loc, Symbol::new("unreachable"));
+        let new_op = clif::trap(ctx, loc, Symbol::new("unreachable"));
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -339,14 +338,14 @@ impl RewritePattern for FuncConstantPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arena_func::Constant::from_op(ctx, op) else {
+        let Ok(const_op) = func::Constant::from_op(ctx, op) else {
             return false;
         };
 
         let func_ref = const_op.func_ref(ctx);
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
-        let new_op = arena_clif::symbol_addr(ctx, loc, ptr_ty, func_ref);
+        let new_op = clif::symbol_addr(ctx, loc, ptr_ty, func_ref);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -362,12 +361,12 @@ impl RewritePattern for ClosureStructAdaptPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        use trunk_ir::dialect::adt as arena_adt;
+        use trunk_ir::dialect::adt;
 
         let native_ty = native_closure_struct_type(ctx);
 
         // Handle adt.struct_new on _closure
-        if let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) {
+        if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
             let ty = struct_new.r#type(ctx);
             if !is_closure_struct(ctx, ty) || ty == native_ty {
                 return false;
@@ -391,7 +390,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
         }
 
         // Handle adt.struct_get on _closure
-        if let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) {
+        if let Ok(struct_get) = adt::StructGet::from_op(ctx, op) {
             let ty = struct_get.r#type(ctx);
             if !is_closure_struct(ctx, ty) || ty == native_ty {
                 return false;

@@ -113,6 +113,57 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
     (hasher.finish() % 0x7FFFFFFF) as u32
 }
 
+/// Compute the stable runtime ability ID for an ability reference type.
+pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
+    let data = ctx.types.get(ability_ref);
+    let ability_name = match data.attrs.get(&Symbol::new("name")) {
+        Some(Attribute::Symbol(s)) => *s,
+        _ => panic!(
+            "ICE: compute_ability_id: ability type has no name: {:?}",
+            data
+        ),
+    };
+
+    let mut hash: u32 = ability_name.with_str(|s| {
+        let mut h: u32 = 0;
+        for byte in s.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+        h
+    });
+
+    for &param in data.params.iter() {
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(ctx, param));
+    }
+
+    hash
+}
+
+fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
+    let data = ctx.types.get(ty);
+    let mut hash: u32 = 0;
+
+    data.dialect.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    data.name.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    for &param in data.params.iter() {
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(ctx, param));
+    }
+
+    hash
+}
+
 // === Pure operation registrations ===
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_lookup") }
@@ -126,7 +177,7 @@ inventory::submit! { trunk_ir::op_interface::IsolatedFromAboveOps::register("abi
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -287,7 +338,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// Get the canonical Evidence ADT type — `core.array(Marker)`.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
-    arena_core::array(ctx, marker_ty).as_type_ref()
+    core::array(ctx, marker_ty).as_type_ref()
 }
 
 /// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
@@ -452,7 +503,7 @@ mod tests {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let other_array = arena_core::array(&mut ctx, i32_ty).as_type_ref();
+        let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false

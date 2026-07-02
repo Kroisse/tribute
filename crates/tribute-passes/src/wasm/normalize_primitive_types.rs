@@ -28,7 +28,7 @@
 use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -125,7 +125,7 @@ impl RewritePattern for NormalizeCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
 
@@ -148,7 +148,7 @@ impl RewritePattern for NormalizeCallPattern {
         let callee = call_op.callee(ctx);
         let args: Vec<_> = call_op.args(ctx).to_vec();
 
-        let new_op = arena_func::call(ctx, loc, args, new_result_ty, callee);
+        let new_op = func::call(ctx, loc, args, new_result_ty, callee);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -168,7 +168,7 @@ impl RewritePattern for NormalizeCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_call_op) = arena_func::CallIndirect::from_op(ctx, op) else {
+        let Ok(_call_op) = func::CallIndirect::from_op(ctx, op) else {
             return false;
         };
 
@@ -191,7 +191,7 @@ impl RewritePattern for NormalizeCallIndirectPattern {
             .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
         let args: Vec<_> = operands[1..].to_vec();
 
-        let new_op = arena_func::call_indirect(ctx, loc, callee, args, new_result_ty);
+        let new_op = func::call_indirect(ctx, loc, callee, args, new_result_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }

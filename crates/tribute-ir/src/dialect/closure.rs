@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_closure_lambda_round_trip() {
         use trunk_ir::context::{BlockArgData, BlockData, RegionData};
-        use trunk_ir::dialect::func as arena_func;
+        use trunk_ir::dialect::func;
 
         let mut ctx = IrContext::new();
         let loc = dummy_location();
@@ -406,7 +406,7 @@ mod tests {
             parent_region: None,
         });
         let x_val = ctx.block_arg(entry, 0);
-        let ret_op = arena_func::r#return(&mut ctx, loc, [x_val]);
+        let ret_op = func::r#return(&mut ctx, loc, [x_val]);
         ctx.push_op(entry, ret_op.op_ref());
 
         let body_region = ctx.create_region(RegionData {

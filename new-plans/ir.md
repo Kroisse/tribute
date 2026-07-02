@@ -21,6 +21,7 @@ Infrastructure
 High-level
   tribute   unresolved or source-level frontend constructs
   ability   evidence and handler dispatch semantics
+  effect    target-independent effect ABI
   closure   closure construction and decomposition
   adt       structs, variants, arrays, references, literals
 
@@ -63,6 +64,13 @@ resolution, type checking, TDNR, and AST-to-IR lowering.
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
 their target-specific representation is selected.
+
+`effect.*` represents the target-independent ABI between high-level ability
+semantics and backend-specific evidence/callable layouts. It carries semantic
+inputs such as evidence, ability identity, operation name, payload,
+continuation, and handler closures. It must not expose Marker field indices,
+handler-table storage layout, closure field positions, or backend function
+pointer representation.
 
 `closure.*` represents closure allocation and projection. Closures lower
 differently per backend: Wasm uses function references plus GC structures, while
@@ -121,8 +129,9 @@ Important stage invariants:
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
 | AST-to-IR | IR structure and SSA use chains are valid |
-| Shared lowering | Source-level and ability operations are removed at claimed boundaries |
-| Backend lowering | Backend-ready target verification succeeds |
+| Shared lowering | Source-level and high-level ability dispatch operations are removed at claimed boundaries |
+| Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
+| Backend lowering | Backend-ready target verification succeeds and no `effect.*` operations remain |
 
 ## Type Model
 

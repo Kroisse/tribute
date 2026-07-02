@@ -8,8 +8,8 @@
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
 use trunk_ir::context::{BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
@@ -42,7 +42,7 @@ impl RewritePattern for ScfIfPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(scf_if_op) = arena_scf::If::from_op(ctx, op) else {
+        let Ok(scf_if_op) = scf::If::from_op(ctx, op) else {
             return false;
         };
 
@@ -56,7 +56,7 @@ impl RewritePattern for ScfIfPattern {
         let result_ty = result_types
             .first()
             .copied()
-            .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+            .unwrap_or_else(|| core::nil(ctx).as_type_ref());
 
         // Get the condition operand
         let cond = scf_if_op.cond(ctx);
@@ -88,7 +88,7 @@ impl RewritePattern for ScfLoopPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(loop_op) = arena_scf::Loop::from_op(ctx, op) else {
+        let Ok(loop_op) = scf::Loop::from_op(ctx, op) else {
             return false;
         };
 
@@ -102,7 +102,7 @@ impl RewritePattern for ScfLoopPattern {
         let result_ty = result_types
             .first()
             .copied()
-            .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+            .unwrap_or_else(|| core::nil(ctx).as_type_ref());
 
         // Get init operands
         let init: Vec<_> = loop_op.init(ctx).to_vec();
@@ -153,7 +153,7 @@ impl RewritePattern for ScfYieldPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_scf::Yield::matches(ctx, op) {
+        if !scf::Yield::matches(ctx, op) {
             return false;
         }
 
@@ -193,7 +193,7 @@ impl RewritePattern for ScfContinuePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_scf::Continue::matches(ctx, op) {
+        if !scf::Continue::matches(ctx, op) {
             return false;
         }
 
@@ -245,7 +245,7 @@ impl RewritePattern for ScfBreakPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(break_op) = arena_scf::Break::from_op(ctx, op) else {
+        let Ok(break_op) = scf::Break::from_op(ctx, op) else {
             return false;
         };
 

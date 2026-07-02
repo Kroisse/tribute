@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
-use tribute_ir::dialect::closure as arena_closure;
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::closure;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
@@ -423,7 +423,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.nil` type.
     pub fn nil_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_core::nil(ir).as_type_ref()
+        core::nil(ir).as_type_ref()
     }
 
     /// Get the `core.i1` (bool) type.
@@ -440,19 +440,19 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.bytes` type.
     pub fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_core::bytes(ir).as_type_ref()
+        core::bytes(ir).as_type_ref()
     }
 
     /// Get the `tribute_rt.anyref` type.
     pub fn anyref_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_tribute_rt::anyref(ir).as_type_ref()
+        tribute_rt::anyref(ir).as_type_ref()
     }
 
     /// Create a `core.func` type with params and result.
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied()).as_type_ref()
+        core::func(ir, result, params.iter().copied()).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.
@@ -548,7 +548,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create the `closure.closure` type wrapping a function type.
     pub fn closure_type(&self, ir: &mut IrContext, func_type: TypeRef) -> TypeRef {
-        arena_closure::closure(ir, func_type).as_type_ref()
+        closure::closure(ir, func_type).as_type_ref()
     }
 
     /// Check if a type is a `closure.closure` type.

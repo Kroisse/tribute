@@ -14,21 +14,23 @@
 //! 2. **Empty evidence** — `adt.array_new(0, evidence_ty)` →
 //!    `func.call @__tribute_evidence_empty()`.
 //!
-//! 3. **Extend call-site rewrite** — the 2-arg call
-//!    `func.call @__tribute_evidence_extend(ev, marker)` where `marker` is
-//!    produced by `adt.struct_new(ability_id, prompt_tag, tr_dispatch_fn, handler_dispatch)` is
-//!    rewritten to a 5-arg call passing the fields directly, and the now-dead
-//!    `adt.struct_new` is removed.
+//! 3. **Effect ABI lowering** — `effect.extend`, `effect.dispatch_tail`, and
+//!    `effect.dispatch_cps` are lowered to the native evidence runtime ABI and
+//!    closure indirect calls.
 //!
 //! 4. **TR dispatch field** — `adt.struct_get(marker, MarkerField::TrDispatchFn)` on evidence_lookup
 //!    results is rewritten to `func.call @__tribute_evidence_lookup_tr(ev, ability_id)`.
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::ability::{MarkerField, evidence_abi, evidence_runtime_symbols};
+use tribute_ir::dialect::ability::{
+    self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
+};
+use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -68,7 +70,7 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     let lookup_handler_sym = Symbol::new(evidence_abi::LOOKUP_HANDLER);
 
     for &op in &ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if name == lookup_sym {
                 stubs_to_replace.push((op, evidence_abi::LOOKUP));
@@ -216,7 +218,7 @@ fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
     let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
 
     for op in ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if is_evidence_runtime_fn(name) {
                 continue;
@@ -244,6 +246,34 @@ fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::ability::is_marker_type_ref(ctx, ty)
 }
 
+fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
+    match ctx.types.get(ability_ref).attrs.get(&Symbol::new("name")) {
+        Some(Attribute::Symbol(s)) => Some(*s),
+        _ => None,
+    }
+}
+
+fn ability_id_const(
+    ctx: &mut IrContext,
+    loc: Location,
+    i32_ty: TypeRef,
+    ability_ref: TypeRef,
+) -> arith::Const {
+    let ability_id = ability::compute_ability_id(ctx, ability_ref);
+    arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128))
+}
+
+fn op_idx_const(
+    ctx: &mut IrContext,
+    loc: Location,
+    i32_ty: TypeRef,
+    ability_ref: TypeRef,
+    op_name: Symbol,
+) -> arith::Const {
+    let op_idx = compute_op_idx(ability_name(ctx, ability_ref), Some(op_name));
+    arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_idx as i128))
+}
+
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
     let ptr_ty = ctx
         .types
@@ -251,6 +281,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
 
     // Track Marker struct_new results → their operands
     let mut marker_struct_operands: HashMap<ValueRef, Vec<ValueRef>> = HashMap::new();
@@ -275,7 +307,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
-                let call = arena_func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
+                let call = func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -298,7 +330,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                      should not reach this pass."
                 );
                 let old_result = ctx.op_result(op, 0);
-                let call = arena_func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
+                let call = func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -319,10 +351,148 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             }
         }
 
+        // --- effect.extend → func.call @__tribute_evidence_extend native ABI ---
+        if let Ok(extend_op) = effect::Extend::from_op(ctx, op) {
+            let ability_id_const = ability_id_const(ctx, loc, i32_ty, extend_op.ability_ref(ctx));
+            let ability_id_val = ability_id_const.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+
+            let tr_dispatch_ptr =
+                core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
+            ctx.insert_op_before(block, op, tr_dispatch_ptr.op_ref());
+
+            let handler_dispatch_ptr =
+                core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
+            ctx.insert_op_before(block, op, handler_dispatch_ptr.op_ref());
+
+            let old_result = extend_op.result(ctx);
+            let extend_call = func::call(
+                ctx,
+                loc,
+                [
+                    extend_op.evidence(ctx),
+                    ability_id_val,
+                    extend_op.prompt_tag(ctx),
+                    tr_dispatch_ptr.result(ctx),
+                    handler_dispatch_ptr.result(ctx),
+                ],
+                ptr_ty,
+                Symbol::new(evidence_abi::EXTEND),
+            );
+            let new_result = extend_call.result(ctx);
+            ctx.insert_op_before(block, op, extend_call.op_ref());
+            ctx.replace_all_uses(old_result, new_result);
+            ops_to_erase.push(op);
+            continue;
+        }
+
+        // --- effect.dispatch_tail → lookup TR dispatch closure and call it ---
+        if let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) {
+            let ability_ref = dispatch_op.ability_ref(ctx);
+            let ability_id_const = ability_id_const(ctx, loc, i32_ty, ability_ref);
+            let ability_id_val = ability_id_const.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+
+            let dispatch_closure = func::call(
+                ctx,
+                loc,
+                [dispatch_op.evidence(ctx), ability_id_val],
+                ptr_ty,
+                Symbol::new(evidence_abi::LOOKUP_TR),
+            );
+            let dispatch_val = dispatch_closure.result(ctx);
+            ctx.insert_op_before(block, op, dispatch_closure.op_ref());
+
+            let op_idx_const =
+                op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+            let op_idx_val = op_idx_const.result(ctx);
+            ctx.insert_op_before(block, op, op_idx_const.op_ref());
+
+            let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+            let fn_ptr = fn_ptr_get.result(ctx);
+            ctx.insert_op_before(block, op, fn_ptr_get.op_ref());
+
+            let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+            let env_val = env_get.result(ctx);
+            ctx.insert_op_before(block, op, env_get.op_ref());
+
+            let result_ty = ctx.op_result_types(op)[0];
+            let call = func::call_indirect(
+                ctx,
+                loc,
+                fn_ptr,
+                [
+                    dispatch_op.evidence(ctx),
+                    env_val,
+                    op_idx_val,
+                    dispatch_op.payload(ctx),
+                ],
+                result_ty,
+            );
+            let old_result = dispatch_op.result(ctx);
+            let new_result = call.result(ctx);
+            ctx.insert_op_before(block, op, call.op_ref());
+            ctx.replace_all_uses(old_result, new_result);
+            ops_to_erase.push(op);
+            continue;
+        }
+
+        // --- effect.dispatch_cps → lookup CPS dispatch closure and call it ---
+        if let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) {
+            let ability_ref = dispatch_op.ability_ref(ctx);
+            let ability_id_const = ability_id_const(ctx, loc, i32_ty, ability_ref);
+            let ability_id_val = ability_id_const.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+
+            let dispatch_closure = func::call(
+                ctx,
+                loc,
+                [dispatch_op.evidence(ctx), ability_id_val],
+                ptr_ty,
+                Symbol::new(evidence_abi::LOOKUP_HANDLER),
+            );
+            let dispatch_val = dispatch_closure.result(ctx);
+            ctx.insert_op_before(block, op, dispatch_closure.op_ref());
+
+            let op_idx_const =
+                op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+            let op_idx_val = op_idx_const.result(ctx);
+            ctx.insert_op_before(block, op, op_idx_const.op_ref());
+
+            let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+            let fn_ptr = fn_ptr_get.result(ctx);
+            ctx.insert_op_before(block, op, fn_ptr_get.op_ref());
+
+            let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+            let env_val = env_get.result(ctx);
+            ctx.insert_op_before(block, op, env_get.op_ref());
+
+            let result_ty = ctx.op_result_types(op)[0];
+            let call = func::call_indirect(
+                ctx,
+                loc,
+                fn_ptr,
+                [
+                    dispatch_op.evidence(ctx),
+                    env_val,
+                    dispatch_op.continuation(ctx),
+                    op_idx_val,
+                    dispatch_op.payload(ctx),
+                ],
+                result_ty,
+            );
+            let old_result = dispatch_op.result(ctx);
+            let new_result = call.result(ctx);
+            ctx.insert_op_before(block, op, call.op_ref());
+            ctx.replace_all_uses(old_result, new_result);
+            ops_to_erase.push(op);
+            continue;
+        }
+
         // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 ---
         if dialect == Symbol::new("func")
             && name == Symbol::new("call")
-            && let Ok(call_op) = arena_func::Call::from_op(ctx, op)
+            && let Ok(call_op) = func::Call::from_op(ctx, op)
         {
             let callee = call_op.callee(ctx);
 
@@ -331,7 +501,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                 let ev_val = operands[0];
                 let ability_id_val = operands[1];
                 let old_result = ctx.op_result(op, 0);
-                let new_call = arena_func::call(
+                let new_call = func::call(
                     ctx,
                     loc,
                     operands,
@@ -369,7 +539,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     args.extend_from_slice(fields);
                     let old_result = ctx.op_result(op, 0);
                     let new_call =
-                        arena_func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
+                        func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
                     let new_result = new_call.result(ctx);
                     ctx.insert_op_before(block, op, new_call.op_ref());
                     ctx.replace_all_uses(old_result, new_result);
@@ -403,7 +573,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                         field if field == i128::from(MarkerField::TrDispatchFn.index()) => {
                             // tr_dispatch_fn — call __tribute_evidence_lookup_tr
                             let old_result = ctx.op_result(op, 0);
-                            let tr_call = arena_func::call(
+                            let tr_call = func::call(
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
@@ -418,7 +588,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                         field if field == i128::from(MarkerField::HandlerDispatch.index()) => {
                             // handler_dispatch — call __tribute_evidence_lookup_handler
                             let old_result = ctx.op_result(op, 0);
-                            let handler_call = arena_func::call(
+                            let handler_call = func::call(
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],

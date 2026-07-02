@@ -44,6 +44,12 @@ The shared effect pipeline establishes the `ability-lowered` partial boundary
 after `LowerHandleDispatch`: residual `ability.*` operations are illegal, while
 operations owned by later lowering stages remain unknown and are allowed.
 
+The effect ABI boundary is represented by `effect.*` operations. Shared ability
+lowering may produce `effect.extend`, `effect.dispatch_tail`, and
+`effect.dispatch_cps`; backend-specific lowering must eliminate them before a
+backend-ready full conversion target. Shared passes must not lower these
+operations by inspecting concrete Marker fields or backend closure layouts.
+
 ## Legality Precedence
 
 `ConversionTarget` legality is structural, not callback-order based:
@@ -118,6 +124,7 @@ Typical pass groups:
 
 ```text
 effect/ability lowering
+effect ABI to native runtime lowering
 native runtime lowering
 arith_to_clif
 scf_to_clif

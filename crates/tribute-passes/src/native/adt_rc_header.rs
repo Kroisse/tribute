@@ -21,7 +21,7 @@ use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_vari
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
@@ -44,7 +44,7 @@ pub fn lower(
     rtti_map: &HashMap<TypeRef, u32>,
 ) -> Result<(), ConversionError> {
     // Pre-intern types
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -343,7 +343,7 @@ mod tests {
     use std::collections::BTreeMap;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
-    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::smallvec::smallvec;
@@ -371,7 +371,7 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
 
         // Build function type: (field_types...) -> ptr
-        let func_ty = arena_core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
+        let func_ty = core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -404,7 +404,7 @@ mod tests {
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 
-        let ret = arena_func::r#return(ctx, loc, [struct_result]);
+        let ret = func::r#return(ctx, loc, [struct_result]);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -412,7 +412,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = arena_func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+        let func_op = func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
 
         // Build module
         let module_block = ctx.create_block(BlockData {

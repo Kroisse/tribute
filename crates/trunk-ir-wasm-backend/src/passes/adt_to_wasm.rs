@@ -42,7 +42,7 @@
 use tracing::warn;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -84,7 +84,7 @@ impl RewritePattern for StructNewPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) else {
+        let Ok(struct_new) = adt::StructNew::from_op(ctx, op) else {
             return false;
         };
 
@@ -114,7 +114,7 @@ impl RewritePattern for StructGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) else {
+        let Ok(struct_get) = adt::StructGet::from_op(ctx, op) else {
             return false;
         };
 
@@ -141,7 +141,7 @@ impl RewritePattern for StructSetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_set) = arena_adt::StructSet::from_op(ctx, op) else {
+        let Ok(struct_set) = adt::StructSet::from_op(ctx, op) else {
             return false;
         };
 
@@ -171,7 +171,7 @@ impl RewritePattern for VariantNewPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op) else {
+        let Ok(variant_new) = adt::VariantNew::from_op(ctx, op) else {
             return false;
         };
 
@@ -248,7 +248,7 @@ impl RewritePattern for VariantIsPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = arena_adt::VariantIs::from_op(ctx, op) else {
+        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
             return false;
         };
 
@@ -289,7 +289,7 @@ impl RewritePattern for VariantCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_cast) = arena_adt::VariantCast::from_op(ctx, op) else {
+        let Ok(variant_cast) = adt::VariantCast::from_op(ctx, op) else {
             return false;
         };
 
@@ -332,7 +332,7 @@ impl RewritePattern for VariantGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_get) = arena_adt::VariantGet::from_op(ctx, op) else {
+        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
             return false;
         };
 
@@ -359,7 +359,7 @@ impl RewritePattern for ArrayNewPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_new) = arena_adt::ArrayNew::from_op(ctx, op) else {
+        let Ok(array_new) = adt::ArrayNew::from_op(ctx, op) else {
             return false;
         };
 
@@ -403,7 +403,7 @@ impl RewritePattern for ArrayGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_get) = arena_adt::ArrayGet::from_op(ctx, op) else {
+        let Ok(array_get) = adt::ArrayGet::from_op(ctx, op) else {
             return false;
         };
 
@@ -428,7 +428,7 @@ impl RewritePattern for ArraySetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_set) = arena_adt::ArraySet::from_op(ctx, op) else {
+        let Ok(array_set) = adt::ArraySet::from_op(ctx, op) else {
             return false;
         };
 
@@ -453,7 +453,7 @@ impl RewritePattern for ArrayLenPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(array_len) = arena_adt::ArrayLen::from_op(ctx, op) else {
+        let Ok(array_len) = adt::ArrayLen::from_op(ctx, op) else {
             return false;
         };
 
@@ -477,7 +477,7 @@ impl RewritePattern for RefNullPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_null) = arena_adt::RefNull::from_op(ctx, op) else {
+        let Ok(ref_null) = adt::RefNull::from_op(ctx, op) else {
             return false;
         };
 
@@ -504,7 +504,7 @@ impl RewritePattern for RefIsNullPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_is_null) = arena_adt::RefIsNull::from_op(ctx, op) else {
+        let Ok(ref_is_null) = adt::RefIsNull::from_op(ctx, op) else {
             return false;
         };
 
@@ -528,7 +528,7 @@ impl RewritePattern for RefCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_cast) = arena_adt::RefCast::from_op(ctx, op) else {
+        let Ok(ref_cast) = adt::RefCast::from_op(ctx, op) else {
             return false;
         };
 

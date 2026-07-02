@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn arena_module_new_rejects_non_module_op() {
+    fn module_new_rejects_non_module_op() {
         let (mut ctx, loc) = test_ctx();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .build(&mut ctx);
@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn arena_module_body_returns_none_without_regions() {
+    fn module_body_returns_none_without_regions() {
         let (mut ctx, loc) = test_ctx();
         // Create a core.module op without any regions.
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn arena_module_body_returns_region() {
+    fn module_body_returns_region() {
         let (mut ctx, loc) = test_ctx();
         let block = ctx.create_block(BlockData {
             location: loc,

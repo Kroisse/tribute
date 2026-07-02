@@ -8,7 +8,7 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -254,7 +254,7 @@ pub(crate) fn extract_element_def(
     for &block_ref in &ctx.region(funcs_region).blocks {
         for &inner_op in &ctx.block(block_ref).ops {
             // Look for func.constant or wasm.ref_func operations
-            if let Ok(const_op) = arena_func::Constant::from_op(ctx, inner_op) {
+            if let Ok(const_op) = func::Constant::from_op(ctx, inner_op) {
                 funcs.push(const_op.func_ref(ctx));
             } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, inner_op) {
                 funcs.push(ref_func_op.func_name(ctx));
