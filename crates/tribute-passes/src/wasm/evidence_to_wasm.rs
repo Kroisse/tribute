@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr }
 //! ```
 //!
 //! ## Implementation Strategy
@@ -22,10 +22,10 @@
 
 use std::collections::BTreeMap;
 
-use tribute_ir::dialect::ability as arena_ability;
+use tribute_ir::dialect::ability::{self as arena_ability, MarkerField, evidence_abi};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::{core as arena_core, wasm as wasm_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -75,10 +75,10 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
 
         let location = data.location;
 
-        if sym_name == Some(Symbol::new("__tribute_evidence_lookup")) {
+        if sym_name == Some(Symbol::new(evidence_abi::LOOKUP)) {
             let new_op = generate_evidence_lookup_function(ctx, location);
             replace_module_op(ctx, module, op, new_op);
-        } else if sym_name == Some(Symbol::new("__tribute_evidence_extend")) {
+        } else if sym_name == Some(Symbol::new(evidence_abi::EXTEND)) {
             let new_op = generate_evidence_extend_function(ctx, location);
             replace_module_op(ctx, module, op, new_op);
         }
@@ -135,7 +135,7 @@ impl RewritePattern for EvidenceLookupPattern {
             loc,
             [evidence_val, id_const.result(ctx)],
             [result_ty],
-            Symbol::new("__tribute_evidence_lookup"),
+            Symbol::new(evidence_abi::LOOKUP),
         );
 
         let call_result = call_op.results(ctx)[0];
@@ -188,6 +188,7 @@ impl RewritePattern for EvidenceExtendPattern {
         let prompt_tag_attr = extend_op.prompt_tag(ctx);
 
         let i32_ty = intern_i32(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
         let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
         // Create: %ability_id = wasm.i32_const(ability_id)
@@ -200,21 +201,29 @@ impl RewritePattern for EvidenceExtendPattern {
         };
         let prompt_tag_const = wasm_dialect::i32_const(ctx, loc, i32_ty, prompt_tag_val);
 
-        // Create: %op_table_idx = wasm.i32_const(0)
-        let op_table_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        // Create a core.ptr-typed null for tr_dispatch_fn (unused for now).
+        let tr_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        let tr_dispatch_null =
+            arena_core::unrealized_conversion_cast(ctx, loc, tr_dispatch_zero.result(ctx), ptr_ty);
 
-        // Create: %handler_dispatch = wasm.i32_const(0)  (null, unused for now)
-        let handler_dispatch_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        // Create a core.ptr-typed null for handler_dispatch (unused for now).
+        let handler_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+        let handler_dispatch_null = arena_core::unrealized_conversion_cast(
+            ctx,
+            loc,
+            handler_dispatch_zero.result(ctx),
+            ptr_ty,
+        );
 
-        // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %op_table_idx, %handler_dispatch)
+        // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
         let marker_op = wasm_dialect::struct_new(
             ctx,
             loc,
             [
                 ability_id_const.result(ctx),
                 prompt_tag_const.result(ctx),
-                op_table_const.result(ctx),
-                handler_dispatch_const.result(ctx),
+                tr_dispatch_null.result(ctx),
+                handler_dispatch_null.result(ctx),
             ],
             marker_ty,
             MARKER_IDX,
@@ -226,14 +235,16 @@ impl RewritePattern for EvidenceExtendPattern {
             loc,
             [evidence_val, marker_op.result(ctx)],
             [result_ty],
-            Symbol::new("__tribute_evidence_extend"),
+            Symbol::new(evidence_abi::EXTEND),
         );
 
         let call_result = call_op.results(ctx)[0];
         rewriter.insert_op(ability_id_const.op_ref());
         rewriter.insert_op(prompt_tag_const.op_ref());
-        rewriter.insert_op(op_table_const.op_ref());
-        rewriter.insert_op(handler_dispatch_const.op_ref());
+        rewriter.insert_op(tr_dispatch_zero.op_ref());
+        rewriter.insert_op(tr_dispatch_null.op_ref());
+        rewriter.insert_op(handler_dispatch_zero.op_ref());
+        rewriter.insert_op(handler_dispatch_null.op_ref());
         rewriter.insert_op(marker_op.op_ref());
         rewriter.insert_op(call_op.op_ref());
         rewriter.erase_op(vec![call_result]);
@@ -318,7 +329,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     let func_op = wasm_dialect::func(
         ctx,
         location,
-        Symbol::new("__tribute_evidence_lookup"),
+        Symbol::new(evidence_abi::LOOKUP),
         func_ty,
         body,
     );
@@ -410,8 +421,15 @@ fn build_lookup_loop_body(
     let marker = marker_op.result(ctx);
     ctx.push_op(block, marker_op.op_ref());
 
-    // marker_ability_id = struct.get(marker, 0)
-    let marker_id_op = wasm_dialect::struct_get(ctx, location, marker, i32_ty, MARKER_IDX, 0);
+    // marker_ability_id = struct.get(marker, MarkerField::AbilityId)
+    let marker_id_op = wasm_dialect::struct_get(
+        ctx,
+        location,
+        marker,
+        i32_ty,
+        MARKER_IDX,
+        MarkerField::AbilityId.index(),
+    );
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(block, marker_id_op.op_ref());
 
@@ -558,7 +576,14 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
 
     // Get marker's ability_id for binary search
-    let marker_id_op = wasm_dialect::struct_get(ctx, location, marker_val, i32_ty, MARKER_IDX, 0);
+    let marker_id_op = wasm_dialect::struct_get(
+        ctx,
+        location,
+        marker_val,
+        i32_ty,
+        MARKER_IDX,
+        MarkerField::AbilityId.index(),
+    );
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(body_block, marker_id_op.op_ref());
 
@@ -757,7 +782,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let func_op = wasm_dialect::func(
         ctx,
         location,
-        Symbol::new("__tribute_evidence_extend"),
+        Symbol::new(evidence_abi::EXTEND),
         func_ty,
         body,
     );
@@ -819,8 +844,15 @@ fn build_extend_search_loop(
     let mid_marker = mid_marker_op.result(ctx);
     ctx.push_op(block, mid_marker_op.op_ref());
 
-    // mid_ability_id = struct.get(mid_marker, 0)
-    let mid_id_op = wasm_dialect::struct_get(ctx, location, mid_marker, i32_ty, MARKER_IDX, 0);
+    // mid_ability_id = struct.get(mid_marker, MarkerField::AbilityId)
+    let mid_id_op = wasm_dialect::struct_get(
+        ctx,
+        location,
+        mid_marker,
+        i32_ty,
+        MARKER_IDX,
+        MarkerField::AbilityId.index(),
+    );
     let mid_id = mid_id_op.result(ctx);
     ctx.push_op(block, mid_id_op.op_ref());
 

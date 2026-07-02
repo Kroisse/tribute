@@ -130,6 +130,120 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
+/// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerField {
+    AbilityId = 0,
+    PromptTag = 1,
+    TrDispatchFn = 2,
+    HandlerDispatch = 3,
+}
+
+impl MarkerField {
+    pub const fn index(self) -> u32 {
+        self as u32
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerFieldType {
+    I32,
+    Ptr,
+}
+
+impl MarkerFieldType {
+    fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
+        let dialect = Symbol::new("core");
+        let name = match self {
+            Self::I32 => Symbol::new("i32"),
+            Self::Ptr => Symbol::new("ptr"),
+        };
+        ctx.types
+            .intern(TypeDataBuilder::new(dialect, name).build())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerFieldSpec {
+    pub field: MarkerField,
+    pub symbol_name: &'static str,
+    pub field_type: MarkerFieldType,
+}
+
+/// Canonical field layout for the `_Marker` ADT.
+pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
+    MarkerFieldSpec {
+        field: MarkerField::AbilityId,
+        symbol_name: "ability_id",
+        field_type: MarkerFieldType::I32,
+    },
+    MarkerFieldSpec {
+        field: MarkerField::PromptTag,
+        symbol_name: "prompt_tag",
+        field_type: MarkerFieldType::I32,
+    },
+    MarkerFieldSpec {
+        field: MarkerField::TrDispatchFn,
+        symbol_name: "tr_dispatch_fn",
+        field_type: MarkerFieldType::Ptr,
+    },
+    MarkerFieldSpec {
+        field: MarkerField::HandlerDispatch,
+        symbol_name: "handler_dispatch",
+        field_type: MarkerFieldType::Ptr,
+    },
+];
+
+impl MarkerFieldSpec {
+    fn type_ref(self, ctx: &mut IrContext) -> TypeRef {
+        self.field_type.type_ref(ctx)
+    }
+}
+
+impl MarkerField {
+    pub fn spec(self) -> &'static MarkerFieldSpec {
+        &MARKER_FIELDS[self.index() as usize]
+    }
+
+    pub fn symbol_name(self) -> &'static str {
+        self.spec().symbol_name
+    }
+
+    pub fn field_type(self) -> MarkerFieldType {
+        self.spec().field_type
+    }
+}
+
+pub const MARKER_FIELD_COUNT: usize = MARKER_FIELDS.len();
+
+const _: () = {
+    let mut idx = 0;
+    while idx < MARKER_FIELDS.len() {
+        assert!(MARKER_FIELDS[idx].field.index() as usize == idx);
+        idx += 1;
+    }
+};
+
+/// Runtime ABI symbols used by native and WASM evidence lowering.
+pub mod evidence_abi {
+    pub const EMPTY: &str = "__tribute_evidence_empty";
+    pub const LOOKUP: &str = "__tribute_evidence_lookup";
+    pub const EXTEND: &str = "__tribute_evidence_extend";
+    pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
+    pub const LOOKUP_HANDLER: &str = "__tribute_evidence_lookup_handler";
+}
+
+pub fn evidence_runtime_symbols() -> [Symbol; 5] {
+    [
+        Symbol::new(evidence_abi::EMPTY),
+        Symbol::new(evidence_abi::LOOKUP),
+        Symbol::new(evidence_abi::EXTEND),
+        Symbol::new(evidence_abi::LOOKUP_TR),
+        Symbol::new(evidence_abi::LOOKUP_HANDLER),
+    ]
+}
+
 /// Get the canonical Marker ADT type for evidence-based dispatch.
 ///
 /// Layout:
@@ -150,31 +264,17 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 /// `(k: ptr, op_idx: i32, value: ptr) -> void`, or null if not using
 /// full CPS. Used by the tail-call-based effect handling path.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-
-    let fields_attr = Attribute::List(vec![
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new("ability_id")),
-            Attribute::Type(i32_ty),
-        ]),
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new("prompt_tag")),
-            Attribute::Type(i32_ty),
-        ]),
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new("tr_dispatch_fn")),
-            Attribute::Type(ptr_ty),
-        ]),
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new("handler_dispatch")),
-            Attribute::Type(ptr_ty),
-        ]),
-    ]);
+    let fields_attr = Attribute::List(
+        MARKER_FIELDS
+            .into_iter()
+            .map(|spec| {
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new(spec.symbol_name)),
+                    Attribute::Type(spec.type_ref(ctx)),
+                ])
+            })
+            .collect(),
+    );
 
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
@@ -236,12 +336,76 @@ mod tests {
             Some(&Attribute::Symbol(Symbol::new("_Marker")))
         );
 
-        // Should have 4 fields
+        // Should have the canonical field layout.
         let fields = data.attrs.get(&Symbol::new("fields")).unwrap();
         match fields {
-            Attribute::List(list) => assert_eq!(list.len(), 4),
+            Attribute::List(list) => {
+                assert_eq!(list.len(), MARKER_FIELD_COUNT);
+                for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
+                    assert_eq!(spec.field.index() as usize, idx);
+                    let Attribute::List(field_attr) = &list[idx] else {
+                        panic!("expected list attribute for field {idx}");
+                    };
+                    assert_eq!(
+                        field_attr.first(),
+                        Some(&Attribute::Symbol(Symbol::new(spec.symbol_name)))
+                    );
+                }
+            }
             _ => panic!("expected list attribute for fields"),
         }
+    }
+
+    #[test]
+    fn test_marker_field_indices_are_canonical() {
+        assert_eq!(MarkerField::AbilityId.index(), 0);
+        assert_eq!(MarkerField::PromptTag.index(), 1);
+        assert_eq!(MarkerField::TrDispatchFn.index(), 2);
+        assert_eq!(MarkerField::HandlerDispatch.index(), 3);
+    }
+
+    #[test]
+    fn test_marker_field_specs_are_canonical() {
+        assert_eq!(MARKER_FIELDS.len(), 4);
+        assert_eq!(
+            MARKER_FIELDS,
+            [
+                MarkerFieldSpec {
+                    field: MarkerField::AbilityId,
+                    symbol_name: "ability_id",
+                    field_type: MarkerFieldType::I32,
+                },
+                MarkerFieldSpec {
+                    field: MarkerField::PromptTag,
+                    symbol_name: "prompt_tag",
+                    field_type: MarkerFieldType::I32,
+                },
+                MarkerFieldSpec {
+                    field: MarkerField::TrDispatchFn,
+                    symbol_name: "tr_dispatch_fn",
+                    field_type: MarkerFieldType::Ptr,
+                },
+                MarkerFieldSpec {
+                    field: MarkerField::HandlerDispatch,
+                    symbol_name: "handler_dispatch",
+                    field_type: MarkerFieldType::Ptr,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_evidence_runtime_symbols_are_canonical() {
+        assert_eq!(
+            evidence_runtime_symbols(),
+            [
+                Symbol::new(evidence_abi::EMPTY),
+                Symbol::new(evidence_abi::LOOKUP),
+                Symbol::new(evidence_abi::EXTEND),
+                Symbol::new(evidence_abi::LOOKUP_TR),
+                Symbol::new(evidence_abi::LOOKUP_HANDLER),
+            ]
+        );
     }
 
     #[test]

@@ -16,15 +16,16 @@
 //!
 //! 3. **Extend call-site rewrite** — the 2-arg call
 //!    `func.call @__tribute_evidence_extend(ev, marker)` where `marker` is
-//!    produced by `adt.struct_new(ability_id, prompt_tag, tr_dispatch_fn)` is
-//!    rewritten to a 4-arg call passing the fields directly, and the now-dead
+//!    produced by `adt.struct_new(ability_id, prompt_tag, tr_dispatch_fn, handler_dispatch)` is
+//!    rewritten to a 5-arg call passing the fields directly, and the now-dead
 //!    `adt.struct_new` is removed.
 //!
-//! 4. **TR dispatch field** — `adt.struct_get(marker, 2)` on evidence_lookup
+//! 4. **TR dispatch field** — `adt.struct_get(marker, MarkerField::TrDispatchFn)` on evidence_lookup
 //!    results is rewritten to `func.call @__tribute_evidence_lookup_tr(ev, ability_id)`.
 
 use std::collections::HashMap;
 
+use tribute_ir::dialect::ability::{MarkerField, evidence_abi, evidence_runtime_symbols};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func as arena_func;
@@ -60,19 +61,19 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     let mut has_lookup_handler = false;
     let mut stubs_to_replace: Vec<(OpRef, &'static str)> = Vec::new();
 
-    let lookup_sym = Symbol::new("__tribute_evidence_lookup");
-    let extend_sym = Symbol::new("__tribute_evidence_extend");
-    let empty_sym = Symbol::new("__tribute_evidence_empty");
-    let lookup_tr_sym = Symbol::new("__tribute_evidence_lookup_tr");
-    let lookup_handler_sym = Symbol::new("__tribute_evidence_lookup_handler");
+    let lookup_sym = Symbol::new(evidence_abi::LOOKUP);
+    let extend_sym = Symbol::new(evidence_abi::EXTEND);
+    let empty_sym = Symbol::new(evidence_abi::EMPTY);
+    let lookup_tr_sym = Symbol::new(evidence_abi::LOOKUP_TR);
+    let lookup_handler_sym = Symbol::new(evidence_abi::LOOKUP_HANDLER);
 
     for &op in &ops {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if name == lookup_sym {
-                stubs_to_replace.push((op, "__tribute_evidence_lookup"));
+                stubs_to_replace.push((op, evidence_abi::LOOKUP));
             } else if name == extend_sym {
-                stubs_to_replace.push((op, "__tribute_evidence_extend"));
+                stubs_to_replace.push((op, evidence_abi::EXTEND));
             } else if name == empty_sym {
                 has_evidence_empty = true;
             } else if name == lookup_tr_sym {
@@ -93,8 +94,8 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     // Replace stubs with extern declarations
     for (old_op, name) in stubs_to_replace {
         let new_op = match name {
-            "__tribute_evidence_lookup" => make_evidence_lookup_extern(ctx, loc, ptr_ty, i32_ty),
-            "__tribute_evidence_extend" => make_evidence_extend_extern(ctx, loc, ptr_ty, i32_ty),
+            evidence_abi::LOOKUP => make_evidence_lookup_extern(ctx, loc, ptr_ty, i32_ty),
+            evidence_abi::EXTEND => make_evidence_extend_extern(ctx, loc, ptr_ty, i32_ty),
             _ => unreachable!(),
         };
         // Insert new before old, then remove old
@@ -143,7 +144,7 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
 
 /// Build extern `fn __tribute_evidence_empty() -> ptr`
 fn make_evidence_empty_extern(ctx: &mut IrContext, loc: Location, ptr_ty: TypeRef) -> OpRef {
-    super::build_extern_func(ctx, loc, "__tribute_evidence_empty", &[], ptr_ty)
+    super::build_extern_func(ctx, loc, evidence_abi::EMPTY, &[], ptr_ty)
 }
 
 /// Build extern `fn __tribute_evidence_lookup(ev: ptr, ability_id: i32) -> i32`
@@ -153,13 +154,7 @@ fn make_evidence_lookup_extern(
     ptr_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
-    super::build_extern_func(
-        ctx,
-        loc,
-        "__tribute_evidence_lookup",
-        &[ptr_ty, i32_ty],
-        i32_ty,
-    )
+    super::build_extern_func(ctx, loc, evidence_abi::LOOKUP, &[ptr_ty, i32_ty], i32_ty)
 }
 
 /// Build extern `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr) -> ptr`
@@ -172,7 +167,7 @@ fn make_evidence_extend_extern(
     super::build_extern_func(
         ctx,
         loc,
-        "__tribute_evidence_extend",
+        evidence_abi::EXTEND,
         &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty],
         ptr_ty,
     )
@@ -185,13 +180,7 @@ fn make_evidence_lookup_tr_extern(
     ptr_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
-    super::build_extern_func(
-        ctx,
-        loc,
-        "__tribute_evidence_lookup_tr",
-        &[ptr_ty, i32_ty],
-        ptr_ty,
-    )
+    super::build_extern_func(ctx, loc, evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty], ptr_ty)
 }
 
 /// Build extern `fn __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr`
@@ -204,7 +193,7 @@ fn make_evidence_lookup_handler_extern(
     super::build_extern_func(
         ctx,
         loc,
-        "__tribute_evidence_lookup_handler",
+        evidence_abi::LOOKUP_HANDLER,
         &[ptr_ty, i32_ty],
         ptr_ty,
     )
@@ -215,11 +204,7 @@ fn make_evidence_lookup_handler_extern(
 // =============================================================================
 
 fn is_evidence_runtime_fn(name: Symbol) -> bool {
-    name == Symbol::new("__tribute_evidence_lookup")
-        || name == Symbol::new("__tribute_evidence_extend")
-        || name == Symbol::new("__tribute_evidence_empty")
-        || name == Symbol::new("__tribute_evidence_lookup_tr")
-        || name == Symbol::new("__tribute_evidence_lookup_handler")
+    evidence_runtime_symbols().contains(&name)
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
@@ -290,13 +275,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
-                let call = arena_func::call(
-                    ctx,
-                    loc,
-                    [],
-                    ptr_ty,
-                    Symbol::new("__tribute_evidence_empty"),
-                );
+                let call = arena_func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -319,13 +298,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                      should not reach this pass."
                 );
                 let old_result = ctx.op_result(op, 0);
-                let call = arena_func::call(
-                    ctx,
-                    loc,
-                    [],
-                    ptr_ty,
-                    Symbol::new("__tribute_evidence_empty"),
-                );
+                let call = arena_func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -353,7 +326,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
         {
             let callee = call_op.callee(ctx);
 
-            if callee == Symbol::new("__tribute_evidence_lookup") {
+            if callee == Symbol::new(evidence_abi::LOOKUP) {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
                 let ev_val = operands[0];
                 let ability_id_val = operands[1];
@@ -363,7 +336,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     loc,
                     operands,
                     i32_ty,
-                    Symbol::new("__tribute_evidence_lookup"),
+                    Symbol::new(evidence_abi::LOOKUP),
                 );
                 let new_result = new_call.result(ctx);
                 ctx.insert_op_before(block, op, new_call.op_ref());
@@ -373,8 +346,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                 continue;
             }
 
-            // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → (ev, a, b, c) ---
-            if callee == Symbol::new("__tribute_evidence_extend") {
+            // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → native ABI args ---
+            if callee == Symbol::new(evidence_abi::EXTEND) {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
                 if operands.len() == 2 {
                     let ev_val = operands[0];
@@ -387,16 +360,16 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                              The adt.struct_new that produced this marker was not recorded."
                         )
                     });
+                    assert_eq!(
+                        fields.len(),
+                        tribute_ir::dialect::ability::MARKER_FIELD_COUNT,
+                        "evidence_extend rewrite: marker operand count must match canonical layout"
+                    );
                     let mut args = vec![ev_val];
                     args.extend_from_slice(fields);
                     let old_result = ctx.op_result(op, 0);
-                    let new_call = arena_func::call(
-                        ctx,
-                        loc,
-                        args,
-                        ptr_ty,
-                        Symbol::new("__tribute_evidence_extend"),
-                    );
+                    let new_call =
+                        arena_func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
                     let new_result = new_call.result(ctx);
                     ctx.insert_op_before(block, op, new_call.op_ref());
                     ctx.replace_all_uses(old_result, new_result);
@@ -420,37 +393,37 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                         }
                     };
                     match field_idx {
-                        1 => {
-                            // Field 1: prompt_tag (i32) — __tribute_evidence_lookup already returns this
+                        field if field == i128::from(MarkerField::PromptTag.index()) => {
+                            // prompt_tag — __tribute_evidence_lookup already returns this
                             let old_result = ctx.op_result(op, 0);
                             ctx.replace_all_uses(old_result, base_val);
                             evidence_lookup_results.insert(old_result, (ev_val, ability_id_val));
                             ops_to_erase.push(op);
                         }
-                        2 => {
-                            // Field 2: tr_dispatch_fn (ptr) — call __tribute_evidence_lookup_tr
+                        field if field == i128::from(MarkerField::TrDispatchFn.index()) => {
+                            // tr_dispatch_fn — call __tribute_evidence_lookup_tr
                             let old_result = ctx.op_result(op, 0);
                             let tr_call = arena_func::call(
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
                                 ptr_ty,
-                                Symbol::new("__tribute_evidence_lookup_tr"),
+                                Symbol::new(evidence_abi::LOOKUP_TR),
                             );
                             let new_result = tr_call.result(ctx);
                             ctx.insert_op_before(block, op, tr_call.op_ref());
                             ctx.replace_all_uses(old_result, new_result);
                             ops_to_erase.push(op);
                         }
-                        3 => {
-                            // Field 3: handler_dispatch (ptr) — call __tribute_evidence_lookup_handler
+                        field if field == i128::from(MarkerField::HandlerDispatch.index()) => {
+                            // handler_dispatch — call __tribute_evidence_lookup_handler
                             let old_result = ctx.op_result(op, 0);
                             let handler_call = arena_func::call(
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
                                 ptr_ty,
-                                Symbol::new("__tribute_evidence_lookup_handler"),
+                                Symbol::new(evidence_abi::LOOKUP_HANDLER),
                             );
                             let new_result = handler_call.result(ctx);
                             ctx.insert_op_before(block, op, handler_call.op_ref());

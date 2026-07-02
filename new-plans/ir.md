@@ -134,7 +134,7 @@ special IR phases.
 ## Open Questions
 
 - Final closure environment representation for each backend.
-- Exact effect ABI boundary names and reusable conversion targets.
+- Reusable conversion targets for effect ABI lowering boundaries.
 - Debug/source-map representation.
 - WasmGC reactivation strategy for lowering shared tail-call CPS IR into
   closure, table, and evidence representations.

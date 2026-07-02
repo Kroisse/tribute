@@ -170,7 +170,8 @@ Array:  [length: i64] [elements...]
 ### Phase 4: CPS Tail-Call Effect Handling
 
 - `lower_ability_perform` + `lower_handle_dispatch` passes
-- Evidence 런타임 (native)
+- Evidence 런타임 (native): `new-plans/cps-effects.md`의 Marker layout과
+  `__tribute_evidence_*` C ABI를 따른다.
 
 ### Phase 5: E2E 파이프라인
 
