@@ -1,4 +1,4 @@
-//! Lower `ability.perform` operations to handler_dispatch calls.
+//! Lower `ability.perform` and `ability.call` operations to the effect ABI.
 //!
 //! In CPS-based effect handling, `ability.perform` carries an explicit
 //! continuation closure. This pass converts it to:
@@ -9,14 +9,10 @@
 //!   { ability_ref: @State, op_name: @get }
 //!
 //! // Output:
-//! %marker = ability.evidence_lookup %evidence { ability_ref: @State }
-//! %handler = adt.struct_get %marker, MarkerField::HandlerDispatch
-//! %fn_ptr = adt.struct_get %handler, 0       // closure function pointer
-//! %env = adt.struct_get %handler, 1          // closure environment
-//! %op_idx = arith.const <hash(ability, op)>
-//! %shift_value = cast %args to anyref (or null)
+//! %payload = cast %args to anyref (or null)
 //! %cont = cast %continuation to anyref
-//! %result = func.call_indirect %fn_ptr, (%ev, %env, %cont, %op_idx, %shift_value)
+//! %result = effect.dispatch_cps %evidence, %cont, %payload
+//!   { ability_ref: @State, op_name: @get }
 //! func.return %result
 //! ```
 //!
@@ -26,34 +22,28 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
 };
-use trunk_ir::types::Attribute;
 
 use tribute_ir::dialect::ability;
-use tribute_ir::dialect::ability::{MarkerField, compute_op_idx};
+use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
 
 /// Cached common type references used by the perform lowering pattern.
 #[derive(Clone, Copy)]
 struct CommonTypes {
     anyref: TypeRef,
-    i32: TypeRef,
 }
 
 impl CommonTypes {
     fn new(ctx: &mut IrContext) -> Self {
         Self {
             anyref: tribute_rt::anyref(ctx).as_type_ref(),
-            i32: ctx.types.intern(
-                trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-                    .build(),
-            ),
         }
     }
 }
@@ -86,7 +76,7 @@ impl Pass for LowerAbilityPerform {
     }
 }
 
-/// Pattern: `ability.perform` → evidence lookup + handler_dispatch call + return.
+/// Pattern: `ability.perform` → `effect.dispatch_cps` + return.
 struct LowerPerformPattern {
     types: CommonTypes,
 }
@@ -116,45 +106,14 @@ impl RewritePattern for LowerPerformPattern {
         // Find evidence parameter from enclosing func's entry block.
         let evidence_val = find_evidence_from_op(ctx, op);
 
-        // === 1. Evidence lookup → marker ===
-        let marker_ty = ability::marker_adt_type_ref(ctx);
+        // === 1. Find evidence ===
         let Some(evidence_val) = evidence_val else {
             // Missing evidence means the frontend detected unhandled effects
             // and emitted a diagnostic. Skip this op gracefully.
             return false;
         };
-        let lookup =
-            ability::evidence_lookup(ctx, location, evidence_val, marker_ty, ability_ref_type);
-        rewriter.insert_op(lookup.op_ref());
-        let marker_val = lookup.result(ctx);
 
-        // === 2. Extract handler_dispatch from marker ===
-        // The Marker ADT declares this field as core.ptr, but we read it with
-        // closure_ty because evidence_to_native replaces this struct_get entirely
-        // with a __tribute_evidence_lookup_handler call before type conversion.
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let handler_get = adt::struct_get(
-            ctx,
-            location,
-            marker_val,
-            closure_ty,
-            marker_ty,
-            MarkerField::HandlerDispatch.index(),
-        );
-        rewriter.insert_op(handler_get.op_ref());
-        let handler_dispatch_val = handler_get.result(ctx);
-
-        // === 3. Compute op_idx ===
-        let ability_data = ctx.types.get(ability_ref_type);
-        let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-            Some(Attribute::Symbol(s)) => Some(*s),
-            _ => None,
-        };
-        let op_idx = compute_op_idx(ability_name, Some(op_name_sym));
-        let op_idx_const = arith::r#const(ctx, location, t.i32, Attribute::Int(op_idx as i128));
-        rewriter.insert_op(op_idx_const.op_ref());
-
-        // === 4. Build shift value (pack args or null) ===
+        // === 2. Build payload (pack args or null) ===
         assert!(
             value_operands.len() <= 1,
             "ability.perform expects at most 1 value operand (multi-arg should be tuple-packed), \
@@ -171,42 +130,28 @@ impl RewritePattern for LowerPerformPattern {
             null_op.result(ctx)
         };
 
-        // === 5. Cast continuation closure to anyref ===
+        // === 3. Cast continuation closure to anyref ===
         let cont_anyref =
             core::unrealized_conversion_cast(ctx, location, continuation_val, t.anyref);
         rewriter.insert_op(cont_anyref.op_ref());
 
-        // === 6. Decompose handler_dispatch closure and call ===
-        let fn_ptr_get = adt::struct_get(ctx, location, handler_dispatch_val, t.i32, closure_ty, 0);
-        rewriter.insert_op(fn_ptr_get.op_ref());
-        let fn_ptr = fn_ptr_get.result(ctx);
-
-        let env_get = adt::struct_get(ctx, location, handler_dispatch_val, t.anyref, closure_ty, 1);
-        rewriter.insert_op(env_get.op_ref());
-        let env_val = env_get.result(ctx);
-
-        // Placeholder evidence for resolve_evidence to replace later.
-        let placeholder_ev = evidence_val;
-
-        let call_op = func::call_indirect(
+        // === 4. Dispatch through target-independent effect ABI ===
+        let dispatch_op = effect::dispatch_cps(
             ctx,
             location,
-            fn_ptr,
-            vec![
-                placeholder_ev,
-                env_val,
-                cont_anyref.result(ctx),
-                op_idx_const.result(ctx),
-                shift_value_val,
-            ],
+            evidence_val,
+            cont_anyref.result(ctx),
+            shift_value_val,
             t.anyref,
+            ability_ref_type,
+            op_name_sym,
         );
-        rewriter.insert_op(call_op.op_ref());
+        rewriter.insert_op(dispatch_op.op_ref());
 
-        // === 7. Return the handler's result (cast to function return type) ===
+        // === 5. Return the dispatch result (cast to function return type) ===
         let block = ctx.op(op).parent_block.unwrap();
         if is_in_func_body(ctx, block) {
-            let result_val = call_op.result(ctx);
+            let result_val = dispatch_op.result(ctx);
             let func_ret_ty = find_enclosing_func_return_type(ctx, block);
             let ret_op = if let Some(ret_ty) = func_ret_ty {
                 if is_nil_type(ctx, ret_ty) {
@@ -225,8 +170,8 @@ impl RewritePattern for LowerPerformPattern {
             rewriter.insert_op(ret_op.op_ref());
         }
 
-        // Erase perform op, mapping its result to the call_indirect result.
-        rewriter.erase_op(vec![call_op.result(ctx)]);
+        // Erase perform op, mapping its result to the dispatch result.
+        rewriter.erase_op(vec![dispatch_op.result(ctx)]);
 
         // Remove dead code after the perform op in the same block.
         // Only do this when we inserted a func.return terminator (i.e., in
@@ -254,7 +199,7 @@ impl RewritePattern for LowerPerformPattern {
     }
 }
 
-/// Pattern: `ability.call` → evidence lookup + tr_dispatch_fn call (no CPS).
+/// Pattern: `ability.call` → `effect.dispatch_tail` (no CPS).
 struct LowerCallPattern {
     types: CommonTypes,
 }
@@ -283,42 +228,14 @@ impl RewritePattern for LowerCallPattern {
         // Find evidence parameter from enclosing func's entry block.
         let evidence_val = find_evidence_from_op(ctx, op);
 
-        // === 1. Evidence lookup → marker ===
-        let marker_ty = ability::marker_adt_type_ref(ctx);
+        // === 1. Find evidence ===
         let Some(evidence_val) = evidence_val else {
             // Missing evidence means the frontend detected unhandled effects
             // and emitted a diagnostic. Skip this op gracefully.
             return false;
         };
-        let lookup =
-            ability::evidence_lookup(ctx, location, evidence_val, marker_ty, ability_ref_type);
-        rewriter.insert_op(lookup.op_ref());
-        let marker_val = lookup.result(ctx);
 
-        // === 2. Extract tr_dispatch_fn from marker ===
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let tr_fn_get = adt::struct_get(
-            ctx,
-            location,
-            marker_val,
-            closure_ty,
-            marker_ty,
-            MarkerField::TrDispatchFn.index(),
-        );
-        rewriter.insert_op(tr_fn_get.op_ref());
-        let tr_dispatch_fn_val = tr_fn_get.result(ctx);
-
-        // === 3. Compute op_idx ===
-        let ability_data = ctx.types.get(ability_ref_type);
-        let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-            Some(Attribute::Symbol(s)) => Some(*s),
-            _ => None,
-        };
-        let op_idx = compute_op_idx(ability_name, Some(op_name_sym));
-        let op_idx_const = arith::r#const(ctx, location, t.i32, Attribute::Int(op_idx as i128));
-        rewriter.insert_op(op_idx_const.op_ref());
-
-        // === 4. Build shift value (pack args or null) ===
+        // === 2. Build payload (pack args or null) ===
         assert!(
             value_operands.len() <= 1,
             "ability.call expects at most 1 value operand (multi-arg should be tuple-packed), \
@@ -335,34 +252,20 @@ impl RewritePattern for LowerCallPattern {
             null_op.result(ctx)
         };
 
-        // === 5. Decompose tr_dispatch_fn closure and call ===
-        let fn_ptr_get = adt::struct_get(ctx, location, tr_dispatch_fn_val, t.i32, closure_ty, 0);
-        rewriter.insert_op(fn_ptr_get.op_ref());
-        let fn_ptr = fn_ptr_get.result(ctx);
-
-        let env_get = adt::struct_get(ctx, location, tr_dispatch_fn_val, t.anyref, closure_ty, 1);
-        rewriter.insert_op(env_get.op_ref());
-        let env_val = env_get.result(ctx);
-
-        // Placeholder evidence for resolve_evidence to replace later.
-        let placeholder_ev = evidence_val;
-
-        let call_result = func::call_indirect(
+        // === 3. Dispatch through target-independent effect ABI ===
+        let dispatch_op = effect::dispatch_tail(
             ctx,
             location,
-            fn_ptr,
-            vec![
-                placeholder_ev,
-                env_val,
-                op_idx_const.result(ctx),
-                shift_value_val,
-            ],
+            evidence_val,
+            shift_value_val,
             t.anyref,
+            ability_ref_type,
+            op_name_sym,
         );
-        rewriter.insert_op(call_result.op_ref());
+        rewriter.insert_op(dispatch_op.op_ref());
 
-        // === 6. Erase ability.call, mapping its result to the call_indirect result ===
-        rewriter.erase_op(vec![call_result.result(ctx)]);
+        // === 4. Erase ability.call, mapping its result to the dispatch result ===
+        rewriter.erase_op(vec![dispatch_op.result(ctx)]);
 
         true
     }
@@ -482,6 +385,31 @@ mod tests {
     %k = arith.const {{value = 0}} : tribute_rt.anyref
     %yr = ability.perform %k, %val {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
     func.return %yr
+  }}
+}}"#
+            ),
+        );
+
+        lower_ability_perform(&mut ctx, module);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert_snapshot!(ir_text);
+    }
+
+    #[test]
+    fn test_lower_call_to_effect_dispatch_tail() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %msg = arith.const {{value = 1}} : tribute_rt.anyref
+    %result = ability.call %msg {{ability_ref = core.ability_ref() {{name = @Console}}, op_name = @print}} : tribute_rt.anyref
+    func.return %result
   }}
 }}"#
             ),

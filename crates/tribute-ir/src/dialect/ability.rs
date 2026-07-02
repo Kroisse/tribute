@@ -113,6 +113,57 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
     (hasher.finish() % 0x7FFFFFFF) as u32
 }
 
+/// Compute the stable runtime ability ID for an ability reference type.
+pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
+    let data = ctx.types.get(ability_ref);
+    let ability_name = match data.attrs.get(&Symbol::new("name")) {
+        Some(Attribute::Symbol(s)) => *s,
+        _ => panic!(
+            "ICE: compute_ability_id: ability type has no name: {:?}",
+            data
+        ),
+    };
+
+    let mut hash: u32 = ability_name.with_str(|s| {
+        let mut h: u32 = 0;
+        for byte in s.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+        h
+    });
+
+    for &param in data.params.iter() {
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(ctx, param));
+    }
+
+    hash
+}
+
+fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
+    let data = ctx.types.get(ty);
+    let mut hash: u32 = 0;
+
+    data.dialect.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    data.name.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    for &param in data.params.iter() {
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(ctx, param));
+    }
+
+    hash
+}
+
 // === Pure operation registrations ===
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_lookup") }
