@@ -217,7 +217,6 @@ impl MarkerField {
 
 pub const MARKER_FIELD_COUNT: usize = MARKER_FIELDS.len();
 
-#[cfg(test)]
 const _: () = {
     let mut idx = 0;
     while idx < MARKER_FIELDS.len() {
