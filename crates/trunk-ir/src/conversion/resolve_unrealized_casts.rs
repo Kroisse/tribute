@@ -9,7 +9,7 @@
 //! If any casts cannot be resolved, the pass returns the unresolved list.
 
 use crate::context::IrContext;
-use crate::dialect::core as arena_core;
+use crate::dialect::core;
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use crate::rewrite::{Module, TypeConverter};
@@ -103,7 +103,7 @@ impl CastResolver {
             }
 
             // Check if this is an unrealized_conversion_cast
-            if arena_core::UnrealizedConversionCast::matches(ctx, op) {
+            if core::UnrealizedConversionCast::matches(ctx, op) {
                 self.try_resolve_cast(ctx, tc, block, op);
                 continue;
             }
@@ -190,12 +190,12 @@ impl CastResolver {
 
 #[cfg(test)]
 mod tests {
-    mod arena_tests {
+    mod resolve_unrealized_casts_tests {
         use crate::OperationDataBuilder;
         use crate::context::{BlockData, IrContext, RegionData};
         use crate::conversion::resolve_unrealized_casts;
         use crate::dialect::arith;
-        use crate::dialect::core as arena_core;
+        use crate::dialect::core;
         use crate::location::Span;
         use crate::refs::{OpRef, TypeRef};
         use crate::rewrite::{Module, TypeConverter};
@@ -245,7 +245,7 @@ mod tests {
         }
 
         #[test]
-        fn arena_resolve_no_materializer() {
+        fn resolve_no_materializer() {
             let (mut ctx, loc) = test_ctx();
             let i32_ty = i32_type(&mut ctx);
             let i64_ty = i64_type(&mut ctx);
@@ -255,8 +255,7 @@ mod tests {
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
-            let cast_op =
-                arena_core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
+            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
@@ -269,7 +268,7 @@ mod tests {
         }
 
         #[test]
-        fn arena_resolve_same_type_noop() {
+        fn resolve_same_type_noop() {
             let (mut ctx, loc) = test_ctx();
             let i32_ty = i32_type(&mut ctx);
 
@@ -278,8 +277,7 @@ mod tests {
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i32 (same type)
-            let cast_op =
-                arena_core::unrealized_conversion_cast(&mut ctx, loc, const_result, i32_ty);
+            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i32_ty);
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
@@ -297,7 +295,7 @@ mod tests {
         }
 
         #[test]
-        fn arena_resolve_with_materializer() {
+        fn resolve_with_materializer() {
             let (mut ctx, loc) = test_ctx();
             let i32_ty = i32_type(&mut ctx);
             let i64_ty = i64_type(&mut ctx);
@@ -307,8 +305,7 @@ mod tests {
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
-            let cast_op =
-                arena_core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
+            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
             let cast_result = cast_op.result(&ctx);
 
             // A user of the cast result

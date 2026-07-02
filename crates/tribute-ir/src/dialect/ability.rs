@@ -177,7 +177,7 @@ inventory::submit! { trunk_ir::op_interface::IsolatedFromAboveOps::register("abi
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -338,7 +338,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// Get the canonical Evidence ADT type — `core.array(Marker)`.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
-    arena_core::array(ctx, marker_ty).as_type_ref()
+    core::array(ctx, marker_ty).as_type_ref()
 }
 
 /// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
@@ -503,7 +503,7 @@ mod tests {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let other_array = arena_core::array(&mut ctx, i32_ty).as_type_ref();
+        let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false

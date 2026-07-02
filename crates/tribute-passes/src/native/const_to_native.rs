@@ -19,9 +19,9 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -130,7 +130,7 @@ impl ConstCollector {
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
 
-        if data.dialect == arena_adt::DIALECT_NAME() {
+        if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
                 if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
                     let bytes = s.clone().into_bytes();
@@ -216,7 +216,7 @@ pub fn lower(
         return Ok(());
     }
 
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -270,21 +270,21 @@ fn emit_bytes_alloc(
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Get rodata address
-    let data_ptr_op = arena_clif::symbol_addr(ctx, loc, ptr_ty, data_sym);
+    let data_ptr_op = clif::symbol_addr(ctx, loc, ptr_ty, data_sym);
     ops.push(data_ptr_op.op_ref());
     let data_ptr = data_ptr_op.result(ctx);
 
     // 2. Length constant
-    let len_op = arena_clif::iconst(ctx, loc, i64_ty, content_len as i64);
+    let len_op = clif::iconst(ctx, loc, i64_ty, content_len as i64);
     ops.push(len_op.op_ref());
     let len_val = len_op.result(ctx);
 
     // 3. Allocate RC header (8) + TributeBytes payload (ptr=8 + len=8 = 16) = 24 bytes
     let alloc_size = RC_HEADER_SIZE + 16; // ptr(8) + len(8)
-    let size_op = arena_clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+    let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
     ops.push(size_op.op_ref());
 
-    let call_op = arena_clif::call(
+    let call_op = clif::call(
         ctx,
         loc,
         [size_op.result(ctx)],
@@ -295,9 +295,9 @@ fn emit_bytes_alloc(
     let raw_ptr = call_op.result(ctx);
 
     // 4. Store RC header: refcount=1, rtti_idx=0
-    let rc_one = arena_clif::iconst(ctx, loc, i32_ty, 1);
+    let rc_one = clif::iconst(ctx, loc, i32_ty, 1);
     ops.push(rc_one.op_ref());
-    let store_rc = arena_clif::store(
+    let store_rc = clif::store(
         ctx,
         loc,
         rc_one.result(ctx),
@@ -306,9 +306,9 @@ fn emit_bytes_alloc(
     );
     ops.push(store_rc.op_ref());
 
-    let rtti_zero = arena_clif::iconst(ctx, loc, i32_ty, 0);
+    let rtti_zero = clif::iconst(ctx, loc, i32_ty, 0);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = arena_clif::store(
+    let store_rtti = clif::store(
         ctx,
         loc,
         rtti_zero.result(ctx),
@@ -318,24 +318,24 @@ fn emit_bytes_alloc(
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw + 8
-    let hdr_size = arena_clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_size.op_ref());
-    let payload_op = arena_clif::iadd(ctx, loc, raw_ptr, hdr_size.result(ctx), ptr_ty);
+    let payload_op = clif::iadd(ctx, loc, raw_ptr, hdr_size.result(ctx), ptr_ty);
     ops.push(payload_op.op_ref());
     let payload = payload_op.result(ctx);
 
     // 6. Store TributeBytes fields: ptr at payload+0, len at payload+8
-    let store_ptr = arena_clif::store(ctx, loc, data_ptr, payload, 0);
+    let store_ptr = clif::store(ctx, loc, data_ptr, payload, 0);
     ops.push(store_ptr.op_ref());
 
-    let store_len = arena_clif::store(ctx, loc, len_val, payload, 8);
+    let store_len = clif::store(ctx, loc, len_val, payload, 8);
     ops.push(store_len.op_ref());
 
     // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
     //    rewrite pattern can use as the replacement result.
-    let zero_op = arena_clif::iconst(ctx, loc, i64_ty, 0);
+    let zero_op = clif::iconst(ctx, loc, i64_ty, 0);
     ops.push(zero_op.op_ref());
-    let identity_op = arena_clif::iadd(ctx, loc, payload, zero_op.result(ctx), ptr_ty);
+    let identity_op = clif::iadd(ctx, loc, payload, zero_op.result(ctx), ptr_ty);
     ops.push(identity_op.op_ref());
 
     let last = ops.pop().unwrap();
@@ -357,7 +357,7 @@ impl RewritePattern for BytesConstNativePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(bytes_const) = arena_adt::BytesConst::from_op(ctx, op) else {
+        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
             return false;
         };
 
@@ -406,7 +406,7 @@ impl RewritePattern for StringConstNativePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(string_const) = arena_adt::StringConst::from_op(ctx, op) else {
+        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
             return false;
         };
 
@@ -434,7 +434,7 @@ impl RewritePattern for StringConstNativePattern {
             self.i64_ty,
             self.i32_ty,
         );
-        let bytes_payload = arena_clif::Iadd::from_op(ctx, bytes_last_op)
+        let bytes_payload = clif::Iadd::from_op(ctx, bytes_last_op)
             .expect("last op is iadd")
             .result(ctx);
 
@@ -444,7 +444,7 @@ impl RewritePattern for StringConstNativePattern {
         // Create adt.variant_new(type=String, tag=Leaf, bytes_payload)
         // Use the actual String enum type for the type attribute so that
         // adt_rc_header can compute the correct enum layout.
-        let variant_new = arena_adt::variant_new(
+        let variant_new = adt::variant_new(
             ctx,
             loc,
             [bytes_payload],

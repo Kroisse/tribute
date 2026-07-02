@@ -12,7 +12,7 @@ use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
 use crate::context::IrContext;
-use crate::dialect::core as arena_core;
+use crate::dialect::core;
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef};
 
@@ -316,7 +316,7 @@ impl PatternApplicator {
     /// infinite loops.
     fn insert_conversion_casts(&self, ctx: &mut IrContext, block: BlockRef, op: OpRef) -> usize {
         // Skip unrealized_conversion_cast itself to avoid infinite loops
-        if arena_core::UnrealizedConversionCast::from_op(ctx, op).is_ok() {
+        if core::UnrealizedConversionCast::from_op(ctx, op).is_ok() {
             return 0;
         }
 
@@ -328,7 +328,7 @@ impl PatternApplicator {
                 && target_ty != raw_ty
             {
                 let loc = ctx.op(op).location;
-                let cast = arena_core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
+                let cast = core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
                 let cast_ref = cast.op_ref();
                 let cast_result = cast.result(ctx);
                 ctx.insert_op_before(block, op, cast_ref);

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef};
@@ -94,7 +94,7 @@ impl ConstCollector {
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
 
-        if data.dialect == arena_adt::DIALECT_NAME() {
+        if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
                 if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
                     let bytes = s.clone().into_bytes();
@@ -198,7 +198,7 @@ impl RewritePattern for StringConstPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(string_const) = arena_adt::StringConst::from_op(ctx, op) else {
+        let Ok(string_const) = adt::StringConst::from_op(ctx, op) else {
             return false;
         };
 
@@ -256,7 +256,7 @@ impl RewritePattern for BytesConstPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(bytes_const) = arena_adt::BytesConst::from_op(ctx, op) else {
+        let Ok(bytes_const) = adt::BytesConst::from_op(ctx, op) else {
             return false;
         };
 

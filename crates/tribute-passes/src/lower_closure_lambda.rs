@@ -34,8 +34,8 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use tribute_ir::dialect::ability as arena_ability;
-use tribute_ir::dialect::closure as arena_closure;
+use tribute_ir::dialect::ability;
+use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 
 /// Lower all `closure.lambda` ops in the module to `func.func` + `closure.new`.
@@ -93,7 +93,7 @@ fn collect_closure_lambdas(ctx: &IrContext, module: Module) -> Vec<OpRef> {
 }
 
 fn collect_lambdas_in_op(ctx: &IrContext, op: OpRef, result: &mut Vec<OpRef>) {
-    if arena_closure::Lambda::matches(ctx, op) {
+    if closure::Lambda::matches(ctx, op) {
         // Don't recurse into the lambda body — nested lambdas will be
         // found on the next iteration after this one is lowered.
         result.push(op);
@@ -118,7 +118,7 @@ fn lower_single_lambda(
     lambda_ref: OpRef,
     namer: &mut LambdaNamer,
 ) {
-    let Ok(lambda_op) = arena_closure::Lambda::from_op(ctx, lambda_ref) else {
+    let Ok(lambda_op) = closure::Lambda::from_op(ctx, lambda_ref) else {
         return;
     };
 
@@ -146,7 +146,7 @@ fn lower_single_lambda(
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let func_result_ty = extract_return_type_from_closure(ctx, result_ty)
         .expect("closure.lambda result type must be closure.closure<core.func<...>>");
-    let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
     let env_struct_ty = if captures.is_empty() {
@@ -205,8 +205,8 @@ fn lower_single_lambda(
     // Create closure.new replacing the lambda.
     let closure_func_ty =
         core::func(ctx, func_result_ty, orig_param_types.iter().copied()).as_type_ref();
-    let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
-    let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
+    let closure_ty = closure::closure(ctx, closure_func_ty).as_type_ref();
+    let closure_new_op = closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
 
     // RAUW: lambda result → closure.new result.
@@ -451,7 +451,7 @@ fn make_bind_name_attrs(name: &str) -> std::collections::BTreeMap<Symbol, Attrib
 mod tests {
     use super::*;
     use trunk_ir::context::RegionData;
-    use trunk_ir::dialect::{arith, core as arena_core};
+    use trunk_ir::dialect::{arith, core};
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
     use trunk_ir::{Attribute, IrContext, OperationDataBuilder, Span};
@@ -527,11 +527,11 @@ mod tests {
         });
 
         // closure type: closure.closure<core.func<i32, i32>>
-        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
-        let closure_ty = arena_closure::closure(&mut ctx, func_ty).as_type_ref();
+        let func_ty = core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
+        let closure_ty = closure::closure(&mut ctx, func_ty).as_type_ref();
 
         // closure.lambda [] { ... } -> closure_ty
-        let lambda_op = arena_closure::lambda(
+        let lambda_op = closure::lambda(
             &mut ctx,
             loc,
             Vec::<ValueRef>::new(),
@@ -554,7 +554,7 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty =
-            arena_core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>()).as_type_ref();
+            core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>()).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,
@@ -581,7 +581,7 @@ mod tests {
         assert!(test_fn_ops.len() >= 2, "expected at least 2 ops in test_fn");
         let last_op = test_fn_ops[test_fn_ops.len() - 1];
         assert!(
-            arena_closure::New::matches(&ctx, last_op),
+            closure::New::matches(&ctx, last_op),
             "last op should be closure.new"
         );
 
@@ -652,12 +652,11 @@ mod tests {
             parent_op: None,
         });
 
-        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
-        let closure_ty = arena_closure::closure(&mut ctx, func_ty).as_type_ref();
+        let func_ty = core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
+        let closure_ty = closure::closure(&mut ctx, func_ty).as_type_ref();
 
         // closure.lambda [%a] { ... }
-        let lambda_op =
-            arena_closure::lambda(&mut ctx, loc, vec![a_val], closure_ty, lambda_body_region);
+        let lambda_op = closure::lambda(&mut ctx, loc, vec![a_val], closure_ty, lambda_body_region);
         ctx.push_op(outer_entry, lambda_op.op_ref());
 
         let outer_body = ctx.create_region(RegionData {
@@ -665,7 +664,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_func_ty = arena_core::func(&mut ctx, anyref_ty, [i32_ty]).as_type_ref();
+        let outer_func_ty = core::func(&mut ctx, anyref_ty, [i32_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,
@@ -695,7 +694,7 @@ mod tests {
 
         let has_closure_new = test_fn_ops
             .iter()
-            .any(|&op| arena_closure::New::matches(&ctx, op));
+            .any(|&op| closure::New::matches(&ctx, op));
         assert!(has_closure_new, "should have closure.new");
 
         // Lifted function body should reference env extraction, not the original capture.

@@ -26,8 +26,8 @@ pub mod type_converter;
 use std::collections::BTreeMap;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location};
@@ -43,7 +43,7 @@ pub(crate) fn build_extern_func(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    let func_ty = arena_core::func(ctx, result, params.iter().copied()).as_type_ref();
+    let func_ty = core::func(ctx, result, params.iter().copied()).as_type_ref();
 
     let args: Vec<BlockArgData> = params
         .iter()
@@ -53,7 +53,7 @@ pub(crate) fn build_extern_func(
         })
         .collect();
 
-    let unreachable_op = arena_func::unreachable(ctx, loc);
+    let unreachable_op = func::unreachable(ctx, loc);
     let entry = ctx.create_block(BlockData {
         location: loc,
         args,
@@ -68,7 +68,7 @@ pub(crate) fn build_extern_func(
         parent_op: None,
     });
 
-    let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
+    let func_op = func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
     ctx.op_mut(func_op.op_ref())
         .attributes
         .insert(Symbol::new("abi"), Attribute::String("C".to_string()));

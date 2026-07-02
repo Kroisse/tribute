@@ -27,12 +27,12 @@
 //! types, the native backend uses opaque pointers (`core.ptr`) for all
 //! reference types. Most conversions between pointer types are no-ops.
 
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::TypeConverter;
 use trunk_ir::types::{Location, TypeDataBuilder};
@@ -41,7 +41,7 @@ use trunk_ir::types::{Location, TypeDataBuilder};
 const ALLOC_FN: &str = "__tribute_alloc";
 
 // =============================================================================
-// Arena versions
+// Native type conversion
 // =============================================================================
 
 /// Pre-interned types for the arena native type converter.
@@ -74,14 +74,14 @@ pub struct NativeTypeRefs {
 impl NativeTypeRefs {
     /// Pre-intern all types needed by the native type converter.
     pub fn new(ctx: &mut IrContext) -> Self {
-        use tribute_ir::dialect::ability as arena_ability;
+        use tribute_ir::dialect::ability;
         Self {
-            tribute_rt_int: arena_tribute_rt::int(ctx).as_type_ref(),
-            tribute_rt_nat: arena_tribute_rt::nat(ctx).as_type_ref(),
-            tribute_rt_bool: arena_tribute_rt::bool(ctx).as_type_ref(),
-            tribute_rt_float: arena_tribute_rt::float(ctx).as_type_ref(),
-            tribute_rt_intref: arena_tribute_rt::intref(ctx).as_type_ref(),
-            tribute_rt_anyref: arena_tribute_rt::anyref(ctx).as_type_ref(),
+            tribute_rt_int: tribute_rt::int(ctx).as_type_ref(),
+            tribute_rt_nat: tribute_rt::nat(ctx).as_type_ref(),
+            tribute_rt_bool: tribute_rt::bool(ctx).as_type_ref(),
+            tribute_rt_float: tribute_rt::float(ctx).as_type_ref(),
+            tribute_rt_intref: tribute_rt::intref(ctx).as_type_ref(),
+            tribute_rt_anyref: tribute_rt::anyref(ctx).as_type_ref(),
             core_i1: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
@@ -95,22 +95,21 @@ impl NativeTypeRefs {
             core_f64: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build()),
-            core_ptr: arena_core::ptr(ctx).as_type_ref(),
-            core_nil: arena_core::nil(ctx).as_type_ref(),
+            core_ptr: core::ptr(ctx).as_type_ref(),
+            core_nil: core::nil(ctx).as_type_ref(),
             core_i8: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build()),
 
-            evidence_ty: arena_ability::evidence_adt_type_ref(ctx),
-            marker_ty: arena_ability::marker_adt_type_ref(ctx),
+            evidence_ty: ability::evidence_adt_type_ref(ctx),
+            marker_ty: ability::marker_adt_type_ref(ctx),
         }
     }
 }
 
 /// Create an `TypeConverter` configured for native backend type conversions.
 ///
-/// Arena version of `native_type_converter()`. All type checks use pre-interned
-/// `TypeRef` comparisons for efficiency.
+/// All type checks use pre-interned `TypeRef` comparisons for efficiency.
 pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeRefs) {
     let refs = NativeTypeRefs::new(ctx);
 
@@ -165,7 +164,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
     tc.set_materializer(move |ctx, location, value, from_ty, to_ty| {
         // Same type: no-op
         if from_ty == to_ty {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
 
         // Primitive equivalences (NoOp)
@@ -175,34 +174,34 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             || from_ty == r.core_i1)
             && to_ty == r.core_i32
         {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         if from_ty == r.tribute_rt_float && to_ty == r.core_f64 {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         if from_ty == r.tribute_rt_intref && to_ty == r.core_ptr {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         // anyref → ptr: no-op (same representation)
         if from_ty == r.tribute_rt_anyref && to_ty == r.core_ptr {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         // ptr → anyref: no-op (same representation)
         if from_ty == r.core_ptr && to_ty == r.tribute_rt_anyref {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         if from_ty == r.evidence_ty && to_ty == r.core_ptr {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         if from_ty == r.core_ptr && to_ty == r.evidence_ty {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         // core.bytes ↔ ptr: no-op (same representation in native)
         if is_bytes_type(ctx, from_ty) && to_ty == r.core_ptr {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
         if from_ty == r.core_ptr && is_bytes_type(ctx, to_ty) {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
 
         // Pointer equivalences: ptr-like ↔ ptr ↔ anyref
@@ -215,7 +214,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             || (from_is_ptr && to_ptr_like)
             || (from_ptr_like && to_ptr_like)
         {
-            return Some(arena_materialize_result_noop(value));
+            return Some(materialize_result_noop(value));
         }
 
         // Boxing: primitive → ptr/anyref
@@ -241,7 +240,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
                 ));
             }
             if from_ty == r.core_nil {
-                let null_op = arena_clif::iconst(ctx, location, ptr_ty, 0);
+                let null_op = clif::iconst(ctx, location, ptr_ty, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: null_op.result(ctx),
                     ops: vec![null_op.op_ref()],
@@ -253,28 +252,28 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         let from_is_ptr_or_any = from_ty == r.core_ptr || from_ty == r.tribute_rt_anyref;
         if from_is_ptr_or_any {
             if to_ty == r.core_i32 || to_ty == r.tribute_rt_int {
-                let load = arena_clif::load(ctx, location, value, r.core_i32, 0);
+                let load = clif::load(ctx, location, value, r.core_i32, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
             }
             if to_ty == r.core_i64 {
-                let load = arena_clif::load(ctx, location, value, r.core_i64, 0);
+                let load = clif::load(ctx, location, value, r.core_i64, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
             }
             if to_ty == r.core_f64 {
-                let load = arena_clif::load(ctx, location, value, r.core_f64, 0);
+                let load = clif::load(ctx, location, value, r.core_f64, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
             }
             if to_ty == r.core_nil {
-                return Some(arena_materialize_result_noop(value));
+                return Some(materialize_result_noop(value));
             }
         }
 
@@ -285,13 +284,13 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
 }
 
 /// NoOp materialization result (pass value through unchanged).
-fn arena_materialize_result_noop(
+fn materialize_result_noop(
     value: ValueRef,
 ) -> trunk_ir::rewrite::type_converter::MaterializeResult {
     trunk_ir::rewrite::type_converter::MaterializeResult { value, ops: vec![] }
 }
 
-/// Generate boxing operations in arena IR: allocate + store RC header + store value.
+/// Generate boxing operations: allocate + store RC header + store value.
 fn box_primitive(
     ctx: &mut IrContext,
     location: Location,
@@ -305,11 +304,11 @@ fn box_primitive(
 
     // 1. Allocation size (payload + RC header)
     let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = arena_clif::iconst(ctx, location, i64_ty, alloc_size as i64);
+    let size_op = clif::iconst(ctx, location, i64_ty, alloc_size as i64);
     ops.push(size_op.op_ref());
 
     // 2. Allocate heap memory
-    let call_op = arena_clif::call(
+    let call_op = clif::call(
         ctx,
         location,
         [size_op.result(ctx)],
@@ -320,9 +319,9 @@ fn box_primitive(
     let raw_ptr = call_op.result(ctx);
 
     // 3. Store refcount = 1
-    let rc_one = arena_clif::iconst(ctx, location, i32_ty, 1);
+    let rc_one = clif::iconst(ctx, location, i32_ty, 1);
     ops.push(rc_one.op_ref());
-    let store_rc = arena_clif::store(
+    let store_rc = clif::store(
         ctx,
         location,
         rc_one.result(ctx),
@@ -332,9 +331,9 @@ fn box_primitive(
     ops.push(store_rc.op_ref());
 
     // 4. Store rtti_idx = 0
-    let rtti_zero = arena_clif::iconst(ctx, location, i32_ty, 0);
+    let rtti_zero = clif::iconst(ctx, location, i32_ty, 0);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = arena_clif::store(
+    let store_rtti = clif::store(
         ctx,
         location,
         rtti_zero.result(ctx),
@@ -344,19 +343,19 @@ fn box_primitive(
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = arena_clif::iconst(ctx, location, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size = clif::iconst(ctx, location, i64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_size.op_ref());
-    let payload_ptr = arena_clif::iadd(ctx, location, raw_ptr, hdr_size.result(ctx), ptr_ty);
+    let payload_ptr = clif::iadd(ctx, location, raw_ptr, hdr_size.result(ctx), ptr_ty);
     ops.push(payload_ptr.op_ref());
 
     // 6. Store value at payload offset 0
-    let store_val = arena_clif::store(ctx, location, value, payload_ptr.result(ctx), 0);
+    let store_val = clif::store(ctx, location, value, payload_ptr.result(ctx), 0);
     ops.push(store_val.op_ref());
 
     // 7. Identity pass-through so the last op produces the payload ptr result
-    let zero_op = arena_clif::iconst(ctx, location, ptr_ty, 0);
+    let zero_op = clif::iconst(ctx, location, ptr_ty, 0);
     ops.push(zero_op.op_ref());
-    let identity_op = arena_clif::iadd(
+    let identity_op = clif::iadd(
         ctx,
         location,
         payload_ptr.result(ctx),

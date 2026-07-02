@@ -22,10 +22,10 @@
 
 use std::collections::BTreeMap;
 
-use tribute_ir::dialect::ability::{self as arena_ability, MarkerField, evidence_abi};
+use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{core as arena_core, wasm as wasm_dialect};
+use trunk_ir::dialect::{core, wasm as wasm_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -112,7 +112,7 @@ impl RewritePattern for EvidenceLookupPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(lookup_op) = arena_ability::EvidenceLookup::from_op(ctx, op) else {
+        let Ok(lookup_op) = ability::EvidenceLookup::from_op(ctx, op) else {
             return false;
         };
 
@@ -165,7 +165,7 @@ impl RewritePattern for EvidenceExtendPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(extend_op) = arena_ability::EvidenceExtend::from_op(ctx, op) else {
+        let Ok(extend_op) = ability::EvidenceExtend::from_op(ctx, op) else {
             return false;
         };
 
@@ -188,8 +188,8 @@ impl RewritePattern for EvidenceExtendPattern {
         let prompt_tag_attr = extend_op.prompt_tag(ctx);
 
         let i32_ty = intern_i32(ctx);
-        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
-        let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // Create: %ability_id = wasm.i32_const(ability_id)
         let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
@@ -204,16 +204,12 @@ impl RewritePattern for EvidenceExtendPattern {
         // Create a core.ptr-typed null for tr_dispatch_fn (unused for now).
         let tr_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
         let tr_dispatch_null =
-            arena_core::unrealized_conversion_cast(ctx, loc, tr_dispatch_zero.result(ctx), ptr_ty);
+            core::unrealized_conversion_cast(ctx, loc, tr_dispatch_zero.result(ctx), ptr_ty);
 
         // Create a core.ptr-typed null for handler_dispatch (unused for now).
         let handler_dispatch_zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
-        let handler_dispatch_null = arena_core::unrealized_conversion_cast(
-            ctx,
-            loc,
-            handler_dispatch_zero.result(ctx),
-            ptr_ty,
-        );
+        let handler_dispatch_null =
+            core::unrealized_conversion_cast(ctx, loc, handler_dispatch_zero.result(ctx), ptr_ty);
 
         // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
         let marker_op = wasm_dialect::struct_new(
@@ -274,7 +270,7 @@ mod locals {
 fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) -> OpRef {
     let evidence_ty = evidence_ref_type(ctx);
     let i32_ty = intern_i32(ctx);
-    let marker_sig_ty = arena_ability::marker_adt_type_ref(ctx);
+    let marker_sig_ty = ability::marker_adt_type_ref(ctx);
 
     let func_ty = intern_func_type(ctx, &[evidence_ty, i32_ty], marker_sig_ty);
 
@@ -345,7 +341,7 @@ fn build_lookup_loop_body(
     i32_ty: TypeRef,
 ) -> RegionRef {
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
-    let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+    let marker_ty = ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
         location,
@@ -549,7 +545,7 @@ fn build_lookup_loop_body(
 fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) -> OpRef {
     let evidence_ty = evidence_ref_type(ctx);
     let i32_ty = intern_i32(ctx);
-    let marker_sig_ty = arena_ability::marker_adt_type_ref(ctx);
+    let marker_sig_ty = ability::marker_adt_type_ref(ctx);
 
     let func_ty = intern_func_type(ctx, &[evidence_ty, marker_sig_ty], evidence_ty);
 
@@ -801,7 +797,7 @@ fn build_extend_search_loop(
     i32_ty: TypeRef,
 ) -> RegionRef {
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
-    let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+    let marker_ty = ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
         location,

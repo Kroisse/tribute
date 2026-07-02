@@ -48,12 +48,6 @@ pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream 
     }
 }
 
-/// Deprecated alias for [`dialect`]. Use `#[dialect]` instead.
-#[proc_macro_attribute]
-pub fn arena_dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
-    dialect(attr, item)
-}
-
 fn dialect_impl(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,

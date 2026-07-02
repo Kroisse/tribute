@@ -17,7 +17,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::{OperatingSystem, Triple};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
@@ -369,7 +369,7 @@ fn emit_module_impl(
     let all_func_ops = collect_clif_funcs(ctx, module);
 
     for &func_op in &all_func_ops {
-        let func_wrapped = arena_clif::Func::from_op(ctx, func_op)
+        let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
@@ -442,7 +442,7 @@ fn emit_module_impl(
             continue;
         }
 
-        let func_wrapped = arena_clif::Func::from_op(ctx, func_op)
+        let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
@@ -601,7 +601,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
     for &block in &region_data.blocks {
         let block_data = ctx.block(block);
         for &op in &block_data.ops {
-            if arena_clif::Func::from_op(ctx, op).is_ok() {
+            if clif::Func::from_op(ctx, op).is_ok() {
                 funcs.push(op);
             } else {
                 let op_data = ctx.op(op);

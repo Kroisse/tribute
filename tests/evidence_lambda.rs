@@ -12,7 +12,7 @@ use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
 use tribute_passes::evidence::has_evidence_first_param;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 
@@ -35,7 +35,7 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
 fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String, bool)> {
     let mut results = Vec::new();
     for op in module.ops(ctx) {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx).to_string();
             let func_ty = func_op.r#type(ctx);
             let has_evidence = has_evidence_first_param(ctx, func_ty);
@@ -213,7 +213,7 @@ fn main() { }
 
         // Count evidence params per function via block args
         for op in module.ops(&ctx) {
-            if let Ok(func_op) = arena_func::Func::from_op(&ctx, op) {
+            if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
                 let body = func_op.body(&ctx);
                 let blocks = &ctx.region(body).blocks;

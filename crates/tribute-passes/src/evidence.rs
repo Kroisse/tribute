@@ -2,10 +2,10 @@
 //!
 //! Helpers for working with evidence parameters on function types.
 
-use tribute_ir::dialect::ability as arena_ability;
+use tribute_ir::dialect::ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 
@@ -19,7 +19,7 @@ pub fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
     if data.params.len() < 2 {
         return false;
     }
-    arena_ability::is_evidence_type_ref(ctx, data.params[1])
+    ability::is_evidence_type_ref(ctx, data.params[1])
 }
 
 /// Build a new `core.func` TypeRef with evidence prepended to params.
@@ -56,11 +56,11 @@ pub fn find_enclosing_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
         let block = ctx.op(current).parent_block?;
         let region = ctx.block(block).parent_region?;
         let parent_op = ctx.region(region).parent_op?;
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, parent_op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, parent_op) {
             let body = func_op.body(ctx);
             let entry = ctx.region(body).blocks[0];
             let args = ctx.block_args(entry);
-            if !args.is_empty() && arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(args[0])) {
+            if !args.is_empty() && ability::is_evidence_type_ref(ctx, ctx.value_ty(args[0])) {
                 return Some(args[0]);
             }
             return None;
