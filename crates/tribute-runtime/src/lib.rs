@@ -658,6 +658,39 @@ mod tests {
     // =========================================================================
 
     #[test]
+    fn test_evidence_runtime_function_signatures() {
+        let _: extern "C" fn() -> *mut Evidence = __tribute_evidence_empty;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> i32 = __tribute_evidence_lookup;
+        let _: unsafe extern "C" fn(
+            *const Evidence,
+            i32,
+            i32,
+            *const u8,
+            *const u8,
+        ) -> *mut Evidence = __tribute_evidence_extend;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> *const u8 =
+            __tribute_evidence_lookup_tr;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> *const u8 =
+            __tribute_evidence_lookup_handler;
+    }
+
+    #[test]
+    fn test_marker_repr_c_field_order() {
+        assert_eq!(core::mem::offset_of!(Marker, ability_id), 0);
+        assert!(
+            core::mem::offset_of!(Marker, ability_id) < core::mem::offset_of!(Marker, prompt_tag)
+        );
+        assert!(
+            core::mem::offset_of!(Marker, prompt_tag)
+                < core::mem::offset_of!(Marker, tr_dispatch_fn)
+        );
+        assert!(
+            core::mem::offset_of!(Marker, tr_dispatch_fn)
+                < core::mem::offset_of!(Marker, handler_dispatch)
+        );
+    }
+
+    #[test]
     fn test_evidence_empty() {
         let ev = __tribute_evidence_empty();
         assert!(!ev.is_null());
@@ -678,6 +711,7 @@ mod tests {
             assert_eq!(ev2_ref.markers[0].ability_id, 10);
             assert_eq!(ev2_ref.markers[0].prompt_tag, 1);
             assert!(ev2_ref.markers[0].tr_dispatch_fn.is_null());
+            assert!(ev2_ref.markers[0].handler_dispatch.is_null());
 
             // Original evidence is unchanged (persistent)
             let ev_ref = &*ev;
@@ -720,6 +754,52 @@ mod tests {
             assert_eq!(prompt_tag, 2);
 
             let _ = Box::from_raw(ev);
+        }
+    }
+
+    #[test]
+    fn test_evidence_lookup_dispatch_pointers() {
+        unsafe {
+            let tr = 0x10usize as *const u8;
+            let handler = 0x20usize as *const u8;
+            let empty = __tribute_evidence_empty();
+            let ev = __tribute_evidence_extend(empty, 10, 1, tr, handler);
+
+            assert_eq!(__tribute_evidence_lookup_tr(ev, 10), tr);
+            assert_eq!(__tribute_evidence_lookup_handler(ev, 10), handler);
+
+            let _ = Box::from_raw(empty);
+            let _ = Box::from_raw(ev);
+        }
+    }
+
+    #[test]
+    fn test_evidence_extend_replaces_nested_same_ability_handler() {
+        unsafe {
+            let outer_tr = 0x10usize as *const u8;
+            let outer_handler = 0x20usize as *const u8;
+            let inner_tr = 0x30usize as *const u8;
+            let inner_handler = 0x40usize as *const u8;
+
+            let ev = __tribute_evidence_empty();
+            let outer = __tribute_evidence_extend(ev, 10, 1, outer_tr, outer_handler);
+            let inner = __tribute_evidence_extend(outer, 10, 2, inner_tr, inner_handler);
+
+            let inner_ref = &*inner;
+            assert_eq!(inner_ref.markers.len(), 1);
+            assert_eq!(inner_ref.markers[0].ability_id, 10);
+            assert_eq!(inner_ref.markers[0].prompt_tag, 2);
+            assert_eq!(inner_ref.markers[0].tr_dispatch_fn, inner_tr);
+            assert_eq!(inner_ref.markers[0].handler_dispatch, inner_handler);
+
+            let outer_ref = &*outer;
+            assert_eq!(outer_ref.markers[0].prompt_tag, 1);
+            assert_eq!(outer_ref.markers[0].tr_dispatch_fn, outer_tr);
+            assert_eq!(outer_ref.markers[0].handler_dispatch, outer_handler);
+
+            let _ = Box::from_raw(ev);
+            let _ = Box::from_raw(outer);
+            let _ = Box::from_raw(inner);
         }
     }
 }

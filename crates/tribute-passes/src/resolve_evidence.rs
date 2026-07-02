@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tribute_ir::dialect::ability;
+use tribute_ir::dialect::ability::{self, evidence_abi};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
@@ -48,9 +48,9 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     for op in &ops {
         if let Ok(func_op) = func::Func::from_op(ctx, *op) {
             let name = func_op.sym_name(ctx);
-            if name == Symbol::new("__tribute_evidence_lookup") {
+            if name == Symbol::new(evidence_abi::LOOKUP) {
                 has_lookup = true;
-            } else if name == Symbol::new("__tribute_evidence_extend") {
+            } else if name == Symbol::new(evidence_abi::EXTEND) {
                 has_extend = true;
             } else if name == Symbol::new("__tribute_next_tag") {
                 has_next_tag = true;
@@ -100,13 +100,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
         });
-        let func_op = func::func(
-            ctx,
-            loc,
-            Symbol::new("__tribute_evidence_lookup"),
-            func_ty,
-            body,
-        );
+        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::LOOKUP), func_ty, body);
         if let Some(first) = first_existing_op {
             ctx.insert_op_before(module_block, first, func_op.op_ref());
         } else {
@@ -143,13 +137,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
         });
-        let func_op = func::func(
-            ctx,
-            loc,
-            Symbol::new("__tribute_evidence_extend"),
-            func_ty,
-            body,
-        );
+        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::EXTEND), func_ty, body);
         // Insert at the beginning of the module
         let first_op = ctx.block(module_block).ops.first().copied();
         if let Some(first) = first_op {
@@ -722,7 +710,7 @@ fn transform_shifts_in_block(
                         loc,
                         vec![current_ev, marker_val],
                         evidence_ty,
-                        Symbol::new("__tribute_evidence_extend"),
+                        Symbol::new(evidence_abi::EXTEND),
                     );
                     current_ev = ctx.op_result(extend_call.op_ref(), 0);
                     ctx.insert_op_before(block, op, extend_call.op_ref());
@@ -874,7 +862,7 @@ fn transform_shifts_in_block(
                 loc,
                 vec![ev_value, ability_id_val],
                 marker_ty,
-                Symbol::new("__tribute_evidence_lookup"),
+                Symbol::new(evidence_abi::LOOKUP),
             );
             let new_marker = ctx.op_result(lookup_call.op_ref(), 0);
             ctx.insert_op_before(block, op, lookup_call.op_ref());

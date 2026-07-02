@@ -22,7 +22,7 @@ lowering은 현재 경로가 아니다.
 
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @Console }
-%tr_dispatch = adt.struct_get %marker, 2
+%tr_dispatch = adt.struct_get %marker, MarkerField::TrDispatchFn
 %fn = adt.struct_get %tr_dispatch, 0
 %env = adt.struct_get %tr_dispatch, 1
 %op_idx = arith.const <hash(Console, print)>
@@ -47,7 +47,7 @@ lowering은 현재 경로가 아니다.
 
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @State }
-%handler = adt.struct_get %marker, 3
+%handler = adt.struct_get %marker, MarkerField::HandlerDispatch
 %fn = adt.struct_get %handler, 0
 %env = adt.struct_get %handler, 1
 %op_idx = arith.const <hash(State, get)>
@@ -112,6 +112,41 @@ struct Marker {
 
 Evidence는 ability id 기준으로 정렬된 marker 배열이며, handler 설치 시
 새 evidence 값을 만든다.
+
+Marker layout과 evidence runtime ABI는 `tribute-ir`의
+`ability::MarkerField`와 `ability::evidence_abi`가 컴파일러 내부의 단일
+정의다. 필드 순서는 다음과 같고 모든 shared pass와 backend lowering은 이
+순서를 직접 숫자로 복제하지 않는다.
+
+| Field | Index | Type | Meaning |
+| --- | ---: | --- | --- |
+| `ability_id` | 0 | `i32` | stable ability key for sorted evidence lookup |
+| `prompt_tag` | 1 | `i32` | prompt installed for the active handler |
+| `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
+| `handler_dispatch` | 3 | `ptr` | full CPS dispatch closure or null |
+
+Empty evidence is represented in high-level IR as an empty `core.array(Marker)`
+or null evidence placeholder, and backend lowering turns that into the target
+runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
+When a handler for the same `ability_id` is nested inside an outer handler,
+evidence extension replaces the existing marker so lookup resolves to the
+nearest handler.
+
+Native runtime ABI:
+
+```text
+__tribute_evidence_empty() -> ptr
+__tribute_evidence_lookup(ev: ptr, ability_id: i32) -> i32
+__tribute_evidence_extend(
+    ev: ptr,
+    ability_id: i32,
+    prompt_tag: i32,
+    tr_dispatch_fn: ptr,
+    handler_dispatch: ptr,
+) -> ptr
+__tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
+__tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
+```
 
 ### `ability.handle_dispatch`
 

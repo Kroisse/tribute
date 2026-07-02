@@ -10,7 +10,7 @@
 //!
 //! // Output:
 //! %marker = ability.evidence_lookup %evidence { ability_ref: @State }
-//! %handler = adt.struct_get %marker, 3       // handler_dispatch closure
+//! %handler = adt.struct_get %marker, MarkerField::HandlerDispatch
 //! %fn_ptr = adt.struct_get %handler, 0       // closure function pointer
 //! %env = adt.struct_get %handler, 1          // closure environment
 //! %op_idx = arith.const <hash(ability, op)>
@@ -36,7 +36,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::Attribute;
 
 use tribute_ir::dialect::ability;
-use tribute_ir::dialect::ability::compute_op_idx;
+use tribute_ir::dialect::ability::{MarkerField, compute_op_idx};
 use tribute_ir::dialect::tribute_rt;
 
 /// Cached common type references used by the perform lowering pattern.
@@ -128,12 +128,19 @@ impl RewritePattern for LowerPerformPattern {
         rewriter.insert_op(lookup.op_ref());
         let marker_val = lookup.result(ctx);
 
-        // === 2. Extract handler_dispatch from marker (field index 3) ===
+        // === 2. Extract handler_dispatch from marker ===
         // The Marker ADT declares this field as core.ptr, but we read it with
         // closure_ty because evidence_to_native replaces this struct_get entirely
         // with a __tribute_evidence_lookup_handler call before type conversion.
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let handler_get = adt::struct_get(ctx, location, marker_val, closure_ty, marker_ty, 3);
+        let handler_get = adt::struct_get(
+            ctx,
+            location,
+            marker_val,
+            closure_ty,
+            marker_ty,
+            MarkerField::HandlerDispatch.index(),
+        );
         rewriter.insert_op(handler_get.op_ref());
         let handler_dispatch_val = handler_get.result(ctx);
 
@@ -288,9 +295,16 @@ impl RewritePattern for LowerCallPattern {
         rewriter.insert_op(lookup.op_ref());
         let marker_val = lookup.result(ctx);
 
-        // === 2. Extract tr_dispatch_fn from marker (field index 2) ===
+        // === 2. Extract tr_dispatch_fn from marker ===
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let tr_fn_get = adt::struct_get(ctx, location, marker_val, closure_ty, marker_ty, 2);
+        let tr_fn_get = adt::struct_get(
+            ctx,
+            location,
+            marker_val,
+            closure_ty,
+            marker_ty,
+            MarkerField::TrDispatchFn.index(),
+        );
         rewriter.insert_op(tr_fn_get.op_ref());
         let tr_dispatch_fn_val = tr_fn_get.result(ctx);
 
