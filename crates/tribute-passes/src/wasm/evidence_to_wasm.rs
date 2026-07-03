@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
 //! ```
 //!
 //! ## Implementation Strategy
@@ -1209,4 +1209,68 @@ fn compute_ability_id(ctx: &IrContext, ability_ty: TypeRef) -> i32 {
 
 fn ability_id_as_wasm_i32(ability_id: u32) -> i32 {
     i32::from_ne_bytes(ability_id.to_ne_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    fn lower_text(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        lower_evidence_to_wasm(&mut ctx, module);
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn textual_dispatch_tail_lowers_to_wasm_indirect_call() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    func.return %result
+  }
+}"#,
+        );
+
+        assert!(!output.contains("effect.dispatch_tail"), "{output}");
+        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
+        assert!(output.contains("wasm.struct_get"), "{output}");
+        assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn textual_dispatch_cps_lowers_to_wasm_indirect_call() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %k: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_cps %ev, %k, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref
+    func.return %result
+  }
+}"#,
+        );
+
+        assert!(!output.contains("effect.dispatch_cps"), "{output}");
+        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
+        assert!(output.contains("wasm.struct_get"), "{output}");
+        assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn textual_extend_lowers_to_wasm_evidence_extend_call() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) -> wasm.arrayref {
+    %result = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : wasm.arrayref
+    func.return %result
+  }
+}"#,
+        );
+
+        assert!(!output.contains("effect.extend"), "{output}");
+        assert!(output.contains("wasm.struct_new"), "{output}");
+        assert!(output.contains("__tribute_evidence_extend"), "{output}");
+    }
 }
