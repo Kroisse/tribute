@@ -118,3 +118,87 @@ fn main() { classify(1) }
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile case expression");
 }
+
+#[salsa_test]
+fn test_compile_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability Console {
+    fn read() -> Int
+    fn print(value: Int) -> Nil
+}
+
+fn use_console() ->{Console} Int {
+    let n = Console::read()
+    Console::print(n)
+    n
+}
+
+fn run() -> Int {
+    handle use_console() {
+        do result { result }
+        fn Console::read() { +41 }
+        fn Console::print(value) { Nil }
+    }
+}
+
+fn main() {
+    let _ = run()
+}
+"#;
+    let source = SourceCst::from_source_str(db, "tail_dispatch_ability.trb", code);
+    let binary = compile_to_wasm_binary(db, source);
+
+    if binary.is_none() {
+        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+    }
+
+    assert!(
+        binary.is_some(),
+        "Should compile tail-dispatch ability through wasm effect ABI lowering"
+    );
+}
+
+#[salsa_test]
+fn test_compile_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn bump() ->{State(Int)} Int {
+    let n = State::get()
+    State::set(n + +1)
+    n
+}
+
+fn run_state() -> Int {
+    handle bump() {
+        do result { result }
+        op State::get() -> k { resume k(+41) }
+        op State::set(value) -> k { resume k(Nil) }
+    }
+}
+
+fn main() {
+    let _ = run_state()
+}
+"#;
+    let source = SourceCst::from_source_str(db, "cps_dispatch_ability.trb", code);
+    let binary = compile_to_wasm_binary(db, source);
+
+    if binary.is_none() {
+        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+    }
+
+    assert!(
+        binary.is_some(),
+        "Should compile CPS ability dispatch through wasm effect ABI lowering"
+    );
+}

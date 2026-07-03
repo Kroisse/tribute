@@ -43,21 +43,19 @@
 //! Module (evidence passed through calls)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
-//! Module (ability.perform lowered)
+//! Module (ability.perform/call lowered to effect.dispatch_*)
 //!     │
 //!     ▼ resolve_evidence
-//! Module (evidence resolved)
+//! Module (handler evidence setup lowered to effect.extend)
 //!     │
 //!     ▼ lower_handle_dispatch
-//! Module (effects lowered)
-//!     │
-//!     ├─► [native only] evidence_to_native
+//! Module (ability.handle_dispatch lowered)
 //!     │
 //!     ▼ dce ─► resolve_casts
 //! Module (ready for codegen)
 //!     │
-//!     ├─► [wasm]   compile_to_wasm
-//!     └─► [native] compile_to_native
+//!     ├─► [wasm]   compile_to_wasm (includes evidence_to_wasm)
+//!     └─► [native] compile_to_native (includes evidence_to_native)
 //! ```
 //!
 //! ## Diagnostics
@@ -364,7 +362,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
     // Phase 1 - Lower to wasm dialect (Tribute-specific)
     {
         let _span = tracing::info_span!("lower_to_wasm").entered();
-        tribute_passes::wasm::lower::lower_to_wasm(ctx, module);
+        tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_conversion_failure)?;
     }
 
     // Phase 2 - Resolve unrealized_conversion_cast operations (WASM type converter)
@@ -818,6 +816,10 @@ fn native_conversion_failure(
     error: ConversionError,
 ) -> trunk_ir_cranelift_backend::CompilationError {
     trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+}
+
+fn wasm_conversion_failure(error: ConversionError) -> CompilationError {
+    CompilationError::ir_validation(error.to_string())
 }
 
 /// Compile to native object bytes.

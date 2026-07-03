@@ -49,6 +49,10 @@ lowering may produce `effect.extend`, `effect.dispatch_tail`, and
 `effect.dispatch_cps`; backend-specific lowering must eliminate them before a
 backend-ready full conversion target. Shared passes must not lower these
 operations by inspecting concrete Marker fields or backend closure layouts.
+Native lowering maps the ABI to runtime evidence calls and native closure
+pointers. WasmGC lowering uses the same shared ability IDs and marker field
+order, but stores dispatch closures as `anyref` closure structs and lowers
+dispatch to evidence lookup, closure unpacking, and `wasm.call_indirect`.
 
 ## Legality Precedence
 
@@ -103,12 +107,34 @@ memory layout.
 Typical pass order:
 
 ```text
-adt_to_wasm
+arith_to_wasm
 scf_to_wasm
 func_to_wasm
-arith_to_wasm
-intrinsic_to_wasm
+wasm_func_signature_conversion
+tribute_rt_to_wasm
+adt_to_wasm
+evidence_to_wasm
 const_to_wasm
+intrinsic_to_wasm
+wasm_lowerer
+assign_gc_type_indices
+```
+
+Backend-ready Wasm lowering must eliminate residual `effect.*` operations.
+The current `wasm-backend-ready` partial conversion boundary rejects residual
+`ability.*` and `effect.*` operations while still allowing later-stage
+infrastructure such as unresolved casts. `evidence_to_wasm` generates the
+evidence lookup/extend helpers and lowers effect dispatch to closure unpacking
+plus `wasm.call_indirect`.
+
+The lower-level `trunk-ir-wasm-backend` pass group handles target-independent
+dialect conversion:
+
+```text
+arith_to_wasm
+scf_to_wasm
+func_to_wasm
+adt_to_wasm
 ```
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly

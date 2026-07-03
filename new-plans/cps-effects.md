@@ -154,6 +154,13 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 | `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
 | `handler_dispatch` | 3 | `ptr` | full CPS dispatch closure or null |
 
+WasmGC uses the same field order and shared field identifiers, but its concrete
+GC marker type stores the dispatch closures as `anyref` closure references
+instead of native `ptr` values. Wasm effect ABI lowering therefore expands
+`effect.dispatch_tail` and `effect.dispatch_cps` into evidence lookup,
+`wasm.struct_get` of the selected marker closure, closure table-index/env
+decomposition, and `wasm.call_indirect`.
+
 Empty evidence is represented in high-level IR as an empty `core.array(Marker)`
 or null evidence placeholder, and backend lowering turns that into the target
 runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
@@ -243,14 +250,16 @@ decomposition, and indirect calls로 변환한다.
 
 ### WasmGC
 
-WasmGC도 원칙적으로 같은 shared middle-end를 사용할 수 있다. 다만 현재
-WasmGC backend에는 이전 yield bubbling/trampoline 설계의 흔적이 남아 있으므로,
-WasmGC를 다시 주요 경로로 올리기 전에 다음을 정리해야 한다.
+WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
+`effect.extend`를 marker construction + `__tribute_evidence_extend` helper
+call로 낮추고, `effect.dispatch_tail` / `effect.dispatch_cps`는
+`__tribute_evidence_lookup`, marker closure field access, closure
+table-index/env unpacking, and `wasm.call_indirect`로 낮춘다.
 
-- `Step`, `Continuation`, `ResumeWrapper` builtin 타입의 실제 필요 여부
-- Marker field 문서와 구현의 4-field layout 일치
-- closure table index 기반 `call_indirect`가 handler/tr dispatch closure에
-  일관되게 적용되는지 검증
+현재 WasmGC backend에는 이전 yield bubbling/trampoline 설계의 builtin 타입
+(`Step`, `Continuation`, `ResumeWrapper`)이 남아 있다. 이 타입들은 active effect
+ABI의 의미론적 기준이 아니며, WasmGC backend 우선순위를 올리기 전에 실제 필요
+여부를 정리해야 한다.
 
 ## 폐기된 접근
 
