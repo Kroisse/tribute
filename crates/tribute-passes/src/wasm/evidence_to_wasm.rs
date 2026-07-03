@@ -934,20 +934,11 @@ fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> Ty
     trunk_ir::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
 }
 
-/// Compute a stable ability ID hash from an ability type reference.
-///
-/// Uses the same hashing strategy as the Salsa-based pass: a deterministic
-/// hash of the ability type data.
+/// Compute a stable ability ID as a WASM i32 immediate.
 fn compute_ability_id(ctx: &IrContext, ability_ty: TypeRef) -> i32 {
-    use std::hash::{Hash, Hasher};
-    let data = ctx.types.get(ability_ty);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    data.dialect.hash(&mut hasher);
-    data.name.hash(&mut hasher);
-    // Use the first few params for more specific hashing
-    for param in &data.params {
-        param.hash(&mut hasher);
-    }
-    // Truncate to i32 and ensure positive for wasm i32 comparisons
-    (hasher.finish() as i32).wrapping_abs()
+    ability_id_as_wasm_i32(ability::compute_ability_id(ctx, ability_ty))
+}
+
+fn ability_id_as_wasm_i32(ability_id: u32) -> i32 {
+    i32::from_ne_bytes(ability_id.to_ne_bytes())
 }
