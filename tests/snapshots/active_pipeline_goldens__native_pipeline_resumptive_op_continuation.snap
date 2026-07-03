@@ -63,7 +63,7 @@ core.module @resumptive_op_native {
       %13 = adt.struct_new %12, %11 {type = !_closure} : !_closure
       %14 = arith.const {value = 0} : tribute_rt.anyref
       %15 = func.call {callee = @__tribute_next_tag} : core.i32
-      %16 = arith.const {value = 80204913} : core.i32
+      %16 = arith.const {value = 3214451656} : core.i32
       %17 = core.unrealized_conversion_cast %14 : core.ptr
       %18 = core.unrealized_conversion_cast %13 : core.ptr
       %19 = func.call %1, %16, %15, %17, %18 {callee = @__tribute_evidence_extend} : core.ptr
@@ -84,7 +84,7 @@ core.module @resumptive_op_native {
       %9 = func.constant {func_ref = @"bump::__clam_0::__clam_0"} : !t1
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = tribute_rt.box_int %7 : tribute_rt.anyref
-      %12 = arith.const {value = 80204913} : core.i32
+      %12 = arith.const {value = 3214451656} : core.i32
       %13 = func.call %0, %12 {callee = @__tribute_evidence_lookup_handler} : core.ptr
       %14 = arith.const {value = 1348736788} : core.i32
       %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
@@ -99,7 +99,7 @@ core.module @resumptive_op_native {
       %5 = func.constant {func_ref = @"bump::__clam_0"} : !t1
       %6 = adt.struct_new %5, %4 {type = !_closure} : !_closure
       %7 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %8 = arith.const {value = 80204913} : core.i32
+      %8 = arith.const {value = 3214451656} : core.i32
       %9 = func.call %0, %8 {callee = @__tribute_evidence_lookup_handler} : core.ptr
       %10 = arith.const {value = 1972422014} : core.i32
       %11 = adt.struct_get %9 {field = 0, type = !_closure} : core.i32

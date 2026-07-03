@@ -115,53 +115,61 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
 
 /// Compute the stable runtime ability ID for an ability reference type.
 pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
+    use std::hash::{Hash, Hasher};
+
     let data = ctx.types.get(ability_ref);
-    let ability_name = match data.attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(s)) => *s,
+    let name = match ability_name(ctx, ability_ref) {
+        Some(s) => s,
         _ => panic!(
             "ICE: compute_ability_id: ability type has no name: {:?}",
             data
         ),
     };
 
-    let mut hash: u32 = ability_name.with_str(|s| {
-        let mut h: u32 = 0;
-        for byte in s.bytes() {
-            h = h.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-        h
-    });
+    let mut hasher = rustc_hash::FxHasher::default();
+    name.hash(&mut hasher);
+    data.params.len().hash(&mut hasher);
 
     for &param in data.params.iter() {
-        hash = hash.wrapping_mul(37);
-        hash = hash.wrapping_add(hash_type(ctx, param));
+        hash_type(ctx, param).hash(&mut hasher);
     }
 
-    hash
+    hasher.finish() as u32
+}
+
+/// Return the source-level ability name attached to an ability reference type.
+pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
+    match ctx.types.get(ability_ref).attrs.get(&Symbol::new("name")) {
+        Some(Attribute::Symbol(s)) => Some(*s),
+        _ => None,
+    }
+}
+
+/// Build an `arith.const` for the stable runtime ability ID.
+pub fn ability_id_const(
+    ctx: &mut IrContext,
+    loc: Location,
+    i32_ty: TypeRef,
+    ability_ref: TypeRef,
+) -> arith::Const {
+    let ability_id = compute_ability_id(ctx, ability_ref);
+    arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128))
 }
 
 fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
+    use std::hash::{Hash, Hasher};
+
     let data = ctx.types.get(ty);
-    let mut hash: u32 = 0;
-
-    data.dialect.with_str(|s| {
-        for byte in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-    });
-
-    data.name.with_str(|s| {
-        for byte in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-    });
+    let mut hasher = rustc_hash::FxHasher::default();
+    data.dialect.hash(&mut hasher);
+    data.name.hash(&mut hasher);
+    data.params.len().hash(&mut hasher);
 
     for &param in data.params.iter() {
-        hash = hash.wrapping_mul(37);
-        hash = hash.wrapping_add(hash_type(ctx, param));
+        hash_type(ctx, param).hash(&mut hasher);
     }
 
-    hash
+    hasher.finish() as u32
 }
 
 // === Pure operation registrations ===
@@ -177,9 +185,10 @@ inventory::submit! { trunk_ir::op_interface::IsolatedFromAboveOps::register("abi
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]

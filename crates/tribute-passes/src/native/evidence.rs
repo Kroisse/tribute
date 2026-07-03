@@ -246,23 +246,6 @@ fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::ability::is_marker_type_ref(ctx, ty)
 }
 
-fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
-    match ctx.types.get(ability_ref).attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(s)) => Some(*s),
-        _ => None,
-    }
-}
-
-fn ability_id_const(
-    ctx: &mut IrContext,
-    loc: Location,
-    i32_ty: TypeRef,
-    ability_ref: TypeRef,
-) -> arith::Const {
-    let ability_id = ability::compute_ability_id(ctx, ability_ref);
-    arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128))
-}
-
 fn op_idx_const(
     ctx: &mut IrContext,
     loc: Location,
@@ -270,7 +253,7 @@ fn op_idx_const(
     ability_ref: TypeRef,
     op_name: Symbol,
 ) -> arith::Const {
-    let op_idx = compute_op_idx(ability_name(ctx, ability_ref), Some(op_name));
+    let op_idx = compute_op_idx(ability::ability_name(ctx, ability_ref), Some(op_name));
     arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_idx as i128))
 }
 
@@ -353,9 +336,10 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
 
         // --- effect.extend → func.call @__tribute_evidence_extend native ABI ---
         if let Ok(extend_op) = effect::Extend::from_op(ctx, op) {
-            let ability_id_const = ability_id_const(ctx, loc, i32_ty, extend_op.ability_ref(ctx));
-            let ability_id_val = ability_id_const.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+            let ability_id_op =
+                ability::ability_id_const(ctx, loc, i32_ty, extend_op.ability_ref(ctx));
+            let ability_id_val = ability_id_op.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_op.op_ref());
 
             let tr_dispatch_ptr =
                 core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
@@ -389,9 +373,9 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
         // --- effect.dispatch_tail → lookup TR dispatch closure and call it ---
         if let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) {
             let ability_ref = dispatch_op.ability_ref(ctx);
-            let ability_id_const = ability_id_const(ctx, loc, i32_ty, ability_ref);
-            let ability_id_val = ability_id_const.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+            let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
+            let ability_id_val = ability_id_op.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_op.op_ref());
 
             let dispatch_closure = func::call(
                 ctx,
@@ -403,10 +387,9 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             let dispatch_val = dispatch_closure.result(ctx);
             ctx.insert_op_before(block, op, dispatch_closure.op_ref());
 
-            let op_idx_const =
-                op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-            let op_idx_val = op_idx_const.result(ctx);
-            ctx.insert_op_before(block, op, op_idx_const.op_ref());
+            let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+            let op_idx_val = op_idx_op.result(ctx);
+            ctx.insert_op_before(block, op, op_idx_op.op_ref());
 
             let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
             let fn_ptr = fn_ptr_get.result(ctx);
@@ -440,9 +423,9 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
         // --- effect.dispatch_cps → lookup CPS dispatch closure and call it ---
         if let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) {
             let ability_ref = dispatch_op.ability_ref(ctx);
-            let ability_id_const = ability_id_const(ctx, loc, i32_ty, ability_ref);
-            let ability_id_val = ability_id_const.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+            let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
+            let ability_id_val = ability_id_op.result(ctx);
+            ctx.insert_op_before(block, op, ability_id_op.op_ref());
 
             let dispatch_closure = func::call(
                 ctx,
@@ -454,10 +437,9 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             let dispatch_val = dispatch_closure.result(ctx);
             ctx.insert_op_before(block, op, dispatch_closure.op_ref());
 
-            let op_idx_const =
-                op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-            let op_idx_val = op_idx_const.result(ctx);
-            ctx.insert_op_before(block, op, op_idx_const.op_ref());
+            let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+            let op_idx_val = op_idx_op.result(ctx);
+            ctx.insert_op_before(block, op, op_idx_op.op_ref());
 
             let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
             let fn_ptr = fn_ptr_get.result(ctx);

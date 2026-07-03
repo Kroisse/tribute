@@ -763,14 +763,11 @@ fn transform_shifts_in_block(
         if let Ok(lookup_op) = ability::EvidenceLookup::from_op(ctx, op) {
             let loc = ctx.op(op).location;
             let ability_ref = lookup_op.ability_ref(ctx);
-            let ability_id = ability::compute_ability_id(ctx, ability_ref);
-
             let marker_ty = ability::marker_adt_type_ref(ctx);
             let i32_ty = i32_type_ref(ctx);
 
             // %ability_id_const = arith.const ability_id
-            let ability_id_const =
-                arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
+            let ability_id_const = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
             let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
