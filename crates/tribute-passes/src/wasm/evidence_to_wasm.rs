@@ -205,12 +205,14 @@ impl RewritePattern for EffectExtendPattern {
         let call_result = insert_evidence_extend_call(
             ctx,
             loc,
-            extend_op.evidence(ctx),
-            result_ty,
-            extend_op.ability_ref(ctx),
-            extend_op.prompt_tag(ctx),
-            extend_op.tr_dispatch_fn(ctx),
-            extend_op.handler_dispatch(ctx),
+            EvidenceExtendCall {
+                evidence: extend_op.evidence(ctx),
+                result_ty,
+                ability_ref_ty: extend_op.ability_ref(ctx),
+                prompt_tag: extend_op.prompt_tag(ctx),
+                tr_dispatch_fn: extend_op.tr_dispatch_fn(ctx),
+                handler_dispatch: extend_op.handler_dispatch(ctx),
+            },
             rewriter,
         );
 
@@ -387,12 +389,14 @@ impl RewritePattern for EvidenceExtendPattern {
         let call_result = insert_evidence_extend_call(
             ctx,
             loc,
-            evidence_val,
-            result_ty,
-            ability_ref_ty,
-            prompt_tag_const.result(ctx),
-            tr_dispatch_null.result(ctx),
-            handler_dispatch_null.result(ctx),
+            EvidenceExtendCall {
+                evidence: evidence_val,
+                result_ty,
+                ability_ref_ty,
+                prompt_tag: prompt_tag_const.result(ctx),
+                tr_dispatch_fn: tr_dispatch_null.result(ctx),
+                handler_dispatch: handler_dispatch_null.result(ctx),
+            },
             rewriter,
         );
 
@@ -472,18 +476,22 @@ fn insert_op_idx_const(
     op_idx
 }
 
-fn insert_evidence_extend_call(
-    ctx: &mut IrContext,
-    loc: Location,
+struct EvidenceExtendCall {
     evidence: ValueRef,
     result_ty: TypeRef,
     ability_ref_ty: TypeRef,
     prompt_tag: ValueRef,
     tr_dispatch_fn: ValueRef,
     handler_dispatch: ValueRef,
+}
+
+fn insert_evidence_extend_call(
+    ctx: &mut IrContext,
+    loc: Location,
+    call: EvidenceExtendCall,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
-    let ability_id = compute_ability_id(ctx, ability_ref_ty);
+    let ability_id = compute_ability_id(ctx, call.ability_ref_ty);
     let i32_ty = intern_i32(ctx);
     let marker_ty = ability::marker_adt_type_ref(ctx);
 
@@ -496,9 +504,9 @@ fn insert_evidence_extend_call(
         loc,
         [
             ability_id_const.result(ctx),
-            prompt_tag,
-            tr_dispatch_fn,
-            handler_dispatch,
+            call.prompt_tag,
+            call.tr_dispatch_fn,
+            call.handler_dispatch,
         ],
         marker_ty,
         MARKER_IDX,
@@ -508,8 +516,8 @@ fn insert_evidence_extend_call(
     let call_op = wasm_dialect::call(
         ctx,
         loc,
-        [evidence, marker_op.result(ctx)],
-        [result_ty],
+        [call.evidence, marker_op.result(ctx)],
+        [call.result_ty],
         Symbol::new(evidence_abi::EXTEND),
     );
 
