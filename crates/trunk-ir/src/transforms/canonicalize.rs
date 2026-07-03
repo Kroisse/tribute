@@ -35,7 +35,7 @@ use std::collections::HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
-use crate::pass::{Pass, PassRunResult};
+use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use crate::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
@@ -311,17 +311,9 @@ pub fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> Canonical
     result_from_apply(canonicalize_applicator().apply_partial(ctx, scope))
 }
 
-/// Function-anchored canonicalization pass.
-pub struct CanonicalizeFunc;
-
-impl Pass for CanonicalizeFunc {
-    type Target = func::Func;
-
-    fn name(&self) -> &'static str {
-        "canonicalize-func"
-    }
-
-    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+/// Build a function-anchored canonicalization pass.
+pub fn canonicalize_pass() -> impl Pass<Target = func::Func> {
+    pass_fn("canonicalize-func", |ctx, target| {
         let result = canonicalize(ctx, target);
         if !result.reached_fixpoint {
             tracing::warn!(
@@ -331,7 +323,7 @@ impl Pass for CanonicalizeFunc {
             );
         }
         Ok(())
-    }
+    })
 }
 
 // =========================================================================

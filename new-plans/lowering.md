@@ -47,7 +47,7 @@ function creation or deletion, cross-function call rewrites, global DCE, and
 pipeline-boundary conversion checks.
 
 `PatternApplicator` supports `RewriteScope`-scoped application for these
-anchored passes. For example, `CanonicalizeFunc` runs generic canonicalization
+anchored passes. For example, `canonicalize_pass()` runs generic canonicalization
 under one `func.func` scope, while module-wide cleanup uses the same
 `canonicalize` entry point with a module scope.
 

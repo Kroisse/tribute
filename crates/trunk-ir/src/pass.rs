@@ -53,6 +53,48 @@ pub trait Pass {
     fn run(&mut self, ctx: &mut IrContext, target: Self::Target) -> PassRunResult;
 }
 
+/// [`Pass`] adapter for a named function or closure.
+pub struct FnPass<T, F> {
+    name: &'static str,
+    f: F,
+    _target: std::marker::PhantomData<fn(T)>,
+}
+
+impl<T, F> FnPass<T, F> {
+    pub fn new(name: &'static str, f: F) -> Self {
+        Self {
+            name,
+            f,
+            _target: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, F> Pass for FnPass<T, F>
+where
+    T: DialectOp,
+    F: FnMut(&mut IrContext, T) -> PassRunResult,
+{
+    type Target = T;
+
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: T) -> PassRunResult {
+        (self.f)(ctx, target)
+    }
+}
+
+/// Build a named [`Pass`] from a function or closure.
+pub fn pass_fn<T, F>(name: &'static str, f: F) -> FnPass<T, F>
+where
+    T: DialectOp,
+    F: FnMut(&mut IrContext, T) -> PassRunResult,
+{
+    FnPass::new(name, f)
+}
+
 /// Object-safe view of [`Pass`] used inside [`PassManager`] storage.
 trait ErasedPass<T: DialectOp> {
     fn name(&self) -> &'static str;
@@ -593,6 +635,30 @@ mod tests {
         pm.run(&mut ctx, module).unwrap();
 
         assert_eq!(count.get(), 1);
+    }
+
+    #[test]
+    fn pass_fn_registers_named_closure_pass() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let count = Rc::new(Cell::new(0));
+        let count_clone = count.clone();
+        let seen_name = Rc::new(RefCell::new(String::new()));
+        let seen_name_clone = seen_name.clone();
+
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target| {
+            count_clone.set(count_clone.get() + 1);
+            Ok(())
+        }));
+        pm.with_instrumentation(move |_ctx, name, _op| {
+            seen_name_clone.replace(name.to_string());
+        });
+        pm.run(&mut ctx, module).unwrap();
+
+        assert_eq!(count.get(), 1);
+        assert_eq!(&*seen_name.borrow(), "closure-pass");
     }
 
     #[test]

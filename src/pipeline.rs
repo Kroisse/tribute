@@ -554,7 +554,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
-            .add_pass(trunk_ir::transforms::CanonicalizeFunc);
+            .add_pass(trunk_ir::transforms::canonicalize_pass());
         if let Err(error) = pm.run(ctx, core_module) {
             tracing::warn!("cleanup canonicalize-func failed: {error}");
         }
