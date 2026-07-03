@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
+use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, wasm as wasm_dialect};
@@ -39,14 +40,15 @@ use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 ///
 /// This pass:
 /// 1. Replaces stub function declarations with real binary search implementations
-/// 2. Lowers remaining `ability.evidence_lookup` and `ability.evidence_extend`
-///    operations to calls to the generated functions.
+/// 2. Lowers `effect.extend` and remaining legacy `ability.evidence_lookup` /
+///    `ability.evidence_extend` operations to calls to the generated functions.
 pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) {
     // Phase 1: Replace stubs with real implementations
     replace_evidence_function_stubs(ctx, module);
 
     // Phase 2: Pattern-based lowering for remaining ability ops
     let applicator = PatternApplicator::new(TypeConverter::new())
+        .add_pattern(EffectExtendPattern)
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
     applicator.apply_partial(ctx, module);
@@ -154,6 +156,44 @@ impl RewritePattern for EvidenceLookupPattern {
 // Evidence Extend Pattern
 // =============================================================================
 
+/// Pattern that matches `effect.extend` and replaces it with
+/// `wasm.call @__tribute_evidence_extend`.
+struct EffectExtendPattern;
+
+impl RewritePattern for EffectExtendPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
+            return false;
+        };
+
+        let result_ty = ctx.op_result_types(op)[0];
+        let loc = ctx.op(op).location;
+        let call_result = insert_evidence_extend_call(
+            ctx,
+            loc,
+            extend_op.evidence(ctx),
+            result_ty,
+            extend_op.ability_ref(ctx),
+            extend_op.prompt_tag(ctx),
+            extend_op.tr_dispatch_fn(ctx),
+            extend_op.handler_dispatch(ctx),
+            rewriter,
+        );
+
+        rewriter.erase_op(vec![call_result]);
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "EffectExtendPattern"
+    }
+}
+
 /// Pattern that matches `ability.evidence_extend` and replaces it with
 /// `wasm.call @__tribute_evidence_extend`.
 struct EvidenceExtendPattern;
@@ -184,16 +224,10 @@ impl RewritePattern for EvidenceExtendPattern {
         // then call __tribute_evidence_extend.
 
         let ability_ref_ty = extend_op.ability_ref(ctx);
-        let ability_id = compute_ability_id(ctx, ability_ref_ty);
         let prompt_tag_attr = extend_op.prompt_tag(ctx);
 
         let i32_ty = intern_i32(ctx);
         let ptr_ty = core::ptr(ctx).as_type_ref();
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-
-        // Create: %ability_id = wasm.i32_const(ability_id)
-        let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
-
         // Create: %prompt_tag = wasm.i32_const(prompt_tag)
         let prompt_tag_val = match &prompt_tag_attr {
             Attribute::Int(v) => *v as i32,
@@ -211,38 +245,24 @@ impl RewritePattern for EvidenceExtendPattern {
         let handler_dispatch_null =
             core::unrealized_conversion_cast(ctx, loc, handler_dispatch_zero.result(ctx), ptr_ty);
 
-        // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
-        let marker_op = wasm_dialect::struct_new(
-            ctx,
-            loc,
-            [
-                ability_id_const.result(ctx),
-                prompt_tag_const.result(ctx),
-                tr_dispatch_null.result(ctx),
-                handler_dispatch_null.result(ctx),
-            ],
-            marker_ty,
-            MARKER_IDX,
-        );
-
-        // Create: %result = wasm.call @__tribute_evidence_extend(%ev, %marker)
-        let call_op = wasm_dialect::call(
-            ctx,
-            loc,
-            [evidence_val, marker_op.result(ctx)],
-            [result_ty],
-            Symbol::new(evidence_abi::EXTEND),
-        );
-
-        let call_result = call_op.results(ctx)[0];
-        rewriter.insert_op(ability_id_const.op_ref());
         rewriter.insert_op(prompt_tag_const.op_ref());
         rewriter.insert_op(tr_dispatch_zero.op_ref());
         rewriter.insert_op(tr_dispatch_null.op_ref());
         rewriter.insert_op(handler_dispatch_zero.op_ref());
         rewriter.insert_op(handler_dispatch_null.op_ref());
-        rewriter.insert_op(marker_op.op_ref());
-        rewriter.insert_op(call_op.op_ref());
+
+        let call_result = insert_evidence_extend_call(
+            ctx,
+            loc,
+            evidence_val,
+            result_ty,
+            ability_ref_ty,
+            prompt_tag_const.result(ctx),
+            tr_dispatch_null.result(ctx),
+            handler_dispatch_null.result(ctx),
+            rewriter,
+        );
+
         rewriter.erase_op(vec![call_result]);
         true
     }
@@ -250,6 +270,54 @@ impl RewritePattern for EvidenceExtendPattern {
     fn name(&self) -> &'static str {
         "EvidenceExtendPattern"
     }
+}
+
+fn insert_evidence_extend_call(
+    ctx: &mut IrContext,
+    loc: Location,
+    evidence: ValueRef,
+    result_ty: TypeRef,
+    ability_ref_ty: TypeRef,
+    prompt_tag: ValueRef,
+    tr_dispatch_fn: ValueRef,
+    handler_dispatch: ValueRef,
+    rewriter: &mut PatternRewriter<'_>,
+) -> ValueRef {
+    let ability_id = compute_ability_id(ctx, ability_ref_ty);
+    let i32_ty = intern_i32(ctx);
+    let marker_ty = ability::marker_adt_type_ref(ctx);
+
+    // Create: %ability_id = wasm.i32_const(ability_id)
+    let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
+
+    // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
+    let marker_op = wasm_dialect::struct_new(
+        ctx,
+        loc,
+        [
+            ability_id_const.result(ctx),
+            prompt_tag,
+            tr_dispatch_fn,
+            handler_dispatch,
+        ],
+        marker_ty,
+        MARKER_IDX,
+    );
+
+    // Create: %result = wasm.call @__tribute_evidence_extend(%ev, %marker)
+    let call_op = wasm_dialect::call(
+        ctx,
+        loc,
+        [evidence, marker_op.result(ctx)],
+        [result_ty],
+        Symbol::new(evidence_abi::EXTEND),
+    );
+
+    let call_result = call_op.results(ctx)[0];
+    rewriter.insert_op(ability_id_const.op_ref());
+    rewriter.insert_op(marker_op.op_ref());
+    rewriter.insert_op(call_op.op_ref());
+    call_result
 }
 
 // =============================================================================
