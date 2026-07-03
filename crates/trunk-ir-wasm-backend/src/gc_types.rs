@@ -11,7 +11,7 @@
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
 //! Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 } (trampoline)
 //! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
-//! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i32, handler_dispatch: i32 } (evidence)
+//! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref } (evidence)
 //! Index 6: Evidence - array (ref Marker) (evidence array)
 //! Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref } (continuation)
 //! Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref } (resume wrapper)
@@ -42,7 +42,7 @@ pub const STEP_IDX: u32 = 3;
 /// All closures share this uniform representation: (table_idx: i32, env: anyref).
 pub const CLOSURE_STRUCT_IDX: u32 = 4;
 
-/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i32, handler_dispatch: i32 }).
+/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }).
 /// This is always index 5 in the GC type section.
 /// Used for evidence-based handler dispatch in the ability system.
 pub const MARKER_IDX: u32 = 5;
@@ -184,7 +184,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i32, handler_dispatch: i32 }
+        // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
         GcTypeDef::Struct(vec![
             FieldType {
                 element_type: StorageType::Val(ValType::I32),
@@ -195,11 +195,11 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
             FieldType {
-                element_type: StorageType::Val(ValType::I32),
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
                 mutable: false,
             },
             FieldType {
-                element_type: StorageType::Val(ValType::I32),
+                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
                 mutable: false,
             },
         ]),
@@ -342,21 +342,36 @@ mod tests {
     }
 
     #[test]
-    fn test_marker_struct_has_four_i32_fields() {
-        // Marker struct: { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i32, handler_dispatch: i32 }
+    fn test_marker_struct_layout() {
+        // Marker struct: { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
         let builtins = builtin_types();
         let marker_def = &builtins[MARKER_IDX as usize];
 
         match marker_def {
             GcTypeDef::Struct(fields) => {
                 assert_eq!(fields.len(), 4, "Marker should have 4 fields");
-                for (i, field) in fields.iter().enumerate() {
-                    assert!(
-                        matches!(field.element_type, StorageType::Val(ValType::I32)),
-                        "Marker field {} should be i32",
-                        i
-                    );
-                }
+                assert!(
+                    matches!(fields[0].element_type, StorageType::Val(ValType::I32)),
+                    "Field 0 (ability_id) should be i32"
+                );
+                assert!(
+                    matches!(fields[1].element_type, StorageType::Val(ValType::I32)),
+                    "Field 1 (prompt_tag) should be i32"
+                );
+                assert!(
+                    matches!(
+                        fields[2].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 2 (tr_dispatch_fn) should be anyref"
+                );
+                assert!(
+                    matches!(
+                        fields[3].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 3 (handler_dispatch) should be anyref"
+                );
             }
             _ => panic!("Marker (index 5) should be a struct type"),
         }
