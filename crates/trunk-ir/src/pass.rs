@@ -28,6 +28,7 @@ use derive_more::{Display, Error};
 
 use crate::context::IrContext;
 use crate::dialect::core;
+use crate::op_interface::IsolatedFromAboveOps;
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::walk::{WalkAction, walk_op};
@@ -203,6 +204,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
             if !T::matches(ctx, target.op_ref()) {
                 continue;
             }
+            ensure_nested_anchor_is_isolated(ctx, target.op_ref())?;
             self.pm.run_on_target_with(ctx, target, hooks)?;
         }
         Ok(())
@@ -235,6 +237,23 @@ fn collect_targets<T: DialectOp>(ctx: &IrContext, root: OpRef) -> Vec<T> {
         ControlFlow::Continue(WalkAction::Advance)
     });
     found
+}
+
+fn ensure_nested_anchor_is_isolated(ctx: &IrContext, op: OpRef) -> PassResult {
+    if IsolatedFromAboveOps::is_isolated(ctx, op) {
+        return Ok(());
+    }
+
+    let data = ctx.op(op);
+    Err(PassError::verification(
+        "nested-pass-manager",
+        VerifyError {
+            message: format!(
+                "nested pass target `{}.{}` is not registered IsolatedFromAbove",
+                data.dialect, data.name
+            ),
+        },
+    ))
 }
 
 /// Orchestrates a sequence of [`Pass`] instances plus nested sub-managers.
@@ -417,7 +436,7 @@ mod tests {
 
     use super::*;
     use crate::context::{BlockData, OperationDataBuilder, RegionData};
-    use crate::dialect::{core, func};
+    use crate::dialect::{arith, core, func};
     use crate::location::Span;
     use crate::symbol::Symbol;
     use crate::types::{Attribute, Location};
@@ -841,6 +860,36 @@ mod tests {
 
         assert_eq!(error.pass_name(), "failing");
         assert_eq!(*order.borrow(), vec!["failing"]);
+    }
+
+    #[test]
+    fn nested_pass_requires_isolated_anchor() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %y = arith.addi %x, %x : core.i32
+    func.return %y
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let module =
+            core::Module::from_op(&ctx, module.op()).expect("test input must parse a core.module");
+        let count = Rc::new(Cell::new(0));
+
+        let mut pm = PassManager::new();
+        pm.nest::<arith::Addi>()
+            .add_pass(CountingPass::<arith::Addi>::new(count.clone()));
+
+        let error = pm.run(&mut ctx, module).unwrap_err();
+
+        assert_eq!(error.pass_name(), "nested-pass-manager");
+        assert!(matches!(error.kind(), PassErrorKind::Verification(_)));
+        assert_eq!(count.get(), 0);
+        assert!(
+            error
+                .to_string()
+                .contains("nested pass target `arith.addi` is not registered IsolatedFromAbove")
+        );
     }
 
     #[test]
