@@ -7,7 +7,7 @@
 use trunk_ir::OperationDataBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cf as arena_cf;
+use trunk_ir::dialect::cf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -46,7 +46,7 @@ impl RewritePattern for CfBrPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_cf::Br::from_op(ctx, op).is_err() {
+        if cf::Br::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -66,7 +66,7 @@ impl RewritePattern for CfCondBrPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_cf::CondBr::from_op(ctx, op).is_err() {
+        if cf::CondBr::from_op(ctx, op).is_err() {
             return false;
         }
 

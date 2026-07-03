@@ -8,8 +8,8 @@ use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
@@ -147,7 +147,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
-            if data.dialect == arena_func::DIALECT_NAME() && data.name == Symbol::new("func") {
+            if data.dialect == func::DIALECT_NAME() && data.name == Symbol::new("func") {
                 if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
                     let fn_data = ctx.types.get(*fn_ty);
                     let params: Vec<_> = fn_data
@@ -218,7 +218,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    arena_core::func(ctx, result, params).as_type_ref()
+    core::func(ctx, result, params).as_type_ref()
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {

@@ -37,13 +37,13 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 
 /// Check if a type is `tribute_rt.anyref` (RC-managed reference type).
 fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -58,12 +58,12 @@ fn is_anyref_value(ctx: &IrContext, value: ValueRef) -> bool {
 
 /// Check if an op is a block terminator.
 fn is_terminator_op(ctx: &IrContext, op: OpRef) -> bool {
-    arena_clif::Return::matches(ctx, op)
-        || arena_clif::Jump::matches(ctx, op)
-        || arena_clif::Brif::matches(ctx, op)
-        || arena_clif::Trap::matches(ctx, op)
-        || arena_clif::ReturnCall::matches(ctx, op)
-        || arena_clif::BrTable::matches(ctx, op)
+    clif::Return::matches(ctx, op)
+        || clif::Jump::matches(ctx, op)
+        || clif::Brif::matches(ctx, op)
+        || clif::Trap::matches(ctx, op)
+        || clif::ReturnCall::matches(ctx, op)
+        || clif::BrTable::matches(ctx, op)
 }
 
 /// Check if a value is a static pointer (not RC-managed).
@@ -71,12 +71,12 @@ fn is_static_ptr(ctx: &IrContext, value: ValueRef) -> bool {
     let ValueDef::OpResult(def_op, _) = ctx.value_def(value) else {
         return false;
     };
-    if arena_clif::SymbolAddr::matches(ctx, def_op) {
+    if clif::SymbolAddr::matches(ctx, def_op) {
         return true;
     }
-    if arena_clif::Iconst::matches(ctx, def_op) && is_anyref_type(ctx, ctx.value_ty(value)) {
+    if clif::Iconst::matches(ctx, def_op) && is_anyref_type(ctx, ctx.value_ty(value)) {
         // Only treat null (zero) constants as unmanaged
-        if let Ok(iconst) = arena_clif::Iconst::from_op(ctx, def_op)
+        if let Ok(iconst) = clif::Iconst::from_op(ctx, def_op)
             && iconst.value(ctx) == 0
         {
             return true;
@@ -91,16 +91,16 @@ fn is_alloc_intermediate(ctx: &IrContext, value: ValueRef) -> bool {
     let ValueDef::OpResult(def_op, _) = ctx.value_def(value) else {
         return false;
     };
-    if let Ok(call_op) = arena_clif::Call::from_op(ctx, def_op) {
+    if let Ok(call_op) = clif::Call::from_op(ctx, def_op) {
         return call_op.callee(ctx) == Symbol::new("__tribute_alloc");
     }
-    if let Ok(_iadd_op) = arena_clif::Iadd::from_op(ctx, def_op) {
+    if let Ok(_iadd_op) = clif::Iadd::from_op(ctx, def_op) {
         let operands = ctx.op_operands(def_op).to_vec();
         if let Some(&lhs) = operands.first() {
             let ValueDef::OpResult(lhs_op, _) = ctx.value_def(lhs) else {
                 return false;
             };
-            if let Ok(call_op) = arena_clif::Call::from_op(ctx, lhs_op) {
+            if let Ok(call_op) = clif::Call::from_op(ctx, lhs_op) {
                 return call_op.callee(ctx) == Symbol::new("__tribute_alloc");
             }
         }
@@ -113,8 +113,8 @@ fn infer_alloc_size(ctx: &IrContext, value: ValueRef) -> u64 {
     let ValueDef::OpResult(def_op, _) = ctx.value_def(value) else {
         return 0;
     };
-    let Ok(call_op) = arena_clif::Call::from_op(ctx, def_op) else {
-        if let Ok(_iadd_op) = arena_clif::Iadd::from_op(ctx, def_op) {
+    let Ok(call_op) = clif::Call::from_op(ctx, def_op) else {
+        if let Ok(_iadd_op) = clif::Iadd::from_op(ctx, def_op) {
             let operands = ctx.op_operands(def_op).to_vec();
             if let Some(&lhs) = operands.first() {
                 return infer_alloc_size(ctx, lhs);
@@ -132,7 +132,7 @@ fn infer_alloc_size(ctx: &IrContext, value: ValueRef) -> u64 {
     let ValueDef::OpResult(size_op, _) = ctx.value_def(size_val) else {
         return 0;
     };
-    if let Ok(iconst_op) = arena_clif::Iconst::from_op(ctx, size_op) {
+    if let Ok(iconst_op) = clif::Iconst::from_op(ctx, size_op) {
         return iconst_op.value(ctx) as u64;
     }
     0
@@ -197,7 +197,7 @@ fn build_ptr_alias_map(
 
     for &block in &blocks {
         for &op in &ctx.block(block).ops.to_vec() {
-            if arena_core::UnrealizedConversionCast::matches(ctx, op) {
+            if core::UnrealizedConversionCast::matches(ctx, op) {
                 let operands = ctx.op_operands(op).to_vec();
                 if let Some(&input) = operands.first() {
                     let root = if ptr_values.contains(&input) {
@@ -374,7 +374,7 @@ pub fn insert_rc(ctx: &mut IrContext, module: Module) {
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
 
     for op in &module_ops {
-        if let Ok(func_op) = arena_clif::Func::from_op(ctx, *op) {
+        if let Ok(func_op) = clif::Func::from_op(ctx, *op) {
             let sym = func_op.sym_name(ctx);
             if sym.with_str(|s| s.starts_with(super::rtti::RELEASE_FN_PREFIX)) {
                 continue;
@@ -395,7 +395,7 @@ pub fn insert_rc(ctx: &mut IrContext, module: Module) {
 /// distinction is no longer needed. All anyref types are lowered to core.ptr
 /// so that subsequent passes (resolve_casts, Cranelift emit) see only core types.
 fn lower_anyref_to_ptr(ctx: &mut IrContext, module: Module) {
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
     let anyref_ty = ctx.types.intern(
         trunk_ir::TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
     );
@@ -405,7 +405,7 @@ fn lower_anyref_to_ptr(ctx: &mut IrContext, module: Module) {
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
 
     for op in module_ops {
-        if let Ok(func_op) = arena_clif::Func::from_op(ctx, op) {
+        if let Ok(func_op) = clif::Func::from_op(ctx, op) {
             // Rewrite function type attribute (anyref → ptr in params/return)
             let func_type = func_op.r#type(ctx);
             let new_func_type = rewrite_func_type(ctx, func_type, anyref_ty, ptr_ty);
@@ -574,7 +574,7 @@ fn insert_rc_in_block(
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let loc = ctx.block(block).location;
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
 
     let live_in = liveness.live_in.get(&block).cloned().unwrap_or_default();
     let live_out = liveness.live_out.get(&block).cloned().unwrap_or_default();
@@ -595,7 +595,7 @@ fn insert_rc_in_block(
     // Returned values
     let mut returned_values: HashSet<ValueRef> = HashSet::new();
     if let Some(&last_op) = ops.last()
-        && arena_clif::Return::matches(ctx, last_op)
+        && clif::Return::matches(ctx, last_op)
     {
         for &operand in ctx.op_operands(last_op) {
             if ptr_values.contains(&operand) {
@@ -616,7 +616,7 @@ fn insert_rc_in_block(
         let args: Vec<ValueRef> = ctx.block_args(block).to_vec();
         for arg_val in args {
             if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
-                let retain_op = arena_tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
+                let retain_op = tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
             }
         }
@@ -624,14 +624,14 @@ fn insert_rc_in_block(
 
     // 2. Retain before store of ptr, retain after load of ptr
     for (op_idx, &op) in ops.iter().enumerate() {
-        if let Ok(_store_op) = arena_clif::Store::from_op(ctx, op) {
+        if let Ok(_store_op) = clif::Store::from_op(ctx, op) {
             let operands = ctx.op_operands(op).to_vec();
             if let Some(&stored_val) = operands.first()
                 && is_anyref_value(ctx, stored_val)
                 && !is_static_ptr(ctx, stored_val)
             {
                 let op_loc = ctx.op(op).location;
-                let retain_op = arena_tribute_rt::retain(ctx, op_loc, stored_val, ptr_ty);
+                let retain_op = tribute_rt::retain(ctx, op_loc, stored_val, ptr_ty);
                 plan.before
                     .entry(op_idx)
                     .or_default()
@@ -639,12 +639,12 @@ fn insert_rc_in_block(
             }
         }
 
-        if arena_clif::Load::matches(ctx, op) {
+        if clif::Load::matches(ctx, op) {
             let result_ty = ctx.op_result_types(op).first().copied();
             if result_ty.is_some_and(|ty| is_anyref_type(ctx, ty)) {
                 let load_result = ctx.op_result(op, 0);
                 let op_loc = ctx.op(op).location;
-                let retain_op = arena_tribute_rt::retain(ctx, op_loc, load_result, ptr_ty);
+                let retain_op = tribute_rt::retain(ctx, op_loc, load_result, ptr_ty);
                 plan.after
                     .entry(op_idx)
                     .or_default()
@@ -682,14 +682,14 @@ fn insert_rc_in_block(
     for v in &dying_sorted {
         if let Some(&last_use_idx) = last_use_in_block.get(v) {
             let last_op = ops[last_use_idx];
-            if arena_clif::Return::matches(ctx, last_op) {
+            if clif::Return::matches(ctx, last_op) {
                 continue;
             }
             let alloc_size = infer_alloc_size(ctx, *v);
             let op_loc = ctx.op(last_op).location;
-            let release_op = arena_tribute_rt::release(ctx, op_loc, *v, alloc_size);
+            let release_op = tribute_rt::release(ctx, op_loc, *v, alloc_size);
             if is_terminator_op(ctx, last_op) {
-                if arena_clif::Jump::matches(ctx, last_op) {
+                if clif::Jump::matches(ctx, last_op) {
                     continue;
                 }
                 plan.before
@@ -704,14 +704,14 @@ fn insert_rc_in_block(
             }
         } else if live_in.contains(v) {
             let alloc_size = infer_alloc_size(ctx, *v);
-            let release_op = arena_tribute_rt::release(ctx, loc, *v, alloc_size);
+            let release_op = tribute_rt::release(ctx, loc, *v, alloc_size);
             plan.at_start.push(release_op.op_ref());
         } else if let ValueDef::OpResult(def_op, _) = ctx.value_def(*v) {
             for (op_idx, &op) in ops.iter().enumerate() {
                 if op == def_op {
                     let alloc_size = infer_alloc_size(ctx, *v);
                     let op_loc = ctx.op(op).location;
-                    let release_op = arena_tribute_rt::release(ctx, op_loc, *v, alloc_size);
+                    let release_op = tribute_rt::release(ctx, op_loc, *v, alloc_size);
                     plan.after
                         .entry(op_idx)
                         .or_default()
@@ -721,7 +721,7 @@ fn insert_rc_in_block(
             }
         } else if let ValueDef::BlockArg(_, _) = ctx.value_def(*v) {
             let alloc_size = infer_alloc_size(ctx, *v);
-            let release_op = arena_tribute_rt::release(ctx, loc, *v, alloc_size);
+            let release_op = tribute_rt::release(ctx, loc, *v, alloc_size);
             plan.at_start.push(release_op.op_ref());
         }
     }

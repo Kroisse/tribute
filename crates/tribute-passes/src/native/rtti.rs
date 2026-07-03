@@ -32,9 +32,9 @@ use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
 use trunk_ir::location::Span;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -43,7 +43,7 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::WalkAction;
 use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
 
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 
 /// Commonly used CLIF primitive types, pre-interned for convenience.
 struct ClifTypes {
@@ -170,7 +170,7 @@ fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
         let name = op_data.name;
 
         if dialect == Symbol::new("adt") && name == Symbol::new("struct_new") {
-            if let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) {
+            if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
                 let struct_ty = struct_new.r#type(ctx);
                 if get_struct_fields(ctx, struct_ty).is_some() {
                     rtti_map.get_or_insert(struct_ty);
@@ -178,7 +178,7 @@ fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
             }
         } else if dialect == Symbol::new("adt")
             && name == Symbol::new("variant_new")
-            && let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op)
+            && let Ok(variant_new) = adt::VariantNew::from_op(ctx, op)
         {
             let enum_ty = variant_new.r#type(ctx);
             if get_enum_variants(ctx, enum_ty).is_some() {
@@ -212,7 +212,7 @@ fn generate_release_function_for_struct(
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
     // Function type: (core.ptr) -> core.nil
-    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
+    let func_ty = core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
 
     // Collect pointer field offsets (skip func_ptr fields)
     let func_ptr_sym = Symbol::new("func_ptr");
@@ -281,7 +281,7 @@ fn generate_release_function_for_struct(
             parent_op: None,
         });
 
-        let func_op = arena_clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+        let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
         return func_op.op_ref();
     }
 
@@ -297,11 +297,11 @@ fn generate_release_function_for_struct(
             ops: smallvec![],
             parent_region: None,
         });
-        let reload = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+        let reload = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
         ctx.push_op(release_block, reload.op_ref());
-        let release = arena_tribute_rt::release(ctx, loc, reload.result(ctx), 0);
+        let release = tribute_rt::release(ctx, loc, reload.result(ctx), 0);
         ctx.push_op(release_block, release.op_ref());
-        let jump = arena_clif::jump(ctx, loc, [], next_block);
+        let jump = clif::jump(ctx, loc, [], next_block);
         ctx.push_op(release_block, jump.op_ref());
 
         // Check block: load field, null check, branch
@@ -311,11 +311,11 @@ fn generate_release_function_for_struct(
             ops: smallvec![],
             parent_region: None,
         });
-        let load = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+        let load = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
         ctx.push_op(check_block, load.op_ref());
-        let null_const = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+        let null_const = clif::iconst(ctx, loc, ptr_ty, 0);
         ctx.push_op(check_block, null_const.op_ref());
-        let is_null = arena_clif::icmp(
+        let is_null = clif::icmp(
             ctx,
             loc,
             load.result(ctx),
@@ -324,7 +324,7 @@ fn generate_release_function_for_struct(
             Symbol::new("eq"),
         );
         ctx.push_op(check_block, is_null.op_ref());
-        let brif = arena_clif::brif(ctx, loc, is_null.result(ctx), next_block, release_block);
+        let brif = clif::brif(ctx, loc, is_null.result(ctx), next_block, release_block);
         ctx.push_op(check_block, brif.op_ref());
 
         blocks_after_entry.push(release_block);
@@ -350,7 +350,7 @@ fn generate_release_function_for_struct(
         parent_op: None,
     });
 
-    let func_op = arena_clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+    let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
     func_op.op_ref()
 }
 
@@ -368,16 +368,16 @@ fn gen_dealloc_and_return(
 ) {
     use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-    let hdr_sz = arena_clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
     ctx.push_op(block, hdr_sz.op_ref());
-    let raw_ptr = arena_clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
+    let raw_ptr = clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
     ctx.push_op(block, raw_ptr.op_ref());
 
     let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-    let size_op = arena_clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+    let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
     ctx.push_op(block, size_op.op_ref());
 
-    let dealloc_call = arena_clif::call(
+    let dealloc_call = clif::call(
         ctx,
         loc,
         [raw_ptr.result(ctx), size_op.result(ctx)],
@@ -386,7 +386,7 @@ fn gen_dealloc_and_return(
     );
     ctx.push_op(block, dealloc_call.op_ref());
 
-    let ret_op = arena_clif::r#return(ctx, loc, []);
+    let ret_op = clif::r#return(ctx, loc, []);
     ctx.push_op(block, ret_op.op_ref());
 }
 
@@ -425,7 +425,7 @@ fn generate_release_function_for_enum(
     let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
-    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
+    let func_ty = core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
 
     let entry_block = ctx.create_block(BlockData {
         location: loc,
@@ -483,16 +483,16 @@ fn generate_release_function_for_enum(
     {
         use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-        let hdr_sz = arena_clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+        let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
         ctx.push_op(dealloc_block, hdr_sz.op_ref());
-        let raw_ptr = arena_clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
+        let raw_ptr = clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
         ctx.push_op(dealloc_block, raw_ptr.op_ref());
 
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = arena_clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+        let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
         ctx.push_op(dealloc_block, size_op.op_ref());
 
-        let dealloc_call = arena_clif::call(
+        let dealloc_call = clif::call(
             ctx,
             loc,
             [raw_ptr.result(ctx), size_op.result(ctx)],
@@ -501,13 +501,13 @@ fn generate_release_function_for_enum(
         );
         ctx.push_op(dealloc_block, dealloc_call.op_ref());
 
-        let ret_op = arena_clif::r#return(ctx, loc, []);
+        let ret_op = clif::r#return(ctx, loc, []);
         ctx.push_op(dealloc_block, ret_op.op_ref());
     }
 
     if variants_with_ptrs.is_empty() {
         // No pointer fields: entry jumps straight to dealloc
-        let jump = arena_clif::jump(ctx, loc, [], dealloc_block);
+        let jump = clif::jump(ctx, loc, [], dealloc_block);
         ctx.push_op(entry_block, jump.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -515,7 +515,7 @@ fn generate_release_function_for_enum(
             blocks: smallvec![entry_block, dealloc_block],
             parent_op: None,
         });
-        let func_op = arena_clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+        let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
         return func_op.op_ref();
     }
 
@@ -537,11 +537,11 @@ fn generate_release_function_for_enum(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let reload = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+            let reload = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
             ctx.push_op(rel_block, reload.op_ref());
-            let release_op = arena_tribute_rt::release(ctx, loc, reload.result(ctx), 0);
+            let release_op = tribute_rt::release(ctx, loc, reload.result(ctx), 0);
             ctx.push_op(rel_block, release_op.op_ref());
-            let jump = arena_clif::jump(ctx, loc, [], next_block);
+            let jump = clif::jump(ctx, loc, [], next_block);
             ctx.push_op(rel_block, jump.op_ref());
 
             // Check block: load field, null check, branch
@@ -551,11 +551,11 @@ fn generate_release_function_for_enum(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let load_op = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+            let load_op = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
             ctx.push_op(chk_block, load_op.op_ref());
-            let null_const = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+            let null_const = clif::iconst(ctx, loc, ptr_ty, 0);
             ctx.push_op(chk_block, null_const.op_ref());
-            let is_null = arena_clif::icmp(
+            let is_null = clif::icmp(
                 ctx,
                 loc,
                 load_op.result(ctx),
@@ -564,7 +564,7 @@ fn generate_release_function_for_enum(
                 Symbol::new("eq"),
             );
             ctx.push_op(chk_block, is_null.op_ref());
-            let brif = arena_clif::brif(ctx, loc, is_null.result(ctx), next_block, rel_block);
+            let brif = clif::brif(ctx, loc, is_null.result(ctx), next_block, rel_block);
             ctx.push_op(chk_block, brif.op_ref());
 
             extra_blocks.push(rel_block);
@@ -583,7 +583,7 @@ fn generate_release_function_for_enum(
     let num_variants = variants_with_ptrs.len();
 
     // Load tag in entry block
-    let tag_load = arena_clif::load(ctx, loc, payload_ptr, i32_ty, 0);
+    let tag_load = clif::load(ctx, loc, payload_ptr, i32_ty, 0);
     ctx.push_op(entry_block, tag_load.op_ref());
     let tag_val = tag_load.result(ctx);
 
@@ -596,9 +596,9 @@ fn generate_release_function_for_enum(
             ops: smallvec![],
             parent_region: None,
         });
-        let expected = arena_clif::iconst(ctx, loc, i32_ty, vr.tag_value as i64);
+        let expected = clif::iconst(ctx, loc, i32_ty, vr.tag_value as i64);
         ctx.push_op(check_block, expected.op_ref());
-        let cmp_op = arena_clif::icmp(
+        let cmp_op = clif::icmp(
             ctx,
             loc,
             tag_val,
@@ -607,7 +607,7 @@ fn generate_release_function_for_enum(
             Symbol::new("eq"),
         );
         ctx.push_op(check_block, cmp_op.op_ref());
-        let brif_op = arena_clif::brif(
+        let brif_op = clif::brif(
             ctx,
             loc,
             cmp_op.result(ctx),
@@ -623,9 +623,9 @@ fn generate_release_function_for_enum(
 
     // Entry block: check first variant
     let first_vr = &variants_with_ptrs[0];
-    let expected = arena_clif::iconst(ctx, loc, i32_ty, first_vr.tag_value as i64);
+    let expected = clif::iconst(ctx, loc, i32_ty, first_vr.tag_value as i64);
     ctx.push_op(entry_block, expected.op_ref());
-    let cmp_op = arena_clif::icmp(
+    let cmp_op = clif::icmp(
         ctx,
         loc,
         tag_val,
@@ -634,7 +634,7 @@ fn generate_release_function_for_enum(
         Symbol::new("eq"),
     );
     ctx.push_op(entry_block, cmp_op.op_ref());
-    let brif_op = arena_clif::brif(
+    let brif_op = clif::brif(
         ctx,
         loc,
         cmp_op.result(ctx),
@@ -661,7 +661,7 @@ fn generate_release_function_for_enum(
         blocks: all_blocks.into(),
         parent_op: None,
     });
-    let func_op = arena_clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+    let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
     func_op.op_ref()
 }
 
@@ -671,7 +671,7 @@ mod tests {
     use std::collections::BTreeMap;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
-    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::Attribute;
@@ -696,7 +696,7 @@ mod tests {
         field_types: &[TypeRef],
     ) -> Module {
         // Build function type: (field_types...) -> struct_ty
-        let func_ty = arena_core::func(ctx, struct_ty, field_types.iter().copied()).as_type_ref();
+        let func_ty = core::func(ctx, struct_ty, field_types.iter().copied()).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -729,7 +729,7 @@ mod tests {
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 
-        let ret = arena_func::r#return(ctx, loc, [struct_result]);
+        let ret = func::r#return(ctx, loc, [struct_result]);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -737,7 +737,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = arena_func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+        let func_op = func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -839,7 +839,7 @@ mod tests {
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
 
         // Build module with two struct_new ops
-        let func_ty = arena_core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty]).as_type_ref();
+        let func_ty = core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -884,7 +884,7 @@ mod tests {
         let sn2_result = ctx.op_result(sn2_ref, 0);
         ctx.push_op(entry, sn2_ref);
 
-        let ret = arena_func::r#return(&mut ctx, loc, [sn2_result]);
+        let ret = func::r#return(&mut ctx, loc, [sn2_result]);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -892,7 +892,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = arena_func::func(&mut ctx, loc, Symbol::new("create"), func_ty, body);
+        let func_op = func::func(&mut ctx, loc, Symbol::new("create"), func_ty, body);
 
         let module_block = ctx.create_block(BlockData {
             location: loc,

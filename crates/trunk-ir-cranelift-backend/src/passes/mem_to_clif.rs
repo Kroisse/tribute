@@ -4,7 +4,7 @@
 //! - `mem.store(ptr, value, offset)` → `clif.store(value, ptr, offset)`
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::clif;
 use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
@@ -54,7 +54,7 @@ impl RewritePattern for MemLoadPattern {
         let Ok(offset) = i32::try_from(load_op.offset(ctx)) else {
             return false;
         };
-        let new_op = arena_clif::load(ctx, loc, ptr, result_ty, offset).op_ref();
+        let new_op = clif::load(ctx, loc, ptr, result_ty, offset).op_ref();
         rewriter.replace_op(new_op);
         true
     }
@@ -79,7 +79,7 @@ impl RewritePattern for MemStorePattern {
             return false;
         };
         // clif.store operand order: (value, addr)
-        let new_op = arena_clif::store(ctx, loc, value, ptr, offset).op_ref();
+        let new_op = clif::store(ctx, loc, value, ptr, offset).op_ref();
         rewriter.replace_op(new_op);
         true
     }

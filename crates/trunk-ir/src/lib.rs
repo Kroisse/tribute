@@ -56,9 +56,6 @@ pub mod parser;
 // Re-export proc macro for dialect definitions
 pub use trunk_ir_macros::dialect;
 
-/// Deprecated alias for [`dialect`].
-pub use trunk_ir_macros::arena_dialect;
-
 // Re-export proc macro for canonicalize-pass registration. Emits an
 // `inventory::submit!` block alongside the user's function.
 pub use trunk_ir_macros::canonicalize_fold;

@@ -28,9 +28,9 @@ use crate::adt_layout::{
 };
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -99,7 +99,7 @@ impl RewritePattern for StructGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) else {
+        let Ok(struct_get) = adt::StructGet::from_op(ctx, op) else {
             return false;
         };
 
@@ -130,7 +130,7 @@ impl RewritePattern for StructGetPattern {
         };
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
-        let load_op = arena_clif::load(ctx, loc, ref_val, result_ty, offset);
+        let load_op = clif::load(ctx, loc, ref_val, result_ty, offset);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -145,7 +145,7 @@ impl RewritePattern for StructSetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(struct_set) = arena_adt::StructSet::from_op(ctx, op) else {
+        let Ok(struct_set) = adt::StructSet::from_op(ctx, op) else {
             return false;
         };
 
@@ -168,7 +168,7 @@ impl RewritePattern for StructSetPattern {
         let ref_val = struct_set.r#ref(ctx);
         let value_val = struct_set.value(ctx);
 
-        let store_op = arena_clif::store(ctx, loc, value_val, ref_val, offset);
+        let store_op = clif::store(ctx, loc, value_val, ref_val, offset);
         rewriter.replace_op(store_op.op_ref());
         true
     }
@@ -183,7 +183,7 @@ impl RewritePattern for VariantIsPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = arena_adt::VariantIs::from_op(ctx, op) else {
+        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
             return false;
         };
 
@@ -207,12 +207,12 @@ impl RewritePattern for VariantIsPattern {
         let ref_val = variant_is.r#ref(ctx);
 
         // Load tag from payload_ptr + 0
-        let tag_load = arena_clif::load(ctx, loc, ref_val, i32_ty, 0);
+        let tag_load = clif::load(ctx, loc, ref_val, i32_ty, 0);
         let tag_val = tag_load.result(ctx);
 
         // Compare with expected discriminant
-        let expected = arena_clif::iconst(ctx, loc, i32_ty, variant_layout.tag_value as i64);
-        let cmp_op = arena_clif::icmp(
+        let expected = clif::iconst(ctx, loc, i32_ty, variant_layout.tag_value as i64);
+        let cmp_op = clif::icmp(
             ctx,
             loc,
             tag_val,
@@ -237,7 +237,7 @@ impl RewritePattern for VariantCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_cast) = arena_adt::VariantCast::from_op(ctx, op) else {
+        let Ok(variant_cast) = adt::VariantCast::from_op(ctx, op) else {
             return false;
         };
         let ref_val = variant_cast.r#ref(ctx);
@@ -255,7 +255,7 @@ impl RewritePattern for VariantGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_get) = arena_adt::VariantGet::from_op(ctx, op) else {
+        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
             return false;
         };
 
@@ -310,7 +310,7 @@ impl RewritePattern for VariantGetPattern {
             return false;
         };
 
-        let load_op = arena_clif::load(ctx, loc, ref_val, load_ty, offset);
+        let load_op = clif::load(ctx, loc, ref_val, load_ty, offset);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -325,12 +325,12 @@ impl RewritePattern for RefNullPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_adt::RefNull::from_op(ctx, op).is_err() {
+        if adt::RefNull::from_op(ctx, op).is_err() {
             return false;
         }
         let loc = ctx.op(op).location;
-        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
-        let iconst_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let iconst_op = clif::iconst(ctx, loc, ptr_ty, 0);
         rewriter.replace_op(iconst_op.op_ref());
         true
     }
@@ -345,7 +345,7 @@ impl RewritePattern for RefCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_cast) = arena_adt::RefCast::from_op(ctx, op) else {
+        let Ok(ref_cast) = adt::RefCast::from_op(ctx, op) else {
             return false;
         };
         let ref_val = ref_cast.r#ref(ctx);
@@ -363,17 +363,17 @@ impl RewritePattern for RefIsNullPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(ref_is_null) = arena_adt::RefIsNull::from_op(ctx, op) else {
+        let Ok(ref_is_null) = adt::RefIsNull::from_op(ctx, op) else {
             return false;
         };
 
         let loc = ctx.op(op).location;
-        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+        let ptr_ty = core::ptr(ctx).as_type_ref();
         let i1_ty = intern_i1_type(ctx);
         let ref_val = ref_is_null.r#ref(ctx);
 
-        let null_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
-        let icmp_op = arena_clif::icmp(
+        let null_op = clif::iconst(ctx, loc, ptr_ty, 0);
+        let icmp_op = clif::icmp(
             ctx,
             loc,
             ref_val,

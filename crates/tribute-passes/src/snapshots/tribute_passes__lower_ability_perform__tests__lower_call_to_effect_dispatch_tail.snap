@@ -1,0 +1,12 @@
+---
+source: crates/tribute-passes/src/lower_ability_perform.rs
+expression: ir_text
+---
+core.module @test {
+  func.func @test_fn(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})) -> tribute_rt.anyref {
+      %1 = arith.const {value = 1} : tribute_rt.anyref
+      %2 = core.unrealized_conversion_cast %1 : tribute_rt.anyref
+      %3 = effect.dispatch_tail %0, %2 {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : tribute_rt.anyref
+      func.return %3
+  }
+}

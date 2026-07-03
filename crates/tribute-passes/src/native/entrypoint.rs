@@ -7,8 +7,8 @@
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::Module;
@@ -46,7 +46,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     let asan_init_sym = Symbol::new("__asan_init");
 
     for &op in &ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if name == main_sym {
                 found_main = true;
@@ -87,7 +87,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let nil_ty = arena_core::nil(ctx).as_type_ref();
+    let nil_ty = core::nil(ctx).as_type_ref();
 
     let tribute_main_return_ty = main_return_ty.unwrap_or_else(|| {
         panic!(
@@ -98,7 +98,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
 
     // Step 1: Rename main -> _tribute_main (in-place attribute mutation)
     for &op in &ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op)
+        if let Ok(func_op) = func::Func::from_op(ctx, op)
             && func_op.sym_name(ctx) == main_sym
         {
             ctx.op_mut(op)
@@ -199,7 +199,7 @@ fn build_entrypoint(
     sanitize: bool,
 ) -> OpRef {
     // Build func type: () -> i32
-    let func_ty = arena_core::func(ctx, i32_ty, []).as_type_ref();
+    let func_ty = core::func(ctx, i32_ty, []).as_type_ref();
 
     // Create entry block
     let entry_block = ctx.create_block(BlockData {
@@ -211,16 +211,16 @@ fn build_entrypoint(
 
     // Initialize ASan before anything else
     if sanitize {
-        let asan_call = arena_func::call(ctx, loc, [], nil_ty, Symbol::new("__asan_init"));
+        let asan_call = func::call(ctx, loc, [], nil_ty, Symbol::new("__asan_init"));
         ctx.push_op(entry_block, asan_call.op_ref());
     }
 
     // Initialize runtime TLS before any ability use
-    let init_call = arena_func::call(ctx, loc, [], nil_ty, Symbol::new("__tribute_init"));
+    let init_call = func::call(ctx, loc, [], nil_ty, Symbol::new("__tribute_init"));
     ctx.push_op(entry_block, init_call.op_ref());
 
     // Call _tribute_main() — result is ignored
-    let main_call = arena_func::call(
+    let main_call = func::call(
         ctx,
         loc,
         [],
@@ -233,7 +233,7 @@ fn build_entrypoint(
     let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
     ctx.push_op(entry_block, zero.op_ref());
 
-    let ret = arena_func::r#return(ctx, loc, [zero.result(ctx)]);
+    let ret = func::r#return(ctx, loc, [zero.result(ctx)]);
     ctx.push_op(entry_block, ret.op_ref());
 
     // Create body region
@@ -247,7 +247,7 @@ fn build_entrypoint(
     // NOTE: No "abi" attribute here — `abi` marks extern (imported) functions.
     // The Cranelift backend treats functions named "main" as Export linkage,
     // but functions with `abi` attribute are treated as Import and skipped.
-    let main_func = arena_func::func(ctx, loc, Symbol::new("main"), func_ty, body);
+    let main_func = func::func(ctx, loc, Symbol::new("main"), func_ty, body);
 
     main_func.op_ref()
 }
@@ -258,31 +258,31 @@ mod tests {
     use trunk_ir::Span;
     use trunk_ir::context::{BlockData, IrContext, RegionData};
     use trunk_ir::dialect::arith;
-    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::dialect::func;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-    fn arena_test_ctx() -> (IrContext, Location) {
+    fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("file:///test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
-    fn arena_i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+    fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
         ctx.types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn arena_nil_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
-        arena_core::nil(ctx).as_type_ref()
+    fn nil_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+        core::nil(ctx).as_type_ref()
     }
 
     /// Build an arena module with a single main function returning i32.
-    fn make_arena_main_module(ctx: &mut IrContext, loc: Location) -> Module {
-        let i32_ty = arena_i32_type(ctx);
-        let func_ty = arena_core::func(ctx, i32_ty, []).as_type_ref();
+    fn make_main_module(ctx: &mut IrContext, loc: Location) -> Module {
+        let i32_ty = i32_type(ctx);
+        let func_ty = core::func(ctx, i32_ty, []).as_type_ref();
 
         // Build main function: const 42, return
         let entry = ctx.create_block(BlockData {
@@ -293,7 +293,7 @@ mod tests {
         });
         let c42 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry, c42.op_ref());
-        let ret = arena_func::r#return(ctx, loc, [c42.result(ctx)]);
+        let ret = func::r#return(ctx, loc, [c42.result(ctx)]);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -301,7 +301,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main_fn = arena_func::func(ctx, loc, Symbol::new("main"), func_ty, body);
+        let main_fn = func::func(ctx, loc, Symbol::new("main"), func_ty, body);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -332,16 +332,16 @@ mod tests {
     }
 
     #[test]
-    fn arena_entrypoint_renames_main() {
-        let (mut ctx, loc) = arena_test_ctx();
-        let module = make_arena_main_module(&mut ctx, loc);
+    fn entrypoint_renames_main() {
+        let (mut ctx, loc) = test_ctx();
+        let module = make_main_module(&mut ctx, loc);
 
         generate_native_entrypoint(&mut ctx, module, false);
 
         let ops = module.ops(&ctx);
         let mut names: Vec<String> = Vec::new();
         for &op in &ops {
-            if let Ok(f) = arena_func::Func::from_op(&ctx, op) {
+            if let Ok(f) = func::Func::from_op(&ctx, op) {
                 names.push(f.sym_name(&ctx).to_string());
             }
         }
@@ -370,10 +370,10 @@ mod tests {
     }
 
     #[test]
-    fn arena_entrypoint_no_main() {
-        let (mut ctx, loc) = arena_test_ctx();
-        let i32_ty = arena_i32_type(&mut ctx);
-        let func_ty = arena_core::func(&mut ctx, i32_ty, []).as_type_ref();
+    fn entrypoint_no_main() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let func_ty = core::func(&mut ctx, i32_ty, []).as_type_ref();
 
         // Build helper function (not main)
         let entry = ctx.create_block(BlockData {
@@ -385,7 +385,7 @@ mod tests {
         let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let ret = arena_func::r#return(&mut ctx, loc, [c1_val]);
+        let ret = func::r#return(&mut ctx, loc, [c1_val]);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -393,7 +393,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let helper_fn = arena_func::func(&mut ctx, loc, Symbol::new("helper"), func_ty, body);
+        let helper_fn = func::func(&mut ctx, loc, Symbol::new("helper"), func_ty, body);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -426,17 +426,17 @@ mod tests {
         // Should be unchanged — only helper
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 1);
-        let f = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        let f = func::Func::from_op(&ctx, ops[0]).unwrap();
         assert_eq!(f.sym_name(&ctx).to_string(), "helper");
     }
 
     #[test]
-    fn arena_entrypoint_wrapper_returns_i32() {
-        let (mut ctx, loc) = arena_test_ctx();
+    fn entrypoint_wrapper_returns_i32() {
+        let (mut ctx, loc) = test_ctx();
 
         // Build module with main returning nil
-        let nil_ty = arena_nil_type(&mut ctx);
-        let func_ty = arena_core::func(&mut ctx, nil_ty, []).as_type_ref();
+        let nil_ty = nil_type(&mut ctx);
+        let func_ty = core::func(&mut ctx, nil_ty, []).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -444,7 +444,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = arena_func::r#return(&mut ctx, loc, []);
+        let ret = func::r#return(&mut ctx, loc, []);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -452,7 +452,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main_fn = arena_func::func(&mut ctx, loc, Symbol::new("main"), func_ty, body);
+        let main_fn = func::func(&mut ctx, loc, Symbol::new("main"), func_ty, body);
 
         let module_block = ctx.create_block(BlockData {
             location: loc,
@@ -481,11 +481,11 @@ mod tests {
 
         generate_native_entrypoint(&mut ctx, module, false);
 
-        let i32_ty = arena_i32_type(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
 
         // Find the new main wrapper and check its return type
         for &op in &module.ops(&ctx) {
-            if let Ok(f) = arena_func::Func::from_op(&ctx, op)
+            if let Ok(f) = func::Func::from_op(&ctx, op)
                 && f.sym_name(&ctx) == Symbol::new("main")
             {
                 let func_ty_ref = f.r#type(&ctx);
@@ -502,16 +502,16 @@ mod tests {
     }
 
     #[test]
-    fn arena_entrypoint_with_sanitize() {
-        let (mut ctx, loc) = arena_test_ctx();
-        let module = make_arena_main_module(&mut ctx, loc);
+    fn entrypoint_with_sanitize() {
+        let (mut ctx, loc) = test_ctx();
+        let module = make_main_module(&mut ctx, loc);
 
         generate_native_entrypoint(&mut ctx, module, true);
 
         let ops = module.ops(&ctx);
         let mut names: Vec<String> = Vec::new();
         for &op in &ops {
-            if let Ok(f) = arena_func::Func::from_op(&ctx, op) {
+            if let Ok(f) = func::Func::from_op(&ctx, op) {
                 names.push(f.sym_name(&ctx).to_string());
             }
         }

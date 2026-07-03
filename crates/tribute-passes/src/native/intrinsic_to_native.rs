@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
@@ -40,7 +40,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
     let func_intrinsic_names = Rc::clone(&intrinsic_names);
     let target = ConversionTarget::new()
         .dynamic_op("func", "call", move |ctx, op| {
-            if let Ok(call_op) = arena_func::Call::from_op(ctx, op)
+            if let Ok(call_op) = func::Call::from_op(ctx, op)
                 && call_intrinsic_names.contains(&call_op.callee(ctx))
             {
                 return LegalityDecision::Illegal;
@@ -49,7 +49,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
             LegalityDecision::Defer
         })
         .dynamic_op("func", "func", move |ctx, op| {
-            if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            if let Ok(func_op) = func::Func::from_op(ctx, op) {
                 let attrs = &ctx.op(op).attributes;
                 let is_intrinsic = matches!(
                     attrs.get(&Symbol::new("abi")),
@@ -90,7 +90,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
         if call_op.callee(ctx) != Symbol::from_dynamic("__bytes_get_or_panic") {
@@ -152,7 +152,7 @@ impl RewritePattern for BytesIntrinsicFuncDeclPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func_op) = func::Func::from_op(ctx, op) else {
             return false;
         };
 

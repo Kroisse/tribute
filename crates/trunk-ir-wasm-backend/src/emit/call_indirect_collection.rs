@@ -9,7 +9,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
@@ -115,7 +115,7 @@ pub(crate) fn collect_call_indirect_types(
                         debug!("collect_call_indirect_types: wasm.func r#type is not core.func");
                         None
                     }
-                } else if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                } else if let Ok(func) = func::Func::from_op(ctx, op) {
                     // Also check for func.func (in case IR isn't fully lowered)
                     let func_type = func.r#type(ctx);
                     helpers::func_type_parts(ctx, func_type).map(|(_, ret_ty)| ret_ty)

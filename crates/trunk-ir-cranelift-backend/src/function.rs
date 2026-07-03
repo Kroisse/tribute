@@ -11,7 +11,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
@@ -235,7 +235,7 @@ impl<'a> FunctionTranslator<'a> {
         let ctx = self.ctx;
 
         // === Constants ===
-        if let Ok(c) = arena_clif::Iconst::from_op(ctx, op) {
+        if let Ok(c) = clif::Iconst::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             // Nil constants have no runtime representation — skip emission.
             let td = ctx.types.get(result_ty);
@@ -248,13 +248,13 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(result, val);
             return Ok(());
         }
-        if let Ok(c) = arena_clif::F32const::from_op(ctx, op) {
+        if let Ok(c) = clif::F32const::from_op(ctx, op) {
             let val = self.builder.ins().f32const(c.value(ctx));
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
             return Ok(());
         }
-        if let Ok(c) = arena_clif::F64const::from_op(ctx, op) {
+        if let Ok(c) = clif::F64const::from_op(ctx, op) {
             let val = self.builder.ins().f64const(c.value(ctx));
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
@@ -262,63 +262,63 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Integer Arithmetic ===
-        if arena_clif::Iadd::from_op(ctx, op).is_ok() {
+        if clif::Iadd::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().iadd(a, c));
         }
-        if arena_clif::Isub::from_op(ctx, op).is_ok() {
+        if clif::Isub::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().isub(a, c));
         }
-        if arena_clif::Imul::from_op(ctx, op).is_ok() {
+        if clif::Imul::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().imul(a, c));
         }
-        if arena_clif::Sdiv::from_op(ctx, op).is_ok() {
+        if clif::Sdiv::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().sdiv(a, c));
         }
-        if arena_clif::Udiv::from_op(ctx, op).is_ok() {
+        if clif::Udiv::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().udiv(a, c));
         }
-        if arena_clif::Srem::from_op(ctx, op).is_ok() {
+        if clif::Srem::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().srem(a, c));
         }
-        if arena_clif::Urem::from_op(ctx, op).is_ok() {
+        if clif::Urem::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().urem(a, c));
         }
-        if arena_clif::Ineg::from_op(ctx, op).is_ok() {
+        if clif::Ineg::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_unary(ops[0], op, |b, v| b.ins().ineg(v));
         }
 
         // === Floating Point Arithmetic ===
-        if arena_clif::Fadd::from_op(ctx, op).is_ok() {
+        if clif::Fadd::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().fadd(a, c));
         }
-        if arena_clif::Fsub::from_op(ctx, op).is_ok() {
+        if clif::Fsub::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().fsub(a, c));
         }
-        if arena_clif::Fmul::from_op(ctx, op).is_ok() {
+        if clif::Fmul::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().fmul(a, c));
         }
-        if arena_clif::Fdiv::from_op(ctx, op).is_ok() {
+        if clif::Fdiv::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().fdiv(a, c));
         }
-        if arena_clif::Fneg::from_op(ctx, op).is_ok() {
+        if clif::Fneg::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_unary(ops[0], op, |b, v| b.ins().fneg(v));
         }
 
         // === Call ===
-        if let Ok(call) = arena_clif::Call::from_op(ctx, op) {
+        if let Ok(call) = clif::Call::from_op(ctx, op) {
             let callee_sym = call.callee(ctx);
             let func_ref = self
                 .func_refs
@@ -342,7 +342,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Return ===
-        if arena_clif::Return::from_op(ctx, op).is_ok() {
+        if clif::Return::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let mut vals = Vec::new();
             for &v in operands {
@@ -359,7 +359,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Control Flow ===
-        if arena_clif::Jump::from_op(ctx, op).is_ok() {
+        if clif::Jump::from_op(ctx, op).is_ok() {
             let op_data = ctx.op(op);
             let ir_dest = op_data.successors[0];
             let cl_dest = self.lookup_block(ir_dest)?;
@@ -379,7 +379,7 @@ impl<'a> FunctionTranslator<'a> {
             self.builder.ins().jump(cl_dest, &args);
             return Ok(());
         }
-        if arena_clif::Brif::from_op(ctx, op).is_ok() {
+        if clif::Brif::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let cond = self.lookup(operands[0])?;
             let op_data = ctx.op(op);
@@ -390,7 +390,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Comparisons ===
-        if let Ok(o) = arena_clif::Icmp::from_op(ctx, op) {
+        if let Ok(o) = clif::Icmp::from_op(ctx, op) {
             let cond = parse_int_cc(o.cond(ctx))?;
             let operands = ctx.op_operands(op);
             let lhs = self.lookup(operands[0])?;
@@ -400,7 +400,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(result, val);
             return Ok(());
         }
-        if let Ok(o) = arena_clif::Fcmp::from_op(ctx, op) {
+        if let Ok(o) = clif::Fcmp::from_op(ctx, op) {
             let cond = parse_float_cc(o.cond(ctx))?;
             let operands = ctx.op_operands(op);
             let lhs = self.lookup(operands[0])?;
@@ -412,7 +412,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Memory ===
-        if let Ok(load) = arena_clif::Load::from_op(ctx, op) {
+        if let Ok(load) = clif::Load::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             let td = ctx.types.get(result_ty);
             if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
@@ -429,7 +429,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(result, val);
             return Ok(());
         }
-        if let Ok(store) = arena_clif::Store::from_op(ctx, op) {
+        if let Ok(store) = clif::Store::from_op(ctx, op) {
             let operands = ctx.op_operands(op);
             if self.is_nil_typed(operands[0]) {
                 return Ok(());
@@ -442,7 +442,7 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
 
-        if let Ok(armw) = arena_clif::AtomicRmw::from_op(ctx, op) {
+        if let Ok(armw) = clif::AtomicRmw::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let operands = ctx.op_operands(op);
@@ -463,7 +463,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Symbol Address ===
-        if let Ok(sym_addr) = arena_clif::SymbolAddr::from_op(ctx, op) {
+        if let Ok(sym_addr) = clif::SymbolAddr::from_op(ctx, op) {
             let sym = sym_addr.sym(ctx);
             // Check function refs first, then data refs
             let val = if let Some(&func_ref) = self.func_refs.get(&sym) {
@@ -482,13 +482,13 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Trap ===
-        if arena_clif::Trap::from_op(ctx, op).is_ok() {
+        if clif::Trap::from_op(ctx, op).is_ok() {
             self.builder.ins().trap(TrapCode::unwrap_user(1));
             return Ok(());
         }
 
         // === Return Call (tail call) ===
-        if let Ok(rc) = arena_clif::ReturnCall::from_op(ctx, op) {
+        if let Ok(rc) = clif::ReturnCall::from_op(ctx, op) {
             let callee_sym = rc.callee(ctx);
             let func_ref = self
                 .func_refs
@@ -507,7 +507,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Return Call Indirect (indirect tail call) ===
-        if let Ok(rci) = arena_clif::ReturnCallIndirect::from_op(ctx, op) {
+        if let Ok(rci) = clif::ReturnCallIndirect::from_op(ctx, op) {
             let operands = ctx.op_operands(op);
             let callee = self.lookup(operands[0])?;
             let args: Vec<cl_ir::Value> = operands[1..]
@@ -526,7 +526,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Indirect Call ===
-        if let Ok(call_ind) = arena_clif::CallIndirect::from_op(ctx, op) {
+        if let Ok(call_ind) = clif::CallIndirect::from_op(ctx, op) {
             let operands = ctx.op_operands(op);
             let callee = self.lookup(operands[0])?;
             let args: Vec<cl_ir::Value> = operands[1..]
@@ -548,7 +548,7 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Type Conversions ===
-        if arena_clif::Ireduce::from_op(ctx, op).is_ok() {
+        if clif::Ireduce::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -557,7 +557,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::Uextend::from_op(ctx, op).is_ok() {
+        if clif::Uextend::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -566,7 +566,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::Sextend::from_op(ctx, op).is_ok() {
+        if clif::Sextend::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -575,7 +575,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::Fpromote::from_op(ctx, op).is_ok() {
+        if clif::Fpromote::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -584,7 +584,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::Fdemote::from_op(ctx, op).is_ok() {
+        if clif::Fdemote::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -593,7 +593,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::FcvtToSint::from_op(ctx, op).is_ok() {
+        if clif::FcvtToSint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -602,7 +602,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::FcvtFromSint::from_op(ctx, op).is_ok() {
+        if clif::FcvtFromSint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -611,7 +611,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::FcvtToUint::from_op(ctx, op).is_ok() {
+        if clif::FcvtToUint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -620,7 +620,7 @@ impl<'a> FunctionTranslator<'a> {
             self.values.insert(ctx.op_result(op, 0), cl_val);
             return Ok(());
         }
-        if arena_clif::FcvtFromUint::from_op(ctx, op).is_ok() {
+        if clif::FcvtFromUint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -631,27 +631,27 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         // === Bitwise Operations ===
-        if arena_clif::Band::from_op(ctx, op).is_ok() {
+        if clif::Band::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().band(a, c));
         }
-        if arena_clif::Bor::from_op(ctx, op).is_ok() {
+        if clif::Bor::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().bor(a, c));
         }
-        if arena_clif::Bxor::from_op(ctx, op).is_ok() {
+        if clif::Bxor::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().bxor(a, c));
         }
-        if arena_clif::Ishl::from_op(ctx, op).is_ok() {
+        if clif::Ishl::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().ishl(a, c));
         }
-        if arena_clif::Sshr::from_op(ctx, op).is_ok() {
+        if clif::Sshr::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().sshr(a, c));
         }
-        if arena_clif::Ushr::from_op(ctx, op).is_ok() {
+        if clif::Ushr::from_op(ctx, op).is_ok() {
             let ops = ctx.op_operands(op);
             return self.emit_binary(ops[0], ops[1], op, |b, a, c| b.ins().ushr(a, c));
         }

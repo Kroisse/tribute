@@ -19,10 +19,10 @@
 //! - `tribute_rt.intref` -> `wasm.i31ref`
 //! - `tribute_rt.anyref` -> `wasm.anyref`
 
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -106,7 +106,7 @@ impl RewritePattern for BoxIntPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = arena_tribute_rt::BoxInt::from_op(ctx, op) else {
+        let Ok(box_op) = tribute_rt::BoxInt::from_op(ctx, op) else {
             return false;
         };
 
@@ -139,7 +139,7 @@ impl RewritePattern for UnboxIntPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = arena_tribute_rt::UnboxInt::from_op(ctx, op) else {
+        let Ok(unbox_op) = tribute_rt::UnboxInt::from_op(ctx, op) else {
             return false;
         };
 
@@ -169,7 +169,7 @@ impl RewritePattern for BoxNatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = arena_tribute_rt::BoxNat::from_op(ctx, op) else {
+        let Ok(box_op) = tribute_rt::BoxNat::from_op(ctx, op) else {
             return false;
         };
 
@@ -199,7 +199,7 @@ impl RewritePattern for UnboxNatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = arena_tribute_rt::UnboxNat::from_op(ctx, op) else {
+        let Ok(unbox_op) = tribute_rt::UnboxNat::from_op(ctx, op) else {
             return false;
         };
 
@@ -230,7 +230,7 @@ impl RewritePattern for BoxFloatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = arena_tribute_rt::BoxFloat::from_op(ctx, op) else {
+        let Ok(box_op) = tribute_rt::BoxFloat::from_op(ctx, op) else {
             return false;
         };
 
@@ -240,7 +240,7 @@ impl RewritePattern for BoxFloatPattern {
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         // adt.struct_new creates BoxedF64 struct with the f64 value
-        let struct_op = arena_adt::struct_new(ctx, location, vec![value], anyref_ty, boxed_f64_ty);
+        let struct_op = adt::struct_new(ctx, location, vec![value], anyref_ty, boxed_f64_ty);
 
         rewriter.replace_op(struct_op.op_ref());
         true
@@ -263,7 +263,7 @@ impl RewritePattern for UnboxFloatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = arena_tribute_rt::UnboxFloat::from_op(ctx, op) else {
+        let Ok(unbox_op) = tribute_rt::UnboxFloat::from_op(ctx, op) else {
             return false;
         };
 
@@ -274,11 +274,11 @@ impl RewritePattern for UnboxFloatPattern {
         let f64_ty = f64_type(ctx);
 
         // Cast anyref to BoxedF64 struct first
-        let cast_op = arena_adt::ref_cast(ctx, location, value, boxed_f64_ty, boxed_f64_ty);
+        let cast_op = adt::ref_cast(ctx, location, value, boxed_f64_ty, boxed_f64_ty);
         let cast_result = cast_op.result(ctx);
 
         // adt.struct_get extracts field 0 (the f64 value) from BoxedF64
-        let get_op = arena_adt::struct_get(ctx, location, cast_result, f64_ty, boxed_f64_ty, 0);
+        let get_op = adt::struct_get(ctx, location, cast_result, f64_ty, boxed_f64_ty, 0);
 
         rewriter.insert_op(cast_op.op_ref());
         rewriter.replace_op(get_op.op_ref());
@@ -302,7 +302,7 @@ impl RewritePattern for BoxBoolPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = arena_tribute_rt::BoxBool::from_op(ctx, op) else {
+        let Ok(box_op) = tribute_rt::BoxBool::from_op(ctx, op) else {
             return false;
         };
 
@@ -332,7 +332,7 @@ impl RewritePattern for UnboxBoolPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = arena_tribute_rt::UnboxBool::from_op(ctx, op) else {
+        let Ok(unbox_op) = tribute_rt::UnboxBool::from_op(ctx, op) else {
             return false;
         };
 

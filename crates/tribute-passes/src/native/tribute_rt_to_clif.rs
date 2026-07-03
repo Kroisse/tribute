@@ -21,7 +21,7 @@ use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
-use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::rewriter::PatternRewriter;
@@ -113,7 +113,7 @@ pub fn lower(
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
     // Pre-intern types for patterns
-    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let ptr_ty = core::ptr(ctx).as_type_ref();
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let i64_ty = ctx
         .types

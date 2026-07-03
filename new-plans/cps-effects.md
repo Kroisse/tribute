@@ -18,7 +18,16 @@ lowering은 현재 경로가 아니다.
   { ability_ref = @Console, op_name = @print }
 ```
 
-`lower_ability_perform`는 이를 다음 형태로 낮춘다:
+Shared lowering converts it to a target-independent effect ABI operation:
+
+```text
+%payload = cast %arg to anyref
+%result = effect.dispatch_tail %ev, %payload
+  { ability_ref = @Console, op_name = @print }
+```
+
+Native lowering then lowers that ABI operation to the current evidence lookup
+and indirect-call representation:
 
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @Console }
@@ -42,8 +51,17 @@ lowering은 현재 경로가 아니다.
   { ability_ref = @State, op_name = @get }
 ```
 
-`lower_ability_perform`는 evidence에서 `handler_dispatch` closure를 찾고,
-그 closure로 tail-call한다:
+Shared lowering converts it to a target-independent effect ABI operation:
+
+```text
+%payload = cast %arg to anyref
+%cont = cast %continuation to anyref
+%result = effect.dispatch_cps %ev, %cont, %payload
+  { ability_ref = @State, op_name = @get }
+```
+
+Native lowering then finds the `handler_dispatch` closure in evidence and
+tail-calls it:
 
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @State }
@@ -100,6 +118,17 @@ continuation에 잘못 포함되어서는 안 된다.
 
 `resolve_evidence`는 handler boundary에서 새 marker를 만들어 evidence를
 확장한다.
+
+Shared evidence resolution represents handler installation with the same effect
+ABI instead of constructing the concrete Marker layout directly:
+
+```text
+%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %handler_dispatch
+  { ability_ref = @State }
+```
+
+Backends lower `effect.extend` to their own evidence representation. The native
+backend maps it to the current `__tribute_evidence_extend` ABI.
 
 ```text
 struct Marker {
@@ -167,21 +196,50 @@ ast_to_ir
 → convert_tail_resumptive
 → resolve_evidence
 → lower_handle_dispatch
+→ effect ABI verification
 → backend-specific lowering
 ```
 
 `ast_to_ir` 단계에서 effectful function과 closure는 evidence parameter와
-CPS calling convention을 반영한 IR로 생성된다. 이후 backend는 이미 lowered된
-`func.call_indirect`, evidence runtime calls, closure representation을 각 타겟에
-맞게 낮춘다.
+CPS calling convention을 반영한 IR로 생성된다. Shared lowering removes
+high-level dispatch operations and emits `effect.*` ABI operations. Backends
+then lower `effect.*` into evidence runtime calls, closure decomposition, and
+target-specific indirect calls.
+
+## Effect ABI Boundary
+
+The `effect` dialect is the target-independent boundary between language
+semantics and concrete runtime layout.
+
+Initial operations:
+
+- `effect.extend(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
+  { ability_ref } -> evidence`
+- `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
+- `effect.dispatch_cps(evidence, continuation, payload)
+  { ability_ref, op_name } -> result`
+
+Rules:
+
+- `ability.perform` and `ability.call` are illegal after the shared
+  ability-dispatch lowering boundary.
+- `effect.*` operations may remain after shared lowering and before
+  backend-specific effect ABI lowering.
+- Backend-ready conversion targets must reject residual `effect.*` operations.
+- Shared passes must not inspect Marker field numbers, handler-table storage
+  layout, closure field positions, or backend function-pointer representation.
+- Payload values are already packed into a single value by the frontend or
+  earlier shared lowering. Missing payloads are represented explicitly by a
+  target-independent null/empty value before reaching `effect.*`.
 
 ## Backend Implications
 
 ### Native
 
 Native target은 현재 주 개발 경로다. Evidence runtime은 `tribute-runtime`의
-`__tribute_evidence_*` C ABI 함수로 제공되고, native lowering은 marker field
-접근을 runtime lookup helper로 바꾼다.
+`__tribute_evidence_*` C ABI 함수로 제공되고, native effect ABI lowering은
+`effect.*`를 marker lookup helper, runtime evidence extension, closure
+decomposition, and indirect calls로 변환한다.
 
 ### WasmGC
 

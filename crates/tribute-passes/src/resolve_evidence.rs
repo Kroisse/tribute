@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tribute_ir::dialect::ability::{self, evidence_abi};
+use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
@@ -283,60 +284,6 @@ fn collect_abilities_from_body_region(ctx: &IrContext, body: RegionRef) -> Vec<T
         }
     }
     abilities
-}
-
-/// Compute ability ID from a TypeRef.
-fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
-    let data = ctx.types.get(ability_ref);
-    // ability_ref is core.ability_ref type
-    let ability_name = match data.attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(s)) => *s,
-        _ => panic!(
-            "ICE: compute_ability_id: ability type has no name: {:?}",
-            data
-        ),
-    };
-
-    let mut hash: u32 = ability_name.with_str(|s| {
-        let mut h: u32 = 0;
-        for byte in s.bytes() {
-            h = h.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-        h
-    });
-
-    // Include type parameters
-    for &param in data.params.iter() {
-        hash = hash.wrapping_mul(37);
-        hash = hash.wrapping_add(hash_type(ctx, param));
-    }
-
-    hash
-}
-
-/// Hash a type for ability ID computation.
-fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
-    let data = ctx.types.get(ty);
-    let mut hash: u32 = 0;
-
-    data.dialect.with_str(|s| {
-        for byte in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-    });
-
-    data.name.with_str(|s| {
-        for byte in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-        }
-    });
-
-    for &param in data.params.iter() {
-        hash = hash.wrapping_mul(37);
-        hash = hash.wrapping_add(hash_type(ctx, param));
-    }
-
-    hash
 }
 
 // ============================================================================
@@ -641,10 +588,8 @@ fn transform_shifts_in_block(
             let mut current_ev = ev_value;
 
             if !abilities.is_empty() {
-                let i32_ty = i32_type_ref(ctx);
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
-                let marker_ty = ability::marker_adt_type_ref(ctx);
-                let ptr_ty = core::ptr(ctx).as_type_ref();
+                let i32_ty = i32_type_ref(ctx);
 
                 // All evidence extension ops are inserted before handle_dispatch.
                 // The body closure call (which needs extended evidence) is moved
@@ -661,59 +606,32 @@ fn transform_shifts_in_block(
                 let tag_val = ctx.op_result(tag_call.op_ref(), 0);
                 ctx.insert_op_before(block, op, tag_call.op_ref());
 
-                // Extract handler_fn and tr_dispatch_fn from handle_dispatch operands
+                // Extract handler_fn and tr_dispatch_fn from handle_dispatch operands.
+                // Keep them as semantic closure values; backend-specific lowering
+                // chooses the concrete function/environment representation.
                 let operands = ctx.op_operands(op).to_vec();
 
-                let tr_dispatch_fn_val = {
-                    let tr_fn_val = operands
-                        .get(2)
-                        .expect("handle_dispatch must have operand[2] (tr_dispatch_fn)");
-                    let cast = core::unrealized_conversion_cast(ctx, loc, *tr_fn_val, ptr_ty);
-                    ctx.insert_op_before(block, op, cast.op_ref());
-                    cast.result(ctx)
-                };
-
-                let handler_dispatch_val = {
-                    let handler_val = operands
-                        .get(1)
-                        .expect("handle_dispatch must have operand[1] (handler closure)");
-                    let cast = core::unrealized_conversion_cast(ctx, loc, *handler_val, ptr_ty);
-                    ctx.insert_op_before(block, op, cast.op_ref());
-                    cast.result(ctx)
-                };
+                let tr_dispatch_fn_val = *operands
+                    .get(2)
+                    .expect("handle_dispatch must have operand[2] (tr_dispatch_fn)");
+                let handler_dispatch_val = *operands
+                    .get(1)
+                    .expect("handle_dispatch must have operand[1] (handler closure)");
 
                 // Extend evidence for each ability
                 for &ability_ref in &abilities {
-                    let ability_id = compute_ability_id(ctx, ability_ref);
-                    let ability_id_const =
-                        arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
-                    let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
-                    ctx.insert_op_before(block, op, ability_id_const.op_ref());
-
-                    let marker_struct = adt::struct_new(
+                    let extend_op = effect::extend(
                         ctx,
                         loc,
-                        vec![
-                            ability_id_val,
-                            tag_val,
-                            tr_dispatch_fn_val,
-                            handler_dispatch_val,
-                        ],
-                        marker_ty,
-                        marker_ty,
-                    );
-                    let marker_val = ctx.op_result(marker_struct.op_ref(), 0);
-                    ctx.insert_op_before(block, op, marker_struct.op_ref());
-
-                    let extend_call = func::call(
-                        ctx,
-                        loc,
-                        vec![current_ev, marker_val],
+                        current_ev,
+                        tag_val,
+                        tr_dispatch_fn_val,
+                        handler_dispatch_val,
                         evidence_ty,
-                        Symbol::new(evidence_abi::EXTEND),
+                        ability_ref,
                     );
-                    current_ev = ctx.op_result(extend_call.op_ref(), 0);
-                    ctx.insert_op_before(block, op, extend_call.op_ref());
+                    current_ev = extend_op.result(ctx);
+                    ctx.insert_op_before(block, op, extend_op.op_ref());
                 }
 
                 // Find the body closure call and move it after evidence extension.
@@ -845,14 +763,11 @@ fn transform_shifts_in_block(
         if let Ok(lookup_op) = ability::EvidenceLookup::from_op(ctx, op) {
             let loc = ctx.op(op).location;
             let ability_ref = lookup_op.ability_ref(ctx);
-            let ability_id = compute_ability_id(ctx, ability_ref);
-
             let marker_ty = ability::marker_adt_type_ref(ctx);
             let i32_ty = i32_type_ref(ctx);
 
             // %ability_id_const = arith.const ability_id
-            let ability_id_const =
-                arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
+            let ability_id_const = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
             let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
@@ -988,8 +903,8 @@ mod tests {
                 .build(),
         );
 
-        let state_id = compute_ability_id(&ctx, state_ref);
-        let console_id = compute_ability_id(&ctx, console_ref);
+        let state_id = ability::compute_ability_id(&ctx, state_ref);
+        let console_id = ability::compute_ability_id(&ctx, console_ref);
 
         // Same ability should have same ID (interning gives same TypeRef)
         let state_ref2 = ctx.types.intern(
@@ -997,7 +912,7 @@ mod tests {
                 .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         );
-        let state_id2 = compute_ability_id(&ctx, state_ref2);
+        let state_id2 = ability::compute_ability_id(&ctx, state_ref2);
         assert_eq!(state_id, state_id2);
 
         // Different abilities should have different IDs
@@ -1025,8 +940,8 @@ mod tests {
                 .build(),
         );
 
-        let id_with_params = compute_ability_id(&ctx, state_i32);
-        let id_no_params = compute_ability_id(&ctx, state_no_params);
+        let id_with_params = ability::compute_ability_id(&ctx, state_i32);
+        let id_no_params = ability::compute_ability_id(&ctx, state_no_params);
 
         // Same ability name but different type params should produce different IDs
         assert_ne!(id_with_params, id_no_params);
