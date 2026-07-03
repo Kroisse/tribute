@@ -46,6 +46,11 @@ matching operation. Module passes remain responsible for symbol-table changes,
 function creation or deletion, cross-function call rewrites, global DCE, and
 pipeline-boundary conversion checks.
 
+`PatternApplicator` supports `RewriteScope`-scoped application for these
+anchored passes. For example, `CanonicalizeFunc` runs generic canonicalization
+under one `func.func` scope, while module-wide cleanup uses the same
+`canonicalize` entry point with a module scope.
+
 ## Conversion Modes
 
 Use partial conversion when a pass only promises to remove a declared illegal

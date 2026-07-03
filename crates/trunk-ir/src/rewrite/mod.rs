@@ -11,7 +11,7 @@ pub mod rewriter;
 pub mod signature_conversion;
 pub mod type_converter;
 
-pub use applicator::{ApplyResult, PatternApplicator};
+pub use applicator::{ApplyResult, PatternApplicator, RewriteScope};
 pub use conversion_target::{
     ConversionError, ConversionMode, ConversionTarget, IllegalOp, LegalityCheck, LegalityDecision,
 };
