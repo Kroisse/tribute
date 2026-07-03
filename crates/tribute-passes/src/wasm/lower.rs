@@ -12,7 +12,10 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
+use trunk_ir::rewrite::{
+    ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
+    WasmFuncSignatureConversionPattern,
+};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
@@ -21,8 +24,18 @@ use super::intrinsic_to_wasm::IntrinsicAnalysis;
 use super::type_converter::{self, wasm_type_converter};
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE};
 
+const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
+
+/// Conversion target for IR after Wasm-specific lowering has removed shared
+/// ability/effect ABI operations.
+pub fn wasm_backend_ready_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .illegal_dialect("ability")
+        .illegal_dialect("effect")
+}
+
 /// Run the full WASM lowering pipeline on arena IR.
-pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) {
+pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();
@@ -117,6 +130,23 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) {
         let _span = tracing::info_span!("assign_gc_type_indices").entered();
         super::wasm_gc_type_assign::assign_gc_type_indices(ctx, module);
     }
+
+    verify_wasm_backend_ready(ctx, module)
+}
+
+/// Verify the partial Wasm backend boundary.
+///
+/// Unknown operations are still allowed because unresolved casts and backend
+/// infrastructure may remain for later pipeline stages, but residual
+/// `ability.*` and `effect.*` operations are compiler bugs at this point.
+pub fn verify_wasm_backend_ready(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), ConversionError> {
+    PatternApplicator::new(TypeConverter::new())
+        .with_target(wasm_backend_ready_target())
+        .apply_partial_conversion(ctx, module, WASM_BACKEND_READY_BOUNDARY)?;
+    Ok(())
 }
 
 // =============================================================================
@@ -1114,5 +1144,52 @@ fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
         *name == Symbol::new("_Step")
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::rewrite::LegalityCheck;
+
+    #[test]
+    fn wasm_backend_ready_rejects_residual_effect_ops() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    func.return %result
+  }
+}"#,
+        );
+
+        let error = verify_wasm_backend_ready(&mut ctx, module)
+            .expect_err("residual effect operation should fail wasm backend boundary");
+
+        assert_eq!(error.boundary(), WASM_BACKEND_READY_BOUNDARY);
+        assert_eq!(error.operations().len(), 1);
+        assert_eq!(error.operations()[0].dialect, Symbol::new("effect"));
+        assert_eq!(error.operations()[0].name, Symbol::new("dispatch_tail"));
+        assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn wasm_backend_ready_allows_unknown_later_stage_ops() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run() -> core.i32 {
+    %value = arith.const {value = 1} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+
+        verify_wasm_backend_ready(&mut ctx, module)
+            .expect("partial wasm backend boundary should allow unknown later-stage ops");
     }
 }

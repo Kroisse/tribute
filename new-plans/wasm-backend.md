@@ -180,8 +180,9 @@ wasm dialect는 WasmGC 인스턴스 연산만 포함:
 
 - Remove or repurpose the legacy `Step`, `Continuation`, and `ResumeWrapper`
   builtin types once the old trampoline path is fully retired.
-- Add a backend-ready conversion target for Wasm that rejects residual
-  `effect.*` and non-wasm dialect operations at the emission boundary.
+- Promote the current Wasm backend-ready partial boundary, which rejects
+  residual `ability.*` and `effect.*`, into a full emission boundary once
+  remaining later-stage infrastructure such as unresolved casts is cleaned up.
 - Keep pass-level textual IR fixtures for `effect.extend`,
   `effect.dispatch_tail`, and `effect.dispatch_cps` so the Wasm and native
   lowering paths cannot drift silently.

@@ -121,8 +121,11 @@ assign_gc_type_indices
 ```
 
 Backend-ready Wasm lowering must eliminate residual `effect.*` operations.
-`evidence_to_wasm` generates the evidence lookup/extend helpers and lowers
-effect dispatch to closure unpacking plus `wasm.call_indirect`.
+The current `wasm-backend-ready` partial conversion boundary rejects residual
+`ability.*` and `effect.*` operations while still allowing later-stage
+infrastructure such as unresolved casts. `evidence_to_wasm` generates the
+evidence lookup/extend helpers and lowers effect dispatch to closure unpacking
+plus `wasm.call_indirect`.
 
 The lower-level `trunk-ir-wasm-backend` pass group handles target-independent
 dialect conversion:
