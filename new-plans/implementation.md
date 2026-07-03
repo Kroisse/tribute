@@ -101,8 +101,9 @@ struct Marker {
 **설계 결정:**
 
 - `ability_id`와 `prompt_tag`는 `i32`로 통일한다.
-- dispatch field는 target별 closure/function reference 표현으로 lowering한다
-  (native: pointer, WasmGC: closure table index + env representation).
+- dispatch field는 target별 closure/function reference 표현으로 lowering한다.
+  Native marker는 closure pointer를 저장하고, WasmGC marker는
+  `(table_idx: i32, env: anyref)` closure struct reference를 `anyref`로 저장한다.
 - 별도의 opaque 타입(`ability.evidence_ptr`, `ability.marker`) 대신 struct/array 사용
 - 기존 `adt.array_get`, `adt.struct_get` 연산 재사용 가능
 - Markers는 ability_id 기준 정렬 → binary search 가능 O(log n)
@@ -132,9 +133,11 @@ let handler = adt.struct_get(marker, MarkerField::HandlerDispatch)
 func.call_indirect(handler, ...)
 ```
 
-Native lowering에서는 `evidence_lookup`과 marker field 접근을
-`__tribute_evidence_lookup*` C ABI 호출로 대체한다. Wasm lowering은 같은
-Marker layout으로 binary search helper를 생성한다.
+Shared lowering은 concrete marker 접근을 직접 만들지 않고 `effect.*` ABI
+operation을 생성한다. Native lowering에서는 이를 `__tribute_evidence_*` C ABI와
+native closure pointer 호출로 대체한다. Wasm lowering은 같은 ability id와 marker
+field 순서를 사용해 binary search helper를 생성하고, marker에 저장된 `anyref`
+closure를 `(table_idx, env)`로 풀어 `wasm.call_indirect`를 emit한다.
 
 ### Handler 설치
 
@@ -402,20 +405,25 @@ op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 
 ### WasmGC
 
-WasmGC는 당분간 후순위 타겟이다. 과거 설계의 yield bubbling /
-`YieldResult` trampoline 방식은 현재 active path가 아니다.
+WasmGC는 당분간 후순위 타겟이지만, active path는 native와 같은 shared
+middle-end의 tail-call CPS / effect ABI 결과를 입력으로 받는다. 과거 설계의
+yield bubbling / `YieldResult` trampoline 방식은 active path가 아니다.
 
-WasmGC로 다시 돌아갈 경우에도 shared middle-end의 tail-call CPS 결과를
-입력으로 받는 것이 기준이다. 즉 backend는 이미 lowering된
-`func.call_indirect`, closure representation, evidence runtime calls를
-WasmGC 타입과 table 기반 호출로 정확히 emit하는 문제에 집중한다.
+Wasm lowering은 `effect.extend`, `effect.dispatch_tail`,
+`effect.dispatch_cps`를 evidence helper, closure unpacking, and
+`wasm.call_indirect`로 낮춘다. 남아 있는 `Step`, `Continuation`,
+`ResumeWrapper` builtin 타입은 과거 trampoline 경로의 호환 흔적이며, 새 effect
+ABI lowering의 의미론적 기준이 아니다.
 
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 
 Effect handling은 tail-call CPS 방식으로 처리된다.
-`lower_ability_perform`이 `ability.perform`과 `ability.call`을 evidence lookup과
-dispatch closure 호출로 변환한다. `lower_handle_dispatch`는 runtime dispatch loop가
-아니라 body result에 `done` handler를 적용하는 정리 pass이다.
+`lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
+`effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
+`resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
+`lower_handle_dispatch`는 runtime dispatch loop가 아니라 body result에 `done`
+handler를 적용하는 정리 pass이다. Backend-specific lowering이 이후 `effect.*`를
+native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
 
 상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 
@@ -425,11 +433,10 @@ dispatch closure 호출로 변환한다. `lower_handle_dispatch`는 runtime disp
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → evidence_params → closure_lower → evidence_calls
       → lower_ability_perform → resolve_evidence → lower_handle_dispatch
-      → [native only: evidence_to_native]
       → dce → resolve_casts
 
-WASM:   → lower_to_wasm → emit_wasm
-Native: → lower_to_clif → emit_native
+WASM:   → lower_to_wasm [includes evidence_to_wasm] → emit_wasm
+Native: → evidence_to_native → lower_to_clif → emit_native
 ```
 
 ---
@@ -578,9 +585,11 @@ flowchart TB
 | | `closure_lower` | closure.new | func.call_indirect | |
 | | `tdnr` | x.method() | Type::method(x) | |
 | **Ability** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
-| | `lower_ability_perform` | ability.perform/call | func.call_indirect + evidence_lookup | |
-| | `resolve_evidence` | evidence_lookup/handle_dispatch | evidence runtime calls | |
+| | `lower_ability_perform` | ability.perform/call | effect.dispatch_* | |
+| | `resolve_evidence` | handler evidence setup | effect.extend | |
 | | `lower_handle_dispatch` | ability.handle_dispatch | done handler inline | |
+| **Backend effect ABI** | `native/evidence` | effect.* | native runtime calls + call_indirect | |
+| | `wasm/evidence_to_wasm` | effect.* | wasm evidence helpers + wasm.call_indirect | |
 | **Lowering** | `lower_case` | tribute.case | scf.if | |
 | | `dce` | all funcs | reachable funcs | |
 
@@ -644,6 +653,10 @@ struct Marker {
     handler_dispatch: ptr,
 }
 ```
+
+위 `ptr` 표기는 high-level/native 설명이다. WasmGC의 concrete `_Marker` GC type은
+같은 field order를 유지하되 dispatch closure field를 `anyref` closure reference로
+저장한다.
 
 타입 시스템 수준에서는 ability row에 대해 parameterized된다:
 
