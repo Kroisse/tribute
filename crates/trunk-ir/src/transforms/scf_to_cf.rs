@@ -34,8 +34,9 @@ use std::collections::BTreeMap;
 use smallvec::SmallVec;
 
 use crate::context::{BlockArgData, BlockData, IrContext};
-use crate::dialect::{arith, cf, core, scf};
+use crate::dialect::{arith, cf, core, func, scf};
 use crate::ops::{DialectOp, DialectType};
+use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
@@ -49,6 +50,19 @@ pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
         None => return,
     };
     transform_region(ctx, body);
+}
+
+/// Lower all `scf` operations in one function to `cf` operations.
+pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
+    transform_region(ctx, func.body(ctx));
+}
+
+/// Build a function-anchored SCF-to-CF lowering pass.
+pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
+    pass_fn("scf-to-cf-func", |ctx, target| {
+        lower_scf_to_cf_func(ctx, target);
+        Ok(())
+    })
 }
 
 /// Transform all blocks in a region, lowering scf ops to cf.
@@ -571,6 +585,70 @@ mod tests {
         ctx.region(region).blocks.len()
     }
 
+    fn build_void_if_func(ctx: &mut IrContext, loc: Location, name: &'static str) -> func::Func {
+        let nil_ty = nil_type(ctx);
+        let i1_ty = i1_type(ctx);
+        let fn_ty = fn_type(ctx);
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        let cond_const = arith::r#const(ctx, loc, i1_ty, Attribute::Bool(true));
+        ctx.push_op(entry, cond_const.op_ref());
+
+        let then_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let then_yield = scf::r#yield(ctx, loc, std::iter::empty());
+        ctx.push_op(then_block, then_yield.op_ref());
+        let then_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![then_block],
+            parent_op: None,
+        });
+
+        let else_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let else_yield = scf::r#yield(ctx, loc, std::iter::empty());
+        ctx.push_op(else_block, else_yield.op_ref());
+        let else_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![else_block],
+            parent_op: None,
+        });
+
+        let if_op = scf::r#if(
+            ctx,
+            loc,
+            cond_const.result(ctx),
+            nil_ty,
+            then_region,
+            else_region,
+        );
+        ctx.push_op(entry, if_op.op_ref());
+
+        let ret = func::r#return(ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+
+        let body_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        func::func(ctx, loc, Symbol::new(name), fn_ty, body_region)
+    }
+
     #[test]
     fn lower_scf_if_basic() {
         let (mut ctx, loc) = test_ctx();
@@ -666,6 +744,32 @@ mod tests {
 
         // Should have 4 blocks: entry, then, else, merge
         assert_eq!(count_blocks(&ctx, func_body), 4);
+    }
+
+    #[test]
+    fn lower_scf_to_cf_func_rewrites_only_selected_function() {
+        let (mut ctx, loc) = test_ctx();
+        let selected = build_void_if_func(&mut ctx, loc, "selected");
+        let untouched = build_void_if_func(&mut ctx, loc, "untouched");
+        let _module = build_module(&mut ctx, loc, vec![selected.op_ref(), untouched.op_ref()]);
+
+        lower_scf_to_cf_func(&mut ctx, selected);
+
+        let selected_names = collect_op_names(&ctx, selected.body(&ctx));
+        let untouched_names = collect_op_names(&ctx, untouched.body(&ctx));
+
+        assert!(
+            !selected_names.iter().any(|n| n.starts_with("scf.")),
+            "selected function still has scf ops: {selected_names:?}"
+        );
+        assert!(
+            selected_names.iter().any(|n| n == "cf.cond_br"),
+            "selected function should contain cf.cond_br: {selected_names:?}"
+        );
+        assert!(
+            untouched_names.iter().any(|n| n.starts_with("scf.")),
+            "untouched function should retain scf ops: {untouched_names:?}"
+        );
     }
 
     #[test]

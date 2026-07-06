@@ -554,12 +554,15 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
-            .add_pass(trunk_ir::transforms::canonicalize_pass());
+            .add_pass(trunk_ir::transforms::canonicalize_pass())
+            .add_pass(trunk_ir::transforms::dce_pass(
+                trunk_ir::transforms::DceConfig::default(),
+            ));
         if let Err(error) = pm.run(ctx, core_module) {
-            tracing::warn!("cleanup canonicalize-func failed: {error}");
+            tracing::warn!("cleanup function passes failed: {error}");
         }
     } else {
-        tracing::warn!("cleanup skipped canonicalize-func: root op is not core.module");
+        tracing::warn!("cleanup skipped function passes: root op is not core.module");
     }
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
@@ -710,7 +713,14 @@ fn compile_module_to_native(
         .map_err(native_conversion_failure)?;
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
-    trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
+    if let Ok(core_module) = core_dialect::Module::from_op(ctx, module.op()) {
+        let mut pm = PassManager::new();
+        pm.nest::<func_dialect::Func>()
+            .add_pass(trunk_ir::transforms::scf_to_cf_pass());
+        pm.run(ctx, core_module).map_err(native_pass_failure)?;
+    } else {
+        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
+    }
 
     // Phase 1 - Lower func dialect to clif dialect
     {
@@ -817,6 +827,10 @@ fn compile_module_to_native(
 fn native_conversion_failure(
     error: ConversionError,
 ) -> trunk_ir_cranelift_backend::CompilationError {
+    trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+}
+
+fn native_pass_failure(error: PassError) -> trunk_ir_cranelift_backend::CompilationError {
     trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
 }
 

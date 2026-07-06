@@ -591,7 +591,8 @@ flowchart TB
 | **Backend effect ABI** | `native/evidence` | effect.* | native runtime calls + call_indirect | |
 | | `wasm/evidence_to_wasm` | effect.* | wasm evidence helpers + wasm.call_indirect | |
 | **Lowering** | `lower_case` | tribute.case | scf.if | |
-| | `dce` | all funcs | reachable funcs | |
+| | `canonicalize`, local `dce`, `scf_to_cf` | func.func body | canonical body / cf blocks | function-anchored |
+| | `global_dce` | module symbols | reachable funcs | module-wide |
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
