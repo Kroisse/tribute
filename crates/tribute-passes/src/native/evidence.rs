@@ -635,12 +635,8 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    #[test]
-    fn function_scope_rewrites_only_selected_function() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
+    fn dispatch_module() -> &'static str {
+        r#"core.module @test {
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
     %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
     func.return %result
@@ -649,8 +645,13 @@ mod tests {
     %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : core.ptr
     func.return %result
   }
-}"#,
-        );
+}"#
+    }
+
+    #[test]
+    fn function_scope_rewrites_only_selected_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
         let selected = module
             .ops(&ctx)
             .into_iter()
@@ -665,5 +666,65 @@ mod tests {
         assert!(ir_text.contains("func.func @untouched"));
         assert!(ir_text.contains("op_name = @print"));
         assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
+    }
+
+    #[test]
+    fn module_entrypoint_prepares_runtime_and_rewrites_all_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+
+        lower_evidence_to_native(&mut ctx, module);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert!(!ir_text.contains("effect.dispatch_tail"));
+        assert!(ir_text.contains("__tribute_evidence_empty"));
+        assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
+        assert!(ir_text.contains("__tribute_evidence_lookup_handler"));
+    }
+
+    #[test]
+    fn pass_adapter_runs_function_lowering() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected function");
+        let mut pass = LowerEvidenceToNative;
+
+        assert_eq!(pass.name(), "lower-evidence-to-native");
+        pass.run(&mut ctx, selected).unwrap();
+
+        let ir_text = print_module(&ctx, module.op());
+        assert_eq!(ir_text.matches("effect.dispatch_tail").count(), 1);
+        assert!(ir_text.contains("__tribute_evidence_lookup"));
+    }
+
+    #[test]
+    fn function_scope_skips_evidence_runtime_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @__tribute_evidence_empty(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    func.return %result
+  }
+}"#,
+        );
+        let runtime_func = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a runtime function");
+
+        lower_evidence_to_native_func(&mut ctx, runtime_func);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert!(ir_text.contains("func.func @__tribute_evidence_empty"));
+        assert!(ir_text.contains("effect.dispatch_tail"));
     }
 }
