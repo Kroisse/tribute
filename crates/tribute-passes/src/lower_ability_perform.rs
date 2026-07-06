@@ -27,7 +27,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
+    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter, erase_op,
 };
 
 use tribute_ir::dialect::ability;
@@ -52,26 +52,26 @@ impl CommonTypes {
 ///
 /// Residual ability operations are allowed here and rejected at the final
 /// `ability-lowered` boundary.
-pub(crate) fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_ability_perform<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let types = CommonTypes::new(ctx);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerPerformPattern { types })
         .add_pattern(LowerCallPattern { types });
-    applicator.apply_partial(ctx, module);
+    applicator.apply_partial(ctx, scope);
 }
 
 /// PassManager-friendly wrapper for [`lower_ability_perform`].
 pub struct LowerAbilityPerform;
 
 impl Pass for LowerAbilityPerform {
-    type Target = core::Module;
+    type Target = func::Func;
 
     fn name(&self) -> &'static str {
         "lower-ability-perform"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        lower_ability_perform(ctx, target.into());
+    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        lower_ability_perform(ctx, target);
         Ok(())
     }
 }

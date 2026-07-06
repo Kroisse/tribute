@@ -9,14 +9,14 @@
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, scf};
+use trunk_ir::dialect::{core, func, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
+    RewriteScope, TypeConverter,
 };
 use trunk_ir::types::Location;
 
@@ -35,12 +35,12 @@ pub fn ability_lowered_target() -> ConversionTarget {
 /// while allowing unknown operations owned by later lowering stages.
 pub(crate) fn lower_handle_dispatch(
     ctx: &mut IrContext,
-    module: Module,
+    scope: impl RewriteScope,
 ) -> Result<(), ConversionError> {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(ability_lowered_target())
         .add_pattern(LowerHandleDispatchPattern);
-    applicator.apply_partial_conversion(ctx, module, ABILITY_LOWERED_BOUNDARY)?;
+    applicator.apply_partial_conversion(ctx, scope, ABILITY_LOWERED_BOUNDARY)?;
     Ok(())
 }
 
@@ -48,14 +48,14 @@ pub(crate) fn lower_handle_dispatch(
 pub struct LowerHandleDispatch;
 
 impl Pass for LowerHandleDispatch {
-    type Target = core::Module;
+    type Target = func::Func;
 
     fn name(&self) -> &'static str {
         "lower-handle-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        lower_handle_dispatch(ctx, target.into()).map_err(Into::into)
+    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        lower_handle_dispatch(ctx, target).map_err(Into::into)
     }
 }
 
@@ -282,6 +282,51 @@ mod tests {
         );
 
         lower_handle_dispatch(&mut ctx, module).unwrap();
+    }
+
+    #[test]
+    fn function_scope_converts_only_selected_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @selected() -> tribute_rt.anyref {
+    %body = arith.const {value = 42} : tribute_rt.anyref
+    %handler_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+      ability.done {
+        ^bb0(%v: tribute_rt.anyref):
+          scf.yield %v
+      }
+    }
+    func.return %result
+  }
+  func.func @untouched() -> tribute_rt.anyref {
+    %body = arith.const {value = 7} : tribute_rt.anyref
+    %handler_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %handler_fn {tag = 2, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+      ability.done {
+        ^bb0(%v: tribute_rt.anyref):
+          scf.yield %v
+      }
+    }
+    func.return %result
+  }
+}"#,
+        );
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected function");
+
+        lower_handle_dispatch(&mut ctx, selected).unwrap();
+
+        let ir_text = print_module(&ctx, module.op());
+        assert_eq!(ir_text.matches("ability.handle_dispatch").count(), 1);
+        assert!(ir_text.contains("func.func @untouched"));
+        assert!(ir_text.contains("tag = 2"));
     }
 
     #[test]

@@ -466,19 +466,43 @@ fn run_shared_pipeline(
     // Registration order == execution order.
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    let mut structural_pm = PassManager::new();
+    structural_pm
+        .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
         // Evidence params are now inserted directly during ast_to_ir lowering.
-        .add_pass(tribute_passes::closure_lower::LowerClosures)
-        // CPS effect handling: lower_ability_perform produces
-        // ability.evidence_lookup ops that resolve_evidence needs to process.
-        // lower_handle_dispatch consumes handle_dispatch ops, so it must run
-        // AFTER resolve_evidence expands evidence.
+        .add_pass(tribute_passes::closure_lower::LowerClosures);
+    install_debug_use_chain_verifier(&mut structural_pm);
+    structural_pm.run(&mut ctx, core_module)?;
+
+    // CPS effect handling, function-local phase: lower_ability_perform produces
+    // ability.evidence_lookup ops that resolve_evidence needs to process.
+    let mut ability_pm = PassManager::new();
+    ability_pm
+        .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform)
-        .add_pass(tribute_passes::tail_resumptive::ConvertTailResumptive)
-        .add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch)
+        .add_pass(tribute_passes::tail_resumptive::ConvertTailResumptive);
+    install_debug_use_chain_verifier(&mut ability_pm);
+    ability_pm.run(&mut ctx, core_module)?;
+
+    let mut evidence_pm = PassManager::new();
+    evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
+    install_debug_use_chain_verifier(&mut evidence_pm);
+    evidence_pm.run(&mut ctx, core_module)?;
+
+    // Final function-local ability conversion. This consumes handle_dispatch ops
+    // after resolve_evidence expands evidence setup.
+    let mut ability_boundary_pm = PassManager::new();
+    ability_boundary_pm
+        .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
+    install_debug_use_chain_verifier(&mut ability_boundary_pm);
+    ability_boundary_pm.run(&mut ctx, core_module)?;
+
+    Ok(Some((ctx, m)))
+}
+
+fn install_debug_use_chain_verifier(pm: &mut PassManager) {
     // Debug-only regression guard: re-check use-chain consistency after every
     // shared pass. step 1+2 (#710) made this invariant hold across the shared
     // middle-end; this catches any future pass that reintroduces a leak. The
@@ -486,7 +510,7 @@ fn run_shared_pipeline(
     // with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
         pm.with_verifier(|ctx, op| {
-            let Some(module) = Module::new(ctx, op) else {
+            let Some(module) = enclosing_module(ctx, op) else {
                 return Ok(());
             };
             let result = trunk_ir::validation::validate_use_chains(ctx, module);
@@ -506,9 +530,17 @@ fn run_shared_pipeline(
             })
         });
     }
-    pm.run(&mut ctx, core_module)?;
+}
 
-    Ok(Some((ctx, m)))
+fn enclosing_module(ctx: &IrContext, mut op: trunk_ir::OpRef) -> Option<Module> {
+    loop {
+        if let Some(module) = Module::new(ctx, op) {
+            return Some(module);
+        }
+        let block = ctx.op(op).parent_block?;
+        let region = ctx.block(block).parent_region?;
+        op = ctx.region(region).parent_op?;
+    }
 }
 
 /// Validate call arity and report mismatches as diagnostics.

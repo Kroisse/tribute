@@ -585,9 +585,9 @@ flowchart TB
 | | `closure_lower` | closure.new | func.call_indirect | |
 | | `tdnr` | x.method() | Type::method(x) | |
 | **Ability** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
-| | `lower_ability_perform` | ability.perform/call | effect.dispatch_* | |
+| | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
 | | `resolve_evidence` | handler evidence setup | effect.extend | |
-| | `lower_handle_dispatch` | ability.handle_dispatch | done handler inline | |
+| | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
 | **Backend effect ABI** | `native/evidence` | effect.* | native runtime calls + call_indirect | |
 | | `wasm/evidence_to_wasm` | effect.* | wasm evidence helpers + wasm.call_indirect | |
 | **Lowering** | `lower_case` | tribute.case | scf.if | |

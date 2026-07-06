@@ -68,35 +68,34 @@ impl ApplyResult {
     pub fn verify(
         &self,
         ctx: &IrContext,
-        module: Module,
+        scope: impl RewriteScope,
         target: &ConversionTarget,
     ) -> Result<(), Vec<IllegalOp>> {
-        self.verify_mode(ctx, module, target, ConversionMode::Partial)
+        self.verify_mode(ctx, scope, target, ConversionMode::Partial)
     }
 
     /// Verify that every operation is legal for the target.
     pub fn verify_full(
         &self,
         ctx: &IrContext,
-        module: Module,
+        scope: impl RewriteScope,
         target: &ConversionTarget,
     ) -> Result<(), Vec<IllegalOp>> {
-        self.verify_mode(ctx, module, target, ConversionMode::Full)
+        self.verify_mode(ctx, scope, target, ConversionMode::Full)
     }
 
     /// Verify the result under a specific conversion mode.
     pub fn verify_mode(
         &self,
         ctx: &IrContext,
-        module: Module,
+        scope: impl RewriteScope,
         target: &ConversionTarget,
         mode: ConversionMode,
     ) -> Result<(), Vec<IllegalOp>> {
-        let body = match module.body(ctx) {
-            Some(r) => r,
-            None => return Ok(()),
-        };
-        let illegal = target.verify_mode(ctx, body, mode);
+        let illegal: Vec<IllegalOp> = scope
+            .regions(ctx)
+            .flat_map(|region| target.verify_mode(ctx, region, mode))
+            .collect();
         if illegal.is_empty() {
             Ok(())
         } else {
@@ -214,12 +213,12 @@ impl PatternApplicator {
     pub fn apply_partial_conversion(
         &self,
         ctx: &mut IrContext,
-        module: Module,
+        scope: impl RewriteScope,
         boundary: &'static str,
     ) -> Result<ApplyResult, ConversionError> {
-        let result = self.apply_partial(ctx, module);
+        let result = self.apply_partial(ctx, scope);
         result
-            .verify(ctx, module, &self.target)
+            .verify(ctx, scope, &self.target)
             .map_err(|operations| ConversionError::new(boundary, operations))?;
         Ok(result)
     }
@@ -232,12 +231,12 @@ impl PatternApplicator {
     pub fn apply_full_conversion(
         &self,
         ctx: &mut IrContext,
-        module: Module,
+        scope: impl RewriteScope,
         boundary: &'static str,
     ) -> Result<ApplyResult, ConversionError> {
-        let result = self.apply_partial(ctx, module);
+        let result = self.apply_partial(ctx, scope);
         result
-            .verify_full(ctx, module, &self.target)
+            .verify_full(ctx, scope, &self.target)
             .map_err(|operations| ConversionError::new(boundary, operations))?;
         Ok(result)
     }
