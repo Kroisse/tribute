@@ -6,9 +6,11 @@
 //! liveness analysis.
 
 use crate::context::IrContext;
+use crate::dialect::func;
 use crate::op_interface::PureOps;
+use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef};
-use crate::rewrite::Module;
+use crate::rewrite::RewriteScope;
 
 /// Configuration for dead code elimination.
 #[derive(Debug, Clone)]
@@ -38,15 +40,10 @@ pub struct DceResult {
     pub reached_fixpoint: bool,
 }
 
-/// Eliminate dead code from a module using default configuration.
-pub fn eliminate_dead_code(ctx: &mut IrContext, module: Module) -> DceResult {
-    eliminate_dead_code_with_config(ctx, module, DceConfig::default())
-}
-
-/// Eliminate dead code with custom configuration.
-pub fn eliminate_dead_code_with_config(
+/// Eliminate dead code from one rewrite scope.
+pub fn eliminate_dead_code<S: RewriteScope>(
     ctx: &mut IrContext,
-    module: Module,
+    scope: S,
     config: DceConfig,
 ) -> DceResult {
     let max_iterations = if config.max_iterations == 0 {
@@ -58,7 +55,7 @@ pub fn eliminate_dead_code_with_config(
     let mut total_removed = 0;
 
     for iteration in 0..max_iterations {
-        let removed = sweep_module(ctx, module, &config);
+        let removed = sweep_scope(ctx, scope, &config);
 
         if removed == 0 {
             return DceResult {
@@ -78,14 +75,28 @@ pub fn eliminate_dead_code_with_config(
     }
 }
 
-/// Sweep all top-level functions in a module, removing dead ops.
+/// Build a function-anchored DCE pass.
+pub fn dce_pass(config: DceConfig) -> impl Pass<Target = func::Func> {
+    pass_fn("dce-func", move |ctx, target| {
+        let result = eliminate_dead_code(ctx, target, config.clone());
+        if !result.reached_fixpoint {
+            tracing::warn!(
+                "dce-func did not reach a fixed point: {} iterations, {} removed",
+                result.iterations,
+                result.removed_count
+            );
+        }
+        Ok(())
+    })
+}
+
+/// Sweep all regions in a rewrite scope, removing dead ops.
 /// Returns the number of ops removed in this sweep.
-fn sweep_module(ctx: &mut IrContext, module: Module, config: &DceConfig) -> usize {
-    let body = match module.body(ctx) {
-        Some(r) => r,
-        None => return 0,
-    };
-    sweep_region(ctx, body, config)
+fn sweep_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S, config: &DceConfig) -> usize {
+    scope
+        .regions(ctx)
+        .map(|region| sweep_region(ctx, region, config))
+        .sum()
 }
 
 /// Sweep all blocks in a region. Returns the number of ops removed.
@@ -157,6 +168,10 @@ mod tests {
     use super::*;
     use crate::dialect::{arith, func};
     use crate::location::Span;
+    use crate::ops::DialectOp;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+    use crate::rewrite::Module;
     use crate::symbol::Symbol;
     use crate::*;
     use smallvec::smallvec;
@@ -244,7 +259,7 @@ mod tests {
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         assert_eq!(result.removed_count, 1);
         assert!(result.reached_fixpoint);
@@ -270,7 +285,7 @@ mod tests {
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -296,7 +311,7 @@ mod tests {
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         // All 3 pure ops should be removed (reverse iteration cascades in one pass)
         assert_eq!(result.removed_count, 3);
@@ -320,9 +335,43 @@ mod tests {
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         assert_eq!(result.removed_count, 0);
+    }
+
+    #[test]
+    fn function_scope_rewrites_only_selected_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @selected() -> core.nil {
+    %dead = arith.const {value = 1} : core.i32
+    func.return
+  }
+  func.func @untouched() -> core.nil {
+    %dead = arith.const {value = 2} : core.i32
+    func.return
+  }
+}"#,
+        );
+        let funcs: Vec<_> = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .collect();
+        let selected = funcs[0];
+        let untouched = funcs[1];
+
+        let result = eliminate_dead_code(&mut ctx, selected, DceConfig::default());
+
+        assert_eq!(result.removed_count, 1);
+        let selected_block = ctx.region(selected.body(&ctx)).blocks[0];
+        let untouched_block = ctx.region(untouched.body(&ctx)).blocks[0];
+        assert_eq!(ctx.block(selected_block).ops.len(), 1);
+        assert_eq!(ctx.block(untouched_block).ops.len(), 2);
+        insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
     #[test]
@@ -330,7 +379,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let module = build_module(&mut ctx, loc, vec![]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         assert_eq!(result.removed_count, 0);
         assert!(result.reached_fixpoint);
@@ -373,7 +422,7 @@ mod tests {
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
 
-        let result = eliminate_dead_code(&mut ctx, module);
+        let result = eliminate_dead_code(&mut ctx, module, DceConfig::default());
 
         // The dead const in the nested region should be removed
         assert_eq!(result.removed_count, 1);
@@ -398,7 +447,7 @@ mod tests {
             max_iterations: 1,
             recursive: true,
         };
-        let result = eliminate_dead_code_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_code(&mut ctx, module, config);
 
         assert_eq!(result.removed_count, 1);
     }
@@ -441,7 +490,7 @@ mod tests {
             max_iterations: 100,
             recursive: false,
         };
-        let result = eliminate_dead_code_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_code(&mut ctx, module, config);
 
         // With recursive=false, the inner dead const should NOT be removed
         assert_eq!(result.removed_count, 0);

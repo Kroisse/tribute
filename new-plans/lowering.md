@@ -46,10 +46,13 @@ matching operation. Module passes remain responsible for symbol-table changes,
 function creation or deletion, cross-function call rewrites, global DCE, and
 pipeline-boundary conversion checks.
 
-`PatternApplicator` supports `RewriteScope`-scoped application for these
-anchored passes. For example, `canonicalize_pass()` runs generic canonicalization
-under one `func.func` scope, while module-wide cleanup uses the same
-`canonicalize` entry point with a module scope.
+`PatternApplicator` and local region transforms support `func.func`-anchored
+application for these passes. For example, `canonicalize_pass()` and
+`dce_pass(DceConfig::default())` run cleanup under one `func.func` scope, and
+`scf_to_cf_pass()` lowers structured control flow inside one function.
+Module-wide entry points remain available for compatibility and tests, but
+pipeline scheduling should prefer nested function passes whenever the transform
+does not create functions, delete functions, or rewrite cross-function symbols.
 
 ## Conversion Modes
 

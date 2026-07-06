@@ -1,0 +1,14 @@
+---
+source: crates/trunk-ir/src/transforms/dce.rs
+assertion_line: 384
+expression: "print_module(&ctx, module.op())"
+---
+core.module @test {
+  func.func @selected() -> core.nil {
+      func.return
+  }
+  func.func @untouched() -> core.nil {
+      %0 = arith.const {value = 2} : core.i32
+      func.return
+  }
+}
