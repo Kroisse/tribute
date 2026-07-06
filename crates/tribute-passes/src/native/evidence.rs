@@ -32,6 +32,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
@@ -41,8 +42,37 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 ///
 /// Must run AFTER effect lowering passes and BEFORE DCE.
 pub fn lower_evidence_to_native(ctx: &mut IrContext, module: Module) {
-    replace_stubs_and_add_empty(ctx, module);
+    prepare_native_evidence_runtime(ctx, module);
     rewrite_evidence_ops_in_module(ctx, module);
+}
+
+/// Prepare native evidence runtime declarations at module scope.
+pub fn prepare_native_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    replace_stubs_and_add_empty(ctx, module);
+}
+
+/// Lower evidence operations inside one function for the native backend.
+pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
+    if is_evidence_runtime_fn(func_op.sym_name(ctx)) {
+        return;
+    }
+    rewrite_evidence_ops_in_region(ctx, func_op.body(ctx));
+}
+
+/// PassManager-friendly native evidence lowering pass.
+pub struct LowerEvidenceToNative;
+
+impl Pass for LowerEvidenceToNative {
+    type Target = func::Func;
+
+    fn name(&self) -> &'static str {
+        "lower-evidence-to-native"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        lower_evidence_to_native_func(ctx, target);
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -219,12 +249,7 @@ fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
 
     for op in ops {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
-            let name = func_op.sym_name(ctx);
-            if is_evidence_runtime_fn(name) {
-                continue;
-            }
-            let body = func_op.body(ctx);
-            rewrite_evidence_ops_in_region(ctx, body);
+            lower_evidence_to_native_func(ctx, func_op);
         }
     }
 }
@@ -601,5 +626,105 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
     // Erase dead ops (in reverse to handle dependencies)
     for op in ops_to_erase.into_iter().rev() {
         erase_op(ctx, op);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    fn dispatch_module() -> &'static str {
+        r#"core.module @test {
+  func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    func.return %result
+  }
+  func.func @untouched(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : core.ptr
+    func.return %result
+  }
+}"#
+    }
+
+    #[test]
+    fn function_scope_rewrites_only_selected_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected function");
+
+        lower_evidence_to_native_func(&mut ctx, selected);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert_eq!(ir_text.matches("effect.dispatch_tail").count(), 1);
+        assert!(ir_text.contains("func.func @untouched"));
+        assert!(ir_text.contains("op_name = @print"));
+        assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
+    }
+
+    #[test]
+    fn module_entrypoint_prepares_runtime_and_rewrites_all_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+
+        lower_evidence_to_native(&mut ctx, module);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert!(!ir_text.contains("effect.dispatch_tail"));
+        assert!(ir_text.contains("__tribute_evidence_empty"));
+        assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
+        assert!(ir_text.contains("__tribute_evidence_lookup_handler"));
+    }
+
+    #[test]
+    fn pass_adapter_runs_function_lowering() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected function");
+        let mut pass = LowerEvidenceToNative;
+
+        assert_eq!(pass.name(), "lower-evidence-to-native");
+        pass.run(&mut ctx, selected).unwrap();
+
+        let ir_text = print_module(&ctx, module.op());
+        assert_eq!(ir_text.matches("effect.dispatch_tail").count(), 1);
+        assert!(ir_text.contains("__tribute_evidence_lookup"));
+    }
+
+    #[test]
+    fn function_scope_skips_evidence_runtime_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @__tribute_evidence_empty(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    func.return %result
+  }
+}"#,
+        );
+        let runtime_func = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a runtime function");
+
+        lower_evidence_to_native_func(&mut ctx, runtime_func);
+
+        let ir_text = print_module(&ctx, module.op());
+        assert!(ir_text.contains("func.func @__tribute_evidence_empty"));
+        assert!(ir_text.contains("effect.dispatch_tail"));
     }
 }
