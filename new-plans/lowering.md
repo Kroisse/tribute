@@ -26,6 +26,31 @@ compiler pipeline. Verifier failures use the same path.
 Instrumentation runs only after a pass succeeds. The verifier then runs on the
 successful result; a verifier failure stops the pipeline before further work.
 
+## Operation-Anchored Scheduling
+
+Use nested pass managers for transformations whose contract is scoped to one
+operation instance instead of the whole module. In particular, intraprocedural
+passes should target `func.func` through `PassManager::nest::<func::Func>()`
+when they do not create, erase, or retarget sibling functions and do not need
+module-wide symbol or call-site decisions.
+
+Nested pass-manager anchors must be registered as `IsolatedFromAbove`.
+This keeps nested pipelines on operations whose regions can be reasoned about
+without capturing values from the parent scope. `func.func` and `core.module`
+are valid anchors; region-bearing control-flow operations such as `scf.if`
+remain part of their enclosing function pipeline unless a documented exception
+is added.
+
+Run a nested pipeline coherently for one anchor before advancing to the next
+matching operation. Module passes remain responsible for symbol-table changes,
+function creation or deletion, cross-function call rewrites, global DCE, and
+pipeline-boundary conversion checks.
+
+`PatternApplicator` supports `RewriteScope`-scoped application for these
+anchored passes. For example, `canonicalize_pass()` runs generic canonicalization
+under one `func.func` scope, while module-wide cleanup uses the same
+`canonicalize` entry point with a module scope.
+
 ## Conversion Modes
 
 Use partial conversion when a pass only promises to remove a declared illegal

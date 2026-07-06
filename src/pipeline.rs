@@ -74,7 +74,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
-use trunk_ir::dialect::core as core_dialect;
+use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
 use trunk_ir::rewrite::ConversionError;
@@ -551,13 +551,15 @@ fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrErr
 ///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
-    let result = trunk_ir::transforms::canonicalize::canonicalize(ctx, m);
-    if !result.reached_fixpoint {
-        tracing::warn!(
-            "canonicalize did not reach a fixed point: {} iterations, {} changes",
-            result.iterations,
-            result.total_changes,
-        );
+    if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
+        let mut pm = PassManager::new();
+        pm.nest::<func_dialect::Func>()
+            .add_pass(trunk_ir::transforms::canonicalize_pass());
+        if let Err(error) = pm.run(ctx, core_module) {
+            tracing::warn!("cleanup canonicalize-func failed: {error}");
+        }
+    } else {
+        tracing::warn!("cleanup skipped canonicalize-func: root op is not core.module");
     }
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);

@@ -34,9 +34,12 @@
 use std::collections::HashMap;
 
 use crate::context::IrContext;
-use crate::dialect::arith;
+use crate::dialect::{arith, func};
+use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
+use crate::rewrite::{
+    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
+};
 use crate::symbol::Symbol;
 use crate::types::Attribute;
 
@@ -290,16 +293,37 @@ pub struct CanonicalizeResult {
     pub reached_fixpoint: bool,
 }
 
-/// Run canonicalization to a fixed point on `module`.
-pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
-    let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()));
-    let result = applicator.apply_partial(ctx, module);
+fn canonicalize_applicator() -> PatternApplicator {
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()))
+}
+
+fn result_from_apply(result: crate::rewrite::ApplyResult) -> CanonicalizeResult {
     CanonicalizeResult {
         iterations: result.iterations,
         total_changes: result.total_changes,
         reached_fixpoint: result.reached_fixpoint,
     }
+}
+
+/// Run canonicalization to a fixed point within one rewrite scope.
+pub fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> CanonicalizeResult {
+    result_from_apply(canonicalize_applicator().apply_partial(ctx, scope))
+}
+
+/// Build a function-anchored canonicalization pass.
+pub fn canonicalize_pass() -> impl Pass<Target = func::Func> {
+    pass_fn("canonicalize-func", |ctx, target| {
+        let result = canonicalize(ctx, target);
+        if !result.reached_fixpoint {
+            tracing::warn!(
+                "canonicalize-func did not reach a fixed point: {} iterations, {} changes",
+                result.iterations,
+                result.total_changes
+            );
+        }
+        Ok(())
+    })
 }
 
 // =========================================================================
@@ -314,7 +338,9 @@ pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
+    use crate::rewrite::Module;
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
@@ -323,6 +349,20 @@ mod tests {
         let name_sym = Symbol::from_dynamic(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            let data = ctx.op(op);
+            if data.dialect == dialect_sym && data.name == name_sym {
+                count += 1;
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        count
+    }
+
+    fn count_ops_under(ctx: &IrContext, root: OpRef, dialect: &str, name: &str) -> usize {
+        let dialect_sym = Symbol::from_dynamic(dialect);
+        let name_sym = Symbol::from_dynamic(name);
+        let mut count = 0usize;
+        let _ = walk_op::<()>(ctx, root, &mut |op| {
             let data = ctx.op(op);
             if data.dialect == dialect_sym && data.name == name_sym {
                 count += 1;
@@ -376,6 +416,36 @@ mod tests {
         assert!(result.reached_fixpoint);
         assert!(result.total_changes >= 2);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+    }
+
+    #[test]
+    fn canonicalize_rewrites_only_selected_function_scope() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %r = arith.addi %x, %z : core.i32
+    func.return %r
+  }
+  func.func @g(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %r = arith.addi %x, %z : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let funcs: Vec<func::Func> = module
+            .ops(&ctx)
+            .into_iter()
+            .map(|op| func::Func::from_op(&ctx, op).expect("test op must be func.func"))
+            .collect();
+
+        let result = canonicalize(&mut ctx, funcs[0]);
+
+        assert!(result.reached_fixpoint);
+        assert_eq!(count_ops_under(&ctx, funcs[0].op_ref(), "arith", "addi"), 0);
+        assert_eq!(count_ops_under(&ctx, funcs[1].op_ref(), "arith", "addi"), 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
     }
 
     #[test]

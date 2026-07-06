@@ -12,9 +12,46 @@ use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
 use crate::context::IrContext;
-use crate::dialect::core;
+use crate::dialect::{core, func};
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef};
+
+/// Scope that bounds a pattern rewrite traversal.
+///
+/// A rewrite scope provides the regions to visit and, when the scope is a
+/// module, the module block that may receive `PatternRewriter::add_module_op`
+/// insertions. Function-scoped rewrites intentionally return no module block,
+/// keeping anchored rewrites inside the current function body.
+pub trait RewriteScope: Copy {
+    type Regions: Iterator<Item = RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions;
+    fn module_first_block(self, ctx: &IrContext) -> Option<BlockRef>;
+}
+
+impl RewriteScope for Module {
+    type Regions = std::option::IntoIter<RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions {
+        self.body(ctx).into_iter()
+    }
+
+    fn module_first_block(self, ctx: &IrContext) -> Option<BlockRef> {
+        self.first_block(ctx)
+    }
+}
+
+impl RewriteScope for func::Func {
+    type Regions = std::iter::Once<RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions {
+        std::iter::once(self.body(ctx))
+    }
+
+    fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
+        None
+    }
+}
 
 /// Result of applying rewrite patterns.
 pub struct ApplyResult {
@@ -141,16 +178,17 @@ impl PatternApplicator {
         &self.type_converter
     }
 
-    /// Apply patterns without verification.
+    /// Apply patterns within a rewrite scope without verification.
     ///
     /// The configured target still skips operations classified as legal.
-    pub fn apply_partial(&self, ctx: &mut IrContext, module: Module) -> ApplyResult {
+    pub fn apply_partial<S: RewriteScope>(&self, ctx: &mut IrContext, scope: S) -> ApplyResult {
+        let module_first_block = scope.module_first_block(ctx);
         let mut total_changes = 0;
         let mut iterations = 0;
 
         for _ in 0..self.max_iterations {
             iterations += 1;
-            let changes = self.run_one_iteration(ctx, module);
+            let changes = self.run_one_iteration(ctx, scope, module_first_block);
             total_changes += changes;
             if changes == 0 {
                 return ApplyResult {
@@ -204,17 +242,18 @@ impl PatternApplicator {
         Ok(result)
     }
 
-    /// Run a single iteration over all operations.
-    fn run_one_iteration(&self, ctx: &mut IrContext, module: Module) -> usize {
+    /// Run a single iteration over all operations below the selected root.
+    fn run_one_iteration(
+        &self,
+        ctx: &mut IrContext,
+        scope: impl RewriteScope,
+        module_first_block: Option<BlockRef>,
+    ) -> usize {
         let mut changes = 0;
-        let module_first_block = module.first_block(ctx);
 
-        // Walk the module body region
-        let body = match module.body(ctx) {
-            Some(r) => r,
-            None => return 0,
-        };
-        changes += self.visit_region(ctx, body, module_first_block);
+        for region in scope.regions(ctx) {
+            changes += self.visit_region(ctx, region, module_first_block);
+        }
 
         changes
     }
@@ -343,7 +382,9 @@ impl PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialect::func;
     use crate::location::Span;
+    use crate::ops::DialectOp;
     use crate::rewrite::conversion_target::ConversionTarget;
     use crate::symbol::Symbol;
     use crate::*;
@@ -405,6 +446,37 @@ mod tests {
                 .region(region)
                 .build(ctx);
         ctx.create_op(container_data)
+    }
+
+    fn make_func_container(
+        ctx: &mut IrContext,
+        loc: Location,
+        name: &'static str,
+        nested_ops: Vec<OpRef>,
+    ) -> func::Func {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in nested_ops {
+            ctx.push_op(block, op);
+        }
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let func_ty = crate::dialect::core::func(ctx, nil_ty, []).as_type_ref();
+        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
+            .attr("type", Attribute::Type(func_ty))
+            .region(region)
+            .build(ctx);
+        let func_op = ctx.create_op(func_data);
+        func::Func::from_op(ctx, func_op).expect("test func should be valid")
     }
 
     fn first_nested_op(ctx: &IrContext, op: OpRef) -> OpRef {
@@ -608,6 +680,45 @@ mod tests {
         assert_eq!(result.total_changes, 0);
         let skipped = first_nested_op(&ctx, container);
         assert_eq!(ctx.op(skipped).name, Symbol::new("source"));
+    }
+
+    #[test]
+    fn apply_partial_rewrites_only_selected_typed_scope_regions() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let selected_nested =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let selected_nested = ctx.create_op(selected_nested);
+        let selected_func = make_func_container(&mut ctx, loc, "selected", vec![selected_nested]);
+
+        let sibling_nested =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let sibling_nested = ctx.create_op(sibling_nested);
+        let sibling_func = make_func_container(&mut ctx, loc, "sibling", vec![sibling_nested]);
+        let _module = make_module(
+            &mut ctx,
+            loc,
+            vec![selected_func.op_ref(), sibling_func.op_ref()],
+        );
+
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .apply_partial(&mut ctx, selected_func);
+
+        assert_eq!(result.total_changes, 1);
+        assert_eq!(
+            ctx.op(first_nested_op(&ctx, selected_func.op_ref())).name,
+            Symbol::new("target")
+        );
+        assert_eq!(
+            ctx.op(first_nested_op(&ctx, sibling_func.op_ref())).name,
+            Symbol::new("source")
+        );
     }
 
     #[test]
