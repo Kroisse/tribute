@@ -588,7 +588,8 @@ flowchart TB
 | | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
 | | `resolve_evidence` | handler evidence setup | effect.extend | |
 | | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
-| **Backend effect ABI** | `native/evidence` | effect.* | native runtime calls + call_indirect | |
+| **Backend effect ABI** | `native/evidence runtime decls` | evidence runtime stubs | native extern declarations | module-wide |
+| | `native/evidence` | effect.* | native runtime calls + call_indirect | function-anchored |
 | | `wasm/evidence_to_wasm` | effect.* | wasm evidence helpers + wasm.call_indirect | |
 | **Lowering** | `lower_case` | tribute.case | scf.if | |
 | | `canonicalize`, local `dce`, `scf_to_cf` | func.func body | canonical body / cf blocks | function-anchored |

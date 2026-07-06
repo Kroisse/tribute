@@ -626,7 +626,15 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
-    tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
+    if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
+        tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
+        let mut pm = PassManager::new();
+        pm.nest::<func_dialect::Func>()
+            .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
+        pm.run(ctx, core_module)?;
+    } else {
+        tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
+    }
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
