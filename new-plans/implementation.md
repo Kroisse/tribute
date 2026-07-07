@@ -582,19 +582,24 @@ flowchart TB
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | concrete types | ✓ |
 | **Closure** | `lambda_lift` | lambdas | top-level funcs | |
-| | `closure_lower` | closure.new | func.call_indirect | |
+| | `closure_lower` | closure.new | func.call_indirect | module-wide: signatures + closure call evidence audit |
 | | `tdnr` | x.method() | Type::method(x) | |
 | **Ability** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
 | | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
-| | `resolve_evidence` | handler evidence setup | effect.extend | |
+| | `resolve_evidence` | handler evidence setup | effect.extend | module-wide setup before function-local lowering |
 | | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
 | **Backend effect ABI** | `native/evidence runtime decls` | evidence runtime stubs | native extern declarations | module-wide |
 | | `native/evidence` | effect.* | native runtime calls + call_indirect | function-anchored |
 | | `wasm/evidence runtime funcs` | evidence runtime stubs | wasm evidence helpers | module-wide |
 | | `wasm/evidence_to_wasm` | effect.* | wasm.call + wasm.call_indirect | function-anchored |
-| **Lowering** | `lower_case` | tribute.case | scf.if | |
+| **Lowering** | `ast_to_ir case lowering` | tribute.case | scf.if | frontend lowering, not a pass |
 | | `canonicalize`, local `dce`, `scf_to_cf` | func.func body | canonical body / cf blocks | function-anchored |
 | | `global_dce` | module symbols | reachable funcs | module-wide |
+
+`ast_to_ir case lowering` is listed as a pipeline stage for design clarity, but
+it is part of frontend IR construction rather than a standalone pass. The
+function-anchored lowering point after case construction is `scf_to_cf_pass()`,
+which runs under `PassManager::nest::<func.func>()`.
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
