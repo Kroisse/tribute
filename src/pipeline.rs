@@ -362,7 +362,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
     // Phase 1 - Lower to wasm dialect (Tribute-specific)
     {
         let _span = tracing::info_span!("lower_to_wasm").entered();
-        tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_conversion_failure)?;
+        tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_lowering_failure)?;
     }
 
     // Phase 2 - Resolve unrealized_conversion_cast operations (WASM type converter)
@@ -874,7 +874,7 @@ fn native_pass_failure(error: PassError) -> trunk_ir_cranelift_backend::Compilat
     trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
 }
 
-fn wasm_conversion_failure(error: ConversionError) -> CompilationError {
+fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> CompilationError {
     CompilationError::ir_validation(error.to_string())
 }
 

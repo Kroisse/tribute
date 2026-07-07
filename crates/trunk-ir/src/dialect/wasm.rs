@@ -1,5 +1,7 @@
 //! Arena-based wasm dialect.
 
+crate::register_isolated_op!(wasm.func);
+
 #[trunk_ir::dialect]
 mod wasm {
     // Types (abstract heap types)

@@ -4,6 +4,8 @@
 //! wasm dialect operations. Uses arena IR for in-place mutation within a
 //! single arena session.
 
+use std::fmt;
+
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
@@ -11,6 +13,8 @@ use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{PassError, PassManager};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
@@ -26,6 +30,42 @@ use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE};
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 
+#[derive(Debug)]
+pub enum WasmLowerError {
+    Conversion(ConversionError),
+    Pass(PassError),
+}
+
+impl fmt::Display for WasmLowerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Conversion(error) => error.fmt(f),
+            Self::Pass(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for WasmLowerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Conversion(error) => Some(error),
+            Self::Pass(error) => Some(error),
+        }
+    }
+}
+
+impl From<ConversionError> for WasmLowerError {
+    fn from(error: ConversionError) -> Self {
+        Self::Conversion(error)
+    }
+}
+
+impl From<PassError> for WasmLowerError {
+    fn from(error: PassError) -> Self {
+        Self::Pass(error)
+    }
+}
+
 /// Conversion target for IR after Wasm-specific lowering has removed shared
 /// ability/effect ABI operations.
 pub fn wasm_backend_ready_target() -> ConversionTarget {
@@ -35,7 +75,7 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
-pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();
@@ -94,7 +134,15 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), Conversi
     // Lower evidence runtime function stubs (prepare for inline WASM operations)
     {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
-        super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
+        if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {
+            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module);
+            let mut pm = PassManager::new();
+            pm.nest::<wasm_dialect::Func>()
+                .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
+            pm.run(ctx, core_module)?;
+        } else {
+            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
+        }
     }
 
     // Const analysis and lowering (string/bytes constants to data segments)
@@ -131,7 +179,8 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), Conversi
         super::wasm_gc_type_assign::assign_gc_type_indices(ctx, module);
     }
 
-    verify_wasm_backend_ready(ctx, module)
+    verify_wasm_backend_ready(ctx, module)?;
+    Ok(())
 }
 
 /// Verify the partial Wasm backend boundary.
