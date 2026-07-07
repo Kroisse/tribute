@@ -431,7 +431,7 @@ native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
-      → evidence_params → closure_lower → evidence_calls
+      → evidence_params → prepare_closure_lowering → lower_closures_in_func
       → lower_ability_perform → resolve_evidence → lower_handle_dispatch
       → dce → resolve_casts
 
@@ -530,7 +530,8 @@ flowchart TB
 
     subgraph closure["Closure Processing"]
         lambda_lift["lambda_lift"]
-        closure_lower["closure_lower"]
+        closure_prep["prepare_closure_lowering"]
+        closure_func["lower_closures_in_func"]
         tdnr["tdnr"]
     end
 
@@ -562,8 +563,9 @@ flowchart TB
     resolve -->|"func.*, adt.*"| const_inline
     const_inline --> typecheck
     typecheck -->|"typed module"| lambda_lift
-    lambda_lift -->|"closure.new"| closure_lower
-    closure_lower -->|"call_indirect"| tdnr
+    lambda_lift -->|"closure signatures"| closure_prep
+    closure_prep -->|"closure.new"| closure_func
+    closure_func -->|"call_indirect + evidence"| tdnr
     tdnr --> evidence
     evidence -->|"+evidence param"| resolve_ev
     resolve_ev -->|"dispatch closures"| tail_opt
@@ -582,7 +584,8 @@ flowchart TB
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | concrete types | ✓ |
 | **Closure** | `lambda_lift` | lambdas | top-level funcs | |
-| | `closure_lower` | closure.new | func.call_indirect | module-wide: signatures + closure call evidence audit |
+| | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
+| | `lower_closures_in_func` | closure.new | func.call_indirect + evidence arg | function-anchored |
 | | `tdnr` | x.method() | Type::method(x) | |
 | **Ability** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
 | | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |

@@ -36,11 +36,8 @@
 //!     ▼ evidence_params (Phase 1)
 //! Module (evidence params added to signatures)
 //!     │
-//!     ▼ closure_lower
-//! Module (closure.* lowered)
-//!     │
-//!     ▼ evidence_calls (Phase 2)
-//! Module (evidence passed through calls)
+//!     ▼ prepare_closure_lowering + lower_closures_in_func
+//! Module (closure.* lowered, evidence passed through closure calls)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
 //! Module (ability.perform/call lowered to effect.dispatch_*)
@@ -438,7 +435,9 @@ pub fn run_through_closure_lower(
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-        .add_pass(tribute_passes::closure_lower::LowerClosures);
+        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+    pm.nest::<func_dialect::Func>()
+        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
@@ -471,7 +470,10 @@ fn run_shared_pipeline(
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
         // Evidence params are now inserted directly during ast_to_ir lowering.
-        .add_pass(tribute_passes::closure_lower::LowerClosures);
+        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+    structural_pm
+        .nest::<func_dialect::Func>()
+        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     install_debug_use_chain_verifier(&mut structural_pm);
     structural_pm.run(&mut ctx, core_module)?;
 

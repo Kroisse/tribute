@@ -45,15 +45,15 @@ core.module @direct_fn_native {
 
   func.func @main() -> core.nil {
       %0 = func.call {callee = @__tribute_evidence_empty} : core.ptr
-      %1 = func.call {callee = @__tribute_evidence_empty} : core.ptr
-      %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = func.constant {func_ref = @"run::__clam_0"} : !t1
-      %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
-      %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"direct_fn_native::__lambda_5"} : !t1
-      %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
-      %8 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
-      %9 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %2 = func.constant {func_ref = @"run::__clam_0"} : !t1
+      %3 = adt.struct_new %2, %1 {type = !_closure} : !_closure
+      %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %5 = func.constant {func_ref = @"direct_fn_native::__lambda_5"} : !t1
+      %6 = adt.struct_new %5, %4 {type = !_closure} : !_closure
+      %7 = func.call {callee = @__tribute_evidence_empty} : core.ptr
+      %8 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
       %10 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %11 = func.constant {func_ref = @"run::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)
       %12 = adt.struct_new %11, %10 {type = !_closure} : !_closure
@@ -65,7 +65,7 @@ core.module @direct_fn_native {
       %18 = core.unrealized_conversion_cast %15 : core.ptr
       %19 = core.unrealized_conversion_cast %12 : core.ptr
       %20 = func.call %0, %17, %16, %18, %19 {callee = @__tribute_evidence_extend} : core.ptr
-      %21 = func.call_indirect %8, %20, %9, %7 : tribute_rt.anyref
+      %21 = func.call_indirect %8, %20, %9, %6 : tribute_rt.anyref
       %22 = tribute_rt.unbox_int %21 : core.i32
       %23 = tribute_rt.unbox_int %21 : core.i32
       %24 = arith.const {value = unit} : core.nil

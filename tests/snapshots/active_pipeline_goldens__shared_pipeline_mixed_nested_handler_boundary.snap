@@ -117,15 +117,15 @@ core.module @mixed_nested {
   func.func @run_all() -> core.i32 {
       %0 = arith.const {value = 0} : core.i32
       %1 = adt.array_new %0 {type = !t0} : !t0
-      %2 = adt.ref_null {type = !t0} : !t0
-      %3 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %4 = func.constant {func_ref = @"run_all::__clam_0"} : !t1
-      %5 = adt.struct_new %4, %3 {type = !_closure} : !_closure
-      %6 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %7 = func.constant {func_ref = @"mixed_nested::__lambda_10"} : !t1
-      %8 = adt.struct_new %7, %6 {type = !_closure} : !_closure
-      %9 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
-      %10 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %3 = func.constant {func_ref = @"run_all::__clam_0"} : !t1
+      %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
+      %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %6 = func.constant {func_ref = @"mixed_nested::__lambda_10"} : !t1
+      %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
+      %8 = adt.ref_null {type = !t0} : !t0
+      %9 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %10 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
       %11 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %12 = func.constant {func_ref = @"run_all::__clam_1"} : !t4
       %13 = adt.struct_new %12, %11 {type = !_closure} : !_closure
@@ -134,7 +134,7 @@ core.module @mixed_nested {
       %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
       %17 = func.call {callee = @__tribute_next_tag} : core.i32
       %18 = effect.extend %1, %17, %16, %13 {ability_ref = core.ability_ref() {name = @Console}} : !t0
-      %19 = func.call_indirect %9, %18, %10, %8 : tribute_rt.anyref
+      %19 = func.call_indirect %9, %18, %10, %7 : tribute_rt.anyref
       %20 = core.unrealized_conversion_cast %19 : core.i32
       %21 = core.unrealized_conversion_cast %20 : tribute_rt.anyref
       %22 = core.unrealized_conversion_cast %21 : core.i32
