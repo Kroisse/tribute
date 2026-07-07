@@ -1200,7 +1200,15 @@ fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::LegalityCheck;
+
+    fn lower_text(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        lower_to_wasm(&mut ctx, module).expect("test module should lower to wasm");
+        print_module(&ctx, module.op())
+    }
 
     #[test]
     fn wasm_backend_ready_rejects_residual_effect_ops() {
@@ -1240,5 +1248,30 @@ mod tests {
 
         verify_wasm_backend_ready(&mut ctx, module)
             .expect("partial wasm backend boundary should allow unknown later-stage ops");
+    }
+
+    #[test]
+    fn lower_to_wasm_removes_effect_dispatch_tail() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    func.return %result
+  }
+}"#,
+        );
+
+        assert!(!output.contains("effect.dispatch_tail"), "{output}");
+        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
+        assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn wasm_lower_error_wraps_conversion_error() {
+        let conversion = ConversionError::new(WASM_BACKEND_READY_BOUNDARY, vec![]);
+        let error = WasmLowerError::from(conversion);
+
+        assert!(error.to_string().contains(WASM_BACKEND_READY_BOUNDARY));
+        assert!(std::error::Error::source(&error).is_some());
     }
 }
