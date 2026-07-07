@@ -54,11 +54,19 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
 }
 
 /// Lower evidence operations in one WASM function body.
+///
+/// Precondition: [`prepare_wasm_evidence_runtime`] must already have run for
+/// the containing module so the `__tribute_evidence_lookup` and
+/// `__tribute_evidence_extend` stubs exist as WASM runtime helpers.
 pub fn lower_evidence_to_wasm_func(ctx: &mut IrContext, func_op: wasm_dialect::Func) {
     rewrite_evidence_ops_in_scope(ctx, func_op);
 }
 
 /// PassManager-friendly WASM evidence lowering pass.
+///
+/// This pass is function-scoped and does not prepare module-scope runtime
+/// helpers. Run [`prepare_wasm_evidence_runtime`] on the module before adding
+/// this pass to a `wasm.func` pipeline.
 pub struct LowerEvidenceToWasm;
 
 impl Pass for LowerEvidenceToWasm {
