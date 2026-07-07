@@ -12,7 +12,7 @@ use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
 use crate::context::IrContext;
-use crate::dialect::{core, func};
+use crate::dialect::{core, func, wasm};
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, RegionRef};
 
@@ -42,6 +42,18 @@ impl RewriteScope for Module {
 }
 
 impl RewriteScope for func::Func {
+    type Regions = std::iter::Once<RegionRef>;
+
+    fn regions(self, ctx: &IrContext) -> Self::Regions {
+        std::iter::once(self.body(ctx))
+    }
+
+    fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
+        None
+    }
+}
+
+impl RewriteScope for wasm::Func {
     type Regions = std::iter::Once<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {

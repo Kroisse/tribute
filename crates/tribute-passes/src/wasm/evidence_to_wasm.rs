@@ -28,9 +28,10 @@ use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -43,17 +44,52 @@ use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_I
 /// 2. Lowers `effect.extend` and remaining legacy `ability.evidence_lookup` /
 ///    `ability.evidence_extend` operations to calls to the generated functions.
 pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) {
-    // Phase 1: Replace stubs with real implementations
-    replace_evidence_function_stubs(ctx, module);
+    prepare_wasm_evidence_runtime(ctx, module);
+    rewrite_evidence_ops_in_scope(ctx, module);
+}
 
-    // Phase 2: Pattern-based lowering for remaining ability ops
+/// Prepare module-scope WASM evidence runtime helper functions.
+pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    replace_evidence_function_stubs(ctx, module);
+}
+
+/// Lower evidence operations in one WASM function body.
+///
+/// Precondition: [`prepare_wasm_evidence_runtime`] must already have run for
+/// the containing module so the `__tribute_evidence_lookup` and
+/// `__tribute_evidence_extend` stubs exist as WASM runtime helpers.
+pub fn lower_evidence_to_wasm_func(ctx: &mut IrContext, func_op: wasm_dialect::Func) {
+    rewrite_evidence_ops_in_scope(ctx, func_op);
+}
+
+/// PassManager-friendly WASM evidence lowering pass.
+///
+/// This pass is function-scoped and does not prepare module-scope runtime
+/// helpers. Run [`prepare_wasm_evidence_runtime`] on the module before adding
+/// this pass to a `wasm.func` pipeline.
+pub struct LowerEvidenceToWasm;
+
+impl Pass for LowerEvidenceToWasm {
+    type Target = wasm_dialect::Func;
+
+    fn name(&self) -> &'static str {
+        "lower-evidence-to-wasm"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: wasm_dialect::Func) -> PassRunResult {
+        lower_evidence_to_wasm_func(ctx, target);
+        Ok(())
+    }
+}
+
+fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(EffectExtendPattern)
         .add_pattern(EffectDispatchTailPattern)
         .add_pattern(EffectDispatchCpsPattern)
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
-    applicator.apply_partial(ctx, module);
+    applicator.apply_partial(ctx, scope);
 }
 
 /// Replace evidence runtime function stubs with real implementations.
@@ -1232,6 +1268,24 @@ mod tests {
         print_module(&ctx, module.op())
     }
 
+    fn dispatch_module() -> &'static str {
+        r#"core.module @test {
+  func.func @selected(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    func.return %result
+  }
+  func.func @untouched(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : wasm.anyref
+    func.return %result
+  }
+}"#
+    }
+
+    fn lower_funcs_to_wasm(ctx: &mut IrContext, module: Module) {
+        let tc = super::super::type_converter::wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, module, tc);
+    }
+
     #[test]
     fn textual_dispatch_tail_lowers_to_wasm_indirect_call() {
         let output = lower_text(
@@ -1280,5 +1334,48 @@ mod tests {
         assert!(!output.contains("effect.extend"), "{output}");
         assert!(output.contains("wasm.struct_new"), "{output}");
         assert!(output.contains("__tribute_evidence_extend"), "{output}");
+    }
+
+    #[test]
+    fn wasm_function_scope_rewrites_only_selected_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+        lower_funcs_to_wasm(&mut ctx, module);
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| wasm_dialect::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected wasm function");
+
+        lower_evidence_to_wasm_func(&mut ctx, selected);
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("effect.dispatch_tail").count(), 1);
+        assert!(output.contains("sym_name = @selected"), "{output}");
+        assert!(output.contains("sym_name = @untouched"), "{output}");
+        assert!(output.contains("op_name = @print"), "{output}");
+        assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn pass_adapter_runs_wasm_function_lowering() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, dispatch_module());
+        lower_funcs_to_wasm(&mut ctx, module);
+        let selected = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| wasm_dialect::Func::from_op(&ctx, op).ok())
+            .next()
+            .expect("test module should contain a selected wasm function");
+        let mut pass = LowerEvidenceToWasm;
+
+        assert_eq!(pass.name(), "lower-evidence-to-wasm");
+        pass.run(&mut ctx, selected).unwrap();
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("effect.dispatch_tail").count(), 1);
+        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
     }
 }
