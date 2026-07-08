@@ -582,7 +582,7 @@ flowchart TB
 | -------- | ---- | ---- | ---- | ---- |
 | **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
 | | `inline_constants` | const refs | inlined values | |
-| | `typecheck` | type.var | concrete types | ✓ |
+| | `typecheck` | type.var | solved or generalized typed AST | ✓ |
 | **Closure** | `lambda_lift` | lambdas | top-level funcs | |
 | | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
 | | `lower_closures_in_func` | closure.new | func.call_indirect + evidence arg | function-anchored |
@@ -603,6 +603,12 @@ flowchart TB
 it is part of frontend IR construction rather than a standalone pass. The
 function-anchored lowering point after case construction is `scf_to_cf_pass()`,
 which runs under `PassManager::nest::<func.func>()`.
+
+`typecheck` solves function-local unification variables where constraints make
+them concrete and generalizes remaining polymorphic variables into stable
+`BoundVar` indices. Generalization covers the function signature, checked body,
+and post-solve deferred UFCS callee types so later TDNR and monomorphization do
+not see raw solver variables in typed references.
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
