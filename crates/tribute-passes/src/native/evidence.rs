@@ -22,6 +22,7 @@
 //!    results is rewritten to `func.call @__tribute_evidence_lookup_tr(ev, ability_id)`.
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 
 use tribute_ir::dialect::ability::{
     self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
@@ -32,11 +33,15 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::{Pass, PassRunResult};
+use trunk_ir::pass::{Pass, PassRunError, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
+use trunk_ir::rewrite::{
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
+};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Lower evidence operations for the native backend.
 ///
@@ -53,10 +58,16 @@ pub fn prepare_native_evidence_runtime(ctx: &mut IrContext, module: Module) {
 
 /// Lower evidence operations inside one function for the native backend.
 pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
+    try_lower_evidence_to_native_func(ctx, func_op).expect("native evidence lowering failed");
+}
+
+fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
     if is_evidence_runtime_fn(func_op.sym_name(ctx)) {
-        return;
+        return Ok(());
     }
-    rewrite_evidence_ops_in_region(ctx, func_op.body(ctx));
+    lower_effect_abi_to_native(ctx, func_op)?;
+    rewrite_evidence_ops_in_region(ctx, func_op.body(ctx))?;
+    Ok(())
 }
 
 /// PassManager-friendly native evidence lowering pass.
@@ -70,8 +81,7 @@ impl Pass for LowerEvidenceToNative {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
-        lower_evidence_to_native_func(ctx, target);
-        Ok(())
+        try_lower_evidence_to_native_func(ctx, target)
     }
 }
 
@@ -240,25 +250,78 @@ fn is_evidence_runtime_fn(name: Symbol) -> bool {
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
-    let first_block = match module.first_block(ctx) {
-        Some(b) => b,
-        None => return,
-    };
-
-    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
-
-    for op in ops {
+    let mut funcs = Vec::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
-            lower_evidence_to_native_func(ctx, func_op);
+            funcs.push(func_op);
         }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+
+    for func_op in funcs {
+        lower_evidence_to_native_func(ctx, func_op);
     }
 }
 
-fn rewrite_evidence_ops_in_region(ctx: &mut IrContext, region: RegionRef) {
+fn native_effect_abi_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .legal_op("func", "func")
+        .recursive_legal_op("func", "func")
+        .illegal_op("effect", "extend")
+        .illegal_op("effect", "dispatch_tail")
+        .illegal_op("effect", "dispatch_cps")
+}
+
+fn lower_effect_abi_to_native(
+    ctx: &mut IrContext,
+    func_op: func::Func,
+) -> Result<(), ConversionError> {
+    PatternApplicator::new(TypeConverter::new())
+        .with_target(native_effect_abi_target())
+        .add_pattern(LowerEffectExtendToNative)
+        .add_pattern(LowerEffectDispatchTailToNative)
+        .add_pattern(LowerEffectDispatchCpsToNative)
+        .apply_partial_conversion(ctx, func_op, "native-evidence-effect-abi")?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct NativeEvidenceRewriteError {
+    op: OpRef,
+    loc: Location,
+    message: String,
+}
+
+impl std::fmt::Display for NativeEvidenceRewriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "native evidence rewrite failed at op {:?} (loc {:?}): {}",
+            self.op, self.loc, self.message
+        )
+    }
+}
+
+impl std::error::Error for NativeEvidenceRewriteError {}
+
+fn native_evidence_rewrite_error(
+    op: OpRef,
+    loc: Location,
+    message: impl Into<String>,
+) -> PassRunError {
+    Box::new(NativeEvidenceRewriteError {
+        op,
+        loc,
+        message: message.into(),
+    })
+}
+
+fn rewrite_evidence_ops_in_region(ctx: &mut IrContext, region: RegionRef) -> PassRunResult {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        rewrite_evidence_ops_in_block(ctx, block);
+        rewrite_evidence_ops_in_block(ctx, block)?;
     }
+    Ok(())
 }
 
 /// Check if a type is an evidence type in arena (adt.array<ability.evidence>).
@@ -282,15 +345,205 @@ fn op_idx_const(
     arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_idx as i128))
 }
 
-fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
+fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+}
+
+fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
+
+struct LowerEffectExtendToNative;
+
+impl RewritePattern for LowerEffectExtendToNative {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let ptr_ty = core_ptr_type(ctx);
+        let i32_ty = core_i32_type(ctx);
+
+        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, extend_op.ability_ref(ctx));
+        let ability_id_val = ability_id_op.result(ctx);
+        rewriter.insert_op(ability_id_op.op_ref());
+
+        let tr_dispatch_ptr =
+            core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
+        rewriter.insert_op(tr_dispatch_ptr.op_ref());
+
+        let handler_dispatch_ptr =
+            core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
+        rewriter.insert_op(handler_dispatch_ptr.op_ref());
+
+        let extend_call = func::call(
+            ctx,
+            loc,
+            [
+                extend_op.evidence(ctx),
+                ability_id_val,
+                extend_op.prompt_tag(ctx),
+                tr_dispatch_ptr.result(ctx),
+                handler_dispatch_ptr.result(ctx),
+            ],
+            ptr_ty,
+            Symbol::new(evidence_abi::EXTEND),
+        );
+        let new_result = extend_call.result(ctx);
+        rewriter.insert_op(extend_call.op_ref());
+        rewriter.erase_op(vec![new_result]);
+        true
+    }
+}
+
+struct LowerEffectDispatchTailToNative;
+
+impl RewritePattern for LowerEffectDispatchTailToNative {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let ptr_ty = core_ptr_type(ctx);
+        let i32_ty = core_i32_type(ctx);
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let ability_ref = dispatch_op.ability_ref(ctx);
+
+        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
+        let ability_id_val = ability_id_op.result(ctx);
+        rewriter.insert_op(ability_id_op.op_ref());
+
+        let dispatch_closure = func::call(
+            ctx,
+            loc,
+            [dispatch_op.evidence(ctx), ability_id_val],
+            ptr_ty,
+            Symbol::new(evidence_abi::LOOKUP_TR),
+        );
+        let dispatch_val = dispatch_closure.result(ctx);
+        rewriter.insert_op(dispatch_closure.op_ref());
+
+        let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+        let op_idx_val = op_idx_op.result(ctx);
+        rewriter.insert_op(op_idx_op.op_ref());
+
+        let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+        let fn_ptr = fn_ptr_get.result(ctx);
+        rewriter.insert_op(fn_ptr_get.op_ref());
+
+        let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+        let env_val = env_get.result(ctx);
+        rewriter.insert_op(env_get.op_ref());
+
+        let result_ty = ctx.op_result_types(op)[0];
+        let call = func::call_indirect(
+            ctx,
+            loc,
+            fn_ptr,
+            [
+                dispatch_op.evidence(ctx),
+                env_val,
+                op_idx_val,
+                dispatch_op.payload(ctx),
+            ],
+            result_ty,
+        );
+        let new_result = call.result(ctx);
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![new_result]);
+        true
+    }
+}
+
+struct LowerEffectDispatchCpsToNative;
+
+impl RewritePattern for LowerEffectDispatchCpsToNative {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let ptr_ty = core_ptr_type(ctx);
+        let i32_ty = core_i32_type(ctx);
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let ability_ref = dispatch_op.ability_ref(ctx);
+
+        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
+        let ability_id_val = ability_id_op.result(ctx);
+        rewriter.insert_op(ability_id_op.op_ref());
+
+        let dispatch_closure = func::call(
+            ctx,
+            loc,
+            [dispatch_op.evidence(ctx), ability_id_val],
+            ptr_ty,
+            Symbol::new(evidence_abi::LOOKUP_HANDLER),
+        );
+        let dispatch_val = dispatch_closure.result(ctx);
+        rewriter.insert_op(dispatch_closure.op_ref());
+
+        let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
+        let op_idx_val = op_idx_op.result(ctx);
+        rewriter.insert_op(op_idx_op.op_ref());
+
+        let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+        let fn_ptr = fn_ptr_get.result(ctx);
+        rewriter.insert_op(fn_ptr_get.op_ref());
+
+        let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+        let env_val = env_get.result(ctx);
+        rewriter.insert_op(env_get.op_ref());
+
+        let result_ty = ctx.op_result_types(op)[0];
+        let call = func::call_indirect(
+            ctx,
+            loc,
+            fn_ptr,
+            [
+                dispatch_op.evidence(ctx),
+                env_val,
+                dispatch_op.continuation(ctx),
+                op_idx_val,
+                dispatch_op.payload(ctx),
+            ],
+            result_ty,
+        );
+        let new_result = call.result(ctx);
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![new_result]);
+        true
+    }
+}
+
+fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRunResult {
     let ptr_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
 
     // Track Marker struct_new results → their operands
     let mut marker_struct_operands: HashMap<ValueRef, Vec<ValueRef>> = HashMap::new();
@@ -331,12 +584,17 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                 // Evidence array_new must represent an empty evidence vector.
                 // The only operand should be the size hint (arith.const 0).
                 let operand_count = ctx.op_operands(op).len();
-                assert!(
-                    operand_count <= 1,
-                    "evidence_to_native: adt.array_new with evidence type has {operand_count} \
-                     operands; expected at most 1 (the size hint). Non-empty evidence arrays \
-                     should not reach this pass."
-                );
+                if operand_count > 1 {
+                    return Err(native_evidence_rewrite_error(
+                        op,
+                        loc,
+                        format!(
+                            "adt.array_new with evidence type has {operand_count} operands; \
+                             expected at most 1 (the size hint). Non-empty evidence arrays \
+                             should not reach this pass."
+                        ),
+                    ));
+                }
                 let old_result = ctx.op_result(op, 0);
                 let call = func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
@@ -359,143 +617,6 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             }
         }
 
-        // --- effect.extend → func.call @__tribute_evidence_extend native ABI ---
-        if let Ok(extend_op) = effect::Extend::from_op(ctx, op) {
-            let ability_id_op =
-                ability::ability_id_const(ctx, loc, i32_ty, extend_op.ability_ref(ctx));
-            let ability_id_val = ability_id_op.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_op.op_ref());
-
-            let tr_dispatch_ptr =
-                core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
-            ctx.insert_op_before(block, op, tr_dispatch_ptr.op_ref());
-
-            let handler_dispatch_ptr =
-                core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
-            ctx.insert_op_before(block, op, handler_dispatch_ptr.op_ref());
-
-            let old_result = extend_op.result(ctx);
-            let extend_call = func::call(
-                ctx,
-                loc,
-                [
-                    extend_op.evidence(ctx),
-                    ability_id_val,
-                    extend_op.prompt_tag(ctx),
-                    tr_dispatch_ptr.result(ctx),
-                    handler_dispatch_ptr.result(ctx),
-                ],
-                ptr_ty,
-                Symbol::new(evidence_abi::EXTEND),
-            );
-            let new_result = extend_call.result(ctx);
-            ctx.insert_op_before(block, op, extend_call.op_ref());
-            ctx.replace_all_uses(old_result, new_result);
-            ops_to_erase.push(op);
-            continue;
-        }
-
-        // --- effect.dispatch_tail → lookup TR dispatch closure and call it ---
-        if let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) {
-            let ability_ref = dispatch_op.ability_ref(ctx);
-            let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-            let ability_id_val = ability_id_op.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_op.op_ref());
-
-            let dispatch_closure = func::call(
-                ctx,
-                loc,
-                [dispatch_op.evidence(ctx), ability_id_val],
-                ptr_ty,
-                Symbol::new(evidence_abi::LOOKUP_TR),
-            );
-            let dispatch_val = dispatch_closure.result(ctx);
-            ctx.insert_op_before(block, op, dispatch_closure.op_ref());
-
-            let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-            let op_idx_val = op_idx_op.result(ctx);
-            ctx.insert_op_before(block, op, op_idx_op.op_ref());
-
-            let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
-            let fn_ptr = fn_ptr_get.result(ctx);
-            ctx.insert_op_before(block, op, fn_ptr_get.op_ref());
-
-            let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
-            let env_val = env_get.result(ctx);
-            ctx.insert_op_before(block, op, env_get.op_ref());
-
-            let result_ty = ctx.op_result_types(op)[0];
-            let call = func::call_indirect(
-                ctx,
-                loc,
-                fn_ptr,
-                [
-                    dispatch_op.evidence(ctx),
-                    env_val,
-                    op_idx_val,
-                    dispatch_op.payload(ctx),
-                ],
-                result_ty,
-            );
-            let old_result = dispatch_op.result(ctx);
-            let new_result = call.result(ctx);
-            ctx.insert_op_before(block, op, call.op_ref());
-            ctx.replace_all_uses(old_result, new_result);
-            ops_to_erase.push(op);
-            continue;
-        }
-
-        // --- effect.dispatch_cps → lookup CPS dispatch closure and call it ---
-        if let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) {
-            let ability_ref = dispatch_op.ability_ref(ctx);
-            let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-            let ability_id_val = ability_id_op.result(ctx);
-            ctx.insert_op_before(block, op, ability_id_op.op_ref());
-
-            let dispatch_closure = func::call(
-                ctx,
-                loc,
-                [dispatch_op.evidence(ctx), ability_id_val],
-                ptr_ty,
-                Symbol::new(evidence_abi::LOOKUP_HANDLER),
-            );
-            let dispatch_val = dispatch_closure.result(ctx);
-            ctx.insert_op_before(block, op, dispatch_closure.op_ref());
-
-            let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-            let op_idx_val = op_idx_op.result(ctx);
-            ctx.insert_op_before(block, op, op_idx_op.op_ref());
-
-            let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
-            let fn_ptr = fn_ptr_get.result(ctx);
-            ctx.insert_op_before(block, op, fn_ptr_get.op_ref());
-
-            let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
-            let env_val = env_get.result(ctx);
-            ctx.insert_op_before(block, op, env_get.op_ref());
-
-            let result_ty = ctx.op_result_types(op)[0];
-            let call = func::call_indirect(
-                ctx,
-                loc,
-                fn_ptr,
-                [
-                    dispatch_op.evidence(ctx),
-                    env_val,
-                    dispatch_op.continuation(ctx),
-                    op_idx_val,
-                    dispatch_op.payload(ctx),
-                ],
-                result_ty,
-            );
-            let old_result = dispatch_op.result(ctx);
-            let new_result = call.result(ctx);
-            ctx.insert_op_before(block, op, call.op_ref());
-            ctx.replace_all_uses(old_result, new_result);
-            ops_to_erase.push(op);
-            continue;
-        }
-
         // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 ---
         if dialect == Symbol::new("func")
             && name == Symbol::new("call")
@@ -505,6 +626,17 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
 
             if callee == Symbol::new(evidence_abi::LOOKUP) {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                if operands.len() != 2 {
+                    return Err(native_evidence_rewrite_error(
+                        op,
+                        loc,
+                        format!(
+                            "{} expects 2 operands, got {}",
+                            evidence_abi::LOOKUP,
+                            operands.len()
+                        ),
+                    ));
+                }
                 let ev_val = operands[0];
                 let ability_id_val = operands[1];
                 let old_result = ctx.op_result(op, 0);
@@ -526,33 +658,44 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → native ABI args ---
             if callee == Symbol::new(evidence_abi::EXTEND) {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                if operands.len() == 2 {
-                    let ev_val = operands[0];
-                    let marker_val = operands[1];
-
-                    let fields = marker_struct_operands.get(&marker_val).unwrap_or_else(|| {
-                        panic!(
-                            "evidence_extend rewrite: missing marker decomposition for \
-                             marker_val={marker_val:?} at op={op:?} (loc={loc:?}). \
-                             The adt.struct_new that produced this marker was not recorded."
-                        )
-                    });
-                    assert_eq!(
-                        fields.len(),
-                        tribute_ir::dialect::ability::MARKER_FIELD_COUNT,
-                        "evidence_extend rewrite: marker operand count must match canonical layout"
-                    );
-                    let mut args = vec![ev_val];
-                    args.extend_from_slice(fields);
-                    let old_result = ctx.op_result(op, 0);
-                    let new_call =
-                        func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
-                    let new_result = new_call.result(ctx);
-                    ctx.insert_op_before(block, op, new_call.op_ref());
-                    ctx.replace_all_uses(old_result, new_result);
-                    ops_to_erase.push(op);
+                if operands.len() != 2 {
                     continue;
                 }
+
+                let ev_val = operands[0];
+                let marker_val = operands[1];
+
+                let Some(fields) = marker_struct_operands.get(&marker_val) else {
+                    return Err(native_evidence_rewrite_error(
+                        op,
+                        loc,
+                        format!(
+                            "missing marker decomposition for marker_val={marker_val:?}; \
+                             the adt.struct_new that produced this marker was not recorded"
+                        ),
+                    ));
+                };
+                if fields.len() != tribute_ir::dialect::ability::MARKER_FIELD_COUNT {
+                    return Err(native_evidence_rewrite_error(
+                        op,
+                        loc,
+                        format!(
+                            "marker operand count must match canonical layout; expected {}, got {}",
+                            tribute_ir::dialect::ability::MARKER_FIELD_COUNT,
+                            fields.len()
+                        ),
+                    ));
+                }
+                let mut args = vec![ev_val];
+                args.extend_from_slice(fields);
+                let old_result = ctx.op_result(op, 0);
+                let new_call =
+                    func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
+                let new_result = new_call.result(ctx);
+                ctx.insert_op_before(block, op, new_call.op_ref());
+                ctx.replace_all_uses(old_result, new_result);
+                ops_to_erase.push(op);
+                continue;
             }
         }
 
@@ -566,7 +709,13 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     let field_idx = match field_attr {
                         Some(Attribute::Int(bits)) => *bits,
                         other => {
-                            panic!("expected Int field attribute on adt.struct_get, got {other:?}")
+                            return Err(native_evidence_rewrite_error(
+                                op,
+                                loc,
+                                format!(
+                                    "expected Int field attribute on adt.struct_get, got {other:?}"
+                                ),
+                            ));
                         }
                     };
                     match field_idx {
@@ -607,19 +756,30 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                             ctx.replace_all_uses(old_result, new_result);
                             ops_to_erase.push(op);
                         }
-                        _ => panic!(
-                            "unexpected struct_get field {field_idx} on evidence_lookup result"
-                        ),
+                        _ => {
+                            return Err(native_evidence_rewrite_error(
+                                op,
+                                loc,
+                                format!(
+                                    "unexpected struct_get field {field_idx} on evidence_lookup \
+                                     result"
+                                ),
+                            ));
+                        }
                     }
                     continue;
                 }
             }
         }
 
-        // --- Recurse into nested regions ---
+        // --- Recurse into nested regions, but leave nested functions for their
+        // own function-scoped pass invocation.
+        if func::Func::from_op(ctx, op).is_ok() {
+            continue;
+        }
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
-            rewrite_evidence_ops_in_region(ctx, region);
+            rewrite_evidence_ops_in_region(ctx, region)?;
         }
     }
 
@@ -627,13 +787,19 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
     for op in ops_to_erase.into_iter().rev() {
         erase_op(ctx, op);
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::ControlFlow;
+    use trunk_ir::Span;
+    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir::smallvec::smallvec;
+    use trunk_ir::walk::{WalkAction, walk_op};
 
     fn dispatch_module() -> &'static str {
         r#"core.module @test {
@@ -646,6 +812,45 @@ mod tests {
     func.return %result
   }
 }"#
+    }
+
+    fn func_by_name_recursive(ctx: &IrContext, module: Module, name: &'static str) -> func::Func {
+        let name = Symbol::new(name);
+        let mut found = None;
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Ok(func_op) = func::Func::from_op(ctx, op)
+                && func_op.sym_name(ctx) == name
+            {
+                found = Some(func_op);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        found.expect("test function should exist")
+    }
+
+    fn call_indirect_operands_in_func(ctx: &IrContext, func_op: func::Func) -> Vec<Vec<ValueRef>> {
+        let mut calls = Vec::new();
+        for &block in &ctx.region(func_op.body(ctx)).blocks {
+            for &op in &ctx.block(block).ops {
+                if func::CallIndirect::from_op(ctx, op).is_ok() {
+                    calls.push(ctx.op_operands(op).to_vec());
+                }
+            }
+        }
+        calls
+    }
+
+    fn entry_arg(ctx: &IrContext, func_op: func::Func, index: usize) -> ValueRef {
+        let entry = ctx.region(func_op.body(ctx)).blocks[0];
+        ctx.block_args(entry)[index]
+    }
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
     }
 
     #[test]
@@ -703,6 +908,57 @@ mod tests {
     }
 
     #[test]
+    fn pass_adapter_reports_malformed_legacy_extend() {
+        let (mut ctx, loc) = test_ctx();
+        let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
+        let marker_ty = ability::marker_adt_type_ref(&mut ctx);
+        let func_ty = core::func(&mut ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: evidence_ty,
+                    attrs: Default::default(),
+                },
+                BlockArgData {
+                    ty: marker_ty,
+                    attrs: Default::default(),
+                },
+            ],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let ev = ctx.block_arg(entry, 0);
+        let marker = ctx.block_arg(entry, 1);
+        let extend_call = func::call(
+            &mut ctx,
+            loc,
+            [ev, marker],
+            evidence_ty,
+            Symbol::new(evidence_abi::EXTEND),
+        );
+        let extend_result = extend_call.result(&ctx);
+        let ret = func::r#return(&mut ctx, loc, [extend_result]);
+        ctx.push_op(entry, extend_call.op_ref());
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = func::func(&mut ctx, loc, Symbol::new("malformed"), func_ty, body);
+
+        let mut pass = LowerEvidenceToNative;
+        let err = pass
+            .run(&mut ctx, func_op)
+            .expect_err("malformed legacy evidence extend should report a pass error");
+
+        assert!(err.to_string().contains("missing marker decomposition"));
+    }
+
+    #[test]
     fn function_scope_skips_evidence_runtime_functions() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -726,5 +982,42 @@ mod tests {
         let ir_text = print_module(&ctx, module.op());
         assert!(ir_text.contains("func.func @__tribute_evidence_empty"));
         assert!(ir_text.contains("effect.dispatch_tail"));
+    }
+
+    #[test]
+    fn function_scope_leaves_nested_func_for_own_lowering() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @outer(%outer_ev: core.ptr, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
+    func.func @inner(%inner_ev: core.ptr, %inner_payload: tribute_rt.anyref) -> core.ptr {
+      %result = effect.dispatch_tail %inner_ev, %inner_payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+      func.return %result
+    }
+    func.return %payload
+  }
+}"#,
+        );
+        let outer = func_by_name_recursive(&ctx, module, "outer");
+
+        lower_evidence_to_native_func(&mut ctx, outer);
+
+        let inner = func_by_name_recursive(&ctx, module, "inner");
+        let inner_after_outer = print_module(&ctx, inner.op_ref());
+        assert!(
+            inner_after_outer.contains("effect.dispatch_tail"),
+            "outer function pass should not lower nested function body:\n{inner_after_outer}"
+        );
+
+        lower_evidence_to_native_func(&mut ctx, inner);
+
+        let inner_calls = call_indirect_operands_in_func(&ctx, inner);
+        assert_eq!(inner_calls.len(), 1);
+        assert_eq!(
+            inner_calls[0][1],
+            entry_arg(&ctx, inner, 0),
+            "nested native evidence lowering should pass the nested function's own evidence"
+        );
     }
 }
