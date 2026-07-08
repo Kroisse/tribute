@@ -221,6 +221,14 @@ fn main() {
 }
 "#;
 
+const FLOAT_COMPARISON_SOURCE: &str = r#"
+fn main() {
+    let a = 1.0
+    let b = 2.0
+    let _ = #(a == b, a != b, a < b, a <= b, a > b, a >= b)
+}
+"#;
+
 #[salsa_test]
 fn shared_pipeline_direct_fn_ability_call(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_shared_pipeline_ir(db, "direct_fn.trb", DIRECT_FN_SOURCE);
@@ -236,6 +244,12 @@ fn shared_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn shared_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_shared_pipeline_ir(db, "mixed_nested.trb", MIXED_NESTED_SOURCE);
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
+fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
+    let ir_text = snapshot_shared_pipeline_ir(db, "float_comparisons.trb", FLOAT_COMPARISON_SOURCE);
     assert_snapshot!(ir_text);
 }
 

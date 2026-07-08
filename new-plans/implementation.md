@@ -18,6 +18,28 @@
 
 ---
 
+## TrunkIR Validation Responsibilities
+
+TrunkIR validation follows the layered model in `new-plans/ir.md`:
+
+- Local operation constraints belong in operation verifiers. They cover one
+  operation's operands, results, attributes, regions, and terminator shape
+  without relying on pipeline phase state.
+- Lowering boundaries belong in `ConversionTarget`. Use partial conversion for
+  intermediate rewrites that may leave unknown operations, and full conversion
+  for named backend-ready or stage-complete boundaries.
+- Whole-IR consistency belongs in pass-manager verifiers. Install these through
+  `PassManager::with_verifier` when a pass sequence should report the pass that
+  broke a graph-wide invariant such as SSA use-chain consistency.
+- Shared behavior belongs in operation interfaces such as `PureOps` and
+  `IsolatedFromAboveOps`. Add new interfaces only when there is an immediate
+  generic consumer, not as a speculative hierarchy.
+
+Do not add a separate semantic-contract DSL unless these existing mechanisms
+cannot express a required invariant.
+
+---
+
 ## Semantic Model
 
 ### 동적 의미론

@@ -163,6 +163,22 @@ fn logic(a: Bool, b: Bool) -> Bool {
     assert_snapshot!(ir_text);
 }
 
+#[salsa_test]
+fn test_float_comparison_operators(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn comparisons(a: Float, b: Float) -> #(Bool, Bool, Bool, Bool, Bool, Bool) {
+    #(a == b, a != b, a < b, a <= b, a > b, a >= b)
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
 // ========================================================================
 // Higher-Order Function Tests
 // ========================================================================

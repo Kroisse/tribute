@@ -10,6 +10,9 @@
 //! 2. **Use-chain consistency**: Checks that the use-chain stored in `IrContext`
 //!    exactly matches the actual operands of all operations. This is unique to
 //!    arena IR.
+//!
+//! 3. **Operation verifiers**: Check local operation invariants that do not
+//!    require whole-IR analysis or conversion-boundary state.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -47,7 +50,7 @@ pub enum ValidationError {
     /// A use-chain inconsistency was found.
     #[display("{message}")]
     UseChain { message: String },
-    /// An operation-level semantic validation error was found.
+    /// An operation-level verifier error was found.
     #[display("{message}")]
     Operation { message: String },
 }
@@ -303,12 +306,16 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 }
 
 // ============================================================================
-// Operation semantic validation
+// Operation verifier validation
 // ============================================================================
 
-/// Validate operation-level semantic constraints that are independent of
-/// value scope/use-chain integrity.
-pub fn validate_operation_semantics(ctx: &IrContext, module: Module) -> ValidationResult {
+/// Validate local operation-level invariants.
+///
+/// Operation verifiers are for constraints that can be checked from one
+/// operation and its immediate shape: required attributes, supported attribute
+/// values, operand/result arity, region count, and terminator requirements.
+/// They must not encode conversion-boundary legality or graph-wide invariants.
+pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
     let body = match module.body(ctx) {
@@ -326,6 +333,19 @@ pub fn validate_operation_semantics(ctx: &IrContext, module: Module) -> Validati
     ValidationResult { errors }
 }
 
+/// Validate operation-level semantic constraints that are independent of
+/// value scope/use-chain integrity.
+///
+/// Deprecated compatibility alias for callers that have not migrated to
+/// [`validate_operation_verifiers`].
+#[deprecated(
+    since = "0.1.0",
+    note = "use validate_operation_verifiers for local operation invariant checks"
+)]
+pub fn validate_operation_semantics(ctx: &IrContext, module: Module) -> ValidationResult {
+    validate_operation_verifiers(ctx, module)
+}
+
 fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
     if data.dialect != Symbol::new("arith") || data.name != Symbol::new("cmpf") {
@@ -335,29 +355,57 @@ fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
     let Some(super::types::Attribute::Symbol(predicate)) =
         data.attributes.get(&Symbol::new("predicate"))
     else {
-        errors.push(ValidationError::Operation {
-            message: "arith.cmpf requires symbol predicate attribute".to_string(),
-        });
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "requires symbol predicate attribute",
+        ));
         return;
     };
 
     if !is_allowed_cmpf_predicate(*predicate) {
-        errors.push(ValidationError::Operation {
-            message: format!(
-                "arith.cmpf has unsupported predicate '{}'; supported predicates are oeq, une, olt, ole, ogt, oge",
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "has unsupported predicate '{}'; supported predicates are {}",
                 predicate,
+                supported_cmpf_predicates_text(),
             ),
-        });
+        ));
     }
 }
 
+fn operation_verifier_error(
+    ctx: &IrContext,
+    op: OpRef,
+    detail: impl Into<String>,
+) -> ValidationError {
+    let data = ctx.op(op);
+    ValidationError::Operation {
+        message: format!(
+            "operation verifier failed for {}.{} ({}): {}",
+            data.dialect,
+            data.name,
+            op,
+            detail.into(),
+        ),
+    }
+}
+
+const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
+
+fn supported_cmpf_predicates_text() -> String {
+    SUPPORTED_CMPF_PREDICATES.join(", ")
+}
+
 fn is_allowed_cmpf_predicate(predicate: Symbol) -> bool {
-    predicate == Symbol::new("oeq")
-        || predicate == Symbol::new("une")
-        || predicate == Symbol::new("olt")
-        || predicate == Symbol::new("ole")
-        || predicate == Symbol::new("ogt")
-        || predicate == Symbol::new("oge")
+    predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[0])
+        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[1])
+        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[2])
+        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[3])
+        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[4])
+        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[5])
 }
 
 fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<ValueRef>) {
@@ -530,7 +578,7 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
-    let ops = validate_operation_semantics(ctx, module);
+    let ops = validate_operation_verifiers(ctx, module);
     let mut errors = scope.errors;
     errors.extend(uses.errors);
     errors.extend(ops.errors);
@@ -1430,7 +1478,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_operation_semantics(&ctx, module);
+        let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
     }
 
@@ -1445,10 +1493,47 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
+        assert!(operation_errors[0].contains("unsupported predicate 'ueq'"));
+    }
+
+    #[test]
+    fn cmpf_missing_predicate_is_rejected() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
+    %2 = arith.cmpf %0, %1 : core.i1
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
+        assert!(operation_errors[0].contains("requires symbol predicate attribute"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_operation_semantics_alias_delegates_to_operation_verifiers() {
+        let input = r#"core.module @test {
+  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
+    %2 = arith.cmpf %0, %1 {predicate = @ueq} : core.i1
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
         let result = validate_operation_semantics(&ctx, module);
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("unsupported predicate 'ueq'"));
+        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
     }
 
     #[test]
