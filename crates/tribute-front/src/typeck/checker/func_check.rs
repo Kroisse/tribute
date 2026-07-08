@@ -103,9 +103,9 @@ impl<'db> TypeChecker<'db> {
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
 
-        // First, collect ALL unresolved UniVars from both the function type AND the body.
-        // This ensures that UniVars created during body type checking (e.g., from builtin calls)
-        // are also included in the generalization mapping.
+        // First, collect ALL unresolved UniVars from the function type, body, and deferred
+        // method callee types. This ensures that UniVars created during body type checking
+        // or post-solve deferred method resolution are included in the generalization mapping.
         let mut all_univars = Vec::new();
         type_subst.collect_univars_from_type(
             self.db(),
