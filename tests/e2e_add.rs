@@ -708,6 +708,10 @@ fn main() { }
             lowered_ops.has_struct_get,
             "Expected adt.struct_get after closure lowering (from closure.func/closure.env)"
         );
+        assert!(
+            lowered_ops.has_call_indirect_evidence_arg,
+            "Expected lowered func.call_indirect to pass evidence before closure env"
+        );
     });
 }
 
@@ -716,23 +720,35 @@ struct LoweredClosureOps {
     has_func_constant: bool,
     has_struct_new: bool,
     has_struct_get: bool,
+    has_call_indirect_evidence_arg: bool,
+}
+
+impl LoweredClosureOps {
+    fn empty() -> Self {
+        Self {
+            has_func_constant: false,
+            has_struct_new: false,
+            has_struct_get: false,
+            has_call_indirect_evidence_arg: false,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.has_func_constant |= other.has_func_constant;
+        self.has_struct_new |= other.has_struct_new;
+        self.has_struct_get |= other.has_struct_get;
+        self.has_call_indirect_evidence_arg |= other.has_call_indirect_evidence_arg;
+    }
 }
 
 /// Helper to check for lowered closure operations in a module (arena version)
 fn check_for_lowered_closure_ops_in_module(ctx: &IrContext, m: Module) -> LoweredClosureOps {
-    let mut result = LoweredClosureOps {
-        has_func_constant: false,
-        has_struct_new: false,
-        has_struct_get: false,
-    };
+    let mut result = LoweredClosureOps::empty();
 
     for &op_ref in &m.ops(ctx) {
         let op_data = ctx.op(op_ref);
         for &region_ref in &op_data.regions {
-            let nested_result = check_for_lowered_closure_ops_in_region(ctx, region_ref);
-            result.has_func_constant = result.has_func_constant || nested_result.has_func_constant;
-            result.has_struct_new = result.has_struct_new || nested_result.has_struct_new;
-            result.has_struct_get = result.has_struct_get || nested_result.has_struct_get;
+            result.merge(check_for_lowered_closure_ops_in_region(ctx, region_ref));
         }
     }
 
@@ -746,15 +762,12 @@ fn check_for_lowered_closure_ops_in_region(
 ) -> LoweredClosureOps {
     let func_dialect = Symbol::new("func");
     let func_constant_name = Symbol::new("constant");
+    let func_call_indirect_name = Symbol::new("call_indirect");
     let adt_dialect = Symbol::new("adt");
     let adt_struct_new_name = Symbol::new("struct_new");
     let adt_struct_get_name = Symbol::new("struct_get");
 
-    let mut result = LoweredClosureOps {
-        has_func_constant: false,
-        has_struct_new: false,
-        has_struct_get: false,
-    };
+    let mut result = LoweredClosureOps::empty();
 
     let region = ctx.region(region_ref);
     for &block_ref in &region.blocks {
@@ -768,6 +781,17 @@ fn check_for_lowered_closure_ops_in_region(
             if dialect == func_dialect && op_name == func_constant_name {
                 result.has_func_constant = true;
             }
+            if dialect == func_dialect && op_name == func_call_indirect_name {
+                let operands = ctx.op_operands(op_ref);
+                if operands.len() > 1
+                    && tribute_ir::dialect::ability::is_evidence_type_ref(
+                        ctx,
+                        ctx.value_ty(operands[1]),
+                    )
+                {
+                    result.has_call_indirect_evidence_arg = true;
+                }
+            }
             // Check for adt.struct_new (from closure.new lowering)
             if dialect == adt_dialect && op_name == adt_struct_new_name {
                 result.has_struct_new = true;
@@ -779,11 +803,7 @@ fn check_for_lowered_closure_ops_in_region(
 
             // Recurse into nested regions
             for &nested_region in &op_data.regions {
-                let nested_result = check_for_lowered_closure_ops_in_region(ctx, nested_region);
-                result.has_func_constant =
-                    result.has_func_constant || nested_result.has_func_constant;
-                result.has_struct_new = result.has_struct_new || nested_result.has_struct_new;
-                result.has_struct_get = result.has_struct_get || nested_result.has_struct_get;
+                result.merge(check_for_lowered_closure_ops_in_region(ctx, nested_region));
             }
         }
     }
