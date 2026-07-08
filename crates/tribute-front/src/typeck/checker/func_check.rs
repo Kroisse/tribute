@@ -948,8 +948,11 @@ impl<'db> TypeChecker<'db> {
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
     ) {
-        for (_, callee_ty) in deferred_resolutions.values() {
-            type_subst.collect_univars_from_type(self.db(), *callee_ty, row_subst, out);
+        let mut node_ids: Vec<_> = deferred_resolutions.keys().copied().collect();
+        node_ids.sort();
+        for node_id in node_ids {
+            let (_, callee_ty) = deferred_resolutions[&node_id];
+            type_subst.collect_univars_from_type(self.db(), callee_ty, row_subst, out);
         }
     }
 
@@ -1144,22 +1147,38 @@ mod tests {
     #[salsa_test]
     fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::DatabaseImpl) {
         let mut solver = TypeSolver::new(db);
-        let solver_var = solver.fresh_type_var(db);
-        let callee_ty = Type::new(
+        let first_solver_var = solver.fresh_type_var(db);
+        let second_solver_var = solver.fresh_type_var(db);
+        let first_callee_ty = Type::new(
             db,
             TypeKind::Func {
                 params: vec![Type::new(db, TypeKind::Nat)],
-                result: solver_var,
+                result: first_solver_var,
+                effect: EffectRow::pure(db),
+            },
+        );
+        let second_callee_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![Type::new(db, TypeKind::Nat)],
+                result: second_solver_var,
                 effect: EffectRow::pure(db),
             },
         );
 
         let mut deferred_resolutions = HashMap::new();
         deferred_resolutions.insert(
+            NodeId::from_raw(2),
+            (
+                crate::ast::FuncDefId::new(db, Symbol::new("Box::flat_map")),
+                second_callee_ty,
+            ),
+        );
+        deferred_resolutions.insert(
             NodeId::from_raw(1),
             (
                 crate::ast::FuncDefId::new(db, Symbol::new("Box::map")),
-                callee_ty,
+                first_callee_ty,
             ),
         );
 
@@ -1172,9 +1191,18 @@ mod tests {
             &mut collected,
         );
 
-        let TypeKind::UniVar { id } = solver_var.kind(db) else {
+        let TypeKind::UniVar {
+            id: first_solver_id,
+        } = first_solver_var.kind(db)
+        else {
             panic!("fresh solver variable should be a UniVar");
         };
-        assert_eq!(collected, vec![*id]);
+        let TypeKind::UniVar {
+            id: second_solver_id,
+        } = second_solver_var.kind(db)
+        else {
+            panic!("fresh solver variable should be a UniVar");
+        };
+        assert_eq!(collected, vec![*first_solver_id, *second_solver_id]);
     }
 }
