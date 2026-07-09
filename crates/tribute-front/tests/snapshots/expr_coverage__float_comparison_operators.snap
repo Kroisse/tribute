@@ -1,0 +1,21 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 179
+expression: ir_text
+---
+core.module @test {
+  !__tuple_i1_i1_i1_i1_i1_i1 = adt.struct() {fields = [[@0, core.i1], [@1, core.i1], [@2, core.i1], [@3, core.i1], [@4, core.i1], [@5, core.i1]], name = @__tuple_i1_i1_i1_i1_i1_i1}
+  !__tuple_i1_i1_i1_i1_i1_i1_1 = adt.typeref() {name = @__tuple_i1_i1_i1_i1_i1_i1}
+
+  func.func @comparisons(%0: core.f64, %1: core.f64) -> tribute_rt.anyref {
+      %2 = func.call %0, %1 {callee = @"Float::=="} : core.i1
+      %3 = func.call %0, %1 {callee = @"Float::!="} : core.i1
+      %4 = func.call %0, %1 {callee = @"Float::<"} : core.i1
+      %5 = func.call %0, %1 {callee = @"Float::<="} : core.i1
+      %6 = func.call %0, %1 {callee = @"Float::>"} : core.i1
+      %7 = func.call %0, %1 {callee = @"Float::>="} : core.i1
+      %8 = adt.struct_new %2, %3, %4, %5, %6, %7 {type = !__tuple_i1_i1_i1_i1_i1_i1} : !__tuple_i1_i1_i1_i1_i1_i1_1
+      %9 = core.unrealized_conversion_cast %8 : tribute_rt.anyref
+      func.return %9
+  }
+}

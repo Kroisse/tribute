@@ -45,6 +45,25 @@ Partial conversion may leave unknown operations for later passes. Full
 conversion boundaries, such as backend-ready native IR, must reject unknown
 operations.
 
+## Validation Layers
+
+TrunkIR validation is layered by responsibility. The compiler should use the
+smallest layer that can state an invariant precisely, and should not introduce a
+separate semantic-contract framework unless these layers leave a concrete gap.
+
+| Layer | Responsibility | Failure timing | Examples |
+| ---- | ---- | ---- | ---- |
+| Operation verifier | Local invariants of one operation: operand/result counts, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | During parsing/building when possible, or during explicit operation validation checkpoints. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
+| Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
+| Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
+| Operation interface | Shared behavior queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces should be introduced only for multiple concrete consumers or one generic transform. | `PureOps` for DCE removability; `IsolatedFromAboveOps` for nested pass-manager anchoring. |
+
+Local operation verifiers must not depend on conversion state or pass ordering.
+Conversion targets must not duplicate local semantic checks. Pass-manager
+verifiers should remain responsible for graph-wide invariants that require
+walking use-def chains, symbol tables, or nested region relationships. Operation
+interfaces describe behavior, not validation phases.
+
 ## Core Invariants
 
 - A `core.module` owns the top-level region for a compilation unit.
