@@ -29,6 +29,7 @@
 //!   %2 = op_after(%1)
 //! ```
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
@@ -37,7 +38,7 @@ use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, core, func, scf};
 use crate::ops::{DialectOp, DialectType};
 use crate::pass::{Pass, pass_fn};
-use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
@@ -128,6 +129,24 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
+fn drop_nil_result_terminator_uses(ctx: &mut IrContext, value: ValueRef) {
+    let mut uses = ctx.uses(value).to_vec();
+    uses.sort_by_key(|use_entry| Reverse(use_entry.operand_index));
+
+    for use_entry in uses {
+        let data = ctx.op(use_entry.user);
+        let is_void_terminator = (data.dialect == Symbol::new("func")
+            && data.name == Symbol::new("return"))
+            || (data.dialect == Symbol::new("scf") && data.name == Symbol::new("yield"));
+        assert!(
+            is_void_terminator,
+            "nil scf result {value} is used by non-terminator operation {}.{} ({})",
+            data.dialect, data.name, use_entry.user,
+        );
+        ctx.remove_op_operand(use_entry.user, use_entry.operand_index);
+    }
+}
+
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
 fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
     let if_op = scf::If::from_op(ctx, scf_op).unwrap();
@@ -141,8 +160,8 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
         None
     } else {
         let ty = ctx.value_ty(results[0]);
-        // Skip nil type (void)
         if core::Nil::matches(ctx, ty) {
+            drop_nil_result_terminator_uses(ctx, results[0]);
             None
         } else {
             Some(ty)
@@ -173,6 +192,7 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
     let parent_region = ctx.block(block).parent_region.unwrap();
     let then_blocks = inline_region_blocks(ctx, then_region, parent_region, Some(merge_block));
     let else_blocks = inline_region_blocks(ctx, else_region, parent_region, Some(merge_block));
+    ctx.remove_op(scf_op);
 
     let then_entry = then_blocks[0];
     let else_entry = else_blocks[0];
@@ -205,7 +225,13 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
     let result_ty = if results.is_empty() {
         None
     } else {
-        Some(ctx.value_ty(results[0]))
+        let ty = ctx.value_ty(results[0]);
+        if core::Nil::matches(ctx, ty) {
+            drop_nil_result_terminator_uses(ctx, results[0]);
+            None
+        } else {
+            Some(ty)
+        }
     };
 
     // Split block at scf op: ops after go to exit block
@@ -230,6 +256,7 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
     // Inline body region blocks into parent region (before exit block)
     let parent_region = ctx.block(block).parent_region.unwrap();
     let body_blocks = inline_region_blocks(ctx, body_region, parent_region, Some(exit_block));
+    ctx.remove_op(scf_op);
 
     // The first body block is the header (loop entry point)
     let header_block = body_blocks[0];
@@ -276,12 +303,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
     let result_ty = if results.is_empty() {
         None
     } else {
-        let ty = ctx.value_ty(results[0]);
-        if core::Nil::matches(ctx, ty) {
-            None
-        } else {
-            Some(ty)
-        }
+        Some(ctx.value_ty(results[0]))
     };
 
     // Split block at scf op: ops after go to merge block
@@ -353,6 +375,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         ctx.block_mut(default_block).parent_region = Some(parent_region);
         default_block
     };
+    ctx.remove_op(scf_op);
 
     // Get the discriminant type for comparisons
     let disc_ty = ctx.value_ty(discriminant);
@@ -511,7 +534,7 @@ fn replace_continue_break(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{arith, func, scf};
+    use crate::dialect::{arith, core, func, scf};
     use crate::location::Span;
     use crate::symbol::Symbol;
     use crate::*;
@@ -723,6 +746,11 @@ mod tests {
 
         // Lower scf to cf
         lower_scf_to_cf(&mut ctx, module);
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(
+            use_chains.is_ok(),
+            "lowering must preserve use-chain consistency: {use_chains}"
+        );
 
         // Verify: no scf ops remain
         let func_body = func_op.body(&ctx);
@@ -834,11 +862,16 @@ mod tests {
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(
+            use_chains.is_ok(),
+            "void lowering must preserve use-chain consistency: {use_chains}"
+        );
 
         let func_body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, func_body);
         assert!(!names.iter().any(|n| n.starts_with("scf.")));
-        // Merge block should have no args (void if)
+        // Nil-typed scf.if results are not materialized as CFG values.
         let blocks = ctx.region(func_body).blocks.to_vec();
         let merge = blocks.last().unwrap();
         assert_eq!(ctx.block_args(*merge).len(), 0);

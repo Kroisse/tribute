@@ -592,6 +592,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
             .add_pass(trunk_ir::transforms::dce_pass(
                 trunk_ir::transforms::DceConfig::default(),
             ));
+        install_debug_use_chain_verifier(&mut pm);
         if let Err(error) = pm.run(ctx, core_module) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
@@ -633,6 +634,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
+        install_debug_use_chain_verifier(&mut pm);
         pm.run(ctx, core_module)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
@@ -759,6 +761,7 @@ fn compile_module_to_native(
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
+        install_debug_use_chain_verifier(&mut pm);
         pm.run(ctx, core_module).map_err(native_pass_failure)?;
     } else {
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
@@ -1122,6 +1125,63 @@ mod tests {
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))
             .expect("attached db")
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_use_chain_verifier_reports_offending_pass() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %y = arith.addi %x, %x : core.i32
+    func.return %y
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let core_module = core_dialect::Module::from_op(&ctx, module.op())
+            .expect("test input must parse a core.module");
+
+        let mut pm = PassManager::new();
+        pm.add_pass(trunk_ir::pass::pass_fn(
+            "break-use-chain",
+            |ctx: &mut IrContext, module: core_dialect::Module| {
+                let module_block = ctx.region(module.body(ctx)).blocks[0];
+                let func_op = ctx.block(module_block).ops[0];
+                let func_region = ctx.op(func_op).regions[0];
+                let func_block = ctx.region(func_region).blocks[0];
+                let add_op = ctx
+                    .block(func_block)
+                    .ops
+                    .iter()
+                    .copied()
+                    .find(|&op| {
+                        let data = ctx.op(op);
+                        data.dialect == trunk_ir::Symbol::new("arith")
+                            && data.name == trunk_ir::Symbol::new("addi")
+                    })
+                    .expect("test input must contain arith.addi");
+
+                // Deliberately mutate operands without updating use-chains to
+                // exercise the graph-wide pass-manager verifier.
+                let _old_operands = std::mem::take(&mut ctx.op_mut(add_op).operands);
+                Ok(())
+            },
+        ));
+        install_debug_use_chain_verifier(&mut pm);
+
+        let error = pm.run(&mut ctx, core_module).unwrap_err();
+
+        assert_eq!(error.pass_name(), "break-use-chain");
+        assert!(
+            error
+                .to_string()
+                .contains("pass `break-use-chain` broke an IR invariant: use-chain regression"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("no such operand exists"),
+            "{error}"
+        );
     }
 
     #[salsa_test]
