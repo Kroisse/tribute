@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "function 'test' declares duplicate effect: State(Int), State(Int)"
+  span:
+    start: 41
+    end: 93
+  severity: Error
+  phase: TypeChecking
