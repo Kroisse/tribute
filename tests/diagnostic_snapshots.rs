@@ -245,6 +245,26 @@ fn test() ->{Foo} Nat {
 }
 
 #[salsa_test]
+fn diag_duplicate_effect_in_annotation(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn test() ->{State(Int), State(Int)} Nil {
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_missing_handler_arm(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

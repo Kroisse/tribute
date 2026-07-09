@@ -16,6 +16,7 @@ use crate::ast::{
 };
 
 use super::super::constraint::ConstraintSet;
+use super::super::effect_row::find_conflicting_effects;
 use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{RowSubst, TypeSolver, TypeSubst};
 use super::{Mode, TypeChecker};
@@ -173,6 +174,20 @@ impl<'db> TypeChecker<'db> {
             && let Some(declared) = declared_effect
         {
             let resolved_declared = row_subst.apply(self.db(), declared);
+            if let Some((_, effects)) = find_conflicting_effects(self.db(), resolved_declared) {
+                Diagnostic::new(
+                    format!(
+                        "function '{}' declares duplicate effect: {}",
+                        func.name,
+                        effects.iter().format(", "),
+                    ),
+                    self.get_span(func.id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+
             // Only check if the declared row is closed (no rest variable)
             if resolved_declared.rest(self.db()).is_none() {
                 let resolved_body = row_subst.apply(self.db(), body_effect_row);
