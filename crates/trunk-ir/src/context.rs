@@ -335,6 +335,37 @@ impl IrContext {
         });
     }
 
+    /// Remove the i-th operand from an operation, updating use-chains.
+    pub fn remove_op_operand(&mut self, op: OpRef, index: u32) {
+        let old_operands: SmallVec<[ValueRef; 8]> =
+            self.ops[op].operands.as_slice(&self.value_pool).into();
+        let index_usize = index as usize;
+        assert!(
+            index_usize < old_operands.len(),
+            "remove_op_operand: operand index {index} out of bounds for operation {op}",
+        );
+
+        let removed = old_operands[index_usize];
+        self.uses[removed].retain(|u| !(u.user == op && u.operand_index == index));
+
+        for (old_idx, &val) in old_operands.iter().enumerate().skip(index_usize + 1) {
+            for use_entry in &mut self.uses[val] {
+                if use_entry.user == op && use_entry.operand_index == old_idx as u32 {
+                    use_entry.operand_index -= 1;
+                    break;
+                }
+            }
+        }
+
+        let mut operands = EntityList::new();
+        for (idx, &val) in old_operands.iter().enumerate() {
+            if idx != index_usize {
+                operands.push(val, &mut self.value_pool);
+            }
+        }
+        self.ops[op].operands = operands;
+    }
+
     /// Get the i-th result value of an operation.
     pub fn op_result(&self, op: OpRef, index: u32) -> ValueRef {
         self.result_values[op].as_slice(&self.value_pool)[index as usize]
@@ -1560,6 +1591,50 @@ mod tests {
         ctx.set_op_operand(op_user, 0, v_new);
         assert_eq!(ctx.uses(v_new).len(), 1); // unchanged
         assert!(!ctx.has_uses(v_old)); // still no uses
+    }
+
+    #[test]
+    fn remove_op_operand_updates_use_chains() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let v0_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let v0_op = ctx.create_op(v0_data);
+        let v0 = ctx.op_result(v0_op, 0);
+        let v1_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let v1_op = ctx.create_op(v1_data);
+        let v1 = ctx.op_result(v1_op, 0);
+
+        let user_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("addi"))
+            .operand(v0)
+            .operand(v1)
+            .operand(v1)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let user = ctx.create_op(user_data);
+
+        ctx.remove_op_operand(user, 1);
+
+        assert_eq!(ctx.op_operands(user), &[v0, v1]);
+        assert_eq!(
+            ctx.uses(v0),
+            &[Use {
+                user,
+                operand_index: 0
+            }]
+        );
+        assert_eq!(
+            ctx.uses(v1),
+            &[Use {
+                user,
+                operand_index: 1
+            }]
+        );
     }
 
     #[test]
