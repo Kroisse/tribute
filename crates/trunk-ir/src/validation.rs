@@ -327,6 +327,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
         validate_arith_cmpf_predicate(ctx, op, &mut errors);
+        validate_scf_if_structure(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
 
@@ -406,6 +407,79 @@ fn is_allowed_cmpf_predicate(predicate: Symbol) -> bool {
         || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[3])
         || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[4])
         || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[5])
+}
+
+fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let data = ctx.op(op);
+    if data.dialect != Symbol::new("scf") || data.name != Symbol::new("if") {
+        return;
+    }
+
+    if ctx.op_operands(op).len() != 1 {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "expects 1 condition operand, found {}",
+                ctx.op_operands(op).len()
+            ),
+        ));
+    }
+
+    if data.regions.len() != 2 {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!("expects 2 regions, found {}", data.regions.len()),
+        ));
+        return;
+    }
+
+    for (region_name, &region) in [
+        ("then_region", &data.regions[0]),
+        ("else_region", &data.regions[1]),
+    ] {
+        let blocks = &ctx.region(region).blocks;
+        let [block] = blocks.as_slice() else {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("{region_name} expects 1 block, found {}", blocks.len()),
+            ));
+            continue;
+        };
+
+        let Some((&yield_op, _body_ops)) = ctx.block(*block).ops.split_last() else {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("{region_name} must terminate with scf.yield"),
+            ));
+            continue;
+        };
+
+        let yield_data = ctx.op(yield_op);
+        if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("{region_name} must terminate with scf.yield"),
+            ));
+            continue;
+        }
+
+        let yield_arity = ctx.op_operands(yield_op).len();
+        let result_arity = ctx.op_results(op).len();
+        if yield_arity != result_arity {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!(
+                    "{region_name} yields {yield_arity} value(s), but scf.if has {result_arity} result(s)"
+                ),
+            ));
+        }
+    }
 }
 
 fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<ValueRef>) {
@@ -610,6 +684,7 @@ mod tests {
     use crate::context::OperationDataBuilder;
     use crate::dialect::{arith, core, func};
     use crate::location::Span;
+    use crate::refs::{RegionRef, ValueRef};
     use crate::types::{Attribute, Location};
     use crate::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
@@ -669,6 +744,69 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    fn single_block_yield_region(
+        ctx: &mut IrContext,
+        loc: Location,
+        values: impl IntoIterator<Item = ValueRef>,
+    ) -> RegionRef {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let mut yield_builder =
+            OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"));
+        for value in values {
+            yield_builder = yield_builder.operand(value);
+        }
+        let yield_data = yield_builder.build(ctx);
+        let yield_op = ctx.create_op(yield_data);
+        ctx.push_op(block, yield_op);
+        ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        })
+    }
+
+    fn wrap_if_in_module(
+        ctx: &mut IrContext,
+        loc: Location,
+        i32_ty: super::super::refs::TypeRef,
+        entry: super::super::refs::BlockRef,
+        if_op: super::super::refs::OpRef,
+    ) -> Module {
+        ctx.push_op(entry, if_op);
+        let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+        ctx.push_op(entry, zero.op_ref());
+        let ret = func::r#return(ctx, loc, [zero.result(ctx)]);
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_ty = make_func_type(ctx, &[], i32_ty);
+        let func_op = func::func(ctx, loc, Symbol::new("bad_if"), func_ty, body);
+
+        let mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(mod_block, func_op.op_ref());
+        let mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![mod_block],
+            parent_op: None,
+        });
+        let module_op = core::module(ctx, loc, Symbol::new("test"), mod_region);
+        Module::new(ctx, module_op.op_ref()).unwrap()
     }
 
     /// Build a valid module: fn add() { 40 + 2 }
@@ -1534,6 +1672,177 @@ mod tests {
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
+    }
+
+    #[test]
+    fn scf_if_yield_arity_mismatch_is_rejected() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
+    %r = scf.if %cond : core.i32 {
+      scf.yield
+    } {
+      scf.yield %x
+    }
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
+        assert!(operation_errors[0].contains("then_region yields 0 value(s)"));
+        assert!(operation_errors[0].contains("scf.if has 1 result(s)"));
+    }
+
+    #[test]
+    fn scf_if_missing_yield_terminator_is_rejected() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
+    %r = scf.if %cond : core.i32 {
+      %zero = arith.const {value = 0} : core.i32
+    } {
+      scf.yield %x
+    }
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
+        assert!(operation_errors[0].contains("then_region must terminate with scf.yield"));
+    }
+
+    #[test]
+    fn scf_if_condition_operand_arity_is_rejected() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let i1_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let cond_a = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        ctx.push_op(entry, cond_a.op_ref());
+        let cond_b = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(0));
+        ctx.push_op(entry, cond_b.op_ref());
+
+        let then_region = single_block_yield_region(&mut ctx, loc, []);
+        let else_region = single_block_yield_region(&mut ctx, loc, []);
+        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+            .operand(cond_a.result(&ctx))
+            .operand(cond_b.result(&ctx))
+            .region(then_region)
+            .region(else_region)
+            .build(&mut ctx);
+        let if_op = ctx.create_op(if_op);
+        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
+        assert!(operation_errors[0].contains("expects 1 condition operand, found 2"));
+    }
+
+    #[test]
+    fn scf_if_region_count_is_rejected() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let i1_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        ctx.push_op(entry, cond.op_ref());
+        let then_region = single_block_yield_region(&mut ctx, loc, []);
+        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+            .operand(cond.result(&ctx))
+            .region(then_region)
+            .build(&mut ctx);
+        let if_op = ctx.create_op(if_op);
+        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
+        assert!(operation_errors[0].contains("expects 2 regions, found 1"));
+    }
+
+    #[test]
+    fn scf_if_multiblock_region_is_rejected() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let i1_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        ctx.push_op(entry, cond.op_ref());
+
+        let then_a = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let then_b = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let then_yield = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+            .build(&mut ctx);
+        let then_yield = ctx.create_op(then_yield);
+        ctx.push_op(then_a, then_yield);
+        let then_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![then_a, then_b],
+            parent_op: None,
+        });
+        let else_region = single_block_yield_region(&mut ctx, loc, []);
+
+        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+            .operand(cond.result(&ctx))
+            .region(then_region)
+            .region(else_region)
+            .build(&mut ctx);
+        let if_op = ctx.create_op(if_op);
+        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let operation_errors = operation_error_messages(&result);
+        assert_eq!(operation_errors.len(), 1);
+        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
+        assert!(operation_errors[0].contains("then_region expects 1 block, found 2"));
     }
 
     #[test]
