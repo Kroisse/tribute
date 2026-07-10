@@ -15,10 +15,10 @@ use crate::ast::{
     PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
 };
 
-use super::super::constraint::ConstraintSet;
+use super::super::constraint::{ConstraintOriginKind, ConstraintSet};
 use super::super::effect_row::find_conflicting_effects;
 use super::super::func_context::FunctionInferenceContext;
-use super::super::solver::{RowSubst, TypeSolver, TypeSubst};
+use super::super::solver::{LocatedSolveError, RowSubst, TypeSolver, TypeSubst};
 use super::{Mode, TypeChecker};
 
 impl<'db> TypeChecker<'db> {
@@ -45,6 +45,9 @@ impl<'db> TypeChecker<'db> {
         // Get the instantiated function type (with UniVars) for later generalization
         let (param_types, expected_return, instantiated_func_ty) =
             self.get_func_signature_with_type(&mut ctx, func_id, &func);
+        let diagnostic_func_id = func.id;
+        let diagnostic_func_name = func.name;
+        let diagnostic_effects = func.effects.clone();
 
         // Bind parameters: by LocalId when present, and also by name
         for (i, param) in func.params.iter().enumerate() {
@@ -83,15 +86,13 @@ impl<'db> TypeChecker<'db> {
 
         let mut solver = TypeSolver::new(self.db());
 
-        if let Err(error) = solver.solve(constraints) {
-            let span = self.get_span(func.id);
-            Diagnostic::new(
-                format!("type error in function '{}': {}", func.name, error),
-                span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+        if let Err(error) = solver.solve_with_origin(constraints) {
+            self.report_solve_error(
+                diagnostic_func_id,
+                diagnostic_func_name,
+                diagnostic_effects.as_deref(),
+                error,
+            );
         }
 
         // 4b. Post-solve: resolve deferred method calls
@@ -256,6 +257,52 @@ impl<'db> TypeChecker<'db> {
             effects: func.effects,
             body,
         }
+    }
+
+    fn report_solve_error(
+        &self,
+        func_id: crate::ast::NodeId,
+        func_name: trunk_ir::Symbol,
+        effects: Option<&[crate::ast::TypeAnnotation]>,
+        failure: LocatedSolveError<'db>,
+    ) {
+        let primary_node = failure
+            .origin
+            .map(|origin| origin.node_id)
+            .unwrap_or(func_id);
+        let context = match failure.origin.map(|origin| origin.kind) {
+            Some(ConstraintOriginKind::Call) => " at call site",
+            Some(ConstraintOriginKind::Lambda) => " in lambda",
+            Some(ConstraintOriginKind::HandlerBoundary) => " at handler boundary",
+            Some(ConstraintOriginKind::Expression) | None => "",
+        };
+        let mut diagnostic = Diagnostic::builder(
+            format!(
+                "type error{context} in function '{}': {}",
+                func_name, failure.error
+            ),
+            self.get_span(primary_node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        );
+
+        let is_effect_error = matches!(
+            &failure.error,
+            super::super::solver::SolveError::RowMismatch { .. }
+                | super::super::solver::SolveError::EffectArgArityMismatch { .. }
+        );
+        if is_effect_error && primary_node != func_id {
+            let related_node = effects
+                .and_then(|effects| effects.first())
+                .map(|annotation| annotation.id)
+                .unwrap_or(func_id);
+            diagnostic = diagnostic.label(
+                self.get_span(related_node),
+                "enclosing function effect contract is declared here",
+            );
+        }
+
+        diagnostic.build().accumulate(self.db());
     }
 
     /// Resolve deferred method calls after constraint solving.

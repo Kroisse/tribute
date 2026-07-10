@@ -7,6 +7,7 @@
 
 mod common;
 
+use salsa::Database;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::SourceCst;
@@ -265,6 +266,138 @@ fn test() ->{State(Int), State(Int)} Nil {
 }
 
 #[salsa_test]
+fn diag_residual_effect_rejected_at_handler_boundary(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Foo {
+    op foo() -> Nil
+}
+
+ability Bar {
+    op bar() -> Nil
+}
+
+fn comp() ->{Foo, Bar} Nil {
+    Foo::foo()
+    Bar::bar()
+}
+
+fn test() ->{Foo} Nil {
+    handle comp() {
+        do result { result }
+        op Foo::foo() { resume Nil }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_row_unification_mismatch_at_lambda(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Foo {
+    op foo() -> Nat
+}
+
+ability Bar {
+    op bar() -> Nat
+}
+
+fn accept_foo(comp: fn() ->{Foo} Nat) ->{Foo} Nat {
+    comp()
+}
+
+fn test() ->{Foo} Nat {
+    accept_foo(fn() { Bar::bar() })
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn valid_distinct_parameterized_effect_annotations(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+}
+
+fn valid() ->{State(Int), State(Bool)} Nil {
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[salsa_test]
+fn valid_residual_effect_propagates_through_handler(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Foo {
+    op foo() -> Nil
+}
+
+ability Bar {
+    op bar() -> Nil
+}
+
+fn comp() ->{Foo, Bar} Nil {
+    Foo::foo()
+    Bar::bar()
+}
+
+fn valid() ->{Bar} Nil {
+    handle comp() {
+        do result { result }
+        op Foo::foo() { resume Nil }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn effect_diagnostics_are_deterministic_across_fresh_databases() {
+    const SOURCE: &str = r#"
+ability State(s) {
+    fn get() -> s
+}
+
+fn test() ->{State(Int), State(Int)} Nil {
+    Nil
+}
+"#;
+
+    let compile = || {
+        salsa::DatabaseImpl::default().attach(|db| {
+            let source = SourceCst::from_source_str(db, "test.trb", SOURCE);
+            compile_with_diagnostics(db, source).diagnostics
+        })
+    };
+
+    assert_eq!(compile(), compile());
+}
+
+#[salsa_test]
 fn diag_missing_handler_arm(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
@@ -324,8 +457,6 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
-/// Panics in func_context.rs debug_assert instead of producing a diagnostic.
-#[ignore = "arity mismatch panics in effect row merging"]
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

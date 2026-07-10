@@ -18,7 +18,7 @@ use crate::ast::{
     UniVarId, UniVarSource,
 };
 
-use super::constraint::ConstraintSet;
+use super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::context::ModuleTypeEnv;
 use super::subst;
 
@@ -485,9 +485,33 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.constraints.add_type_eq(t1, t2);
     }
 
+    /// Add a type equality constraint tied to a source AST node.
+    pub fn constrain_eq_at(
+        &mut self,
+        t1: Type<'db>,
+        t2: Type<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_type_eq_at(t1, t2, ConstraintOrigin { node_id, kind });
+    }
+
     /// Add an effect row equality constraint.
     pub fn constrain_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
         self.constraints.add_row_eq(r1, r2);
+    }
+
+    /// Add an effect row equality constraint tied to a source AST node.
+    pub fn constrain_row_eq_at(
+        &mut self,
+        r1: EffectRow<'db>,
+        r2: EffectRow<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_row_eq_at(r1, r2, ConstraintOrigin { node_id, kind });
     }
 
     /// Constrain that inferred_effect is subsumed by expected_effect.
@@ -544,6 +568,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///   - `e1 = {B | e3}`
     ///   - `e2 = {A | e3}`
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
+        self.merge_effect_with_origin(effect, None);
+    }
+
+    /// Merge an effect and tie any resulting type/arity constraint to a call.
+    pub fn merge_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+        self.merge_effect_with_origin(effect, Some(node_id));
+    }
+
+    fn merge_effect_with_origin(&mut self, effect: EffectRow<'db>, origin: Option<NodeId>) {
         let db = self.db;
         let current = self.current_effect;
 
@@ -566,17 +599,33 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     // Check if there's already an effect with the same ability_id
                     if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
                         // Same ability: unify type args instead of adding duplicate
-                        debug_assert_eq!(
-                            existing.args.len(),
-                            e.args.len(),
-                            "ability {:?} arity mismatch: existing has {} args, incoming has {}",
-                            e.ability_id,
-                            existing.args.len(),
-                            e.args.len()
-                        );
+                        if existing.args.len() != e.args.len() {
+                            let existing_row = EffectRow::single(db, existing.clone());
+                            let incoming_row = EffectRow::single(db, e.clone());
+                            if let Some(node_id) = origin {
+                                ctx.constrain_row_eq_at(
+                                    incoming_row,
+                                    existing_row,
+                                    node_id,
+                                    ConstraintOriginKind::Call,
+                                );
+                            } else {
+                                ctx.constrain_row_eq(incoming_row, existing_row);
+                            }
+                            continue;
+                        }
                         for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
                         {
-                            ctx.constrain_eq(*existing_arg, *incoming_arg);
+                            if let Some(node_id) = origin {
+                                ctx.constrain_eq_at(
+                                    *existing_arg,
+                                    *incoming_arg,
+                                    node_id,
+                                    ConstraintOriginKind::Call,
+                                );
+                            } else {
+                                ctx.constrain_eq(*existing_arg, *incoming_arg);
+                            }
                         }
                         // Don't add the effect since it's already present (with unified args)
                     } else {

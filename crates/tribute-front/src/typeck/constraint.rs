@@ -8,7 +8,28 @@
 //!     | C₁ ∧ C₂           -- conjunction
 //! ```
 
-use crate::ast::{EffectRow, Type};
+use crate::ast::{EffectRow, NodeId, Type};
+
+/// Source location and semantic role for a generated constraint.
+///
+/// The solver operates on normalized types and rows, so without this metadata
+/// it can only report an error against the enclosing function.  Keeping the
+/// originating AST node lets the diagnostic layer point back to the call,
+/// lambda, or handler boundary that introduced the failed constraint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstraintOrigin {
+    pub node_id: NodeId,
+    pub kind: ConstraintOriginKind,
+}
+
+/// The source construct that introduced a constraint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstraintOriginKind {
+    Expression,
+    Call,
+    Lambda,
+    HandlerBoundary,
+}
 
 /// A type inference constraint.
 #[derive(Clone, Debug)]
@@ -18,6 +39,12 @@ pub enum Constraint<'db> {
 
     /// Effect row equality: ρ₁ = ρ₂
     RowEq(EffectRow<'db>, EffectRow<'db>),
+
+    /// Type equality with a source origin.
+    TypeEqAt(Type<'db>, Type<'db>, ConstraintOrigin),
+
+    /// Effect row equality with a source origin.
+    RowEqAt(EffectRow<'db>, EffectRow<'db>, ConstraintOrigin),
 
     /// Conjunction of constraints.
     And(Vec<Constraint<'db>>),
@@ -32,6 +59,16 @@ impl<'db> Constraint<'db> {
     /// Create a row equality constraint.
     pub fn row_eq(r1: EffectRow<'db>, r2: EffectRow<'db>) -> Self {
         Self::RowEq(r1, r2)
+    }
+
+    /// Create a source-originated type equality constraint.
+    pub fn type_eq_at(t1: Type<'db>, t2: Type<'db>, origin: ConstraintOrigin) -> Self {
+        Self::TypeEqAt(t1, t2, origin)
+    }
+
+    /// Create a source-originated row equality constraint.
+    pub fn row_eq_at(r1: EffectRow<'db>, r2: EffectRow<'db>, origin: ConstraintOrigin) -> Self {
+        Self::RowEqAt(r1, r2, origin)
     }
 
     /// Create a conjunction of constraints.
@@ -75,6 +112,21 @@ impl<'db> ConstraintSet<'db> {
     /// Add a row equality constraint.
     pub fn add_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
         self.add(Constraint::row_eq(r1, r2));
+    }
+
+    /// Add a source-originated type equality constraint.
+    pub fn add_type_eq_at(&mut self, t1: Type<'db>, t2: Type<'db>, origin: ConstraintOrigin) {
+        self.add(Constraint::type_eq_at(t1, t2, origin));
+    }
+
+    /// Add a source-originated effect row equality constraint.
+    pub fn add_row_eq_at(
+        &mut self,
+        r1: EffectRow<'db>,
+        r2: EffectRow<'db>,
+        origin: ConstraintOrigin,
+    ) {
+        self.add(Constraint::row_eq_at(r1, r2, origin));
     }
 
     /// Extend with constraints from another set.

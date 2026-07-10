@@ -1,0 +1,15 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "type error at handler boundary in function 'test': effect mismatch: expected `{Foo}`, found `{Bar, e}`"
+  span:
+    start: 165
+    end: 252
+  severity: Error
+  labels:
+    - span:
+        start: 150
+        end: 153
+      message: enclosing function effect contract is declared here
+  phase: TypeChecking
