@@ -630,7 +630,18 @@ which runs under `PassManager::nest::<func.func>()`.
 them concrete and generalizes remaining polymorphic variables into stable
 `BoundVar` indices. Generalization covers the function signature, checked body,
 and post-solve deferred UFCS callee types so later TDNR and monomorphization do
-not see raw solver variables in typed references.
+not see raw solver variables in typed references. Each type-scheme
+instantiation freshens both bound type variables and free effect-row variables,
+while preserving repeated references to the same row variable within that
+single instantiation.
+
+Constraints produced from calls, lambdas, and handler boundaries retain their
+source origin through solving. User-facing failures render effect rows in
+canonical source syntax, hide internal row-variable identities, and attach the
+primary diagnostic to the originating expression with the enclosing effect
+contract as secondary context. A frontend error stops the pipeline before AST
+to IR conversion and shared lowering so invalid source does not produce
+cascading diagnostics containing internal IR operation identities.
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
