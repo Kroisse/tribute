@@ -339,18 +339,129 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Instantiate a type scheme with fresh type variables.
     ///
-    /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`.
+    /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`, and each
+    /// free effect-row variable with a fresh row variable. Repeated occurrences
+    /// of the same row variable remain shared within one instantiation.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         let params = scheme.type_params(self.db);
-        if params.is_empty() {
-            return scheme.body(self.db);
+        let instantiated = if params.is_empty() {
+            scheme.body(self.db)
+        } else {
+            // Generate fresh variables for each parameter
+            let fresh_vars: Vec<Type<'db>> =
+                (0..params.len()).map(|_| self.fresh_type_var()).collect();
+
+            // Substitute bound variables with fresh variables
+            self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
+        };
+
+        let mut row_vars = HashMap::new();
+        self.freshen_effect_vars_in_type(instantiated, &mut row_vars)
+    }
+
+    fn freshen_effect_vars_in_type(
+        &mut self,
+        ty: Type<'db>,
+        row_vars: &mut HashMap<u64, EffectVar>,
+    ) -> Type<'db> {
+        let freshen_row =
+            |ctx: &mut Self, row: EffectRow<'db>, row_vars: &mut HashMap<u64, EffectVar>| {
+                let effects: Vec<Effect<'db>> = row
+                    .effects(ctx.db)
+                    .iter()
+                    .map(|effect| Effect {
+                        ability_id: effect.ability_id,
+                        args: effect
+                            .args
+                            .iter()
+                            .map(|arg| ctx.freshen_effect_vars_in_type(*arg, row_vars))
+                            .collect(),
+                    })
+                    .collect();
+                let rest = row.rest(ctx.db).map(|var| {
+                    if let Some(fresh) = row_vars.get(&var.id) {
+                        *fresh
+                    } else {
+                        let fresh = ctx.fresh_row_var();
+                        row_vars.insert(var.id, fresh);
+                        fresh
+                    }
+                });
+                EffectRow::new(ctx.db, effects, rest)
+            };
+
+        match ty.kind(self.db) {
+            TypeKind::Named { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::Named { name: *name, args })
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|param| self.freshen_effect_vars_in_type(*param, row_vars))
+                    .collect();
+                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let effect = freshen_row(self, *effect, row_vars);
+                Type::new(
+                    self.db,
+                    TypeKind::Func {
+                        params,
+                        result,
+                        effect,
+                    },
+                )
+            }
+            TypeKind::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(|element| self.freshen_effect_vars_in_type(*element, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::Tuple(elements))
+            }
+            TypeKind::App { ctor, args } => {
+                let ctor = self.freshen_effect_vars_in_type(*ctor, row_vars);
+                let args = args
+                    .iter()
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::App { ctor, args })
+            }
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                let arg = self.freshen_effect_vars_in_type(*arg, row_vars);
+                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let effect = freshen_row(self, *effect, row_vars);
+                Type::new(
+                    self.db,
+                    TypeKind::Continuation {
+                        arg,
+                        result,
+                        effect,
+                    },
+                )
+            }
+            TypeKind::BoundVar { .. }
+            | TypeKind::UniVar { .. }
+            | TypeKind::Int
+            | TypeKind::Nat
+            | TypeKind::Float
+            | TypeKind::Bool
+            | TypeKind::Bytes
+            | TypeKind::Rune
+            | TypeKind::Nil
+            | TypeKind::Never
+            | TypeKind::Error => ty,
         }
-
-        // Generate fresh variables for each parameter
-        let fresh_vars: Vec<Type<'db>> = (0..params.len()).map(|_| self.fresh_type_var()).collect();
-
-        // Substitute bound variables with fresh variables
-        self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
     }
 
     /// Substitute bound variables with given types.
@@ -708,6 +819,59 @@ mod tests {
             test_instantiate_scheme_inner(db),
             "Each instantiation should produce fresh type variables"
         );
+    }
+
+    #[salsa_test]
+    fn test_instantiate_scheme_freshens_shared_effect_row_vars(db: &dyn salsa::Database) {
+        fn extract_rows<'db>(
+            db: &'db dyn salsa::Database,
+            ty: Type<'db>,
+        ) -> (EffectRow<'db>, EffectRow<'db>) {
+            let TypeKind::Func { params, effect, .. } = ty.kind(db) else {
+                panic!("expected outer function type");
+            };
+            let TypeKind::Func {
+                effect: callback_effect,
+                ..
+            } = params[0].kind(db)
+            else {
+                panic!("expected callback function type");
+            };
+            (*effect, *callback_effect)
+        }
+
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let nil = Type::new(db, TypeKind::Nil);
+        let callback = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: shared,
+            },
+        );
+        let outer = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![callback],
+                result: nil,
+                effect: shared,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], outer);
+
+        let first = ctx.instantiate_scheme(scheme);
+        let second = ctx.instantiate_scheme(scheme);
+
+        let (first_outer, first_callback) = extract_rows(db, first);
+        let (second_outer, second_callback) = extract_rows(db, second);
+        assert_eq!(first_outer.rest(db), first_callback.rest(db));
+        assert_eq!(second_outer.rest(db), second_callback.rest(db));
+        assert_ne!(first_outer.rest(db), second_outer.rest(db));
     }
 
     #[salsa_test]
