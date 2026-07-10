@@ -2,13 +2,13 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "type error in function 'main': expected `Nat`, found `Foo`"
+- message: "function 'main' must return Nil, but returns `Foo`"
   span:
     start: 0
     end: 23
   severity: Error
   phase: TypeChecking
-- message: "function 'main' must return Nil, but returns `Foo`"
+- message: "type error in function 'main': expected `Nat`, found `Foo`"
   span:
     start: 0
     end: 23

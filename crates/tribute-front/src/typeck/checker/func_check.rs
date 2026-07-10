@@ -379,16 +379,10 @@ impl<'db> TypeChecker<'db> {
             }
 
             if new_constraints.is_empty() {
-                // Emit diagnostics for methods that remain unresolved
-                for mc in &remaining {
-                    Diagnostic::new(
-                        format!("unresolved UFCS method '{}'", mc.method),
-                        self.get_span(mc.node_id),
-                        DiagnosticSeverity::Error,
-                        CompilationPhase::TypeChecking,
-                    )
-                    .accumulate(self.db());
-                }
+                // These calls may become resolvable after the surrounding
+                // function's types have propagated through TDNR. Keep them in
+                // the AST for that pass; any calls still unresolved afterward
+                // are diagnosed at the frontend boundary.
                 break;
             }
             if let Err(error) = solver.solve(new_constraints) {

@@ -104,8 +104,7 @@ pub struct CompilationConfig {
 }
 
 // AST-based pipeline imports
-use tribute_front::ast::ResolvedRef;
-use tribute_front::ast::SpanMap;
+use tribute_front::ast::{Decl, Expr, ExprKind, ResolvedRef, SpanMap, Stmt, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
@@ -328,6 +327,12 @@ pub fn compile_frontend(
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
     let typed = parse_and_lower_ast(db, source)?;
+    let has_frontend_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        .iter()
+        .any(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error);
+    if has_frontend_errors {
+        return None;
+    }
     Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
@@ -1000,6 +1005,7 @@ pub fn parse_and_lower_ast<'db>(
         result.module,
         prelude_module(db).iter().map(|p| p.module(db)),
     );
+    report_unresolved_methods(db, &tdnr_ast, &span_map);
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -1008,6 +1014,130 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types,
         span_map,
     ))
+}
+
+/// Report method calls that remain unresolved after TDNR has had the final
+/// opportunity to use types propagated through the enclosing function.
+fn report_unresolved_methods<'db>(
+    db: &'db dyn salsa::Database,
+    module: &tribute_front::ast::Module<TypedRef<'db>>,
+    span_map: &SpanMap,
+) {
+    fn visit_decl<'db>(
+        db: &'db dyn salsa::Database,
+        decl: &Decl<TypedRef<'db>>,
+        span_map: &SpanMap,
+    ) {
+        match decl {
+            Decl::Function(function) => visit_expr(db, &function.body, span_map),
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    for decl in body {
+                        visit_decl(db, decl, span_map);
+                    }
+                }
+            }
+            Decl::ExternFunction(_)
+            | Decl::Struct(_)
+            | Decl::Enum(_)
+            | Decl::Ability(_)
+            | Decl::Use(_) => {}
+        }
+    }
+
+    fn visit_expr<'db>(
+        db: &'db dyn salsa::Database,
+        expr: &Expr<TypedRef<'db>>,
+        span_map: &SpanMap,
+    ) {
+        match expr.kind.as_ref() {
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                Diagnostic::new(
+                    format!("unresolved method '{}' for this receiver type", method),
+                    span_map.get_or_default(expr.id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(db);
+                visit_expr(db, receiver, span_map);
+                for arg in args {
+                    visit_expr(db, arg, span_map);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                visit_expr(db, callee, span_map);
+                for arg in args {
+                    visit_expr(db, arg, span_map);
+                }
+            }
+            ExprKind::Cons { args, .. } => {
+                for arg in args {
+                    visit_expr(db, arg, span_map);
+                }
+            }
+            ExprKind::Record { fields, spread, .. } => {
+                for (_, value) in fields {
+                    visit_expr(db, value, span_map);
+                }
+                if let Some(spread) = spread {
+                    visit_expr(db, spread, span_map);
+                }
+            }
+            ExprKind::Block { stmts, value } => {
+                for statement in stmts {
+                    match statement {
+                        Stmt::Let { value, .. } => visit_expr(db, value, span_map),
+                        Stmt::Expr { expr, .. } => visit_expr(db, expr, span_map),
+                    }
+                }
+                visit_expr(db, value, span_map);
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                visit_expr(db, scrutinee, span_map);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        visit_expr(db, guard, span_map);
+                    }
+                    visit_expr(db, &arm.body, span_map);
+                }
+            }
+            ExprKind::Lambda { body, .. } => visit_expr(db, body, span_map),
+            ExprKind::Handle { body, handlers } => {
+                visit_expr(db, body, span_map);
+                for handler in handlers {
+                    visit_expr(db, &handler.body, span_map);
+                }
+            }
+            ExprKind::Resume { arg, .. } => visit_expr(db, arg, span_map),
+            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
+                for element in elements {
+                    visit_expr(db, element, span_map);
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                visit_expr(db, lhs, span_map);
+                visit_expr(db, rhs, span_map);
+            }
+            ExprKind::Var(_)
+            | ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::Nil
+            | ExprKind::RuneLit(_)
+            | ExprKind::Error => {}
+        }
+    }
+
+    for decl in &module.decls {
+        visit_decl(db, decl, span_map);
+    }
 }
 
 /// Run the shared pipeline for diagnostic collection only.
@@ -1045,10 +1175,12 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
     compile_ast_tracked(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let diagnostics: Vec<Diagnostic> = compile_ast_tracked::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .cloned()
-        .collect();
+    let mut diagnostics: Vec<Diagnostic> =
+        compile_ast_tracked::accumulated::<Diagnostic>(db, source)
+            .into_iter()
+            .cloned()
+            .collect();
+    diagnostics.sort_by(compare_diagnostics);
 
     // Run the pipeline again for the actual result (Salsa memoizes, so this is cheap)
     let module = run_shared_pipeline(db, source).ok().flatten();
@@ -1057,6 +1189,30 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
         module,
         diagnostics,
     }
+}
+
+/// Compare diagnostics using a stable user-facing order.
+///
+/// Compilation phase is primary, followed by source location and message as
+/// deterministic tie-breakers. This is also used by the CLI for target-specific
+/// accumulator results.
+pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
+    fn phase_rank(phase: &CompilationPhase) -> u8 {
+        match phase {
+            CompilationPhase::Parsing => 0,
+            CompilationPhase::AstGeneration => 1,
+            CompilationPhase::TirGeneration => 2,
+            CompilationPhase::NameResolution => 3,
+            CompilationPhase::TypeChecking => 4,
+            CompilationPhase::Lowering => 5,
+            CompilationPhase::Optimization => 6,
+        }
+    }
+
+    phase_rank(&left.phase)
+        .cmp(&phase_rank(&right.phase))
+        .then_with(|| left.inner.span.cmp(&right.inner.span))
+        .then_with(|| left.inner.message.cmp(&right.inner.message))
 }
 
 // =============================================================================
@@ -1186,7 +1342,7 @@ mod tests {
 
     #[salsa_test]
     fn test_full_pipeline(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
+        let source = source_from_str("test.trb", "fn compute() -> Int { +42 }\nfn main() { }");
 
         let result = compile_ast(db, source).expect("pipeline should not fail");
         assert!(result.is_some(), "Should compile successfully");
@@ -1423,7 +1579,7 @@ mod tests {
 
     #[salsa_test]
     fn test_ast_pipeline_simple_function(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
+        let source = source_from_str("test.trb", "fn compute() -> Int { +42 }\nfn main() { }");
 
         let result = compile_frontend(db, source);
         assert!(result.is_some());
@@ -1446,16 +1602,20 @@ mod tests {
         let source = source_from_str(
             "test.trb",
             r#"
-            fn main() -> Int {
-                let x = 10;
-                let y = 20;
-                x + y
+            fn main() {
+                let x = 10
+                let y = 20
+                let _ = x + y
             }
             "#,
         );
 
         let result = compile_frontend(db, source);
-        assert!(result.is_some());
+        assert!(
+            result.is_some(),
+            "{:?}",
+            parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        );
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
@@ -1470,7 +1630,7 @@ mod tests {
                 y: Int,
             }
 
-            fn main() -> Int { 0 }
+            fn main() { }
             "#,
         );
 

@@ -101,6 +101,25 @@ fn test() -> Int {
 }
 
 #[salsa_test]
+fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Thing { value: Nat }
+
+fn test(thing: Thing) -> Nat {
+    thing.missing()
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    assert!(result.module.is_none());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "test.trb", "fn main() -> Int { 42 }");
     let result = compile_with_diagnostics(db, source);

@@ -58,7 +58,7 @@ fn test_pure_toplevel_function_no_evidence() {
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
 
 fn run() -> Int {
-    apply(fn(n) { n + 1 }, 41)
+    apply(fn(n) { n + +1 }, +41)
 }
 
 fn main() { }
@@ -97,7 +97,7 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        fn State::get() { 42 }
+        fn State::get() { +42 }
         fn State::set(v) { Nil }
     }
 }
@@ -138,14 +138,14 @@ ability State(s) {
 
 fn counter() ->{State(Int)} Int {
     let n = State::get()
-    State::set(n + 1)
+    State::set(n + +1)
     n
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        fn State::get() { 0 }
+        fn State::get() { +0 }
         fn State::set(v) { Nil }
     }
 }
@@ -197,7 +197,7 @@ ability State(s) {
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
         do result { result }
-        fn State::get() { 42 }
+        fn State::get() { +42 }
     }
 }
 

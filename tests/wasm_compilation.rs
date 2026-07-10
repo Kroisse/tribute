@@ -29,7 +29,7 @@ use tribute_passes::diagnostic::Diagnostic;
 
 #[salsa_test]
 fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(db, "literal.trb", "fn main() { 42 }");
+    let source = SourceCst::from_source_str(db, "literal.trb", "fn main() { let _ = 42 }");
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile literal return");
 
@@ -39,7 +39,7 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(db, "arith.trb", "fn main() { 1 + 2 * 3 }");
+    let source = SourceCst::from_source_str(db, "arith.trb", "fn main() { let _ = 1 + 2 * 3 }");
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile arithmetic expression");
 }
@@ -48,7 +48,7 @@ fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
 fn test_compile_function_with_params(db: &salsa::DatabaseImpl) {
     let code = r#"
 fn add(a: Nat, b: Nat) -> Nat { a + b }
-fn main() { add(1, 2) }
+fn main() { let _ = add(1, 2) }
 "#;
     let source = SourceCst::from_source_str(db, "params.trb", code);
     let binary = compile_to_wasm_binary(db, source);
@@ -83,12 +83,12 @@ fn main() { my_print("Hello, World!") }
 #[salsa_test]
 fn test_compile_local_variables(db: &salsa::DatabaseImpl) {
     let code = r#"
-fn test_ops() {
-    let a = 10;
-    let b = 3;
+fn test_ops() -> Nat {
+    let a = 10
+    let b = 3
     a + b
 }
-fn main() { test_ops() }
+fn main() { let _ = test_ops() }
 "#;
     let source = SourceCst::from_source_str(db, "locals.trb", code);
     let binary = compile_to_wasm_binary(db, source);
@@ -105,17 +105,22 @@ fn main() { test_ops() }
 #[salsa_test]
 fn test_compile_case_expression(db: &salsa::DatabaseImpl) {
     let code = r#"
-fn classify(n) {
+fn classify(n: Nat) -> String {
     case n {
-        0 { "zero" }
-        1 { "one" }
-        _ { "other" }
+        0 -> "zero"
+        1 -> "one"
+        _ -> "other"
     }
 }
-fn main() { classify(1) }
+fn main() { let _ = classify(1) }
 "#;
     let source = SourceCst::from_source_str(db, "case_expr.trb", code);
     let binary = compile_to_wasm_binary(db, source);
+    if binary.is_none() {
+        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
+            eprintln!("Diagnostic: {diagnostic:?}");
+        }
+    }
     assert!(binary.is_some(), "Should compile case expression");
 }
 
@@ -178,8 +183,8 @@ fn bump() ->{State(Int)} Int {
 fn run_state() -> Int {
     handle bump() {
         do result { result }
-        op State::get() -> k { resume k(+41) }
-        op State::set(value) -> k { resume k(Nil) }
+        op State::get() { resume +41 }
+        op State::set(value) { resume Nil }
     }
 }
 

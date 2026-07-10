@@ -70,7 +70,7 @@ fn test_state_set_then_get() {
 }
 
 fn set_then_get() ->{State(Int)} Int {
-    State::set(100)
+    State::set(+100)
     State::get()
 }
 
@@ -83,7 +83,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 fn main() {
-    let _ = run_state(fn() { set_then_get() }, 0)
+    let _ = run_state(fn() { set_then_get() }, +0)
 }
 "#;
     let output = compile_and_run_native("state_set_then_get.trb", code);
@@ -190,7 +190,7 @@ fn test_handler_direct_result() {
 }
 
 fn no_effects() ->{State(Int)} Int {
-    42
+    +42
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
@@ -202,7 +202,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 fn main() {
-    let _ = run_state(fn() { no_effects() }, 0)
+    let _ = run_state(fn() { no_effects() }, +0)
 }
 "#;
     let output = compile_and_run_native("handler_direct_result.trb", code);
