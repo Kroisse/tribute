@@ -43,6 +43,11 @@ fn main() {
 "#,
     );
     let binary = compile_to_wasm_binary(db, source);
+    if binary.is_none() {
+        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
+            eprintln!("Diagnostic: {diagnostic:?}");
+        }
+    }
     assert!(binary.is_some(), "Should compile literal return");
 
     let bytes = binary.unwrap();
@@ -65,6 +70,11 @@ fn main() {
 "#,
     );
     let binary = compile_to_wasm_binary(db, source);
+    if binary.is_none() {
+        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
+            eprintln!("Diagnostic: {diagnostic:?}");
+        }
+    }
     assert!(binary.is_some(), "Should compile arithmetic expression");
 }
 
@@ -82,6 +92,11 @@ fn main() {
 "#;
     let source = SourceCst::from_source_str(db, "params.trb", code);
     let binary = compile_to_wasm_binary(db, source);
+    if binary.is_none() {
+        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
+            eprintln!("Diagnostic: {diagnostic:?}");
+        }
+    }
     assert!(binary.is_some(), "Should compile function with params");
 }
 
@@ -128,6 +143,11 @@ fn main() {
 "#;
     let source = SourceCst::from_source_str(db, "locals.trb", code);
     let binary = compile_to_wasm_binary(db, source);
+    if binary.is_none() {
+        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
+            eprintln!("Diagnostic: {diagnostic:?}");
+        }
+    }
     assert!(binary.is_some(), "Should compile local variables");
 }
 
