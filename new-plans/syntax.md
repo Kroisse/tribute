@@ -266,7 +266,7 @@ UseItem ::= Identifier ('as' Identifier)?
 ```rust
 use std::collections::List
 use std::collections::{List, Option, Result}
-use std::io::Console as IO
+use std::io::Error as IoError
 ```
 
 ### Module Declaration
@@ -296,7 +296,7 @@ PathSegment ::= Identifier | TypeId
 ```rust
 List::empty()
 Option::Some(42)
-std::io::Console::println
+std::io::print_line("hello")
 ```
 
 ---
@@ -464,9 +464,8 @@ Ability operation은 두 종류로 선언한다:
 **예시:**
 
 ```rust
-ability Console {
-    fn print(msg: Text) -> Nil
-    fn read() -> Text
+ability Logger {
+    fn log(msg: String) -> Nil
 }
 
 ability State(s) {
@@ -512,8 +511,7 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 Body의 반환값이 곧 resume 값. `resume` 사용 불가:
 
 ```rust
-fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume Nil
-fn Console::read() { IO::read(stdin) }              // Text 반환 → resume input
+fn Logger::log(msg) { print_line(msg) } // Nil 반환 → resume Nil
 ```
 
 **`op` handler arm과 `resume`:**
@@ -549,11 +547,10 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     }
 }
 
-fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
         do result { result }
-        fn Console::print(msg) { IO::write(stdout, msg) }
-        fn Console::read() { IO::read(stdin) }
+        fn Logger::log(msg) { print_line(msg) }
     }
 }
 
@@ -591,9 +588,9 @@ fn fetch(url: Text) ->{Http} Response {
     Http::get(url)
 }
 
-fn example() ->{State(Int), Console} Nil {
+fn example() ->{State(Int), Io} Nil {
     let n = State::get()
-    Console::print(Int::to_string(n))
+    print_line(Int::to_string(n))
 }
 
 // 순수 함수 명시
@@ -1011,28 +1008,28 @@ let x = 1; let y = 2; x + y
 
 ```rust
 use std::collections::{List, Option}
-use std::io::Console
+use std::io::{Io, print_line}
 
 struct User {
-    name: Text
+    name: String
     age: Nat
 }
 
 enum Status {
     Active
-    Inactive { reason: Text }
+    Inactive { reason: String }
 }
 
 ability Logger {
-    fn log(msg: Text) -> Nil
+    fn log(msg: String) -> Nil
 }
 
-pub fn greet(user: User) ->{Console} Nil {
+pub fn greet(user: User) ->{Io} Nil {
     let greeting = "Hello, " <> user.name <> "!"
-    Console::print(greeting)
+    print_line(greeting)
 }
 
-fn process(users: List(User)) ->{Logger} List(Text) {
+fn process(users: List(User)) ->{Logger} List(String) {
     users
         .filter(fn(u) u.age >= 18)
         .map(fn(u) {
@@ -1041,14 +1038,14 @@ fn process(users: List(User)) ->{Logger} List(Text) {
         })
 }
 
-fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Io} a {
     handle comp() {
         do result { result }
-        fn Logger::log(msg) { Console::print("[LOG] " <> msg) }
+        fn Logger::log(msg) { print_line("[LOG] " <> msg) }
     }
 }
 
-fn main() ->{Console} Nil {
+fn main() ->{Io} Nil {
     let users = [
         User { name: "Alice", age: 30 },
         User { name: "Bob", age: 17 },
@@ -1058,7 +1055,7 @@ fn main() ->{Console} Nil {
     run_logger(fn() {
         let names = process(users)
         names.each(fn(name) {
-            Console::print("Name: " <> name)
+            print_line("Name: " <> name)
         })
     })
 }

@@ -23,7 +23,7 @@
 
 ```rust
 // 구체적 ability만
-fn foo() ->{State(Int), Console} Nil
+fn foo() ->{State(Int), Logger} Nil
 
 // Row 변수 (나머지를 나타냄)
 fn bar(f: fn() ->{e} a) ->{e} a
@@ -40,6 +40,10 @@ fn pure(x: a) ->{} a
 // 암묵적 polymorphic (생략 시)
 fn map(xs: List(a), f: fn(a) -> b) -> List(b)
 ```
+
+`std::io::Io`도 effect row의 concrete label로 전파된다. 다만 compiler-owned
+ambient ability이므로 handler로 제거할 수 없고 `main`에 terminal effect로 남을
+수 있다. Calling convention과 표준 API는 [io.md](io.md)를 따른다.
 
 ### 암묵적 Effect Polymorphism
 
@@ -126,19 +130,19 @@ unify({State(Int)}, {State(Int), State(Int)})
 ### 예시
 
 ```rust
-fn example(f: fn() ->{State(Int)} a, g: fn() ->{Console} b) {
+fn example(f: fn() ->{State(Int)} a, g: fn() ->{Logger} b) {
     f()  // effect: {State(Int)}
-    g()  // effect: {Console}
+    g()  // effect: {Logger}
 }
-// 추론된 타입: fn(...) ->{State(Int), Console} Nil
+// 추론된 타입: fn(...) ->{State(Int), Logger} b
 ```
 
 Unification 과정:
 
 ```text
-{State(Int) | e₁} ∪ {Console | e₂}
-= {State(Int), Console | e₃}
-  where e₁ = {Console | e₃}, e₂ = {State(Int) | e₃}
+{State(Int) | e₁} ∪ {Logger | e₂}
+= {State(Int), Logger | e₃}
+  where e₁ = {Logger | e₃}, e₂ = {State(Int) | e₃}
 ```
 
 ### Occurs Check
@@ -178,8 +182,8 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a
 ### Row에서 Ability 제거
 
 ```text
-remove(State(s), {State(s), Console | e}) = {Console | e}
-remove(State(s), {Console | e}) = 에러: State(s)가 없음
+remove(State(s), {State(s), Logger | e}) = {Logger | e}
+remove(State(s), {Logger | e}) = 에러: State(s)가 없음
 remove(State(s), {e}) = e' where e = {State(s) | e'}
 ```
 
@@ -261,7 +265,7 @@ E₁ ⊆ E₂
 Γ ⊢ e ⇐ A ; E₂
 ```
 
-`{State(Int)} ⊆ {State(Int), Console}` 이므로, 더 적은 effect를 가진
+`{State(Int)} ⊆ {State(Int), Logger}` 이므로, 더 적은 effect를 가진
 표현식은 더 많은 effect가 허용되는 컨텍스트에서 사용 가능하다.
 
 ---
@@ -339,13 +343,13 @@ fn add(x: Int, y: Int) -> Int {
 ### Effect 전파
 
 ```rust
-fn fetch_and_print(url: Text) ->{Http, Console} Nil {
+fn fetch_and_print(url: String) ->{Http, Io} Nil {
     let response = Http::get(url)
-    Console::println(response.body)
+    print_line(response.body)
 }
-// Http::get : fn(Text) ->{Http} Response
-// Console::println : fn(Text) ->{Console} Nil
-// 합집합: {Http, Console}
+// Http::get : fn(String) ->{Http} Response
+// print_line : fn(String) ->{Io} Nil
+// 합집합: {Http, Io}
 ```
 
 ### Handler
@@ -355,16 +359,16 @@ fn with_state(comp: fn() ->{e, State(Int)} a) ->{e} a {
     run_state(comp, 0)
 }
 
-fn example() ->{Console} Int {
+fn example() ->{Io} Int {
     with_state(fn() {
         let n = State::get()
         State::set(n + 1)
-        Console::println("incremented")
+        print_line("incremented")
         State::get()
     })
 }
-// comp의 effect: {Console, State(Int)}
-// State(Int) 소비 후: {Console}
+// comp의 effect: {Io, State(Int)}
+// State(Int) 소비 후: {Io}
 ```
 
 ### 고차 함수
@@ -388,10 +392,10 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c {
 }
 
 let h = compose(
-    fn(x) { Console::println(x); x },      // ->{Console}
+    fn(x) { print_line(x); x },             // ->{Io}
     fn(x) { Http::get(x) }                  // ->{Http}
 )
-// h : fn(Text) ->{Console, Http} Response
+// h : fn(String) ->{Io, Http} Response
 ```
 
 ---
@@ -484,8 +488,8 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 3. **Effect aliases** (향후 고려):
 
    ```rust
-   type IO = {Console, FileSystem, Http}
-   fn main() ->{IO} Nil
+   type Network = {Http, Async}
+   fn fetch_all() ->{Network} List(Response)
    ```
 
 ---

@@ -165,7 +165,7 @@ Handler가 **항상 즉시 `k(value)`로 끝나면** (tail-resumptive), continua
 // Tail-resumptive handler 예시
 { State::get() -> k } -> k(current_state)
 { State::put(v) -> k } -> k(())
-{ Console::print(s) -> k } -> { do_print(s); k(()) }
+{ Logger::log(s) -> k } -> { emit_log(s); k(()) }
 ```
 
 ### 최적화 전
@@ -215,7 +215,7 @@ Handler의 각 case arm 분석:
 | State     | Yes              | get/put 모두 즉시 resume |
 | Reader    | Yes              | ask는 즉시 resume        |
 | Writer    | Yes              | tell은 즉시 resume       |
-| Console   | Yes              | print는 즉시 resume      |
+| Logger    | Yes              | log는 즉시 resume        |
 | Exception | No               | fail은 resume 안 함      |
 | Async     | 조건부           | await 후 resume          |
 | Choice    | No               | 여러 번 resume 가능      |

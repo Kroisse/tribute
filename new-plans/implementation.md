@@ -211,10 +211,24 @@ fn state_get(ev: Evidence) -> s {
 
 ### Evidence 전달 규칙
 
-1. **Effectful 함수**는 evidence 포인터를 받는다
-2. **순수 함수** (`fn(a) ->{} b`)는 evidence를 전달받지 않는다
-3. **Handler 설치** 시 새 evidence를 할당한다
-4. **Ability operation** 시 evidence에서 marker를 조회한다
+1. **순수 함수** (`fn(a) ->{} b`)는 evidence를 전달받지 않는다
+2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
+3. **CPS 함수**는 evidence와 `done_k`를 받고 `anyref`를 반환한다
+4. **Handler 설치** 시 새 evidence를 할당한다
+5. **Handled ability operation** 시 evidence에서 marker를 조회한다
+
+호출 규약은 effect requirement의 상한으로 합성한다:
+
+```text
+Direct < EvidenceDirect < Cps
+```
+
+Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
+`EvidenceDirect`다. `Io`는 operation dispatch를 위해 전달된 evidence를 lookup하지
+않는다. Evidence의 concrete representation은 source semantics가 아니라 backend
+구현 세부사항이다.
+`Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
+자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
 
 ### 런타임 함수
 
@@ -260,8 +274,9 @@ fn fetch_all(urls: List(Text), ev: Evidence) -> List(Response) {
 모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
 
 ```text
-순수 코드 (fn(a) ->{} b)     → 직접 스타일, 일반 호출
-Effect 코드 (fn(a) ->{E} b)  → shift/reset 지점만 특별 처리
+순수 코드 (fn(a) ->{} b)            → Direct
+Ambient/fn effect                    → EvidenceDirect
+General op/Throw effect              → Cps, effect point만 continuation 처리
 ```
 
 ### Ability Polymorphism 처리
@@ -287,16 +302,22 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 ```rust
 // fn operation 호출 → shift 없이 직접 호출
-fn console_print(msg: Text, ev: Evidence) -> Nil {
-    let marker = evidence_lookup(ev, CONSOLE_ID)
+fn logger_log(msg: String, ev: Evidence) -> Nil {
+    let marker = evidence_lookup(ev, LOGGER_ID)
     let tr_dispatch = adt.struct_get(marker, MarkerField::TrDispatchFn)
-    let op_idx = hash(Console, print)
+    let op_idx = hash(Logger, log)
     tr_dispatch(op_idx, msg)  // 직접 호출, shift 없음
 }
 ```
 
-Console, Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언되므로,
+Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언되므로,
 이 최적화가 큰 효과를 낸다.
+
+`Io` 함수도 continuation을 받지 않는다는 점에서는 `fn` operation과 같지만,
+handler dispatch가 없으므로 marker lookup도 수행하지 않는다. 현재는 ABI 안정성과
+effectful call 규칙의 단순성을 위해 evidence를 계속 전달한다. 현재 representation의
+`Io`-only entrypoint는 empty evidence를 사용할 수 있지만 이는 backend 구현
+세부사항이다.
 
 #### 2. Handler 수준 분석 (`op` operation)
 
@@ -343,7 +364,7 @@ Handler arm에서도 `-> k`를 사용하지 않으므로 continuation 관련 오
 스택 (아래가 바닥)
 ─────────────────────
 [State prompt: P1]     ← 바깥쪽 run_state
-[Console prompt: P2]   ← run_console
+[Logger prompt: P2]    ← run_logger
 [State prompt: P3]     ← 안쪽 run_state (같은 ability 중첩)
 [현재 실행 지점]        ← State::get() 호출
 ─────────────────────
@@ -711,10 +732,10 @@ struct Marker {
 타입 시스템 수준에서는 ability row에 대해 parameterized된다:
 
 ```text
-fn foo() ->{State(Int), Console} Nil
+fn foo() ->{State(Int), Logger} Nil
 
 // 타입 검사 시 Evidence가 포함해야 할 ability:
-Evidence({State(Int), Console | ρ})
+Evidence({State(Int), Logger | ρ})
 ```
 
 Row polymorphism으로 ability 합성을 표현하되, 런타임 표현은 단순 배열이다.
@@ -736,7 +757,7 @@ let marker = adt.array_get(ev, idx)        // ADT 연산
 
 ```text
 State    → 0
-Console  → 1
+Logger   → 1
 Http     → 2
 Async    → 3
 ...
@@ -745,16 +766,22 @@ Async    → 3
 Evidence 배열은 ability_id 기준으로 정렬된다. `evidence_lookup`이 binary search로 O(log n) 탐색:
 
 ```rust
-// {Console, State} 든 {State, Console} 이든
-// markers 배열은 항상 [State(id=0), Console(id=1)] 순서
+// {Logger, State} 든 {State, Logger} 이든
+// markers 배열은 항상 [State(id=0), Logger(id=1)] 순서
 let idx = evidence_lookup(ev, STATE_ID)  // binary search
 ```
 
 **설계 결정:**
 
 - Ability ID: `i32` (실용적인 ability 개수는 수십 개 수준)
-- 표준 라이브러리 ability (State, Console, Http 등): 0-63 예약
+- runtime dispatch가 필요한 compiler/표준 라이브러리 ability (State, Http 등): 0-63 예약
 - 사용자 정의 ability: 64+
+
+`Io`의 canonical builtin identity는 frontend와 type system에서 ambient semantics를
+판정하기 위한 identity다. 이것이 runtime `ability_id` 할당이나 특정 Evidence 배열
+표현을 요구하지는 않는다. 보장되는 계약은 `Io`가 handler lookup이나 dispatch를
+요구하지 않는다는 점뿐이다. 향후 runtime capability를 evidence에 저장할지는 backend
+구현 선택으로 남긴다.
 
 ---
 
