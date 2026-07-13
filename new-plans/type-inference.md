@@ -134,7 +134,7 @@ fn example(f: fn() ->{State(Int)} a, g: fn() ->{Logger} b) {
     f()  // effect: {State(Int)}
     g()  // effect: {Logger}
 }
-// 추론된 타입: fn(...) ->{State(Int), Logger} Nil
+// 추론된 타입: fn(...) ->{State(Int), Logger} b
 ```
 
 Unification 과정:
