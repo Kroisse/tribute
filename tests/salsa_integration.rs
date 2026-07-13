@@ -28,6 +28,18 @@ fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
     })
 }
 
+fn compile_frontend_with_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Result<(IrContext, Module), Vec<Diagnostic>> {
+    compile_frontend(db, source).ok_or_else(|| {
+        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+            .into_iter()
+            .cloned()
+            .collect()
+    })
+}
+
 #[salsa_test]
 fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     // Example source code
@@ -67,11 +79,8 @@ fn main() {
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let Some((ctx, module)) = compile_frontend(db, source_file) else {
-            let diagnostics =
-                tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source_file);
-            panic!("compilation should succeed: {diagnostics:?}");
-        };
+        let (ctx, module) = compile_frontend_with_diagnostics(db, source_file)
+            .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
 
         // Verify that expected user functions exist
         for func_name in expected_funcs {
@@ -83,6 +92,17 @@ fn main() {
             );
         }
     }
+}
+
+#[salsa_test]
+fn test_compile_frontend_with_diagnostics_returns_errors(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "invalid.trb", "fn main() -> Int { true }");
+
+    let Err(diagnostics) = compile_frontend_with_diagnostics(db, source) else {
+        panic!("invalid source should return diagnostics");
+    };
+
+    assert!(!diagnostics.is_empty());
 }
 
 #[test]
@@ -98,7 +118,8 @@ fn test_salsa_incremental_computation_detailed() {
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let (ctx1, module1) = compile_frontend(&db, source_file).expect("compilation should succeed");
+    let (ctx1, module1) = compile_frontend_with_diagnostics(&db, source_file)
+        .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
     assert!(
         find_func_by_name(&ctx1, &module1, "main"),
         "Should have main function"
@@ -112,7 +133,9 @@ fn test_salsa_incremental_computation_detailed() {
 
     // Lower again - should recompute with updated source
     let (ctx2, module2) =
-        compile_frontend(&db, source_file).expect("compilation should succeed after update");
+        compile_frontend_with_diagnostics(&db, source_file).unwrap_or_else(|diagnostics| {
+            panic!("compilation should succeed after update: {diagnostics:?}")
+        });
     assert!(
         find_func_by_name(&ctx2, &module2, "main"),
         "Should have main function after update"
@@ -120,7 +143,9 @@ fn test_salsa_incremental_computation_detailed() {
 
     // Lower again without changes - pipeline still works
     let (ctx3, module3) =
-        compile_frontend(&db, source_file).expect("compilation should succeed on re-run");
+        compile_frontend_with_diagnostics(&db, source_file).unwrap_or_else(|diagnostics| {
+            panic!("compilation should succeed on re-run: {diagnostics:?}")
+        });
     assert!(
         find_func_by_name(&ctx3, &module3, "main"),
         "Should have main function on cached run"
@@ -147,7 +172,8 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let (ctx, module) = compile_frontend(db, source).expect("compilation should succeed");
+    let (ctx, module) = compile_frontend_with_diagnostics(db, source)
+        .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
 
     // Verify all user functions exist
     assert!(
@@ -175,7 +201,8 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { let _ = 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let (ctx, module) = compile_frontend(db, source1).expect("compilation should succeed");
+        let (ctx, module) = compile_frontend_with_diagnostics(db, source1)
+            .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -187,7 +214,8 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { let _ = 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let (ctx, module) = compile_frontend(db, source2).expect("compilation should succeed");
+        let (ctx, module) = compile_frontend_with_diagnostics(db, source2)
+            .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -205,7 +233,8 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let (ctx, module) = compile_frontend(db, source_file).expect("compilation should succeed");
+    let (ctx, module) = compile_frontend_with_diagnostics(db, source_file)
+        .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"));
 
     // Verify the main function exists
     assert!(
