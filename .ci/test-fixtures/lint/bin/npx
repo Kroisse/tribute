@@ -1,0 +1,4 @@
+#!/bin/sh
+
+: "${LINT_TEST_NPX_MARKER:?must be set by test-lint.sh}"
+touch "$LINT_TEST_NPX_MARKER"

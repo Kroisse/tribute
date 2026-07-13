@@ -1,0 +1,19 @@
+#!/bin/sh
+
+case "$1" in
+    fmt)
+        exit 0
+        ;;
+    clippy)
+        line=1
+        while [ "$line" -le 100 ]; do
+            echo "clippy output $line"
+            line=$((line + 1))
+        done
+        echo "CLIPPY_FAILURE_MARKER"
+        exit 1
+        ;;
+    *)
+        exit 0
+        ;;
+esac
