@@ -26,6 +26,16 @@ if ! grep -q "CLIPPY_FAILURE_MARKER" "$TEMP_DIR/output"; then
     exit 1
 fi
 
+if ! grep -q "clippy output 62$" "$TEMP_DIR/output"; then
+    echo "lint.sh did not print the complete 40-line clippy tail" >&2
+    exit 1
+fi
+
+if grep -q "clippy output 61$" "$TEMP_DIR/output"; then
+    echo "lint.sh printed more than the final 40 clippy lines" >&2
+    exit 1
+fi
+
 if grep -q "clippy output 1$" "$TEMP_DIR/output"; then
     echo "lint.sh printed unbounded clippy output" >&2
     exit 1

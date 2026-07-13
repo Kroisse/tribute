@@ -12,7 +12,10 @@ fi
 
 echo "Running clippy..."
 CLIPPY_OUTPUT="$(mktemp)"
-trap 'rm -f "$CLIPPY_OUTPUT"' EXIT HUP INT TERM
+trap 'rm -f "$CLIPPY_OUTPUT"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if cargo clippy --workspace --all-targets --message-format=short -- -D warnings \
     >"$CLIPPY_OUTPUT" 2>&1; then
     rm -f "$CLIPPY_OUTPUT"
