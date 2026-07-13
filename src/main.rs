@@ -153,18 +153,19 @@ fn compile_file(
                         let output =
                             output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
-                        match std::fs::write(&output, &wasm_bytes) {
-                            Ok(_) => {
-                                println!(
-                                    "Successfully wrote WebAssembly binary to {}",
-                                    output.display()
-                                );
-                            }
-                            Err(e) => {
-                                eprintln!("Error writing output file {}: {}", output.display(), e);
-                                std::process::exit(1);
-                            }
+                        if let Err(error) = std::fs::write(&output, &wasm_bytes) {
+                            eprintln!(
+                                "Error writing output file {}: {}",
+                                output.display(),
+                                error
+                            );
+                            std::process::exit(1);
                         }
+
+                        println!(
+                            "Successfully wrote WebAssembly binary to {}",
+                            output.display()
+                        );
                     }
                     Err(diagnostics) => {
                         let file_path = input_path.display().to_string();
