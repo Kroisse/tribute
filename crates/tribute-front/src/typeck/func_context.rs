@@ -924,6 +924,49 @@ mod tests {
     }
 
     #[salsa_test]
+    fn test_instantiate_scheme_freshens_rows_in_app_and_continuation(db: &dyn salsa::Database) {
+        fn continuation_effect<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
+            let TypeKind::Continuation { effect, .. } = ty.kind(db) else {
+                panic!("expected continuation type");
+            };
+            *effect
+        }
+
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let nil = Type::new(db, TypeKind::Nil);
+        let continuation = Type::new(
+            db,
+            TypeKind::Continuation {
+                arg: nil,
+                result: nil,
+                effect: shared,
+            },
+        );
+        let app = Type::new(
+            db,
+            TypeKind::App {
+                ctor: continuation,
+                args: vec![continuation],
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], app);
+
+        let instantiated = ctx.instantiate_scheme(scheme);
+        let TypeKind::App { ctor, args } = instantiated.kind(db) else {
+            panic!("expected application type");
+        };
+        let ctor_effect = continuation_effect(db, *ctor);
+        let arg_effect = continuation_effect(db, args[0]);
+
+        assert_eq!(ctor_effect.rest(db), arg_effect.rest(db));
+        assert_ne!(ctor_effect.rest(db), shared.rest(db));
+    }
+
+    #[salsa_test]
     fn test_local_binding(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
         let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
