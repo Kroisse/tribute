@@ -731,11 +731,8 @@ pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Vec<u8>, Vec<&Diagnostic>> {
-    compile_to_wasm_binary_tracked(db, source).ok_or_else(|| {
-        let mut diagnostics = compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source);
-        diagnostics.sort_by(|left, right| compare_diagnostics(left, right));
-        diagnostics
-    })
+    compile_to_wasm_binary_tracked(db, source)
+        .ok_or_else(|| compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source))
 }
 
 // =============================================================================
