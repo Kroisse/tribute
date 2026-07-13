@@ -4,12 +4,11 @@
 
 use std::collections::HashMap;
 
-use itertools::Itertools;
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource};
 
-use super::constraint::{Constraint, ConstraintSet};
+use super::constraint::{Constraint, ConstraintOrigin, ConstraintSet};
 
 /// Apply a type-transforming function to all effect type arguments in an effect row.
 ///
@@ -62,6 +61,28 @@ pub enum SolveError<'db> {
     },
 }
 
+/// A solver error together with the source construct that introduced the
+/// failing constraint, when one was recorded by the checker.
+#[derive(Clone, Debug)]
+pub struct LocatedSolveError<'db> {
+    pub error: SolveError<'db>,
+    pub origin: Option<ConstraintOrigin>,
+}
+
+/// Format an effect row using stable, source-oriented syntax.
+///
+/// Internal row-variable IDs are intentionally hidden.  Open rows use the
+/// generic source-level tail name `e`, and concrete effects are sorted so the
+/// message does not depend on insertion or hash-map iteration order.
+pub fn format_effect_row(db: &dyn salsa::Database, row: EffectRow<'_>) -> String {
+    let mut items: Vec<String> = row.effects(db).iter().map(ToString::to_string).collect();
+    items.sort();
+    if row.rest(db).is_some() {
+        items.push("e".to_string());
+    }
+    format!("{{{}}}", items.join(", "))
+}
+
 impl std::fmt::Display for SolveError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -76,19 +97,11 @@ impl std::fmt::Display for SolveError<'_> {
                 )
             }
             Self::RowMismatch { expected, actual } => salsa::with_attached_database(|db| {
-                let fmt_row = |row: &EffectRow<'_>| -> String {
-                    let effects = row.effects(db);
-                    if effects.is_empty() {
-                        "{{}}".to_string()
-                    } else {
-                        format!("{{{}}}", effects.iter().format(", "))
-                    }
-                };
                 write!(
                     f,
                     "effect mismatch: expected `{}`, found `{}`",
-                    fmt_row(expected),
-                    fmt_row(actual)
+                    format_effect_row(db, *expected),
+                    format_effect_row(db, *actual)
                 )
             })
             .unwrap_or(Err(std::fmt::Error)),
@@ -625,10 +638,19 @@ impl<'db> TypeSolver<'db> {
     /// variables as possible are resolved.  Returns the first error (if any)
     /// after all constraints have been attempted.
     pub fn solve(&mut self, constraints: ConstraintSet<'db>) -> Result<(), SolveError<'db>> {
+        self.solve_with_origin(constraints)
+            .map_err(|error| error.error)
+    }
+
+    /// Solve constraints while retaining the source origin of the first error.
+    pub fn solve_with_origin(
+        &mut self,
+        constraints: ConstraintSet<'db>,
+    ) -> Result<(), LocatedSolveError<'db>> {
         let constraints_vec = constraints.into_constraints();
-        let mut first_error: Option<SolveError<'db>> = None;
+        let mut first_error: Option<LocatedSolveError<'db>> = None;
         for constraint in constraints_vec.into_iter() {
-            if let Err(e) = self.solve_constraint(constraint) {
+            if let Err(e) = self.solve_constraint_with_origin(constraint) {
                 first_error.get_or_insert(e);
             }
         }
@@ -638,15 +660,40 @@ impl<'db> TypeSolver<'db> {
         }
     }
 
-    /// Solve a single constraint.
-    fn solve_constraint(&mut self, constraint: Constraint<'db>) -> Result<(), SolveError<'db>> {
+    /// Solve a single constraint while preserving any attached source origin.
+    fn solve_constraint_with_origin(
+        &mut self,
+        constraint: Constraint<'db>,
+    ) -> Result<(), LocatedSolveError<'db>> {
         match constraint {
-            Constraint::TypeEq(t1, t2) => self.unify_types(t1, t2),
-            Constraint::RowEq(r1, r2) => self.unify_rows(r1, r2),
+            Constraint::TypeEq(t1, t2) => {
+                self.unify_types(t1, t2).map_err(|error| LocatedSolveError {
+                    error,
+                    origin: None,
+                })
+            }
+            Constraint::RowEq(r1, r2) => {
+                self.unify_rows(r1, r2).map_err(|error| LocatedSolveError {
+                    error,
+                    origin: None,
+                })
+            }
+            Constraint::TypeEqAt(t1, t2, origin) => {
+                self.unify_types(t1, t2).map_err(|error| LocatedSolveError {
+                    error,
+                    origin: Some(origin),
+                })
+            }
+            Constraint::RowEqAt(r1, r2, origin) => {
+                self.unify_rows(r1, r2).map_err(|error| LocatedSolveError {
+                    error,
+                    origin: Some(origin),
+                })
+            }
             Constraint::And(cs) => {
-                let mut first_error: Option<SolveError<'db>> = None;
+                let mut first_error: Option<LocatedSolveError<'db>> = None;
                 for c in cs {
-                    if let Err(e) = self.solve_constraint(c) {
+                    if let Err(e) = self.solve_constraint_with_origin(c) {
                         first_error.get_or_insert(e);
                     }
                 }

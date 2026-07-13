@@ -2,9 +2,9 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "function 'main' has unhandled effects: Foo, Bar"
+- message: "unresolved method 'missing' for this receiver type"
   span:
-    start: 75
-    end: 125
+    start: 65
+    end: 80
   severity: Error
   phase: TypeChecking

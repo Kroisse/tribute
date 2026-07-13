@@ -11,9 +11,11 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
-    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    HandlerKind, LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind,
+    TypedRef,
 };
 
+use super::super::constraint::ConstraintOriginKind;
 use super::super::func_context::FunctionInferenceContext;
 use super::super::subst;
 use super::{Mode, TypeChecker};
@@ -103,7 +105,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|a| self.infer_expr_type_with_ctx(ctx, a))
                     .collect();
-                self.infer_call_with_ctx(ctx, callee_ty, &arg_types)
+                self.infer_call_with_ctx(ctx, callee_ty, &arg_types, expr.id)
             }
             ExprKind::Cons { ctor, args } => {
                 let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
@@ -116,7 +118,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|a| self.infer_expr_type_with_ctx(ctx, a))
                         .collect();
-                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
+                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
             ExprKind::Record {
@@ -323,7 +325,12 @@ impl<'db> TypeChecker<'db> {
                     // Constrain the inferred effect (fresh_effect after body checking)
                     // to match the expected effect. This ensures UniVars in the body's
                     // types that reference fresh_effect get properly resolved.
-                    ctx.constrain_row_eq(inferred_effect, expected);
+                    ctx.constrain_row_eq_at(
+                        inferred_effect,
+                        expected,
+                        expr.id,
+                        ConstraintOriginKind::Lambda,
+                    );
                     expected
                 } else {
                     inferred_effect
@@ -388,7 +395,12 @@ impl<'db> TypeChecker<'db> {
                 // with the enclosing function's effect. Use constraint instead of
                 // merge to avoid creating spurious variable linkages that lead to
                 // RowMismatch when the solver chains substitutions.
-                ctx.constrain_row_eq(result_effect, effect_before_body);
+                ctx.constrain_row_eq_at(
+                    effect_before_body,
+                    result_effect,
+                    expr.id,
+                    ConstraintOriginKind::HandlerBoundary,
+                );
                 ctx.set_current_effect(effect_before_body);
 
                 body_ty
@@ -494,7 +506,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|a| self.infer_expr_type_with_ctx(ctx, a))
                     .collect();
-                self.infer_call_with_ctx(ctx, callee_ty, &arg_types)
+                self.infer_call_with_ctx(ctx, callee_ty, &arg_types, expr.id)
             }
             ExprKind::Cons { ctor, args } => {
                 let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
@@ -507,7 +519,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|a| self.infer_expr_type_with_ctx(ctx, a))
                         .collect();
-                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
+                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
             ExprKind::Block { stmts, value } => {
@@ -705,6 +717,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         callee_ty: Type<'db>,
         arg_types: &[Type<'db>],
+        origin: NodeId,
     ) -> Type<'db> {
         // Create expected type - could be either a function or continuation type.
         // We create fresh type variables and let unification determine the actual type.
@@ -745,18 +758,33 @@ impl<'db> TypeChecker<'db> {
                 // effect row is already the handler body's effect row (assigned in
                 // convert_handler_arm_with_ctx), so it's already accounted for in the
                 // enclosing handle expression's effect propagation.
-                ctx.constrain_eq(callee_ty, expected_cont_ty);
-                ctx.constrain_eq(cont_arg_ty, arg_types[0]);
+                ctx.constrain_eq_at(
+                    callee_ty,
+                    expected_cont_ty,
+                    origin,
+                    ConstraintOriginKind::Call,
+                );
+                ctx.constrain_eq_at(
+                    cont_arg_ty,
+                    arg_types[0],
+                    origin,
+                    ConstraintOriginKind::Call,
+                );
                 return cont_result_ty;
             } else {
                 // Callee is a UniVar, concrete function type, or other - use function semantics
                 // This handles cases like higher-order functions with unknown callees
-                ctx.constrain_eq(callee_ty, expected_func_ty);
+                ctx.constrain_eq_at(
+                    callee_ty,
+                    expected_func_ty,
+                    origin,
+                    ConstraintOriginKind::Call,
+                );
                 for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
-                    ctx.constrain_eq(*param_ty, *arg_ty);
+                    ctx.constrain_eq_at(*param_ty, *arg_ty, origin, ConstraintOriginKind::Call);
                 }
 
-                ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
+                ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
 
                 return result_ty;
             }
@@ -765,14 +793,19 @@ impl<'db> TypeChecker<'db> {
         // Multiple arguments (or zero): must be a function call
         let callee_effect = ctx.fresh_effect_row();
         let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
-        ctx.constrain_eq(callee_ty, expected_func_ty);
+        ctx.constrain_eq_at(
+            callee_ty,
+            expected_func_ty,
+            origin,
+            ConstraintOriginKind::Call,
+        );
 
         // Constrain argument types
         for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
-            ctx.constrain_eq(*param_ty, *arg_ty);
+            ctx.constrain_eq_at(*param_ty, *arg_ty, origin, ConstraintOriginKind::Call);
         }
 
-        ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
+        ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
 
         result_ty
     }

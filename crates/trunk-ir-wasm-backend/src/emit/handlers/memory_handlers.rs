@@ -546,3 +546,61 @@ pub(crate) fn handle_i64_store32(
     function.instruction(&Instruction::I64Store32(memarg));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use trunk_ir::Span;
+    use trunk_ir::Symbol;
+    use trunk_ir::refs::PathRef;
+    use trunk_ir::types::{Location, TypeDataBuilder};
+    use wasm_encoder::ValType;
+
+    use super::*;
+
+    #[test]
+    fn memarg_uses_natural_alignment_for_zero_and_clamps_explicit_alignment() {
+        let natural = make_memarg(4, 0, 1, 2);
+        assert_eq!(natural.offset, 4);
+        assert_eq!(natural.align, 2);
+        assert_eq!(natural.memory_index, 1);
+
+        let clamped = make_memarg(8, 7, 0, 2);
+        assert_eq!(clamped.align, 2);
+    }
+
+    #[test]
+    fn i32_memory_handlers_emit_with_mapped_operands_and_result() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let address = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
+        let value = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 42);
+        let address_result = address.result(&ctx);
+        let value_result = value.result(&ctx);
+        let load = wasm_dialect::i32_load(&mut ctx, location, address_result, i32_ty, 4, 7, 0);
+        let store =
+            wasm_dialect::i32_store(&mut ctx, location, address_result, value_result, 8, 7, 0);
+        let store8 =
+            wasm_dialect::i32_store8(&mut ctx, location, address_result, value_result, 12, 7, 0);
+        let emit_ctx = FunctionEmitContext {
+            value_locals: HashMap::from([
+                (address_result, 0),
+                (value_result, 1),
+                (load.result(&ctx), 2),
+            ]),
+            effective_types: HashMap::new(),
+            func_return_type: None,
+        };
+        let module_info = ModuleInfo::default();
+        let mut function = Function::new([(3, ValType::I32)]);
+
+        for op in [load.op_ref(), store.op_ref(), store8.op_ref()] {
+            crate::emit::emit_op_nested(&ctx, op, &emit_ctx, &module_info, &mut function, &[])
+                .expect("memory operation should emit through the dispatcher");
+        }
+    }
+}

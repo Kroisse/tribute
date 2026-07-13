@@ -4,6 +4,7 @@ use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
+use tribute_passes::diagnostic::Diagnostic;
 use trunk_ir::Symbol;
 use trunk_ir::{IrContext, Module};
 
@@ -27,6 +28,20 @@ fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
     })
 }
 
+fn compile_frontend_with_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
+    compile_frontend(db, source).ok_or_else(|| {
+        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+    })
+}
+
+fn expect_compilation_success(db: &dyn salsa::Database, source: SourceCst) -> (IrContext, Module) {
+    compile_frontend_with_diagnostics(db, source)
+        .unwrap_or_else(|diagnostics| panic!("compilation should succeed: {diagnostics:?}"))
+}
+
 #[salsa_test]
 fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     // Example source code
@@ -36,19 +51,23 @@ fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
             r#"fn main() { print_line("Hello, World!") }"#,
             vec!["main"],
         ),
-        ("calc.trb", r#"fn main() { 1 + 2 + 3 }"#, vec!["main"]),
+        (
+            "calc.trb",
+            r#"fn main() { let _ = 1 + 2 + 3 }"#,
+            vec!["main"],
+        ),
         (
             "complex.trb",
             r#"
-fn factorial(n) {
+fn factorial(n: Nat) -> Nat {
   case n {
-    0 { 1 }
-    _ { n * factorial(n - 1) }
+    0 -> 1
+    _ -> n * factorial(n - 1)
   }
 }
 
 fn main() {
-  factorial(5)
+  let _ = factorial(5)
 }
 "#,
             vec!["factorial", "main"],
@@ -62,7 +81,7 @@ fn main() {
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let (ctx, module) = compile_frontend(db, source_file).expect("compilation should succeed");
+        let (ctx, module) = expect_compilation_success(db, source_file);
 
         // Verify that expected user functions exist
         for func_name in expected_funcs {
@@ -76,6 +95,17 @@ fn main() {
     }
 }
 
+#[salsa_test]
+fn test_compile_frontend_with_diagnostics_returns_errors(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "invalid.trb", "fn main() -> Int { true }");
+
+    let Err(diagnostics) = compile_frontend_with_diagnostics(db, source) else {
+        panic!("invalid source should return diagnostics");
+    };
+
+    assert!(!diagnostics.is_empty());
+}
+
 #[test]
 fn test_salsa_incremental_computation_detailed() {
     // Demonstrate incremental computation via compile_frontend
@@ -84,34 +114,32 @@ fn test_salsa_incremental_computation_detailed() {
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
-    let text = "fn main() { 1 + 2 }";
+    let text = "fn main() { let _ = 1 + 2 }";
     let tree = parser.parse(text, None).expect("tree");
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let (ctx1, module1) = compile_frontend(&db, source_file).expect("compilation should succeed");
+    let (ctx1, module1) = expect_compilation_success(&db, source_file);
     assert!(
         find_func_by_name(&ctx1, &module1, "main"),
         "Should have main function"
     );
 
     // Modify the source file
-    let updated_text = "fn main() { 1 + 2 + 3 + 4 }";
+    let updated_text = "fn main() { let _ = 1 + 2 + 3 + 4 }";
     let updated_tree = parser.parse(updated_text, None).expect("tree");
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - should recompute with updated source
-    let (ctx2, module2) =
-        compile_frontend(&db, source_file).expect("compilation should succeed after update");
+    let (ctx2, module2) = expect_compilation_success(&db, source_file);
     assert!(
         find_func_by_name(&ctx2, &module2, "main"),
         "Should have main function after update"
     );
 
     // Lower again without changes - pipeline still works
-    let (ctx3, module3) =
-        compile_frontend(&db, source_file).expect("compilation should succeed on re-run");
+    let (ctx3, module3) = expect_compilation_success(&db, source_file);
     assert!(
         find_func_by_name(&ctx3, &module3, "main"),
         "Should have main function on cached run"
@@ -138,7 +166,7 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let (ctx, module) = compile_frontend(db, source).expect("compilation should succeed");
+    let (ctx, module) = expect_compilation_success(db, source);
 
     // Verify all user functions exist
     assert!(
@@ -163,10 +191,10 @@ fn test_salsa_database_isolation() {
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
-        let text = "fn main() { 1 + 2 }";
+        let text = "fn main() { let _ = 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let (ctx, module) = compile_frontend(db, source1).expect("compilation should succeed");
+        let (ctx, module) = expect_compilation_success(db, source1);
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -175,10 +203,10 @@ fn test_salsa_database_isolation() {
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
-        let text = "fn main() { 3 * 4 }";
+        let text = "fn main() { let _ = 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let (ctx, module) = compile_frontend(db, source2).expect("compilation should succeed");
+        let (ctx, module) = expect_compilation_success(db, source2);
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -189,14 +217,14 @@ fn test_salsa_database_isolation() {
 
 #[salsa_test]
 fn test_function_lowering(db: &salsa::DatabaseImpl) {
-    let source = "fn main() { 1 + 2 }";
+    let source = "fn main() { let _ = 1 + 2 }";
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let (ctx, module) = compile_frontend(db, source_file).expect("compilation should succeed");
+    let (ctx, module) = expect_compilation_success(db, source_file);
 
     // Verify the main function exists
     assert!(

@@ -148,26 +148,30 @@ fn compile_file(
             "wasm" => {
                 println!("Compiling {} to WebAssembly...", input_path.display());
 
-                if let Some(wasm_bytes) = compile_to_wasm_binary(db, source) {
-                    let output = output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
+                match compile_to_wasm_binary(db, source) {
+                    Ok(wasm_bytes) => {
+                        let output =
+                            output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
-                    match std::fs::write(&output, &wasm_bytes) {
-                        Ok(_) => {
-                            println!(
-                                "Successfully wrote WebAssembly binary to {}",
-                                output.display()
+                        if let Err(error) = std::fs::write(&output, &wasm_bytes) {
+                            eprintln!(
+                                "Error writing output file {}: {}",
+                                output.display(),
+                                error
                             );
-                        }
-                        Err(e) => {
-                            eprintln!("Error writing output file {}: {}", output.display(), e);
                             std::process::exit(1);
                         }
+
+                        println!(
+                            "Successfully wrote WebAssembly binary to {}",
+                            output.display()
+                        );
                     }
-                } else {
-                    let file_path = input_path.display().to_string();
-                    let diags = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-                    report_diagnostics(db, source, &file_path, diags);
-                    std::process::exit(1);
+                    Err(diagnostics) => {
+                        let file_path = input_path.display().to_string();
+                        report_diagnostics(db, source, &file_path, diagnostics);
+                        std::process::exit(1);
+                    }
                 }
             }
             "none" => {

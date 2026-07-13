@@ -2,9 +2,9 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "type error in function 'test': expected `Int`, found `Nat`"
+- message: "type error at call site in function 'test': expected `Int`, found `Nat`"
   span:
-    start: 42
-    end: 82
+    start: 65
+    end: 80
   severity: Error
   phase: TypeChecking

@@ -2,19 +2,13 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "Pipeline failed: pass `lower-handle-dispatch` failed: conversion boundary `ability-lowered` failed with 1 error(s):\n  - ability.call (op335, Illegal)\n"
-  span:
-    start: 0
-    end: 0
-  severity: Error
-  phase: Lowering
-- message: "function 'main' must return Nil, but returns `Int`"
+- message: "function 'main' has unhandled effects: MyEffect"
   span:
     start: 52
     end: 101
   severity: Error
   phase: TypeChecking
-- message: "function 'main' has unhandled effects: MyEffect"
+- message: "function 'main' must return Nil, but returns `Int`"
   span:
     start: 52
     end: 101

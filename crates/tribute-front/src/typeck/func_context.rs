@@ -18,7 +18,7 @@ use crate::ast::{
     UniVarId, UniVarSource,
 };
 
-use super::constraint::ConstraintSet;
+use super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::context::ModuleTypeEnv;
 use super::subst;
 
@@ -339,18 +339,129 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Instantiate a type scheme with fresh type variables.
     ///
-    /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`.
+    /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`, and each
+    /// free effect-row variable with a fresh row variable. Repeated occurrences
+    /// of the same row variable remain shared within one instantiation.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         let params = scheme.type_params(self.db);
-        if params.is_empty() {
-            return scheme.body(self.db);
+        let instantiated = if params.is_empty() {
+            scheme.body(self.db)
+        } else {
+            // Generate fresh variables for each parameter
+            let fresh_vars: Vec<Type<'db>> =
+                (0..params.len()).map(|_| self.fresh_type_var()).collect();
+
+            // Substitute bound variables with fresh variables
+            self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
+        };
+
+        let mut row_vars = HashMap::new();
+        self.freshen_effect_vars_in_type(instantiated, &mut row_vars)
+    }
+
+    fn freshen_effect_vars_in_type(
+        &mut self,
+        ty: Type<'db>,
+        row_vars: &mut HashMap<u64, EffectVar>,
+    ) -> Type<'db> {
+        let freshen_row =
+            |ctx: &mut Self, row: EffectRow<'db>, row_vars: &mut HashMap<u64, EffectVar>| {
+                let effects: Vec<Effect<'db>> = row
+                    .effects(ctx.db)
+                    .iter()
+                    .map(|effect| Effect {
+                        ability_id: effect.ability_id,
+                        args: effect
+                            .args
+                            .iter()
+                            .map(|arg| ctx.freshen_effect_vars_in_type(*arg, row_vars))
+                            .collect(),
+                    })
+                    .collect();
+                let rest = row.rest(ctx.db).map(|var| {
+                    if let Some(fresh) = row_vars.get(&var.id) {
+                        *fresh
+                    } else {
+                        let fresh = ctx.fresh_row_var();
+                        row_vars.insert(var.id, fresh);
+                        fresh
+                    }
+                });
+                EffectRow::new(ctx.db, effects, rest)
+            };
+
+        match ty.kind(self.db) {
+            TypeKind::Named { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::Named { name: *name, args })
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|param| self.freshen_effect_vars_in_type(*param, row_vars))
+                    .collect();
+                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let effect = freshen_row(self, *effect, row_vars);
+                Type::new(
+                    self.db,
+                    TypeKind::Func {
+                        params,
+                        result,
+                        effect,
+                    },
+                )
+            }
+            TypeKind::Tuple(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(|element| self.freshen_effect_vars_in_type(*element, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::Tuple(elements))
+            }
+            TypeKind::App { ctor, args } => {
+                let ctor = self.freshen_effect_vars_in_type(*ctor, row_vars);
+                let args = args
+                    .iter()
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .collect();
+                Type::new(self.db, TypeKind::App { ctor, args })
+            }
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                let arg = self.freshen_effect_vars_in_type(*arg, row_vars);
+                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let effect = freshen_row(self, *effect, row_vars);
+                Type::new(
+                    self.db,
+                    TypeKind::Continuation {
+                        arg,
+                        result,
+                        effect,
+                    },
+                )
+            }
+            TypeKind::BoundVar { .. }
+            | TypeKind::UniVar { .. }
+            | TypeKind::Int
+            | TypeKind::Nat
+            | TypeKind::Float
+            | TypeKind::Bool
+            | TypeKind::Bytes
+            | TypeKind::Rune
+            | TypeKind::Nil
+            | TypeKind::Never
+            | TypeKind::Error => ty,
         }
-
-        // Generate fresh variables for each parameter
-        let fresh_vars: Vec<Type<'db>> = (0..params.len()).map(|_| self.fresh_type_var()).collect();
-
-        // Substitute bound variables with fresh variables
-        self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
     }
 
     /// Substitute bound variables with given types.
@@ -374,9 +485,33 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.constraints.add_type_eq(t1, t2);
     }
 
+    /// Add a type equality constraint tied to a source AST node.
+    pub fn constrain_eq_at(
+        &mut self,
+        t1: Type<'db>,
+        t2: Type<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_type_eq_at(t1, t2, ConstraintOrigin { node_id, kind });
+    }
+
     /// Add an effect row equality constraint.
     pub fn constrain_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
         self.constraints.add_row_eq(r1, r2);
+    }
+
+    /// Add an effect row equality constraint tied to a source AST node.
+    pub fn constrain_row_eq_at(
+        &mut self,
+        r1: EffectRow<'db>,
+        r2: EffectRow<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_row_eq_at(r1, r2, ConstraintOrigin { node_id, kind });
     }
 
     /// Constrain that inferred_effect is subsumed by expected_effect.
@@ -433,6 +568,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///   - `e1 = {B | e3}`
     ///   - `e2 = {A | e3}`
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
+        self.merge_effect_with_origin(effect, None);
+    }
+
+    /// Merge an effect and tie any resulting type/arity constraint to a call.
+    pub fn merge_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+        self.merge_effect_with_origin(effect, Some(node_id));
+    }
+
+    fn merge_effect_with_origin(&mut self, effect: EffectRow<'db>, origin: Option<NodeId>) {
         let db = self.db;
         let current = self.current_effect;
 
@@ -455,17 +599,33 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     // Check if there's already an effect with the same ability_id
                     if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
                         // Same ability: unify type args instead of adding duplicate
-                        debug_assert_eq!(
-                            existing.args.len(),
-                            e.args.len(),
-                            "ability {:?} arity mismatch: existing has {} args, incoming has {}",
-                            e.ability_id,
-                            existing.args.len(),
-                            e.args.len()
-                        );
+                        if existing.args.len() != e.args.len() {
+                            let existing_row = EffectRow::single(db, existing.clone());
+                            let incoming_row = EffectRow::single(db, e.clone());
+                            if let Some(node_id) = origin {
+                                ctx.constrain_row_eq_at(
+                                    incoming_row,
+                                    existing_row,
+                                    node_id,
+                                    ConstraintOriginKind::Call,
+                                );
+                            } else {
+                                ctx.constrain_row_eq(incoming_row, existing_row);
+                            }
+                            continue;
+                        }
                         for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
                         {
-                            ctx.constrain_eq(*existing_arg, *incoming_arg);
+                            if let Some(node_id) = origin {
+                                ctx.constrain_eq_at(
+                                    *existing_arg,
+                                    *incoming_arg,
+                                    node_id,
+                                    ConstraintOriginKind::Call,
+                                );
+                            } else {
+                                ctx.constrain_eq(*existing_arg, *incoming_arg);
+                            }
                         }
                         // Don't add the effect since it's already present (with unified args)
                     } else {
@@ -711,6 +871,102 @@ mod tests {
     }
 
     #[salsa_test]
+    fn test_instantiate_scheme_freshens_shared_effect_row_vars(db: &dyn salsa::Database) {
+        fn extract_rows<'db>(
+            db: &'db dyn salsa::Database,
+            ty: Type<'db>,
+        ) -> (EffectRow<'db>, EffectRow<'db>) {
+            let TypeKind::Func { params, effect, .. } = ty.kind(db) else {
+                panic!("expected outer function type");
+            };
+            let TypeKind::Func {
+                effect: callback_effect,
+                ..
+            } = params[0].kind(db)
+            else {
+                panic!("expected callback function type");
+            };
+            (*effect, *callback_effect)
+        }
+
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let nil = Type::new(db, TypeKind::Nil);
+        let callback = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: shared,
+            },
+        );
+        let outer = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![callback],
+                result: nil,
+                effect: shared,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], outer);
+
+        let first = ctx.instantiate_scheme(scheme);
+        let second = ctx.instantiate_scheme(scheme);
+
+        let (first_outer, first_callback) = extract_rows(db, first);
+        let (second_outer, second_callback) = extract_rows(db, second);
+        assert_eq!(first_outer.rest(db), first_callback.rest(db));
+        assert_eq!(second_outer.rest(db), second_callback.rest(db));
+        assert_ne!(first_outer.rest(db), second_outer.rest(db));
+    }
+
+    #[salsa_test]
+    fn test_instantiate_scheme_freshens_rows_in_app_and_continuation(db: &dyn salsa::Database) {
+        fn continuation_effect<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
+            let TypeKind::Continuation { effect, .. } = ty.kind(db) else {
+                panic!("expected continuation type");
+            };
+            *effect
+        }
+
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let shared = EffectRow::open(db, EffectVar { id: 0 });
+        let nil = Type::new(db, TypeKind::Nil);
+        let continuation = Type::new(
+            db,
+            TypeKind::Continuation {
+                arg: nil,
+                result: nil,
+                effect: shared,
+            },
+        );
+        let app = Type::new(
+            db,
+            TypeKind::App {
+                ctor: continuation,
+                args: vec![continuation],
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], app);
+
+        let instantiated = ctx.instantiate_scheme(scheme);
+        let TypeKind::App { ctor, args } = instantiated.kind(db) else {
+            panic!("expected application type");
+        };
+        let ctor_effect = continuation_effect(db, *ctor);
+        let arg_effect = continuation_effect(db, args[0]);
+
+        assert_eq!(ctor_effect.rest(db), arg_effect.rest(db));
+        assert_ne!(ctor_effect.rest(db), shared.rest(db));
+    }
+
+    #[salsa_test]
     fn test_local_binding(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
         let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
@@ -844,6 +1100,7 @@ mod tests {
 mod merge_effect_tests {
     use super::*;
     use crate::ast::AbilityId;
+    use crate::typeck::constraint::Constraint;
     use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
 
@@ -952,6 +1209,54 @@ mod merge_effect_tests {
         let effects = result.effects(db);
         assert_eq!(effects.len(), 1);
         assert!(effects.contains(&console));
+    }
+
+    #[salsa_test]
+    fn merge_parameterized_effects_adds_unlocated_constraints(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
+        let ability_id = test_ability_id(db, "State");
+
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+        ctx.set_current_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.int_type()],
+            },
+        ));
+        ctx.merge_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.bool_type()],
+            },
+        ));
+        assert_eq!(ctx.current_effect().effects(db).len(), 1);
+        assert!(matches!(
+            ctx.take_constraints().into_constraints().as_slice(),
+            [Constraint::TypeEq(_, _)]
+        ));
+
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+        ctx.set_current_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.int_type()],
+            },
+        ));
+        ctx.merge_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![],
+            },
+        ));
+        assert!(matches!(
+            ctx.take_constraints().into_constraints().as_slice(),
+            [Constraint::RowEq(_, _)]
+        ));
     }
 
     #[salsa_test]

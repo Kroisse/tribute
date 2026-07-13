@@ -76,10 +76,12 @@ pub fn report_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
     file_path: &str,
-    accumulated_diags: Vec<&Diagnostic>,
+    mut accumulated_diags: Vec<&Diagnostic>,
 ) {
     let source_text = source.text(db);
     if !accumulated_diags.is_empty() {
+        accumulated_diags
+            .sort_by(|left, right| tribute::pipeline::compare_diagnostics(left, right));
         for diag in &accumulated_diags {
             print_diagnostic(diag, source_text, file_path);
         }

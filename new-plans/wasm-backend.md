@@ -87,6 +87,16 @@ layout. `wasm/evidence_to_wasm` is the Wasm boundary that removes those
 operations by generating evidence lookup/extend helpers, unpacking closure
 structs `(table_idx, env)`, and emitting `wasm.call_indirect`.
 
+### Entrypoint contract
+
+The frontend accepts `main` only when its declared result is `Nil`. A frontend
+error is terminal, so the Wasm backend never receives a valid program whose
+`main` returns an `Int`, `Nat`, or another user value. The generated `_start`
+function therefore calls a pure `main` for its side effects and ignores the
+`Done` payload of an effectful `main`; printing program results belongs in
+explicit I/O operations such as `__print_line`, not in backend entrypoint
+lowering.
+
 ---
 
 ## WasmGC 타입 처리

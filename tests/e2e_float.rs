@@ -192,8 +192,8 @@ fn main() {
     let a = 1.5
     let b = 1.5
     case a == b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -210,8 +210,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a < b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -228,8 +228,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a != b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -246,8 +246,8 @@ fn main() {
     let a = 2.0
     let b = 1.0
     case a > b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -264,8 +264,8 @@ fn main() {
     let a = 1.0
     let b = 2.0
     case a <= b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -282,8 +282,8 @@ fn main() {
     let a = 2.0
     let b = 2.0
     case a >= b {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
@@ -301,28 +301,28 @@ fn main() {
     let x = 1.0
 
     case nan == x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
     case nan != x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
     case nan < x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
     case nan <= x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
     case nan > x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
     case nan >= x {
-        True -> __tribute_print_int(1)
-        False -> __tribute_print_int(0)
+        True -> __tribute_print_int(+1)
+        False -> __tribute_print_int(+0)
     }
 }
 "#,
