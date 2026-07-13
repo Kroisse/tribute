@@ -21,6 +21,15 @@ use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{LocatedSolveError, RowSubst, TypeSolver, TypeSubst};
 use super::{Mode, TypeChecker};
 
+fn solve_error_context(kind: Option<ConstraintOriginKind>) -> &'static str {
+    match kind {
+        Some(ConstraintOriginKind::Call) => " at call site",
+        Some(ConstraintOriginKind::Lambda) => " in lambda",
+        Some(ConstraintOriginKind::HandlerBoundary) => " at handler boundary",
+        Some(ConstraintOriginKind::Expression) | None => "",
+    }
+}
+
 impl<'db> TypeChecker<'db> {
     /// Type check a function declaration with per-function inference.
     ///
@@ -270,12 +279,7 @@ impl<'db> TypeChecker<'db> {
             .origin
             .map(|origin| origin.node_id)
             .unwrap_or(func_id);
-        let context = match failure.origin.map(|origin| origin.kind) {
-            Some(ConstraintOriginKind::Call) => " at call site",
-            Some(ConstraintOriginKind::Lambda) => " in lambda",
-            Some(ConstraintOriginKind::HandlerBoundary) => " at handler boundary",
-            Some(ConstraintOriginKind::Expression) | None => "",
-        };
+        let context = solve_error_context(failure.origin.map(|origin| origin.kind));
         let mut diagnostic = Diagnostic::builder(
             format!(
                 "type error{context} in function '{}': {}",
@@ -1199,6 +1203,28 @@ mod tests {
 
     use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeKind};
     use crate::typeck::{TypeChecker, TypeSolver};
+
+    use super::{ConstraintOriginKind, solve_error_context};
+
+    #[test]
+    fn solve_error_context_describes_each_origin() {
+        assert_eq!(
+            [
+                solve_error_context(Some(ConstraintOriginKind::Call)),
+                solve_error_context(Some(ConstraintOriginKind::Lambda)),
+                solve_error_context(Some(ConstraintOriginKind::HandlerBoundary)),
+                solve_error_context(Some(ConstraintOriginKind::Expression)),
+                solve_error_context(None),
+            ],
+            [
+                " at call site",
+                " in lambda",
+                " at handler boundary",
+                "",
+                ""
+            ]
+        );
+    }
 
     #[salsa_test]
     fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::DatabaseImpl) {

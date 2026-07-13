@@ -1100,6 +1100,7 @@ mod tests {
 mod merge_effect_tests {
     use super::*;
     use crate::ast::AbilityId;
+    use crate::typeck::constraint::Constraint;
     use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
 
@@ -1208,6 +1209,54 @@ mod merge_effect_tests {
         let effects = result.effects(db);
         assert_eq!(effects.len(), 1);
         assert!(effects.contains(&console));
+    }
+
+    #[salsa_test]
+    fn merge_parameterized_effects_adds_unlocated_constraints(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
+        let ability_id = test_ability_id(db, "State");
+
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+        ctx.set_current_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.int_type()],
+            },
+        ));
+        ctx.merge_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.bool_type()],
+            },
+        ));
+        assert_eq!(ctx.current_effect().effects(db).len(), 1);
+        assert!(matches!(
+            ctx.take_constraints().into_constraints().as_slice(),
+            [Constraint::TypeEq(_, _)]
+        ));
+
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+        ctx.set_current_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![ctx.int_type()],
+            },
+        ));
+        ctx.merge_effect(EffectRow::single(
+            db,
+            Effect {
+                ability_id,
+                args: vec![],
+            },
+        ));
+        assert!(matches!(
+            ctx.take_constraints().into_constraints().as_slice(),
+            [Constraint::RowEq(_, _)]
+        ));
     }
 
     #[salsa_test]

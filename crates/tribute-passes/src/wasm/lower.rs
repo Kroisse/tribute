@@ -15,7 +15,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
     WasmFuncSignatureConversionPattern,
@@ -313,7 +313,6 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static s
 struct MainExports {
     saw_main: bool,
     main_result_type: Option<TypeRef>,
-    original_result_type: Option<TypeRef>,
     main_exported: bool,
 }
 
@@ -322,7 +321,6 @@ impl MainExports {
         Self {
             saw_main: false,
             main_result_type: None,
-            original_result_type: None,
             main_exported: false,
         }
     }
@@ -466,22 +464,6 @@ impl<'a> WasmLowerer<'a> {
                 self.main_exports.main_result_type = Some(result_ty);
             }
         }
-
-        // Read original_result_type attribute if present
-        if let Some(Attribute::Type(original_ty)) =
-            data.attributes.get(&Symbol::new("original_result_type"))
-        {
-            self.main_exports.original_result_type = Some(*original_ty);
-        }
-    }
-
-    /// Size of the runtime print buffer used by `_start` for itoa + fd_write.
-    const PRINT_BUF_TOTAL: u32 = 32;
-
-    /// Base offset for `_start`'s runtime print buffer in linear memory.
-    fn start_buf_base(&self) -> u32 {
-        let end = self.const_analysis.total_size() + self.intrinsic_analysis.total_size;
-        (end + 3) & !3
     }
 
     /// Insert preamble ops (imports, memory, globals) before existing module ops.
@@ -494,8 +476,8 @@ impl<'a> WasmLowerer<'a> {
     ) {
         let mut preamble_ops: Vec<OpRef> = Vec::new();
 
-        // Emit fd_write import if intrinsics need it OR if main exists (_start needs it)
-        if self.intrinsic_analysis.needs_fd_write || self.main_exports.saw_main {
+        // Emit fd_write only when an explicit intrinsic needs it.
+        if self.intrinsic_analysis.needs_fd_write {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
             let op = wasm_dialect::import_func(
@@ -512,17 +494,12 @@ impl<'a> WasmLowerer<'a> {
         // Check if memory is needed
         let const_size = self.const_analysis.total_size();
         let intrinsic_size = self.intrinsic_analysis.total_size;
-        let start_buf_size = if self.main_exports.saw_main {
-            Self::PRINT_BUF_TOTAL
-        } else {
-            0
-        };
-        if const_size > 0 || intrinsic_size > 0 || start_buf_size > 0 {
+        if const_size > 0 || intrinsic_size > 0 {
             self.memory_plan.needs_memory = true;
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            let total_data_size = const_size + intrinsic_size + start_buf_size;
+            let total_data_size = const_size + intrinsic_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
             let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
             preamble_ops.push(op.op_ref());
@@ -697,22 +674,6 @@ impl<'a> WasmLowerer<'a> {
         nil_ty: TypeRef,
     ) {
         let step_ty = type_converter::step_adt_type(ctx);
-        let anyref_ty = intern_type(ctx, "wasm", "anyref");
-
-        let orig_ty = self.main_exports.original_result_type;
-        let is_int_like = orig_ty
-            .map(|ty| {
-                is_type(ctx, ty, "tribute_rt", "int")
-                    || is_type(ctx, ty, "tribute_rt", "nat")
-                    || is_type(ctx, ty, "core", "i32")
-            })
-            .unwrap_or(false);
-        let is_nat = orig_ty
-            .map(|ty| is_type(ctx, ty, "tribute_rt", "nat"))
-            .unwrap_or(false);
-        let returns_nil = orig_ty
-            .map(|ty| is_type(ctx, ty, "core", "nil"))
-            .unwrap_or(false);
 
         // Call main — returns Step
         let call_main =
@@ -739,37 +700,6 @@ impl<'a> WasmLowerer<'a> {
             ops: smallvec![],
             parent_region: None,
         });
-
-        if !returns_nil {
-            // Extract value field (field 1) from Step
-            let get_value =
-                wasm_dialect::struct_get(ctx, location, step_result, anyref_ty, STEP_IDX, 1);
-            ctx.push_op(then_block, get_value.op_ref());
-            let value_val = get_value.result(ctx);
-
-            if is_int_like {
-                // Unbox to i32 and print
-                let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
-                let cast =
-                    wasm_dialect::ref_cast(ctx, location, value_val, i31ref_ty, i31ref_ty, None);
-                ctx.push_op(then_block, cast.op_ref());
-
-                let unbox_val = if is_nat {
-                    let get_u = wasm_dialect::i31_get_u(ctx, location, cast.result(ctx), i32_ty);
-                    ctx.push_op(then_block, get_u.op_ref());
-                    get_u.result(ctx)
-                } else {
-                    let get_s = wasm_dialect::i31_get_s(ctx, location, cast.result(ctx), i32_ty);
-                    ctx.push_op(then_block, get_s.op_ref());
-                    get_s.result(ctx)
-                };
-                self.build_print_i32_body(ctx, then_block, location, unbox_val);
-            } else {
-                // Drop the anyref value
-                let drop_op = wasm_dialect::drop(ctx, location, value_val);
-                ctx.push_op(then_block, drop_op.op_ref());
-            }
-        }
 
         let ret_then = wasm_dialect::r#return(ctx, location, vec![]);
         ctx.push_op(then_block, ret_then.op_ref());
@@ -802,387 +732,20 @@ impl<'a> WasmLowerer<'a> {
         ctx.push_op(body_block, trap_end.op_ref());
     }
 
-    /// Build _start body for main NOT returning Step.
+    /// Build `_start` for a pure `main`, whose source-level result is always Nil.
     fn build_start_simple_body(
         &self,
         ctx: &mut IrContext,
         body_block: BlockRef,
         location: Location,
         _i32_ty: TypeRef,
-        nil_ty: TypeRef,
+        _nil_ty: TypeRef,
     ) {
-        let result_ty = self
-            .main_exports
-            .main_result_type
-            .filter(|&ty| ty != nil_ty);
-        let result_types: Vec<TypeRef> = result_ty.into_iter().collect();
-        let is_i32 = result_ty
-            .map(|ty| is_type(ctx, ty, "core", "i32"))
-            .unwrap_or(false);
-
-        let call = wasm_dialect::call(ctx, location, vec![], result_types, Symbol::new("main"));
+        let call = wasm_dialect::call(ctx, location, vec![], vec![], Symbol::new("main"));
         ctx.push_op(body_block, call.op_ref());
-
-        if is_i32 {
-            let result_val = call.results(ctx)[0];
-            self.build_print_i32_body(ctx, body_block, location, result_val);
-        } else if result_ty.is_some() {
-            let result_val = call.results(ctx)[0];
-            let drop_op = wasm_dialect::drop(ctx, location, result_val);
-            ctx.push_op(body_block, drop_op.op_ref());
-        }
 
         let ret = wasm_dialect::r#return(ctx, location, vec![]);
         ctx.push_op(body_block, ret.op_ref());
-    }
-
-    /// Build IR operations to print an i32 value as decimal to stdout via fd_write.
-    fn build_print_i32_body(
-        &self,
-        ctx: &mut IrContext,
-        block: BlockRef,
-        location: Location,
-        result_val: ValueRef,
-    ) {
-        let i32_ty = intern_type(ctx, "core", "i32");
-        let nil_ty = intern_type(ctx, "core", "nil");
-
-        // Memory layout offsets
-        let buf_base = self.start_buf_base();
-        let scratch_rem = buf_base;
-        let scratch_pos = buf_base + 4;
-        let buf_end = buf_base + 8 + 11;
-        let iovec_off = buf_base + 20;
-        let nwr_off = buf_base + 28;
-
-        let align_i32: u32 = 2;
-        let align_i8: u32 = 0;
-
-        // === Step 1: Handle sign — compute absolute value ===
-        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
-        ctx.push_op(block, zero.op_ref());
-        let zero_val = zero.result(ctx);
-
-        let is_neg = wasm_dialect::i32_lt_s(ctx, location, result_val, zero_val, i32_ty);
-        ctx.push_op(block, is_neg.op_ref());
-        let is_neg_val = is_neg.result(ctx);
-
-        // if (result < 0) then (0 - result) else result → abs_value
-        let then_abs_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let neg = wasm_dialect::i32_sub(ctx, location, zero_val, result_val, i32_ty);
-        ctx.push_op(then_abs_block, neg.op_ref());
-        let yield_neg = wasm_dialect::r#yield(ctx, location, neg.result(ctx));
-        ctx.push_op(then_abs_block, yield_neg.op_ref());
-
-        let else_abs_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let yield_pos = wasm_dialect::r#yield(ctx, location, result_val);
-        ctx.push_op(else_abs_block, yield_pos.op_ref());
-
-        let then_abs_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![then_abs_block],
-            parent_op: None,
-        });
-        let else_abs_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![else_abs_block],
-            parent_op: None,
-        });
-        let if_abs = wasm_dialect::r#if(
-            ctx,
-            location,
-            is_neg_val,
-            i32_ty,
-            then_abs_region,
-            else_abs_region,
-        );
-        ctx.push_op(block, if_abs.op_ref());
-        let abs_value = if_abs.result(ctx);
-
-        // === Step 2: Initialize scratch memory ===
-        let rem_addr = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
-        ctx.push_op(block, rem_addr.op_ref());
-        let store_rem = wasm_dialect::i32_store(
-            ctx,
-            location,
-            rem_addr.result(ctx),
-            abs_value,
-            0,
-            align_i32,
-            0,
-        );
-        ctx.push_op(block, store_rem.op_ref());
-
-        let pos_addr_c = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
-        ctx.push_op(block, pos_addr_c.op_ref());
-        let buf_end_c = wasm_dialect::i32_const(ctx, location, i32_ty, buf_end as i32);
-        ctx.push_op(block, buf_end_c.op_ref());
-        let store_pos = wasm_dialect::i32_store(
-            ctx,
-            location,
-            pos_addr_c.result(ctx),
-            buf_end_c.result(ctx),
-            0,
-            align_i32,
-            0,
-        );
-        ctx.push_op(block, store_pos.op_ref());
-
-        // === Step 3: Do-while digit extraction loop ===
-        let loop_body_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        {
-            let b = loop_body_block;
-
-            let rem_addr_l = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
-            ctx.push_op(b, rem_addr_l.op_ref());
-            let rem = wasm_dialect::i32_load(
-                ctx,
-                location,
-                rem_addr_l.result(ctx),
-                i32_ty,
-                0,
-                align_i32,
-                0,
-            );
-            ctx.push_op(b, rem.op_ref());
-
-            let pos_addr_l = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
-            ctx.push_op(b, pos_addr_l.op_ref());
-            let pos = wasm_dialect::i32_load(
-                ctx,
-                location,
-                pos_addr_l.result(ctx),
-                i32_ty,
-                0,
-                align_i32,
-                0,
-            );
-            ctx.push_op(b, pos.op_ref());
-
-            let ten = wasm_dialect::i32_const(ctx, location, i32_ty, 10);
-            ctx.push_op(b, ten.op_ref());
-            let digit =
-                wasm_dialect::i32_rem_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
-            ctx.push_op(b, digit.op_ref());
-            let next =
-                wasm_dialect::i32_div_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
-            ctx.push_op(b, next.op_ref());
-
-            let ascii_0 = wasm_dialect::i32_const(ctx, location, i32_ty, 48);
-            ctx.push_op(b, ascii_0.op_ref());
-            let ascii = wasm_dialect::i32_add(
-                ctx,
-                location,
-                digit.result(ctx),
-                ascii_0.result(ctx),
-                i32_ty,
-            );
-            ctx.push_op(b, ascii.op_ref());
-            let store8 = wasm_dialect::i32_store8(
-                ctx,
-                location,
-                pos.result(ctx),
-                ascii.result(ctx),
-                0,
-                align_i8,
-                0,
-            );
-            ctx.push_op(b, store8.op_ref());
-
-            let rem_addr_s = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
-            ctx.push_op(b, rem_addr_s.op_ref());
-            let store_next = wasm_dialect::i32_store(
-                ctx,
-                location,
-                rem_addr_s.result(ctx),
-                next.result(ctx),
-                0,
-                align_i32,
-                0,
-            );
-            ctx.push_op(b, store_next.op_ref());
-
-            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
-            ctx.push_op(b, one.op_ref());
-            let new_pos =
-                wasm_dialect::i32_sub(ctx, location, pos.result(ctx), one.result(ctx), i32_ty);
-            ctx.push_op(b, new_pos.op_ref());
-            let pos_addr_s = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
-            ctx.push_op(b, pos_addr_s.op_ref());
-            let store_pos2 = wasm_dialect::i32_store(
-                ctx,
-                location,
-                pos_addr_s.result(ctx),
-                new_pos.result(ctx),
-                0,
-                align_i32,
-                0,
-            );
-            ctx.push_op(b, store_pos2.op_ref());
-
-            let br_if = wasm_dialect::br_if(ctx, location, next.result(ctx), 0);
-            ctx.push_op(b, br_if.op_ref());
-        }
-
-        let loop_body_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![loop_body_block],
-            parent_op: None,
-        });
-        let loop_op = wasm_dialect::r#loop(ctx, location, vec![], nil_ty, loop_body_region);
-        ctx.push_op(block, loop_op.op_ref());
-
-        // === Step 4: Read final position ===
-        let final_pos_addr = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
-        ctx.push_op(block, final_pos_addr.op_ref());
-        let final_pos = wasm_dialect::i32_load(
-            ctx,
-            location,
-            final_pos_addr.result(ctx),
-            i32_ty,
-            0,
-            align_i32,
-            0,
-        );
-        ctx.push_op(block, final_pos.op_ref());
-
-        // === Step 5: Handle negative sign prefix ===
-        let then_sign_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        {
-            let minus = wasm_dialect::i32_const(ctx, location, i32_ty, 45); // '-'
-            ctx.push_op(then_sign_block, minus.op_ref());
-            let store_sign = wasm_dialect::i32_store8(
-                ctx,
-                location,
-                final_pos.result(ctx),
-                minus.result(ctx),
-                0,
-                align_i8,
-                0,
-            );
-            ctx.push_op(then_sign_block, store_sign.op_ref());
-            let yield_sign = wasm_dialect::r#yield(ctx, location, final_pos.result(ctx));
-            ctx.push_op(then_sign_block, yield_sign.op_ref());
-        }
-
-        let else_sign_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        {
-            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
-            ctx.push_op(else_sign_block, one.op_ref());
-            let start = wasm_dialect::i32_add(
-                ctx,
-                location,
-                final_pos.result(ctx),
-                one.result(ctx),
-                i32_ty,
-            );
-            ctx.push_op(else_sign_block, start.op_ref());
-            let yield_start = wasm_dialect::r#yield(ctx, location, start.result(ctx));
-            ctx.push_op(else_sign_block, yield_start.op_ref());
-        }
-
-        let then_sign_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![then_sign_block],
-            parent_op: None,
-        });
-        let else_sign_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![else_sign_block],
-            parent_op: None,
-        });
-        let if_sign = wasm_dialect::r#if(
-            ctx,
-            location,
-            is_neg_val,
-            i32_ty,
-            then_sign_region,
-            else_sign_region,
-        );
-        ctx.push_op(block, if_sign.op_ref());
-        let start_ptr = if_sign.result(ctx);
-
-        // === Step 6: Calculate string length ===
-        let buf_end_plus1 = wasm_dialect::i32_const(ctx, location, i32_ty, (buf_end + 1) as i32);
-        ctx.push_op(block, buf_end_plus1.op_ref());
-        let len =
-            wasm_dialect::i32_sub(ctx, location, buf_end_plus1.result(ctx), start_ptr, i32_ty);
-        ctx.push_op(block, len.op_ref());
-
-        // === Step 7: Set up iovec and call fd_write ===
-        let iovec_addr = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_off as i32);
-        ctx.push_op(block, iovec_addr.op_ref());
-        let store_iovec_ptr = wasm_dialect::i32_store(
-            ctx,
-            location,
-            iovec_addr.result(ctx),
-            start_ptr,
-            0,
-            align_i32,
-            0,
-        );
-        ctx.push_op(block, store_iovec_ptr.op_ref());
-
-        let iovec_len_addr = wasm_dialect::i32_const(ctx, location, i32_ty, (iovec_off + 4) as i32);
-        ctx.push_op(block, iovec_len_addr.op_ref());
-        let store_iovec_len = wasm_dialect::i32_store(
-            ctx,
-            location,
-            iovec_len_addr.result(ctx),
-            len.result(ctx),
-            0,
-            align_i32,
-            0,
-        );
-        ctx.push_op(block, store_iovec_len.op_ref());
-
-        let stdout = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
-        ctx.push_op(block, stdout.op_ref());
-        let iovs_count = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
-        ctx.push_op(block, iovs_count.op_ref());
-        let nwr_addr = wasm_dialect::i32_const(ctx, location, i32_ty, nwr_off as i32);
-        ctx.push_op(block, nwr_addr.op_ref());
-
-        let fd_result = wasm_dialect::call(
-            ctx,
-            location,
-            vec![
-                stdout.result(ctx),
-                iovec_addr.result(ctx),
-                iovs_count.result(ctx),
-                nwr_addr.result(ctx),
-            ],
-            vec![i32_ty],
-            Symbol::new("fd_write"),
-        );
-        ctx.push_op(block, fd_result.op_ref());
-        let drop_fd = wasm_dialect::drop(ctx, location, fd_result.results(ctx)[0]);
-        ctx.push_op(block, drop_fd.op_ref());
     }
 }
 
@@ -1199,8 +762,10 @@ fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::Span;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir::refs::PathRef;
     use trunk_ir::rewrite::LegalityCheck;
 
     fn lower_text(ir: &str) -> String {
@@ -1208,6 +773,93 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         lower_to_wasm(&mut ctx, module).expect("test module should lower to wasm");
         print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn module_lowerer_emits_explicit_intrinsic_and_data_requirements() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run() -> core.i32 {
+    %value = arith.const {value = 1} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+        let const_analysis = ConstAnalysis {
+            string_allocations: vec![(b"text".to_vec(), 0, 4)],
+            bytes_allocations: vec![(vec![1, 2], 0, 2)],
+            string_total_size: 4,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: true,
+            iovec_allocations: vec![(0, 4, 8)],
+            nwritten_offset: Some(16),
+            total_size: 20,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &intrinsic_analysis);
+        let module_block = module.first_block(&ctx).expect("module body block");
+        let placeholder = ctx.block(module_block).ops[0];
+
+        lowerer.lower_module(&mut ctx, module);
+        trunk_ir::rewrite::erase_op(&mut ctx, placeholder);
+
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let i64_ty = intern_type(&mut ctx, "core", "i64");
+        let f32_ty = intern_type(&mut ctx, "core", "f32");
+        let f64_ty = intern_type(&mut ctx, "core", "f64");
+        let nil_ty = intern_type(&mut ctx, "core", "nil");
+        let body_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let address = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
+        let address_result = address.result(&ctx);
+        ctx.push_op(body_block, address.op_ref());
+        let i64_load = wasm_dialect::i64_load(&mut ctx, location, address_result, i64_ty, 0, 0, 0);
+        let f32_load = wasm_dialect::f32_load(&mut ctx, location, address_result, f32_ty, 0, 0, 0);
+        let f64_load = wasm_dialect::f64_load(&mut ctx, location, address_result, f64_ty, 0, 0, 0);
+        let i64_result = i64_load.result(&ctx);
+        let f32_result = f32_load.result(&ctx);
+        let f64_result = f64_load.result(&ctx);
+        for load in [i64_load.op_ref(), f32_load.op_ref(), f64_load.op_ref()] {
+            ctx.push_op(body_block, load);
+        }
+        for store in [
+            wasm_dialect::i64_store(&mut ctx, location, address_result, i64_result, 0, 0, 0)
+                .op_ref(),
+            wasm_dialect::f32_store(&mut ctx, location, address_result, f32_result, 0, 0, 0)
+                .op_ref(),
+            wasm_dialect::f64_store(&mut ctx, location, address_result, f64_result, 0, 0, 0)
+                .op_ref(),
+        ] {
+            ctx.push_op(body_block, store);
+        }
+        let ret = wasm_dialect::r#return(&mut ctx, location, vec![]);
+        ctx.push_op(body_block, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![body_block],
+            parent_op: None,
+        });
+        let func_ty = intern_func_type(&mut ctx, vec![], nil_ty);
+        let memory_func =
+            wasm_dialect::func(&mut ctx, location, Symbol::new("memory_ops"), func_ty, body);
+        ctx.push_op(module_block, memory_func.op_ref());
+
+        let output = print_module(&ctx, module.op());
+        assert!(output.contains("wasm.import_func"), "{output}");
+        assert!(output.contains("wasm.memory"), "{output}");
+        assert!(output.contains("wasm.export_memory"), "{output}");
+        assert_eq!(output.matches("wasm.data").count(), 4, "{output}");
+
+        let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+            .expect("lowered module requirements should emit");
+        assert_eq!(&binary.bytes[..4], b"\0asm");
     }
 
     #[test]

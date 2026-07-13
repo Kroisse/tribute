@@ -29,7 +29,19 @@ use tribute_passes::diagnostic::Diagnostic;
 
 #[salsa_test]
 fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(db, "literal.trb", "fn main() { let _ = 42 }");
+    let source = SourceCst::from_source_str(
+        db,
+        "literal.trb",
+        r#"
+extern "intrinsic" fn __print_line(message: String) -> Nil
+fn main() {
+    case 42 {
+        42 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
+}
+"#,
+    );
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile literal return");
 
@@ -39,7 +51,19 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(db, "arith.trb", "fn main() { let _ = 1 + 2 * 3 }");
+    let source = SourceCst::from_source_str(
+        db,
+        "arith.trb",
+        r#"
+extern "intrinsic" fn __print_line(message: String) -> Nil
+fn main() {
+    case 1 + 2 * 3 {
+        7 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
+}
+"#,
+    );
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile arithmetic expression");
 }
@@ -47,8 +71,14 @@ fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn test_compile_function_with_params(db: &salsa::DatabaseImpl) {
     let code = r#"
+extern "intrinsic" fn __print_line(message: String) -> Nil
 fn add(a: Nat, b: Nat) -> Nat { a + b }
-fn main() { let _ = add(1, 2) }
+fn main() {
+    case add(1, 2) {
+        3 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
+}
 "#;
     let source = SourceCst::from_source_str(db, "params.trb", code);
     let binary = compile_to_wasm_binary(db, source);
@@ -88,7 +118,13 @@ fn test_ops() -> Nat {
     let b = 3
     a + b
 }
-fn main() { let _ = test_ops() }
+extern "intrinsic" fn __print_line(message: String) -> Nil
+fn main() {
+    case test_ops() {
+        13 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
+}
 "#;
     let source = SourceCst::from_source_str(db, "locals.trb", code);
     let binary = compile_to_wasm_binary(db, source);
@@ -112,7 +148,8 @@ fn classify(n: Nat) -> String {
         _ -> "other"
     }
 }
-fn main() { let _ = classify(1) }
+extern "intrinsic" fn __print_line(message: String) -> Nil
+fn main() { __print_line(classify(1)) }
 "#;
     let source = SourceCst::from_source_str(db, "case_expr.trb", code);
     let binary = compile_to_wasm_binary(db, source);
@@ -132,6 +169,8 @@ ability Console {
     fn print(value: Int) -> Nil
 }
 
+extern "intrinsic" fn __print_line(message: String) -> Nil
+
 fn use_console() ->{Console} Int {
     let n = Console::read()
     Console::print(n)
@@ -147,7 +186,10 @@ fn run() -> Int {
 }
 
 fn main() {
-    let _ = run()
+    case run() {
+        +41 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
 }
 "#;
     let source = SourceCst::from_source_str(db, "tail_dispatch_ability.trb", code);
@@ -174,6 +216,8 @@ ability State(s) {
     op set(value: s) -> Nil
 }
 
+extern "intrinsic" fn __print_line(message: String) -> Nil
+
 fn bump() ->{State(Int)} Int {
     let n = State::get()
     State::set(n + +1)
@@ -189,7 +233,10 @@ fn run_state() -> Int {
 }
 
 fn main() {
-    let _ = run_state()
+    case run_state() {
+        +41 -> __print_line("ok")
+        _ -> __print_line("unexpected")
+    }
 }
 "#;
     let source = SourceCst::from_source_str(db, "cps_dispatch_ability.trb", code);
