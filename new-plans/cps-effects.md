@@ -15,7 +15,7 @@ lowering은 현재 경로가 아니다.
 
 ```text
 %result = ability.call %arg
-  { ability_ref = @Console, op_name = @print }
+  { ability_ref = @Logger, op_name = @log }
 ```
 
 Shared lowering converts it to a target-independent effect ABI operation:
@@ -23,18 +23,18 @@ Shared lowering converts it to a target-independent effect ABI operation:
 ```text
 %payload = cast %arg to anyref
 %result = effect.dispatch_tail %ev, %payload
-  { ability_ref = @Console, op_name = @print }
+  { ability_ref = @Logger, op_name = @log }
 ```
 
 Native lowering then lowers that ABI operation to the current evidence lookup
 and indirect-call representation:
 
 ```text
-%marker = ability.evidence_lookup %ev { ability_ref = @Console }
+%marker = ability.evidence_lookup %ev { ability_ref = @Logger }
 %tr_dispatch = adt.struct_get %marker, MarkerField::TrDispatchFn
 %fn = adt.struct_get %tr_dispatch, 0
 %env = adt.struct_get %tr_dispatch, 1
-%op_idx = arith.const <hash(Console, print)>
+%op_idx = arith.const <hash(Logger, log)>
 %result = func.call_indirect %fn(%ev, %env, %op_idx, %arg_anyref)
 ```
 

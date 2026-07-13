@@ -323,14 +323,14 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 // app/main.trb
 
 use std::collections::{List, Option}
-use std::io::Console
+use std::io::{Io, print_line}
 
 struct User {
-    name: Text
+    name: String
     age: Int
 }
 
-fn main() ->{Console} Nil {
+fn main() ->{Io} Nil {
     let numbers = List::of(1, 2, 3, 4, 5)
 
     let result = numbers
@@ -338,20 +338,20 @@ fn main() ->{Console} Nil {
         .map(fn(x) x * 10)
         .fold(0, fn(acc, x) acc + x)
 
-    Console::println("Result: " <> Int::to_string(result))
+    print_line("Result: " <> Int::to_string(result))
     
     // Record 생성과 업데이트
     let user = User { name: "Alice", age: 30 }
     let older = User { ..user, age: 31 }
     
-    Console::println("User: " <> older.name)
+    print_line("User: " <> older.name)
 }
 
 // 명시적 함수 전달 예시
-fn sort_and_print(items: List(Text)) ->{Console} Nil {
-    let sorted = List::sort(items, Text::compare)
+fn sort_and_print(items: List(String)) ->{Io} Nil {
+    let sorted = List::sort(items, String::compare)
     sorted.each(fn(item) {
-        Console::println(item)
+        print_line(item)
     })
 }
 ```

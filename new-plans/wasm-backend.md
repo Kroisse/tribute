@@ -92,10 +92,12 @@ structs `(table_idx, env)`, and emitting `wasm.call_indirect`.
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
 error is terminal, so the Wasm backend never receives a valid program whose
 `main` returns an `Int`, `Nat`, or another user value. The generated `_start`
-function therefore calls a pure `main` for its side effects and ignores the
-`Done` payload of an effectful `main`; printing program results belongs in
-explicit I/O operations such as `__print_line`, not in backend entrypoint
-lowering.
+function therefore calls `main` for its side effects. A pure `main` is called
+directly; a `main ->{Io} Nil` receives target-provided initial evidence through
+the `EvidenceDirect` ABI. Other residual effects are rejected by the frontend.
+Printing program results belongs in explicit standard I/O calls such as
+`std::io::print_line`, which shared lowering maps to the target-independent I/O
+boundary described in [io.md](io.md), not in backend entrypoint lowering.
 
 ---
 

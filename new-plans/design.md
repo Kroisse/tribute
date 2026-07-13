@@ -109,6 +109,12 @@ let ys = xs.map(fn(x) x + 1)  // List::map(xs, ...) 로 해석
 
 Tribute는 Unison의 선례를 따라 algebraic effect를 **ability**라고 부른다.
 
+일반 ability와 별도로 compiler-owned builtin ambient ability를 둘 수 있다.
+현재 유일한 ambient ability는 `std::io::Io`이며 handler로 제거할 수 없고
+entrypoint에 terminal effect로 남을 수 있다. 사용자에게 ambient ability 선언
+문법은 제공하지 않는다. 기본 I/O API와 calling convention은
+[io.md](io.md)를 따른다.
+
 ### Continuation 의미론
 
 Tribute의 ability 시스템은 **delimited, one-shot continuation**을 기반으로 한다.
