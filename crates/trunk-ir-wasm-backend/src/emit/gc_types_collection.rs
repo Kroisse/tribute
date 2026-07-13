@@ -550,13 +550,7 @@ pub(crate) fn collect_gc_types(
                 }
             });
 
-            let placeholder_type_from_result = result_type.and_then(|ty| {
-                if is_structref(ctx, ty) {
-                    Some(ty)
-                } else {
-                    None
-                }
-            });
+            let placeholder_type_from_result = result_type.filter(|&ty| is_structref(ctx, ty));
 
             let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
 

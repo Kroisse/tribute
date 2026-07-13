@@ -814,7 +814,7 @@ impl<'a> WasmLowerer<'a> {
         let result_ty = self
             .main_exports
             .main_result_type
-            .and_then(|ty| if ty == nil_ty { None } else { Some(ty) });
+            .filter(|&ty| ty != nil_ty);
         let result_types: Vec<TypeRef> = result_ty.into_iter().collect();
         let is_i32 = result_ty
             .map(|ty| is_type(ctx, ty, "core", "i32"))
