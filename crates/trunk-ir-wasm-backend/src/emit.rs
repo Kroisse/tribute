@@ -845,13 +845,10 @@ fn assign_locals_in_region(
                                 }
                             })
                             .or_else(|| {
-                                ctx.op_result_types(op).first().copied().and_then(|ty| {
-                                    if is_type(ctx, ty, "wasm", "structref") {
-                                        Some(ty)
-                                    } else {
-                                        None
-                                    }
-                                })
+                                ctx.op_result_types(op)
+                                    .first()
+                                    .copied()
+                                    .filter(|&ty| is_type(ctx, ty, "wasm", "structref"))
                             })
                     } else {
                         None

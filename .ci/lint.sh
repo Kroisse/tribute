@@ -11,7 +11,19 @@ if ! cargo fmt --all --check; then
 fi
 
 echo "Running clippy..."
-if ! cargo clippy --workspace --all-targets --message-format=short -- -D warnings 2>&1 | head -n 40; then
+CLIPPY_OUTPUT="$(mktemp)"
+trap 'rm -f "$CLIPPY_OUTPUT"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if cargo clippy --workspace --all-targets --message-format=short -- -D warnings \
+    >"$CLIPPY_OUTPUT" 2>&1; then
+    rm -f "$CLIPPY_OUTPUT"
+    trap - EXIT HUP INT TERM
+else
+    tail -n 40 "$CLIPPY_OUTPUT" >&2
+    rm -f "$CLIPPY_OUTPUT"
+    trap - EXIT HUP INT TERM
     echo "" >&2
     echo "Clippy failed with warnings/errors. Fix the issues above and try again." >&2
     echo "Run 'cargo clippy --workspace --all-targets' to see all issues." >&2
