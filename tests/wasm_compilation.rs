@@ -21,7 +21,24 @@ mod common;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
-use tribute_passes::diagnostic::Diagnostic;
+
+fn expect_wasm_compilation_success(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    message: &str,
+) -> Vec<u8> {
+    compile_to_wasm_binary(db, source)
+        .unwrap_or_else(|diagnostics| panic!("{message}: {diagnostics:?}"))
+}
+
+#[salsa_test]
+fn test_compile_failure_returns_diagnostics(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "invalid.trb", "fn main() -> Int { true }");
+    let Err(diagnostics) = compile_to_wasm_binary(db, source) else {
+        panic!("invalid source should fail WebAssembly compilation");
+    };
+    assert!(!diagnostics.is_empty());
+}
 
 // =============================================================================
 // Passing end-to-end tests
@@ -42,15 +59,7 @@ fn main() {
 }
 "#,
     );
-    let binary = compile_to_wasm_binary(db, source);
-    if binary.is_none() {
-        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
-            eprintln!("Diagnostic: {diagnostic:?}");
-        }
-    }
-    assert!(binary.is_some(), "Should compile literal return");
-
-    let bytes = binary.unwrap();
+    let bytes = expect_wasm_compilation_success(db, source, "Should compile literal return");
     assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
 }
 
@@ -69,13 +78,7 @@ fn main() {
 }
 "#,
     );
-    let binary = compile_to_wasm_binary(db, source);
-    if binary.is_none() {
-        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
-            eprintln!("Diagnostic: {diagnostic:?}");
-        }
-    }
-    assert!(binary.is_some(), "Should compile arithmetic expression");
+    expect_wasm_compilation_success(db, source, "Should compile arithmetic expression");
 }
 
 #[salsa_test]
@@ -91,13 +94,7 @@ fn main() {
 }
 "#;
     let source = SourceCst::from_source_str(db, "params.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-    if binary.is_none() {
-        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
-            eprintln!("Diagnostic: {diagnostic:?}");
-        }
-    }
-    assert!(binary.is_some(), "Should compile function with params");
+    expect_wasm_compilation_success(db, source, "Should compile function with params");
 }
 
 // Note: String literals work as intrinsic arguments (e.g., __print_line)
@@ -112,17 +109,7 @@ fn my_print(message: String) -> Nil { __print_line(message) }
 fn main() { my_print("Hello, World!") }
 "#;
     let source = SourceCst::from_source_str(db, "hello.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-
-    if binary.is_none() {
-        // Collect and print diagnostics
-        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-        for diag in &diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-    }
-
-    assert!(binary.is_some(), "Should compile print_line");
+    expect_wasm_compilation_success(db, source, "Should compile print_line");
 }
 
 #[salsa_test]
@@ -142,13 +129,7 @@ fn main() {
 }
 "#;
     let source = SourceCst::from_source_str(db, "locals.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-    if binary.is_none() {
-        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
-            eprintln!("Diagnostic: {diagnostic:?}");
-        }
-    }
-    assert!(binary.is_some(), "Should compile local variables");
+    expect_wasm_compilation_success(db, source, "Should compile local variables");
 }
 
 // =============================================================================
@@ -172,13 +153,7 @@ extern "intrinsic" fn __print_line(message: String) -> Nil
 fn main() { __print_line(classify(1)) }
 "#;
     let source = SourceCst::from_source_str(db, "case_expr.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-    if binary.is_none() {
-        for diagnostic in compile_to_wasm_binary::accumulated::<Diagnostic>(db, source) {
-            eprintln!("Diagnostic: {diagnostic:?}");
-        }
-    }
-    assert!(binary.is_some(), "Should compile case expression");
+    expect_wasm_compilation_success(db, source, "Should compile case expression");
 }
 
 #[salsa_test]
@@ -213,18 +188,10 @@ fn main() {
 }
 "#;
     let source = SourceCst::from_source_str(db, "tail_dispatch_ability.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-
-    if binary.is_none() {
-        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-        for diag in &diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-    }
-
-    assert!(
-        binary.is_some(),
-        "Should compile tail-dispatch ability through wasm effect ABI lowering"
+    expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile tail-dispatch ability through wasm effect ABI lowering",
     );
 }
 
@@ -260,17 +227,9 @@ fn main() {
 }
 "#;
     let source = SourceCst::from_source_str(db, "cps_dispatch_ability.trb", code);
-    let binary = compile_to_wasm_binary(db, source);
-
-    if binary.is_none() {
-        let diagnostics = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-        for diag in &diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-    }
-
-    assert!(
-        binary.is_some(),
-        "Should compile CPS ability dispatch through wasm effect ABI lowering"
+    expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
 }

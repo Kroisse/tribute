@@ -31,12 +31,9 @@ fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
 fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<(IrContext, Module), Vec<Diagnostic>> {
+) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
     compile_frontend(db, source).ok_or_else(|| {
         tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
-            .into_iter()
-            .cloned()
-            .collect()
     })
 }
 

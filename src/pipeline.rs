@@ -682,14 +682,8 @@ pub fn dump_ir(
     Ok(trunk_ir::printer::print_module(&ctx, m.op()))
 }
 
-/// Compile to WebAssembly binary bytes.
-///
-/// Runs the full pipeline (frontend → shared passes → WASM lowering → emit)
-/// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
-///
-/// Returns the raw WASM bytes on success, or `None` with diagnostics accumulated.
 #[salsa::tracked]
-pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
+fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
         Ok(None) => return None,
@@ -725,6 +719,23 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
             None
         }
     }
+}
+
+/// Compile to WebAssembly binary bytes.
+///
+/// Runs the full pipeline (frontend → shared passes → WASM lowering → emit)
+/// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
+///
+/// Returns the raw WASM bytes on success, or the accumulated diagnostics on failure.
+pub fn compile_to_wasm_binary(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Vec<u8>, Vec<&Diagnostic>> {
+    compile_to_wasm_binary_tracked(db, source).ok_or_else(|| {
+        let mut diagnostics = compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source);
+        diagnostics.sort_by(|left, right| compare_diagnostics(left, right));
+        diagnostics
+    })
 }
 
 // =============================================================================
