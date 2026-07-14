@@ -13,12 +13,6 @@ core.module @test {
   func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @"test::__lambda_1"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-  func.func @"test::__lambda_2"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
   func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
           %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
@@ -41,7 +35,7 @@ core.module @test {
           %19 = arith.const {value = 1} : core.i1
           %20 = scf.if %19 : tribute_rt.anyref {
               %21 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %22 = closure.new %21 {func_ref = @"test::__lambda_2"} : !t0
+              %22 = closure.new %21 {func_ref = @"test::__lambda_0"} : !t0
               %23 = arith.const {value = 41} : core.i32
               %24 = core.unrealized_conversion_cast %23 : tribute_rt.anyref
               %25 = core.unrealized_conversion_cast %16 : !t0
@@ -62,7 +56,7 @@ core.module @test {
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
             ^bb8(%31: tribute_rt.anyref, %32: tribute_rt.anyref):
               %33 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %34 = closure.new %33 {func_ref = @"test::__lambda_1"} : !t0
+              %34 = closure.new %33 {func_ref = @"test::__lambda_0"} : !t0
               %35 = arith.const {value = 41} : core.i32
               %36 = core.unrealized_conversion_cast %35 : tribute_rt.anyref
               %37 = core.unrealized_conversion_cast %31 : !t0

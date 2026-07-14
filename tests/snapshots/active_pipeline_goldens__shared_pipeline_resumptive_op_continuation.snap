@@ -33,6 +33,10 @@ core.module @resumptive_op {
       func.unreachable
   }
 
+  func.func @"resumptive_op::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+
   func.func @bump(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = adt.struct_new %1 {type = !"bump::__clam_0::env"} : !"bump::__clam_0::env"
       %3 = func.constant {func_ref = @"bump::__clam_0"} : !t1
@@ -43,26 +47,6 @@ core.module @resumptive_op {
       func.return %7
   }
 
-  func.func @"resumptive_op::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"resumptive_op::__lambda_6"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"resumptive_op::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"resumptive_op::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"resumptive_op::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
   func.func @run_state() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 0} : core.i32
       %1 = adt.array_new %0 {type = !t0} : !t0
@@ -70,7 +54,7 @@ core.module @resumptive_op {
       %3 = func.constant {func_ref = @"run_state::__clam_0"} : !t1
       %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"resumptive_op::__lambda_5"} : !t1
+      %6 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t1
       %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
       %8 = adt.ref_null {type = !t0} : !t0
       %9 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
@@ -120,7 +104,7 @@ core.module @resumptive_op {
       %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
       %7 = scf.if %6 : tribute_rt.anyref {
           %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"resumptive_op::__lambda_8"} : !t1
+          %9 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t1
           %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
           %11 = arith.const {value = 10} : core.i32
           %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
@@ -133,7 +117,7 @@ core.module @resumptive_op {
           %17 = arith.const {value = 1} : core.i1
           %18 = scf.if %17 : tribute_rt.anyref {
               %19 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %20 = func.constant {func_ref = @"resumptive_op::__lambda_9"} : !t1
+              %20 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t1
               %21 = adt.struct_new %20, %19 {type = !_closure} : !_closure
               %22 = arith.const {value = unit} : core.nil
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref

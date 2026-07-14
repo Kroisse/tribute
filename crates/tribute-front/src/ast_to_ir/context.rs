@@ -55,6 +55,11 @@ pub struct IrLoweringCtx<'db> {
     module_path: SymbolVec,
     /// Counter for generating unique lambda names.
     lambda_counter: u64,
+    /// Shared identity `done_k` function for this compilation unit.
+    ///
+    /// The function definition is emitted once in the compilation root, while
+    /// each SSA region still creates its own closure value referencing it.
+    identity_done_k_func: Option<Symbol>,
     /// Counter for generating unique local IDs (for synthetic bindings like continuations).
     local_id_counter: u32,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
@@ -111,6 +116,7 @@ impl<'db> IrLoweringCtx<'db> {
             definition_conventions: HashMap::new(),
             module_path,
             lambda_counter: 0,
+            identity_done_k_func: None,
             local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             module_block: None,
             struct_fields: HashMap::new(),
@@ -326,6 +332,31 @@ impl<'db> IrLoweringCtx<'db> {
                 .join("::");
             Symbol::from_dynamic(&format!("{}::{}", path_str, lambda_name))
         }
+    }
+
+    /// Generate a unique lambda name owned by the compilation root.
+    pub(crate) fn gen_compilation_unit_lambda_name(&mut self) -> Symbol {
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
+        self.lambda_counter += 1;
+
+        self.module_path.first().map_or_else(
+            || Symbol::from_dynamic(&lambda_name),
+            |root| Symbol::from_dynamic(&format!("{root}::{lambda_name}")),
+        )
+    }
+
+    /// Return the shared identity `done_k` function, initializing it if needed.
+    ///
+    /// The symbol is cached only after `init` completes successfully.
+    pub(crate) fn identity_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
+        if let Some(name) = self.identity_done_k_func {
+            return name;
+        }
+
+        let name = self.gen_compilation_unit_lambda_name();
+        init(name);
+        self.identity_done_k_func = Some(name);
+        name
     }
 
     /// Register struct field order for lowering Record expressions.

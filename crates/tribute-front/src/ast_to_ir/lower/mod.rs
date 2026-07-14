@@ -328,8 +328,10 @@ pub(super) fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> 
 
 /// Create an identity `done_k` closure: `fn(result: anyref) -> anyref { return result }`.
 ///
-/// Built as a direct `func.func` + `closure.new` (NOT `closure.lambda`), so it
-/// bypasses `lower_closure_lambda` and has a fixed, known signature:
+/// The direct `func.func` definition is shared by the entire compilation unit.
+/// Each call still creates a region-local `closure.new`, so SSA values do not
+/// cross region boundaries. This bypasses `lower_closure_lambda` and has a
+/// fixed, known signature:
 /// `(evidence, env, result) -> anyref`.
 ///
 /// This is an internal mechanism closure, not a user lambda.
@@ -344,51 +346,50 @@ pub(super) fn create_identity_done_k(
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
     let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
-
-    let dk_name = builder.ctx.gen_lambda_name();
-
-    // func.func @identity_dk(%evidence, %env, %result) -> anyref { return %result }
-    let dk_block = builder.ir.create_block(BlockData {
-        location,
-        args: vec![
-            BlockArgData {
-                ty: evidence_ty,
-                attrs: Default::default(),
-            },
-            BlockArgData {
-                ty: anyref_ty,
-                attrs: Default::default(),
-            },
-            BlockArgData {
-                ty: anyref_ty,
-                attrs: Default::default(),
-            },
-        ],
-        ops: Default::default(),
-        parent_region: None,
-    });
-    let result_param = builder.ir.block_arg(dk_block, 2); // result is 3rd arg
-    let ret = func::r#return(builder.ir, location, [result_param]);
-    builder.ir.push_op(dk_block, ret.op_ref());
-
-    let dk_region = builder.ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![dk_block],
-        parent_op: None,
-    });
-
     let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
     let dk_func_ty = builder
         .ctx
         .func_type(builder.ir, &all_param_types, anyref_ty);
-    let dk_func_op = func::func(builder.ir, location, dk_name, dk_func_ty, dk_region);
-
-    // Push to module block
     let module_block = builder
         .ctx
         .module_block()
         .expect("module block should be set");
-    builder.ir.push_op(module_block, dk_func_op.op_ref());
+
+    let dk_name = builder.ctx.identity_done_k_func(|name| {
+        // func.func @identity_dk(%evidence, %env, %result) -> anyref { return %result }
+        let dk_block = builder.ir.create_block(BlockData {
+            location,
+            args: vec![
+                BlockArgData {
+                    ty: evidence_ty,
+                    attrs: Default::default(),
+                },
+                BlockArgData {
+                    ty: anyref_ty,
+                    attrs: Default::default(),
+                },
+                BlockArgData {
+                    ty: anyref_ty,
+                    attrs: Default::default(),
+                },
+            ],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let result_param = builder.ir.block_arg(dk_block, 2); // result is 3rd arg
+        let ret = func::r#return(builder.ir, location, [result_param]);
+        builder.ir.push_op(dk_block, ret.op_ref());
+
+        let dk_region = builder.ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![dk_block],
+            parent_op: None,
+        });
+
+        let dk_func_op = func::func(builder.ir, location, name, dk_func_ty, dk_region);
+
+        builder.ir.push_op(module_block, dk_func_op.op_ref());
+    });
 
     // closure.new @identity_dk, null_env
     let null_op = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);

@@ -13,6 +13,13 @@ continuation chain의 결과를 되돌려 보내기 위해 사용하는 compatib
 향후 control lowering은 이를 true tail call의 `Never` 또는 trampoline의 `Step`으로
 대체할 수 있다.
 
+현재 compatibility representation에서 캡처 없는 identity `done_k`의 함수 본문은
+컴파일 단위 전체에서 동일하다. AST-to-IR lowering은 이 내부 함수 정의를 compilation
+root에 한 번만 만들고 모든 사용 지점에서 같은 함수 심볼을 참조한다. 다만 각 사용
+지점의 null environment와 `closure.new`는 SSA 영역 가시성을 지키기 위해 해당 영역에
+각각 생성한다. 독립적으로 codegen되는 compilation unit은 자체 정의를 가지며, 향후
+separate compilation이 도입되면 backend의 link-once 정책으로 합칠 수 있다.
+
 ## 핵심 설계
 
 ### `fn` operation: direct dispatch

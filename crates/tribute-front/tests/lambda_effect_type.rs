@@ -13,6 +13,38 @@ use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
+fn assert_shared_identity_done_k(ir_text: &str, expected_references: usize) {
+    let lines: Vec<_> = ir_text.lines().collect();
+    let identity_done_k_headers: Vec<_> = lines
+        .windows(2)
+        .filter_map(|pair| {
+            let header = pair[0].trim_start();
+            (header.starts_with("func.func ")
+                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
+                && pair[1].trim() == "func.return %2")
+                .then_some(header)
+        })
+        .collect();
+    assert_eq!(
+        identity_done_k_headers.len(),
+        1,
+        "identity done_k should have one function definition per compilation unit"
+    );
+
+    let identity_done_k_symbol = identity_done_k_headers[0]
+        .strip_prefix("func.func ")
+        .expect("identity done_k header should start with func.func")
+        .split('(')
+        .next()
+        .expect("identity done_k header should contain a parameter list");
+    let identity_done_k_ref = format!("func_ref = {identity_done_k_symbol}");
+    assert_eq!(
+        ir_text.matches(&identity_done_k_ref).count(),
+        expected_references,
+        "all identity done_k closures should reference the shared function"
+    );
+}
+
 // ========================================================================
 // Pure Lambda Tests - No Effect Expected
 // ========================================================================
@@ -241,6 +273,7 @@ fn main() -> Int {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_shared_identity_done_k(&ir_text, 6);
     assert_snapshot!(ir_text);
 }
 
