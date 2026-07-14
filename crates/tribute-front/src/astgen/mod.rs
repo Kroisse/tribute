@@ -2247,7 +2247,7 @@ mod tests {
 
     #[test]
     fn test_type_annotation_function_pure() {
-        // fn(a) ->{} b → explicit pure-effectful function (empty abilities)
+        // fn(a) ->{} b → explicit pure function (empty abilities)
         let source = "fn run(f: fn(Int) ->{} Bool) -> Bool { f(0) }";
         let module = parse_and_lower(source);
 

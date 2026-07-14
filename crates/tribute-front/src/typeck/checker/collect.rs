@@ -121,12 +121,7 @@ impl<'db> TypeChecker<'db> {
             None => EffectRow::open(self.db(), EffectVar { id: 0 }),
         };
 
-        // Create function type
-        let minimum_convention =
-            crate::ast::function_declaration_abi_floor(func.effects.as_deref());
-        let func_ty =
-            self.env
-                .func_type_with_convention(param_types, return_ty, effect, minimum_convention);
+        let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         // Build type params from the collected BoundVars
         let type_params: Vec<TypeParam> = (0..next_bound_var)
@@ -440,13 +435,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
                     || EffectVar { id: 0 },
                 );
-                let minimum_convention = crate::ast::function_type_abi_floor(abilities);
-                self.env.func_type_with_convention(
-                    param_types,
-                    result_ty,
-                    effect,
-                    minimum_convention,
-                )
+                self.env.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems
@@ -510,13 +499,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
                     || EffectVar { id: 0 },
                 );
-                let minimum_convention = crate::ast::function_type_abi_floor(abilities);
-                self.env.func_type_with_convention(
-                    param_types,
-                    result_ty,
-                    effect,
-                    minimum_convention,
-                )
+                self.env.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems

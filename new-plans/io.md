@@ -70,16 +70,16 @@ Compiler는 이름 문자열만 비교하지 않고 canonical builtin identity
 
 | Convention | Parameters | Result | Requirement |
 | ---------- | ---------- | ------ | ----------- |
-| `Direct` | source parameters | source result | pure named worker |
-| `EvidenceDirect` | evidence + source parameters | source result | explicit `->{}`, `Io`, or tail-resumptive `fn` effect |
+| `Direct` | source parameters | source result | closed empty effect row or pure named worker |
+| `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
 | `Cps` | evidence + `done_k` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
 
 규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
 우선한다.
 
-명시적인 빈 effect annotation `->{}`는 effect row 자체는 비어 있지만
-effectful function ABI를 요청한다. 따라서 annotation을 생략해 얻은 pure worker와 달리
-`EvidenceDirect`를 사용한다.
+명시적인 빈 effect annotation `->{}`는 닫힌 빈 effect row를 뜻하므로
+`Direct`를 사용한다. Effect annotation을 생략한 함수와 달리 effect-polymorphic하지
+않지만, 빈 row 자체는 evidence parameter를 요구하지 않는다.
 
 Effect annotation을 생략한 `fn(...) -> T`의 semantic type은
 `fn(...) ->{e} T`다. 열린 row의 간접 호출은 `Cps`지만, 정의에서 concrete residual

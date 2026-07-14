@@ -464,10 +464,7 @@ fn explicit() ->{} Nil { Nil }
 
         let (explicit, explicit_minimum) = effect_of("explicit");
         assert!(explicit.is_pure(&db));
-        assert_eq!(
-            explicit_minimum,
-            crate::ast::CallingConvention::EvidenceDirect
-        );
+        assert_eq!(explicit_minimum, crate::ast::CallingConvention::Direct);
     }
 
     #[test]

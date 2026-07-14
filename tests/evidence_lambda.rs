@@ -117,7 +117,7 @@ ability State {
 
 fn direct() -> Int { +1 }
 
-fn pure_effectful() ->{} Int { +1 }
+fn explicit_pure() ->{} Int { +1 }
 
 fn evidence_direct() ->{Logger} Int { +2 }
 
@@ -152,8 +152,8 @@ fn main() { }
             (0, true, false, false)
         );
         assert_eq!(
-            function_abi(&ctx, &module, "pure_effectful"),
-            (0, true, false, false)
+            function_abi(&ctx, &module, "explicit_pure"),
+            (0, false, false, false)
         );
         assert_eq!(
             function_abi(&ctx, &module, "call_evidence_direct"),
@@ -217,7 +217,7 @@ fn main() { }
 
         assert_eq!(
             function_param_names(&ctx, &module, "direct_closure::__clam_0"),
-            ["__evidence", "__env", "x"]
+            ["__env", "x"]
         );
         assert_eq!(
             function_param_names(&ctx, &module, "evidence_direct_closure::__clam_0"),

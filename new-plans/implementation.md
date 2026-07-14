@@ -211,9 +211,10 @@ fn state_get(ev: Evidence) -> s {
 
 ### Evidence 전달 규칙
 
-1. **Direct worker**는 evidence를 전달받지 않는다. Effect annotation을 생략한
-   `fn(a) -> b`의 semantic type은 `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete
-   residual effect가 없다면 worker 자체는 Direct일 수 있다
+1. **Direct 함수**는 evidence를 전달받지 않는다. 명시적인 닫힌 빈 row `->{}`는
+   Direct다. Effect annotation을 생략한 `fn(a) -> b`의 semantic type은
+   `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete residual effect가 없다면
+   worker 자체도 Direct일 수 있다
 2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
 3. **CPS 함수**는 evidence와 `done_k`를 받고 source result를 직접 반환하지 않는다
 4. **Handler 설치** 시 새 evidence를 할당한다
@@ -293,7 +294,7 @@ ability가 요구하는 convention의 상한으로 결정한다.
 requirement({A₁, ..., Aₙ | e})
   = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ) ⊔ requirement(e)
 
-explicit empty row `->{}`  → EvidenceDirect
+closed empty row `->{}`    → Direct
 fn-only or empty ability    → EvidenceDirect
 ability containing any op  → Cps
 open or otherwise unknown e → Cps
@@ -310,8 +311,8 @@ definition의 physical worker convention은 semantic function type과 별도로 
 생략된 annotation으로부터 생긴 generalized tail은 worker requirement에 포함하지
 않고, body에서 발견된 concrete residual abilities의 상한만 사용한다. 그러므로
 effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class function
-boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`는
-이 예외를 적용하지 않고 `EvidenceDirect` worker를 요청한다.
+boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`도
+닫힌 빈 row이므로 Direct를 사용한다.
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 `done_k`로 전달한다는
 논리적 convention이다. 실제 lowered result carrier는 control-lowering 전략이
@@ -369,7 +370,7 @@ plain/CPS worker 복제나 specialization은 후속 최적화로 검토한다.
 ```text
 생략 annotation의 semantic type       → open row, indirect call은 Cps
 concrete residual effect 없는 worker  → Direct
-명시적 빈 effect (fn(a) ->{} b)      → EvidenceDirect
+명시적 빈 effect (fn(a) ->{} b)      → Direct
 Ambient/fn effect                    → EvidenceDirect
 General op/Throw effect              → Cps, effect point만 continuation 처리
 ```

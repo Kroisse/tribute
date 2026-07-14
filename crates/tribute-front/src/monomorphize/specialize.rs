@@ -270,7 +270,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             params,
             result,
             effect,
-            minimum_convention,
+            ..
         } => {
             // Preserve the effect row as ability annotations. Each Effect
             // becomes a Named (or App) annotation; a row variable (`rest`) is
@@ -304,13 +304,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
                     }
                 })
                 .collect();
-            if effect.rest(db).is_some()
-                // Preserve omitted effect-polymorphic functions whose resolved
-                // ability set is empty as Direct when annotations round-trip,
-                // rather than reclassifying them as EvidenceDirect.
-                || (abilities.is_empty()
-                    && *minimum_convention == crate::ast::CallingConvention::Direct)
-            {
+            if effect.rest(db).is_some() {
                 abilities.push(TypeAnnotation {
                     id,
                     kind: TypeAnnotationKind::Infer,
@@ -1087,6 +1081,27 @@ mod tests {
             }
             other => panic!("expected Func annotation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_type_to_annotation_func_preserves_closed_empty_row() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect: EffectRow::pure(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        let ann = type_to_annotation(&db, func_ty, node_id(1));
+        let TypeAnnotationKind::Func { abilities, .. } = ann.kind else {
+            panic!("expected Func annotation");
+        };
+        assert!(abilities.is_empty());
     }
 
     // ========================================================================

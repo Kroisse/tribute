@@ -2,26 +2,8 @@
 
 use std::collections::HashMap;
 
-use super::{AbilityId, EffectRow, Type, TypeAnnotation, TypeKind};
+use super::{AbilityId, EffectRow, Type, TypeKind};
 pub use tribute_core::CallingConvention;
-
-/// ABI floor requested by a function declaration's effect annotation.
-pub fn function_declaration_abi_floor(effects: Option<&[TypeAnnotation]>) -> CallingConvention {
-    if effects.is_some() {
-        CallingConvention::EvidenceDirect
-    } else {
-        CallingConvention::Direct
-    }
-}
-
-/// ABI floor requested by an explicit function-type effect list.
-pub fn function_type_abi_floor(abilities: &[TypeAnnotation]) -> CallingConvention {
-    if abilities.is_empty() {
-        CallingConvention::EvidenceDirect
-    } else {
-        CallingConvention::Direct
-    }
-}
 
 /// Derive a convention from an effect row and ability-level requirements.
 ///
@@ -99,6 +81,11 @@ mod tests {
         };
         let logger_only = EffectRow::new(&db, vec![logger_effect.clone()], None);
         let mixed = EffectRow::new(&db, vec![logger_effect, state_effect], None);
+
+        assert_eq!(
+            calling_convention_for_effect_row(&db, EffectRow::pure(&db), &abilities),
+            CallingConvention::Direct
+        );
 
         assert_eq!(
             calling_convention_for_effect_row(&db, logger_only, &abilities),

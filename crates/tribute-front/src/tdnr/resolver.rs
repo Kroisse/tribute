@@ -238,9 +238,7 @@ impl<'db> TdnrResolver<'db> {
                 params,
                 result,
                 effect,
-                minimum_convention: crate::ast::function_declaration_abi_floor(
-                    func.effects.as_deref(),
-                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         )
     }
