@@ -19,7 +19,8 @@ ability를 정의하고 handler에서 `std::io` 함수를 호출할 수 있다.
 The `std::io` module exports:
 
 ```rust
-pub ability Io {}
+// Io is a virtual, compiler-owned builtin export.
+// No source `ability` declaration or synthetic AST node exists.
 
 pub struct SystemError {
     code: Int
@@ -36,6 +37,9 @@ pub fn print(message: String) ->{Io} Nil
 pub fn print_line(message: String) ->{Io} Nil
 pub fn read_line() ->{Io, Throw(Error)} String
 ```
+
+사용자는 resolver가 제공하는 `std::io::Io`를 `use std::io::Io` 또는 qualified
+effect annotation으로 참조한다. `Io`를 사용하기 위해 별도의 ability를 선언하지 않는다.
 
 API 이름은 Tribute의 일반 함수 naming을 따른다. 개행을 추가하는 함수는
 `println`이 아니라 기존 이름인 `print_line`을 사용한다.
