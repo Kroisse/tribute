@@ -402,6 +402,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 params,
                 result,
                 effect,
+                minimum_convention,
             } => {
                 let params = params
                     .iter()
@@ -415,6 +416,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                         params,
                         result,
                         effect,
+                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -747,6 +749,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.env.func_type(params, result, effect)
     }
 
+    /// Create a function type with an explicit calling-convention lower bound.
+    pub fn func_type_with_convention(
+        &self,
+        params: Vec<Type<'db>>,
+        result: Type<'db>,
+        effect: EffectRow<'db>,
+        minimum_convention: crate::ast::CallingConvention,
+    ) -> Type<'db> {
+        self.env
+            .func_type_with_convention(params, result, effect, minimum_convention)
+    }
+
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         self.env.named_type(name, args)
@@ -821,6 +835,7 @@ mod tests {
                 params: vec![bound_var],
                 result: bound_var,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
@@ -901,6 +916,7 @@ mod tests {
                 params: vec![],
                 result: nil,
                 effect: shared,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let outer = Type::new(
@@ -909,6 +925,7 @@ mod tests {
                 params: vec![callback],
                 result: nil,
                 effect: shared,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(db, vec![], outer);
@@ -1029,6 +1046,7 @@ mod tests {
                 params: vec![bound_var],
                 result: result_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);

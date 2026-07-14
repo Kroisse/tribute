@@ -1,7 +1,6 @@
 //! Module-level and declaration lowering.
 
-use std::collections::HashMap;
-
+use tribute_core::{CallableAbi, set_calling_convention};
 use tribute_ir::dialect::ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -11,9 +10,10 @@ use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
-    CtorId, Decl, ExternFuncDecl, FuncDecl, Module, NodeId, SpanMap, TypeScheme, TypedRef,
+    CallingConvention, CtorId, Decl, EffectRow, ExternFuncDecl, FuncDecl, TypeKind, TypedRef,
 };
 
+use super::super::TypedModule;
 use super::super::context::IrLoweringCtx;
 use super::{FuncSignature, IrBuilder, convert_annotation_to_ir_type, expr, qualified_type_name};
 
@@ -82,58 +82,111 @@ fn prescan_struct_fields<'db>(
     }
 }
 
-/// Lower a module to arena TrunkIR.
+/// Record physical worker conventions separately from semantic function types.
 ///
-/// Returns an `Module` inside the given `IrContext`.
-pub fn lower_module<'db>(
-    db: &'db dyn salsa::Database,
-    ir: &mut IrContext,
-    path: PathRef,
-    span_map: SpanMap,
-    module: Module<TypedRef<'db>>,
-    function_types: HashMap<Symbol, TypeScheme<'db>>,
-    node_types: HashMap<NodeId, crate::ast::Type<'db>>,
-) -> IrModule {
-    let module_location = span_map.get_or_default(module.id);
-    let location = Location::new(path, module_location);
-    let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
-    let module_path = smallvec::smallvec![module_name];
+/// An omitted effect annotation denotes an open row, but its generalized tail
+/// does not by itself require the definition's worker to use CPS. Concrete
+/// residual effects still contribute their ability-level requirements. An
+/// explicit annotations use the convention derived from their closed row.
+fn prescan_definition_conventions<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+) {
+    for decl in decls {
+        match decl {
+            Decl::Function(func_decl) => {
+                let qualified = crate::qualified_symbol(prefix, func_decl.name);
+                let scheme = ctx
+                    .lookup_function_type(qualified)
+                    .or_else(|| ctx.lookup_function_type(func_decl.name));
+                let Some(scheme) = scheme.copied() else {
+                    continue;
+                };
+                let body = scheme.body(ctx.db);
+                let Some(mut convention) = ctx.calling_convention_for_type(body) else {
+                    continue;
+                };
 
-    let mut ctx = IrLoweringCtx::new(
-        db,
-        path,
-        span_map.clone(),
-        function_types,
-        module_path,
-        node_types,
-    );
-
-    // Pre-scan: register all struct field orders before lowering any declarations.
-    prescan_struct_fields(&mut ctx, ir, &module.decls, &mut String::new());
-
-    // Create the module block (top-down: create block first, push ops into it)
-    let module_block = ir.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: Default::default(),
-        parent_region: None,
-    });
-    ctx.set_module_block(module_block);
-
-    // Lower each declaration, pushing ops into the module block
-    for decl in module.decls {
-        lower_decl(&mut ctx, ir, module_block, decl);
+                if func_decl.effects.is_none()
+                    && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
+                {
+                    let concrete = EffectRow::new(ctx.db, effect.effects(ctx.db).clone(), None);
+                    convention = ctx.calling_convention_for_effect_row(concrete);
+                }
+                ctx.register_definition_convention(qualified, convention);
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, module.name);
+                    prescan_definition_conventions(ctx, body, prefix);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
     }
+}
 
-    // Create region and module op
-    let module_region = ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![module_block],
-        parent_op: None,
-    });
+impl<'db> TypedModule<'db> {
+    /// Lower this module when its source path has already been interned.
+    pub(crate) fn lower_module(
+        self,
+        db: &'db dyn salsa::Database,
+        ir: &mut IrContext,
+        path: PathRef,
+    ) -> IrModule {
+        let Self {
+            ast,
+            span_map,
+            function_types,
+            node_types,
+            ability_conventions,
+        } = self;
+        let module_location = span_map.get_or_default(ast.id);
+        let location = Location::new(path, module_location);
+        let module_name = ast.name.unwrap_or_else(|| Symbol::new("main"));
+        let module_path = smallvec::smallvec![module_name];
 
-    let module_op = core::module(ir, location, module_name, module_region);
-    IrModule::new(ir, module_op.op_ref()).expect("valid core.module operation")
+        let mut ctx = IrLoweringCtx::new(
+            db,
+            path,
+            span_map.clone(),
+            function_types,
+            ability_conventions,
+            module_path,
+            node_types,
+        );
+
+        prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
+
+        // Pre-scan: register all struct field orders before lowering any declarations.
+        prescan_struct_fields(&mut ctx, ir, &ast.decls, &mut String::new());
+
+        // Create the module block (top-down: create block first, push ops into it)
+        let module_block = ir.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        ctx.set_module_block(module_block);
+
+        // Lower each declaration, pushing ops into the module block
+        for decl in ast.decls {
+            lower_decl(&mut ctx, ir, module_block, decl);
+        }
+
+        // Create region and module op
+        let module_region = ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![module_block],
+            parent_op: None,
+        });
+
+        let module_op = core::module(ir, location, module_name, module_region);
+        IrModule::new(ir, module_op.op_ref()).expect("valid core.module operation")
+    }
 }
 
 /// Lower a declaration to arena TrunkIR.
@@ -184,9 +237,15 @@ fn lower_function<'db>(
     let FuncSignature {
         param_types: param_ir_types,
         return_type: return_ty,
-        is_effectful,
+        convention: semantic_convention,
     } = sig;
+    let qualified_name = ctx.qualify_name(func_name);
+    let convention = ctx
+        .function_calling_convention(qualified_name)
+        .unwrap_or(semantic_convention);
     let anyref_ty = ctx.anyref_type(ir);
+    let evidence_ty = ability::evidence_adt_type_ref(ir);
+    let abi = CallableAbi::new(convention, param_ir_types.iter().copied(), return_ty);
 
     // Create entry block with parameter args
     let mut block_args: Vec<BlockArgData> = param_ir_types
@@ -203,11 +262,9 @@ fn lower_function<'db>(
         })
         .collect();
 
-    // Effectful functions receive evidence and done_k as the first two parameters.
-    // Evidence is threaded through to effectful callees.
-    // The function calls done_k(result) instead of func.return on normal completion.
-    let block_args = if is_effectful {
-        let evidence_ty = ability::evidence_adt_type_ref(ir);
+    // Effectful functions receive evidence. Only CPS functions also receive done_k
+    // and return through it on normal completion.
+    let block_args = if convention.needs_evidence() {
         let mut ev_arg = BlockArgData {
             ty: evidence_ty,
             attrs: Default::default(),
@@ -216,15 +273,18 @@ fn lower_function<'db>(
             Symbol::new("bind_name"),
             Attribute::Symbol(Symbol::new("__evidence")),
         );
-        let mut done_k_arg = BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        };
-        done_k_arg.attrs.insert(
-            Symbol::new("bind_name"),
-            Attribute::Symbol(Symbol::new("__done_k")),
-        );
-        let mut args = vec![ev_arg, done_k_arg];
+        let mut args = vec![ev_arg];
+        if convention.needs_done_k() {
+            let mut done_k_arg = BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            };
+            done_k_arg.attrs.insert(
+                Symbol::new("bind_name"),
+                Attribute::Symbol(Symbol::new("__done_k")),
+            );
+            args.push(done_k_arg);
+        }
         args.append(&mut block_args);
         args
     } else {
@@ -241,8 +301,7 @@ fn lower_function<'db>(
     // Bind parameters to their block argument values
     {
         let mut scope = ctx.scope();
-        // When effectful, evidence=0, done_k=1, params start at 2
-        let param_offset: u32 = if is_effectful { 2 } else { 0 };
+        let param_offset = abi.source_param_offset() as u32;
         for (i, param) in func_decl.params.iter().enumerate() {
             if let Some(local_id) = param.local_id {
                 let arg_val = ir.block_arg(entry_block, i as u32 + param_offset);
@@ -250,10 +309,10 @@ fn lower_function<'db>(
             }
         }
 
-        // For effectful functions: set done_k and use CPS body lowering.
+        // For CPS functions: set done_k and use CPS body lowering.
         // The done_k continuation is called at the end of the continuation chain
         // instead of func.return, handled by build_cps_continuation.
-        if is_effectful {
+        if convention.needs_done_k() {
             let prev_done_k = scope.done_k;
             let prev_evidence = scope.evidence;
             let evidence_val = ir.block_arg(entry_block, 0);
@@ -281,7 +340,12 @@ fn lower_function<'db>(
             scope.done_k = prev_done_k;
             scope.evidence = prev_evidence;
         } else {
-            // Pure function: lower body normally
+            // Direct and EvidenceDirect functions return their source result normally.
+            // EvidenceDirect still threads evidence through nested effectful calls.
+            let prev_evidence = scope.evidence;
+            if convention.needs_evidence() {
+                scope.evidence = Some(ir.block_arg(entry_block, 0));
+            }
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
             if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
                 let result = builder.cast_if_needed(location, result, return_ty);
@@ -292,19 +356,13 @@ fn lower_function<'db>(
                 let ret_op = func::r#return(builder.ir, location, [nil]);
                 builder.ir.push_op(builder.block, ret_op.op_ref());
             }
+            scope.evidence = prev_evidence;
         }
     }
 
     // Build function type
-    // Effectful functions: evidence + done_k are the first two params, return type is anyref
-    let (final_param_types, final_return_ty) = if is_effectful {
-        let evidence_ty = ability::evidence_adt_type_ref(ir);
-        let mut params = vec![evidence_ty, anyref_ty]; // evidence, done_k
-        params.extend_from_slice(&param_ir_types);
-        (params, anyref_ty)
-    } else {
-        (param_ir_types.clone(), return_ty)
-    };
+    let final_param_types = abi.lowered_params(evidence_ty, anyref_ty);
+    let final_return_ty = abi.lowered_result(anyref_ty);
     let func_type = ctx.func_type(ir, &final_param_types, final_return_ty);
 
     // Create body region and func op
@@ -316,6 +374,7 @@ fn lower_function<'db>(
 
     let qualified_name = ctx.qualify_name(func_name);
     let func_op = func::func(ir, location, qualified_name, func_type, body_region);
+    set_calling_convention(ir, func_op.op_ref(), convention);
     ir.push_op(top, func_op.op_ref());
 }
 
@@ -520,6 +579,6 @@ fn fallback_from_annotations<'db>(
     FuncSignature {
         param_types,
         return_type,
-        is_effectful: false,
+        convention: CallingConvention::Direct,
     }
 }

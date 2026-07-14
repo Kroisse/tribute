@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 202
 expression: ir_text
 ---
 core.module @test {
@@ -18,7 +17,7 @@ core.module @test {
         func.return %1
     }
   }
-  func.func @copy_config(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @copy_config(%0: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : tribute_rt.anyref
       %2 = adt.struct_get %0 {field = 1, type = !Config} : tribute_rt.anyref
       %3 = adt.struct_new %1, %2 {type = !Config} : adt.typeref() {name = @Config}

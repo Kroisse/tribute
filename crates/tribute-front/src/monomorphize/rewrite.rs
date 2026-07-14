@@ -347,6 +347,7 @@ pub fn rewrite_type<'db>(
             params,
             result,
             effect,
+            minimum_convention,
         } => {
             let new_params: Vec<_> = params.iter().map(|p| rewrite_type(db, *p, map)).collect();
             let new_result = rewrite_type(db, *result, map);
@@ -359,6 +360,7 @@ pub fn rewrite_type<'db>(
                     params: new_params,
                     result: new_result,
                     effect: *effect,
+                    minimum_convention: *minimum_convention,
                 },
             )
         }
@@ -827,6 +829,7 @@ mod tests {
                 params: vec![option_int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let map = make_type_rewrite_map(

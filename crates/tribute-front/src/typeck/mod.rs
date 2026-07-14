@@ -37,7 +37,8 @@ pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeParam, TypeScheme, TypedRef,
+    AbilityId, CallingConvention, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeParam,
+    TypeScheme, TypedRef,
 };
 
 /// Salsa-tracked struct holding the complete type checking output.
@@ -61,6 +62,9 @@ pub struct TypeCheckOutput<'db> {
     /// Stored as Vec for Salsa compatibility (HashMap doesn't implement Hash).
     #[returns(ref)]
     pub node_types: Vec<(NodeId, Type<'db>)>,
+    /// Ability-level calling-convention requirements.
+    #[returns(ref)]
+    pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Source span information for AST nodes.
     pub span_map: SpanMap,
 }
@@ -98,6 +102,9 @@ pub struct PreludeExports<'db> {
     /// Method index for UFCS resolution: method_name → candidates.
     #[returns(ref)]
     pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
+    /// Ability-level calling-convention requirements exported by the prelude.
+    #[returns(ref)]
+    pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
 }
 
 /// Type check a module.
@@ -116,6 +123,7 @@ pub fn typecheck_module<'db>(
         result.module,
         result.function_types,
         result.node_types,
+        result.ability_conventions,
         span_map,
     )
 }

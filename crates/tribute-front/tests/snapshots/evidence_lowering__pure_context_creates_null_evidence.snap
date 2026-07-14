@@ -6,7 +6,7 @@ core.module @test {
   !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
   !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
-  func.func @use_ask(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @use_ask(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Ask}, op_name = @ask} : tribute_rt.anyref
       func.return %2
   }
@@ -19,10 +19,10 @@ core.module @test {
   func.func @"test::__lambda_2"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
           %2 = adt.ref_null {type = !t0} : !t0
-          %3 = func.call %2, %1 {callee = @use_ask} : tribute_rt.anyref
+          %3 = func.call %2, %1 {callee = @use_ask, tribute.calling_convention = 2} : tribute_rt.anyref
           func.return %3
       }
       %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref

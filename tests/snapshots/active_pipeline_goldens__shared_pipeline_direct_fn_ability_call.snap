@@ -8,12 +8,12 @@ core.module @direct_fn {
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)
-  !t2 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref))
   !"Result$T3$T4" = adt.enum() {name = @"Result$T3$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T6$T5" = adt.enum() {name = @"Result$T6$T5", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T2" = adt.enum() {name = @"Option$T2", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
+  !t2 = closure.closure(core.func(tribute_rt.anyref, !t0, closure.closure(!t1), tribute_rt.anyref))
   !"Result$T4$T3" = adt.enum() {name = @"Result$T4$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T1" = adt.enum() {name = @"Option$T1", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"Option$T3" = adt.enum() {name = @"Option$T3", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
@@ -30,19 +30,14 @@ core.module @direct_fn {
       func.unreachable
   }
 
-  func.func @use_console(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
-      %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = effect.dispatch_tail %0, %2 {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
-      %4 = core.unrealized_conversion_cast %3 : core.i32
-      %5 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %6 = effect.dispatch_tail %0, %5 {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : tribute_rt.anyref
-      %7 = core.unrealized_conversion_cast %6 : core.nil
-      %8 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %9 = core.unrealized_conversion_cast %1 : closure.closure(!t1)
-      %10 = adt.struct_get %9 {field = 0, type = !_closure} : core.i32
-      %11 = adt.struct_get %9 {field = 1, type = !_closure} : tribute_rt.anyref
-      %12 = func.call_indirect %10, %0, %11, %8 : tribute_rt.anyref
-      func.return %12
+  func.func @use_console(%0: !t0) -> core.i32 attributes {tribute.calling_convention = 1} {
+      %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %2 = effect.dispatch_tail %0, %1 {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
+      %3 = core.unrealized_conversion_cast %2 : core.i32
+      %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+      %5 = effect.dispatch_tail %0, %4 {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : tribute_rt.anyref
+      %6 = core.unrealized_conversion_cast %5 : core.nil
+      func.return %3
   }
 
   func.func @"direct_fn::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
@@ -61,46 +56,40 @@ core.module @direct_fn {
       func.return %2
   }
 
-  func.func @"direct_fn::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @run() -> core.i32 {
+  func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 0} : core.i32
       %1 = adt.array_new %0 {type = !t0} : !t0
       %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = func.constant {func_ref = @"run::__clam_0"} : !t1
+      %3 = func.constant {func_ref = @"run::__clam_0"} : core.func(tribute_rt.anyref)
       %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
-      %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"direct_fn::__lambda_5"} : !t1
-      %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
-      %8 = adt.ref_null {type = !t0} : !t0
-      %9 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
-      %10 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      %5 = adt.ref_null {type = !t0} : !t0
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %9 = func.constant {func_ref = @"run::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)
+      %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %12 = func.constant {func_ref = @"run::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)
+      %12 = func.constant {func_ref = @"run::__clam_2"} : core.func(tribute_rt.anyref, core.i32, tribute_rt.anyref)
       %13 = adt.struct_new %12, %11 {type = !_closure} : !_closure
-      %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %15 = func.constant {func_ref = @"run::__clam_2"} : core.func(tribute_rt.anyref, core.i32, tribute_rt.anyref)
-      %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
-      %17 = func.call {callee = @__tribute_next_tag} : core.i32
-      %18 = effect.extend %1, %17, %16, %13 {ability_ref = core.ability_ref() {name = @Console}} : !t0
-      %19 = func.call_indirect %9, %18, %10, %7 : tribute_rt.anyref
-      %20 = core.unrealized_conversion_cast %19 : core.i32
-      %21 = core.unrealized_conversion_cast %20 : tribute_rt.anyref
-      %22 = core.unrealized_conversion_cast %21 : core.i32
-      func.return %22
+      %14 = func.call {callee = @__tribute_next_tag} : core.i32
+      %15 = effect.extend %1, %14, %13, %10 {ability_ref = core.ability_ref() {name = @Console}} : !t0
+      %16 = func.call_indirect %6, %15, %7 : tribute_rt.anyref
+      %17 = core.unrealized_conversion_cast %16 : core.i32
+      %18 = core.unrealized_conversion_cast %17 : tribute_rt.anyref
+      %19 = core.unrealized_conversion_cast %18 : core.i32
+      func.return %19
   }
 
-  func.func @main() -> core.nil {
-      %0 = func.call {callee = @run} : core.i32
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+      %0 = func.call {callee = @run, tribute.calling_convention = 0} : core.i32
       %1 = arith.const {value = unit} : core.nil
       func.return %1
   }
 
-  func.func @"run::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_null {type = !t0} : !t0
-      %4 = func.call %0, %2 {callee = @use_console} : tribute_rt.anyref
+  func.func @"run::__clam_0"(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+      %2 = adt.ref_null {type = !t0} : !t0
+      %3 = func.call %0 {callee = @use_console} : core.i32
+      %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
       func.return %4
   }
 
@@ -109,7 +98,7 @@ core.module @direct_fn {
       %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
       %7 = scf.if %6 : tribute_rt.anyref {
           %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"direct_fn::__lambda_8"} : !t1
+          %9 = func.constant {func_ref = @"direct_fn::__lambda_7"} : !t1
           %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
           %11 = arith.const {value = 41} : core.i32
           %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
@@ -118,7 +107,7 @@ core.module @direct_fn {
           %13 = arith.const {value = 1} : core.i1
           %14 = scf.if %13 : tribute_rt.anyref {
               %15 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %16 = func.constant {func_ref = @"direct_fn::__lambda_9"} : !t1
+              %16 = func.constant {func_ref = @"direct_fn::__lambda_8"} : !t1
               %17 = adt.struct_new %16, %15 {type = !_closure} : !_closure
               %18 = arith.const {value = unit} : core.nil
               %19 = core.unrealized_conversion_cast %18 : tribute_rt.anyref

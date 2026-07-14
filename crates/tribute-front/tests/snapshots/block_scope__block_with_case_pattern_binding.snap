@@ -5,7 +5,7 @@ expression: ir_text
 core.module @test {
   !Option = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
 
-  func.func @example(%0: tribute_rt.anyref) -> core.i32 {
+  func.func @example(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.calling_convention = 0} {
       %1 = adt.variant_is %0 {tag = @Some, type = !Option} : core.i1
       %2 = scf.if %1 : core.i32 {
           %3 = adt.variant_cast %0 {tag = @Some, type = !Option} : !Option

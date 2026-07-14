@@ -211,9 +211,12 @@ fn state_get(ev: Evidence) -> s {
 
 ### Evidence 전달 규칙
 
-1. **순수 함수** (`fn(a) ->{} b`)는 evidence를 전달받지 않는다
+1. **Direct 함수**는 evidence를 전달받지 않는다. 명시적인 닫힌 빈 row `->{}`는
+   Direct다. Effect annotation을 생략한 `fn(a) -> b`의 semantic type은
+   `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete residual effect가 없다면
+   worker 자체도 Direct일 수 있다
 2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
-3. **CPS 함수**는 evidence와 `done_k`를 받고 `anyref`를 반환한다
+3. **CPS 함수**는 evidence와 `done_k`를 받고 source result를 직접 반환하지 않는다
 4. **Handler 설치** 시 새 evidence를 할당한다
 5. **Handled ability operation** 시 evidence에서 marker를 조회한다
 
@@ -229,6 +232,18 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 구현 세부사항이다.
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
+
+논리적인 CPS ABI에서 함수와 `done_k`의 control result는 `Never`다:
+
+```text
+fn cps(ev: Evidence, done_k: fn(T) -> Never, args...) -> Never
+```
+
+현재 IR은 true tail call이 모든 경로에서 보장되지 않으므로 continuation chain의
+행정적 반환값을 `anyref`로 전달하는 compatibility representation을 사용한다.
+`anyref`는 source result가 아니며 `Cps` convention의 영구적인 의미도 아니다.
+Control lowering이 분리되면 true tail-call backend는 `Never`, trampoline
+backend는 `Step`, 기존 경로는 `anyref` carrier를 선택할 수 있다.
 
 ### 런타임 함수
 
@@ -269,12 +284,93 @@ fn fetch_all(urls: List(Text), ev: Evidence) -> List(Response) {
 
 ## Selective Transformation
 
+### Effect Row Granularity and Convention Bound
+
+Source effect row는 operation 집합이 아니라 **ability identity의 집합**을
+기록한다. Semantic function type의 calling convention은 row에 들어 있는 각
+ability가 요구하는 convention의 상한으로 결정한다.
+
+```text
+requirement({A₁, ..., Aₙ | e})
+  = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ) ⊔ requirement(e)
+
+closed empty row `->{}`    → Direct
+fn-only or empty ability    → EvidenceDirect
+ability containing any op  → Cps
+open or otherwise unknown e → Cps
+```
+
+Effect annotation 생략은 closed-empty 추론이 아니다.
+
+```text
+fn(a) -> b ≡ fn(a) ->{e} b
+```
+
+따라서 이 타입을 통한 **간접 호출**은 열린 `e` 때문에 `Cps`다. 반면 named
+definition의 physical worker convention은 semantic function type과 별도로 기록한다.
+생략된 annotation으로부터 생긴 generalized tail은 worker requirement에 포함하지
+않고, body에서 발견된 concrete residual abilities의 상한만 사용한다. 그러므로
+effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class function
+boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`도
+닫힌 빈 row이므로 Direct를 사용한다.
+
+여기서 `Cps`는 source result를 직접 반환하지 않고 `done_k`로 전달한다는
+논리적 convention이다. 실제 lowered result carrier는 control-lowering 전략이
+`Never`, `Step`, 또는 compatibility `anyref` 중에서 결정한다.
+
+따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
+분류한다. 이는 안전한 **ability 단위 상한**이다. 다만 CPS 함수 안에서도 개별
+`fn` operation 호출은 `tr_dispatch_fn`을 통한 evidence-direct fast path를
+사용할 수 있다. 함수 표현을 결정하는 상한과 operation call-site의 dispatch
+최적화는 서로 다른 결정이다.
+
+Operation 종류를 source effect row에 기록하는 대안은 채택하지 않는다. 예를 들어
+`{State::get}`과 `{State::get, State::set}`을 서로 다른 effect로 만들면 이 차이가
+함수 타입, effect polymorphism, subtyping, 간접 호출 및 별도 컴파일 단위의 ABI에
+모두 관여해야 한다. 내부 calling-convention 정보로만 operation 집합을 추적하면
+간접 호출에서 실제 callee가 더 강한 convention을 요구할 수 있으므로 sound하지 않다.
+
+#### 다른 언어와의 비교
+
+- **Koka**는 effect label 단위의 row를 사용하고, selective CPS 판정을 row의 각
+  label이 요구하는 변환의 join으로 계산한다. 열린 effect variable은 보수적으로
+  CPS가 필요하다고 판정한다. 최신 Koka의 `fun` operation과 linear effect는
+  tail-resumptive 호출을 evidence lookup 뒤 직접 실행하여 일반 control 변환을
+  피한다. Tribute의 ability 단위 상한과 `fn` fast path에 가장 가까운 선례다.
+  ([Type Directed Compilation of Row-Typed Algebraic Effects](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/algeff.pdf),
+  [Koka Language Book](https://koka-lang.github.io/koka/doc/book.html),
+  [Generalized Evidence Passing for Effect Handlers](https://xnning.github.io/papers/multip-tr.pdf))
+- **Eff**는 computation type의 dirt에 호출 가능한 operation 집합을 기록한다.
+  이 정밀도는 effect subtyping, 집합 포함 관계를 나타내는 coercion, elaboration과
+  함께 타입 시스템의 일부가 된다. 이는 operation 단위 설계가 가능함을 보여 주지만,
+  단순한 ABI 분석 속성으로 추가할 수 있는 기능은 아님을 보여 주는 대안이다.
+  ([Eff handlers tutorial](https://www.eff-lang.org/handlers-tutorial.pdf),
+  [Explicit Effect Subtyping](https://arxiv.org/abs/2005.13814))
+- **Unison**은 함수 타입에 ability 집합을 기록한다. Handler는 ability request의
+  operation별로 match하고 각 branch에서 continuation을 받으므로, ability-level
+  effect typing의 선례이지만 Tribute의 정적인 `fn`/`op` 구분에는 대응하지 않는다.
+  ([Abilities and ability handlers](https://www.unison-lang.org/docs/language-reference/abilities-and-ability-handlers/),
+  [Writing your own abilities](https://www.unison-lang.org/docs/fundamentals/abilities/writing-abilities/))
+- **Effekt**는 effect를 computation이 요구하는 capability로 해석하고 explicit
+  capability passing으로 내린다. Second-class block과 contextual effect
+  polymorphism을 사용하므로 Tribute의 first-class function ABI와 직접 같지는 않지만,
+  effect 정보를 capability-passing representation으로 lowering하는 비교 사례다.
+  ([Effects as Capabilities](https://ps.informatik.uni-tuebingen.de/publications/brachthaeuser20effekt/))
+
+이 비교에 따라 source effect row의 ability 단위 표현은 유지한다. Operation 단위
+정밀도가 실제로 필요해지면 숨은 최적화 메타데이터가 아니라 타입 시스템 기능으로
+별도 설계해야 한다. 열린 row의 간접 호출은 보수적인 `Cps`를 유지하되, named
+definition에는 semantic type과 분리된 worker convention을 사용한다. 추가적인
+plain/CPS worker 복제나 specialization은 후속 최적화로 검토한다.
+
 ### 변환 범위
 
 모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
 
 ```text
-순수 코드 (fn(a) ->{} b)            → Direct
+생략 annotation의 semantic type       → open row, indirect call은 Cps
+concrete residual effect 없는 worker  → Direct
+명시적 빈 effect (fn(a) ->{} b)      → Direct
 Ambient/fn effect                    → EvidenceDirect
 General op/Throw effect              → Cps, effect point만 continuation 처리
 ```
@@ -287,9 +383,13 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 `f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
 
-1. **Evidence는 항상 전달**: 오버헤드 최소화 (포인터 하나)
-2. **Tail-resumptive 최적화**: 대부분의 handler가 즉시 resume하면 실제 shift 불필요
-3. **Inlining**: 구체적 타입이 알려지면 evidence 사용 여부 최적화
+1. **열린 row는 Cps**: 구체화 전에는 더 강한 convention을 요구할 가능성을
+   배제할 수 없으므로 `done_k`를 포함하는 ABI를 사용한다
+2. **Evidence는 항상 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다
+3. **Tail-resumptive 최적화**: 구체적인 `fn` operation call-site에서는 실제 shift가
+   필요 없다
+4. **Inlining/specialization**: row가 구체화되면 더 약한 convention의 worker로
+   최적화할 수 있다
 
 ### Tail-Resumptive Optimization
 

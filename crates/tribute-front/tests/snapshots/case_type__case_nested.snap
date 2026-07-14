@@ -1,10 +1,9 @@
 ---
 source: crates/tribute-front/tests/case_type.rs
-assertion_line: 147
 expression: ir_text
 ---
 core.module @test {
-  func.func @nested(%0: core.i32, %1: core.i1) -> core.i32 {
+  func.func @nested(%0: core.i32, %1: core.i1) -> core.i32 attributes {tribute.calling_convention = 0} {
       %2 = arith.const {value = 0} : core.i32
       %3 = arith.cmpi %0, %2 {predicate = @eq} : core.i1
       %4 = scf.if %3 : core.i32 {

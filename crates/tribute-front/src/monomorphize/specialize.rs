@@ -270,6 +270,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             params,
             result,
             effect,
+            ..
         } => {
             // Preserve the effect row as ability annotations. Each Effect
             // becomes a Named (or App) annotation; a row variable (`rest`) is
@@ -895,6 +896,7 @@ mod tests {
                 params: vec![bv0],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(&db, vec![TypeParam::anonymous()], scheme_body);
@@ -1019,6 +1021,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1067,6 +1070,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1077,6 +1081,27 @@ mod tests {
             }
             other => panic!("expected Func annotation, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_type_to_annotation_func_preserves_closed_empty_row() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect: EffectRow::pure(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        let ann = type_to_annotation(&db, func_ty, node_id(1));
+        let TypeAnnotationKind::Func { abilities, .. } = ann.kind else {
+            panic!("expected Func annotation");
+        };
+        assert!(abilities.is_empty());
     }
 
     // ========================================================================

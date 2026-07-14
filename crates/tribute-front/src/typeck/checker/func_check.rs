@@ -73,7 +73,15 @@ impl<'db> TypeChecker<'db> {
         // Set effect row from the function's declared type before checking body
         let declared_effect =
             if let TypeKind::Func { effect, .. } = instantiated_func_ty.kind(self.db()) {
-                ctx.set_current_effect(*effect);
+                // Omission is semantically `->{e}`, but the fresh generalized
+                // tail is not an effect performed by the body. Infer residual
+                // effects from a closed-empty accumulator and reattach the tail
+                // to the resulting function type after solving.
+                if func.effects.is_none() {
+                    ctx.set_current_effect(crate::ast::EffectRow::pure(self.db()));
+                } else {
+                    ctx.set_current_effect(*effect);
+                }
                 Some(*effect)
             } else {
                 None
@@ -139,8 +147,45 @@ impl<'db> TypeChecker<'db> {
             .map(|(i, id)| (id, i as u32))
             .collect();
 
-        // Apply substitution and generalization to the function type
-        let substituted_ty = type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
+        // An omitted annotation denotes an open effect row. Preserve the
+        // concrete residual effects discovered while checking the body, then
+        // reattach the generalized tail supplied by the collected signature.
+        let inferred_func_ty = if func.effects.is_none() {
+            match instantiated_func_ty.kind(self.db()) {
+                TypeKind::Func {
+                    params,
+                    result,
+                    effect: declared_effect,
+                    minimum_convention,
+                    ..
+                } => {
+                    let inferred_effect = if body_effect_row.rest(self.db()).is_some() {
+                        body_effect_row
+                    } else {
+                        crate::ast::EffectRow::new(
+                            self.db(),
+                            body_effect_row.effects(self.db()).clone(),
+                            declared_effect.rest(self.db()),
+                        )
+                    };
+                    Type::new(
+                        self.db(),
+                        TypeKind::Func {
+                            params: params.clone(),
+                            result: *result,
+                            effect: inferred_effect,
+                            minimum_convention: *minimum_convention,
+                        },
+                    )
+                }
+                _ => instantiated_func_ty,
+            }
+        } else {
+            instantiated_func_ty
+        };
+
+        // Apply substitution and generalization to the function type.
+        let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
 
         // Validate that `main` returns Nil
         if func.name == "main"
@@ -346,6 +391,7 @@ impl<'db> TypeChecker<'db> {
                         params,
                         result,
                         effect,
+                        ..
                     } = func_ty.kind(self.db())
                     {
                         // Arity check
@@ -1237,6 +1283,7 @@ mod tests {
                 params: vec![Type::new(db, TypeKind::Nat)],
                 result: first_solver_var,
                 effect: EffectRow::pure(db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let second_callee_ty = Type::new(
@@ -1245,6 +1292,7 @@ mod tests {
                 params: vec![Type::new(db, TypeKind::Nat)],
                 result: second_solver_var,
                 effect: EffectRow::pure(db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

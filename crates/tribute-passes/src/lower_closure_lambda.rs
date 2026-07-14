@@ -24,6 +24,9 @@
 
 use std::collections::HashMap;
 
+use tribute_core::{
+    CallableAbi, CallingConvention, get_calling_convention, set_calling_convention,
+};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
@@ -144,9 +147,9 @@ fn lower_single_lambda(
 
     // Determine function return type and effect from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+    let convention = get_calling_convention(ctx, lambda_ref);
     let func_result_ty = extract_return_type_from_closure(ctx, result_ty)
         .expect("closure.lambda result type must be closure.closure<core.func<...>>");
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
     let env_struct_ty = if captures.is_empty() {
@@ -162,6 +165,7 @@ fn lower_single_lambda(
     };
 
     // === Build the lifted function ===
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let func_body_region = build_lifted_body(
         ctx,
         location,
@@ -171,17 +175,36 @@ fn lower_single_lambda(
             capture_types: &capture_types,
             env_struct_ty,
             orig_param_types: &orig_param_types,
+            convention,
             evidence_ty,
             anyref_ty,
         },
     );
 
-    // Function type: (evidence, env, params...) -> result.
-    let mut all_param_tys = vec![evidence_ty, anyref_ty];
-    all_param_tys.extend_from_slice(&orig_param_types);
+    // Source lambdas carry explicit convention metadata. Synthetic legacy
+    // continuations still use the compatibility ABI `(evidence, env, args...)`.
+    let all_param_tys = if let Some(convention) = convention {
+        let source_offset =
+            usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
+        let abi = CallableAbi::new(
+            convention,
+            orig_param_types[source_offset..].iter().copied(),
+            func_result_ty,
+        );
+        abi.interpose_environment(&orig_param_types, anyref_ty)
+    } else {
+        let mut params = Vec::with_capacity(orig_param_types.len() + 2);
+        params.push(ability::evidence_adt_type_ref(ctx));
+        params.push(anyref_ty);
+        params.extend_from_slice(&orig_param_types);
+        params
+    };
     let func_ty = core::func(ctx, func_result_ty, all_param_tys.iter().copied()).as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
+    if let Some(convention) = convention {
+        set_calling_convention(ctx, func_op.op_ref(), convention);
+    }
     ctx.push_op(module_block, func_op.op_ref());
 
     // === Replace closure.lambda at the original site ===
@@ -207,6 +230,9 @@ fn lower_single_lambda(
         core::func(ctx, func_result_ty, orig_param_types.iter().copied()).as_type_ref();
     let closure_ty = closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = closure::new(ctx, location, closure_env, closure_ty, lifted_name);
+    if let Some(convention) = convention {
+        set_calling_convention(ctx, closure_new_op.op_ref(), convention);
+    }
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
 
     // RAUW: lambda result → closure.new result.
@@ -230,6 +256,7 @@ struct LiftBodyParams<'a> {
     capture_types: &'a [TypeRef],
     env_struct_ty: Option<TypeRef>,
     orig_param_types: &'a [TypeRef],
+    convention: Option<CallingConvention>,
     evidence_ty: TypeRef,
     anyref_ty: TypeRef,
 }
@@ -246,6 +273,7 @@ fn build_lifted_body(
     let capture_types = params.capture_types;
     let env_struct_ty = params.env_struct_ty;
     let orig_param_types = params.orig_param_types;
+    let convention = params.convention;
     let evidence_ty = params.evidence_ty;
     let anyref_ty = params.anyref_ty;
     let orig_blocks: Vec<BlockRef> = ctx.region(orig_body).blocks.to_vec();
@@ -254,17 +282,29 @@ fn build_lifted_body(
 
     let mut mapping = IrMapping::new();
 
-    // --- Pass 1: Create new entry block with [evidence, env, params...] ---
+    // --- Pass 1: Create new entry block with the physical closure ABI. ---
     let mut new_entry_args = Vec::new();
-    new_entry_args.push(BlockArgData {
-        ty: evidence_ty,
-        attrs: make_bind_name_attrs("__evidence"),
-    });
+    match convention {
+        Some(convention) if convention.needs_evidence() => {
+            new_entry_args.push(BlockArgData {
+                ty: orig_param_types[0],
+                attrs: ctx.block(orig_entry).args[0].attrs.clone(),
+            });
+        }
+        None => {
+            new_entry_args.push(BlockArgData {
+                ty: evidence_ty,
+                attrs: make_bind_name_attrs("__evidence"),
+            });
+        }
+        Some(_) => {}
+    }
     new_entry_args.push(BlockArgData {
         ty: anyref_ty,
         attrs: make_bind_name_attrs("__env"),
     });
-    for (i, &param_ty) in orig_param_types.iter().enumerate() {
+    let source_start = usize::from(convention.is_some_and(CallingConvention::needs_evidence));
+    for (i, &param_ty) in orig_param_types.iter().enumerate().skip(source_start) {
         new_entry_args.push(BlockArgData {
             ty: param_ty,
             attrs: ctx.block(orig_entry).args[i].attrs.clone(),
@@ -280,15 +320,21 @@ fn build_lifted_body(
 
     mapping.map_block(orig_entry, new_entry);
 
-    // Map old param args → new param args (shifted by 2 for evidence + env).
+    // Map logical closure args around the inserted environment parameter.
     for i in 0..orig_param_count {
         let old_arg = ctx.block_arg(orig_entry, i as u32);
-        let new_arg = ctx.block_arg(new_entry, (i + 2) as u32);
+        let new_index = match convention {
+            Some(convention) if convention.needs_evidence() && i == 0 => 0,
+            Some(_) => i + 1,
+            None => i + 2,
+        };
+        let new_arg = ctx.block_arg(new_entry, new_index as u32);
         mapping.map_value(old_arg, new_arg);
     }
 
     // Insert env extraction ops at the start of the new entry block.
-    let raw_env_val = ctx.block_arg(new_entry, 1);
+    let env_index = u32::from(convention.is_none_or(CallingConvention::needs_evidence));
+    let raw_env_val = ctx.block_arg(new_entry, env_index);
     if let Some(env_ty) = env_struct_ty {
         let cast_op = adt::ref_cast(ctx, location, raw_env_val, env_ty, env_ty);
         ctx.push_op(new_entry, cast_op.op_ref());
@@ -538,6 +584,7 @@ mod tests {
             closure_ty,
             lambda_body_region,
         );
+        set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
 
         // Wrap in a func.func
         let outer_entry = ctx.create_block(BlockData {
@@ -592,11 +639,11 @@ mod tests {
             Symbol::from_dynamic("test_fn::__clam_0")
         );
 
-        // Lifted function should have 3 params: evidence, env, x
+        // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);
         let lifted_ty_data = ctx.types.get(lifted_ty);
         // params[0] = return, params[1..] = param types
-        assert_eq!(lifted_ty_data.params.len(), 4); // return + evidence + env + x
+        assert_eq!(lifted_ty_data.params.len(), 3); // return + env + x
     }
 
     #[test]
@@ -657,6 +704,7 @@ mod tests {
 
         // closure.lambda [%a] { ... }
         let lambda_op = closure::lambda(&mut ctx, loc, vec![a_val], closure_ty, lambda_body_region);
+        set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
         ctx.push_op(outer_entry, lambda_op.op_ref());
 
         let outer_body = ctx.create_region(RegionData {

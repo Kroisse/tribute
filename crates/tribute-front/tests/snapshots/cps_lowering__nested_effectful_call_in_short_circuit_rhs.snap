@@ -6,19 +6,19 @@ core.module @test {
   !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
   !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
-  func.func @read(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @read(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Flag}, op_name = @get} : tribute_rt.anyref
       func.return %2
   }
   func.func @"test::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @run(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @run(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = arith.const {value = false} : core.i1
       %3 = scf.if %2 : core.i1 {
           %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
           %5 = closure.new %4 {func_ref = @"test::__lambda_0"} : !t1
-          %6 = func.call %0, %5 {callee = @read} : tribute_rt.anyref
+          %6 = func.call %0, %5 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
           %7 = core.unrealized_conversion_cast %6 : core.i1
           scf.yield %7
       } {
@@ -30,7 +30,7 @@ core.module @test {
       %11 = func.call_indirect %10, %9 : tribute_rt.anyref
       func.return %11
   }
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }

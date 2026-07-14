@@ -48,6 +48,7 @@
 //! let typed: TypedModule<'db> = typecheck_module(db, resolved);
 //! ```
 
+mod calling_convention;
 mod decl;
 mod expr;
 pub mod lookup;
@@ -60,6 +61,7 @@ mod span_map;
 mod types;
 
 // Re-export core types
+pub use calling_convention::*;
 pub use decl::*;
 pub use expr::*;
 pub use node_id::*;

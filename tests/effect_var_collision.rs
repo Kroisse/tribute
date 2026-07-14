@@ -93,7 +93,7 @@ fn main() { }
 /// might get incorrectly typed as effectful, causing this to fail.
 ///
 /// This is the KEY test for the bug:
-/// - `apply_pure` requires `fn(Int) ->{} Int` (pure function)
+/// - `apply_pure` requires `fn(Int) ->{} Int` (explicit pure function)
 /// - `effectful_using_pure` is `->{State(Int)}`
 /// - The lambda `fn(x: Int) { x * 2 }` inside should be inferred as pure
 /// - If EffectVar { id: 0 } collision occurs, the lambda might get typed as effectful

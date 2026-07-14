@@ -1,6 +1,5 @@
 ---
 source: tests/active_pipeline_goldens.rs
-assertion_line: 253
 expression: ir_text
 ---
 core.module @float_comparisons {
@@ -8,7 +7,6 @@ core.module @float_comparisons {
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
-  !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref))
   !t2 = core.func(tribute_rt.anyref, tribute_rt.anyref)
   !"Result$T3$T4" = adt.enum() {name = @"Result$T3$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T6$T5" = adt.enum() {name = @"Result$T6$T5", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
@@ -16,6 +14,7 @@ core.module @float_comparisons {
   !__tuple_i1_i1_i1_i1_i1_i1 = adt.struct() {fields = [[@0, core.i1], [@1, core.i1], [@2, core.i1], [@3, core.i1], [@4, core.i1], [@5, core.i1]], name = @__tuple_i1_i1_i1_i1_i1_i1}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
+  !t1 = closure.closure(core.func(tribute_rt.anyref, !t0, closure.closure(!t2), tribute_rt.anyref))
   !"Result$T4$T3" = adt.enum() {name = @"Result$T4$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T1" = adt.enum() {name = @"Option$T1", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"Option$T3" = adt.enum() {name = @"Option$T3", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
@@ -33,7 +32,7 @@ core.module @float_comparisons {
       func.unreachable
   }
 
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 1.0} : core.f64
       %1 = arith.const {value = 2.0} : core.f64
       %2 = arith.cmpf %0, %1 {predicate = @oeq} : core.i1

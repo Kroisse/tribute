@@ -6,7 +6,7 @@ core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
   !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
 
-  func.func @read_log(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @read_log(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Log}, op_name = @value} : tribute_rt.anyref
       func.return %2
   }
@@ -19,7 +19,7 @@ core.module @test {
   func.func @"test::__lambda_2"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref {
           %4 = ability.perform %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           func.return %4
@@ -32,10 +32,10 @@ core.module @test {
           %13 = scf.if %12 : tribute_rt.anyref {
               %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
               %15 = closure.new %14 {func_ref = @"test::__lambda_2"} : !t0
-              %16 = func.call %0, %15 {callee = @read_log} : tribute_rt.anyref
-              %17 = arith.const {value = 1} : core.i32
-              %18 = core.unrealized_conversion_cast %16 : core.i32
-              %19 = func.call %18, %17 {callee = @"Int::+"} : core.i32
+              %16 = func.call %0, %15 {callee = @read_log, tribute.calling_convention = 2} : tribute_rt.anyref
+              %17 = core.unrealized_conversion_cast %16 : core.i32
+              %18 = arith.const {value = 1} : core.i32
+              %19 = func.call %17, %18 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
               %20 = core.unrealized_conversion_cast %19 : tribute_rt.anyref
               %21 = core.unrealized_conversion_cast %9 : !t0
               %22 = func.call_indirect %21, %20 : tribute_rt.anyref
@@ -55,10 +55,10 @@ core.module @test {
             ^bb7(%26: tribute_rt.anyref, %27: tribute_rt.anyref):
               %28 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
               %29 = closure.new %28 {func_ref = @"test::__lambda_1"} : !t0
-              %30 = func.call %0, %29 {callee = @read_log} : tribute_rt.anyref
-              %31 = arith.const {value = 1} : core.i32
-              %32 = core.unrealized_conversion_cast %30 : core.i32
-              %33 = func.call %32, %31 {callee = @"Int::+"} : core.i32
+              %30 = func.call %0, %29 {callee = @read_log, tribute.calling_convention = 2} : tribute_rt.anyref
+              %31 = core.unrealized_conversion_cast %30 : core.i32
+              %32 = arith.const {value = 1} : core.i32
+              %33 = func.call %31, %32 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
               %34 = core.unrealized_conversion_cast %33 : tribute_rt.anyref
               %35 = core.unrealized_conversion_cast %26 : !t0
               %36 = func.call_indirect %35, %34 : tribute_rt.anyref
@@ -69,7 +69,7 @@ core.module @test {
       %38 = func.call_indirect %37, %24 : tribute_rt.anyref
       func.return %38
   }
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }

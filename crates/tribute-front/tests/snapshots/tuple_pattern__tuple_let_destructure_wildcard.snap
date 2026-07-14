@@ -5,7 +5,7 @@ expression: ir_text
 core.module @test {
   !__tuple_i32_i32_i32 = adt.struct() {fields = [[@0, core.i32], [@1, core.i32], [@2, core.i32]], name = @__tuple_i32_i32_i32}
 
-  func.func @test() -> core.i32 {
+  func.func @test() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = arith.const {value = 3} : core.i32
@@ -13,7 +13,7 @@ core.module @test {
       %4 = adt.struct_get %3 {field = 0, type = !__tuple_i32_i32_i32} : core.i32
       %5 = adt.struct_get %3 {field = 1, type = !__tuple_i32_i32_i32} : core.i32
       %6 = adt.struct_get %3 {field = 2, type = !__tuple_i32_i32_i32} : core.i32
-      %7 = func.call %4, %6 {callee = @"Nat::+"} : core.i32
+      %7 = func.call %4, %6 {callee = @"Nat::+", tribute.calling_convention = 0} : core.i32
       func.return %7
   }
 }

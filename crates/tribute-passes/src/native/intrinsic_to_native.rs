@@ -26,7 +26,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 /// Also removes `func.func` declarations for bytes intrinsics.
 pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     let intrinsic_names: Rc<HashSet<Symbol>> =
-        Rc::new([Symbol::from_dynamic("__bytes_get_or_panic")].into());
+        Rc::new([Symbol::new("__bytes_get_or_panic")].into());
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
     applicator =
@@ -93,7 +93,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
-        if call_op.callee(ctx) != Symbol::from_dynamic("__bytes_get_or_panic") {
+        if call_op.callee(ctx) != "__bytes_get_or_panic" {
             return false;
         }
 

@@ -6,6 +6,13 @@
 WasmGC yield bubbling, `YieldResult` 중심 trampoline, `cont.*` dialect 직접
 lowering은 현재 경로가 아니다.
 
+논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 `done_k`의
+인자로 전달되고 함수와 continuation의 control result는 `Never`다. 아래 예시의
+`anyref` result와 `func.return %result`는 현재 구현이 true tail call 대신
+continuation chain의 결과를 되돌려 보내기 위해 사용하는 compatibility carrier다.
+향후 control lowering은 이를 true tail call의 `Never` 또는 trampoline의 `Step`으로
+대체할 수 있다.
+
 ## 핵심 설계
 
 ### `fn` operation: direct dispatch
@@ -208,7 +215,7 @@ ast_to_ir
 ```
 
 `ast_to_ir` 단계에서 effectful function과 closure는 evidence parameter와
-CPS calling convention을 반영한 IR로 생성된다. Shared lowering removes
+현재 compatibility CPS representation을 반영한 IR로 생성된다. Shared lowering removes
 high-level dispatch operations and emits `effect.*` ABI operations. Backends
 then lower `effect.*` into evidence runtime calls, closure decomposition, and
 target-specific indirect calls.

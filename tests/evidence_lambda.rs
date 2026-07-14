@@ -45,6 +45,191 @@ fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String,
     results
 }
 
+/// Return `(source parameter count, has evidence, has done_k, returns anyref)`.
+fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool, bool, bool) {
+    let func_op = module
+        .ops(ctx)
+        .into_iter()
+        .find_map(|op| {
+            let func_op = func::Func::from_op(ctx, op).ok()?;
+            (func_op.sym_name(ctx) == target).then_some(func_op)
+        })
+        .unwrap_or_else(|| panic!("missing function '{target}'"));
+    let func_ty = func_op.r#type(ctx);
+    let data = ctx.types.get(func_ty);
+    let params = &data.params[1..];
+    let has_evidence = params
+        .first()
+        .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
+    let hidden_count = usize::from(has_evidence)
+        + usize::from(
+            has_evidence
+                && params.get(1).is_some_and(|ty| {
+                    let ty = ctx.types.get(*ty);
+                    ty.dialect == trunk_ir::Symbol::new("tribute_rt")
+                        && ty.name == trunk_ir::Symbol::new("anyref")
+                }),
+        );
+    let has_done_k = hidden_count == 2;
+    let result = ctx.types.get(data.params[0]);
+    let returns_anyref = result.dialect == trunk_ir::Symbol::new("tribute_rt")
+        && result.name == trunk_ir::Symbol::new("anyref");
+    (
+        params.len() - hidden_count,
+        has_evidence,
+        has_done_k,
+        returns_anyref,
+    )
+}
+
+fn function_param_names(ctx: &IrContext, module: &Module, target: &str) -> Vec<String> {
+    let func_op = module
+        .ops(ctx)
+        .into_iter()
+        .find_map(|op| {
+            let func_op = func::Func::from_op(ctx, op).ok()?;
+            (func_op.sym_name(ctx) == target).then_some(func_op)
+        })
+        .unwrap_or_else(|| panic!("missing function '{target}'"));
+    let entry = ctx.region(func_op.body(ctx)).blocks[0];
+    ctx.block(entry)
+        .args
+        .iter()
+        .map(
+            |arg| match arg.attrs.get(&trunk_ir::Symbol::new("bind_name")) {
+                Some(trunk_ir::Attribute::Symbol(name)) => name.to_string(),
+                _ => "_".to_owned(),
+            },
+        )
+        .collect()
+}
+
+#[test]
+fn test_toplevel_calling_conventions_follow_ability_upper_bound() {
+    let code = r#"
+ability Logger {
+    fn log(message: String) -> Nil
+}
+
+ability State {
+    op get() -> Int
+}
+
+fn direct() -> Int { +1 }
+
+fn explicit_pure() ->{} Int { +1 }
+
+fn evidence_direct() ->{Logger} Int { +2 }
+
+fn inferred_evidence_direct() {
+    Logger::log("inferred")
+}
+
+fn call_evidence_direct() ->{Logger} Int {
+    evidence_direct()
+}
+
+fn cps() ->{State} Int {
+    State::get()
+}
+
+fn inferred_cps() -> Int {
+    State::get()
+}
+
+fn main() { }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let (ctx, module) = compile_to_ir(db, code, "calling_conventions.trb");
+
+        assert_eq!(
+            function_abi(&ctx, &module, "direct"),
+            (0, false, false, false)
+        );
+        assert_eq!(
+            function_abi(&ctx, &module, "evidence_direct"),
+            (0, true, false, false)
+        );
+        assert_eq!(
+            function_abi(&ctx, &module, "explicit_pure"),
+            (0, false, false, false)
+        );
+        assert_eq!(
+            function_abi(&ctx, &module, "call_evidence_direct"),
+            (0, true, false, false)
+        );
+        assert_eq!(
+            function_abi(&ctx, &module, "inferred_evidence_direct"),
+            (0, true, false, false)
+        );
+        assert_eq!(function_abi(&ctx, &module, "cps"), (0, true, true, true));
+        assert_eq!(
+            function_abi(&ctx, &module, "inferred_cps"),
+            (0, true, true, true)
+        );
+    });
+}
+
+#[test]
+fn test_lifted_closure_physical_abi_interposes_environment() {
+    let code = r#"
+ability Logger {
+    fn log(message: String) -> Nil
+}
+
+ability State {
+    op get() -> Int
+}
+
+fn call_direct(f: fn(Int) ->{} Int) -> Int {
+    f(+1)
+}
+
+fn call_logger(f: fn(Int) ->{Logger} Int) ->{Logger} Int {
+    f(+1)
+}
+
+fn call_state(f: fn() ->{State} Int) ->{State} Int {
+    f()
+}
+
+fn direct_closure() -> Int {
+    call_direct(fn(x: Int) { x })
+}
+
+fn evidence_direct_closure() ->{Logger} Int {
+    call_logger(fn(x: Int) {
+        Logger::log("called")
+        x
+    })
+}
+
+fn cps_closure() ->{State} Int {
+    call_state(fn() { State::get() })
+}
+
+fn main() { }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let (ctx, module) = compile_to_ir(db, code, "closure_calling_conventions.trb");
+
+        assert_eq!(
+            function_param_names(&ctx, &module, "direct_closure::__clam_0"),
+            ["__env", "x"]
+        );
+        assert_eq!(
+            function_param_names(&ctx, &module, "evidence_direct_closure::__clam_0"),
+            ["__evidence", "__env", "x"]
+        );
+        assert_eq!(
+            function_param_names(&ctx, &module, "cps_closure::__clam_0"),
+            ["__evidence", "__env", "__done_k"]
+        );
+    });
+}
+
 // ========================================================================
 // Pure Lambda Tests
 // ========================================================================

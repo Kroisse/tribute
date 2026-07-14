@@ -116,10 +116,11 @@ impl<'db> TypeChecker<'db> {
                     || EffectVar { id: 0 }, // Placeholder, will be replaced during function check
                 )
             }
-            None => EffectRow::pure(self.db()),
+            // Omitting the annotation is effect-polymorphic (`->{e}`), not
+            // an assertion that the row is closed and empty.
+            None => EffectRow::open(self.db(), EffectVar { id: 0 }),
         };
 
-        // Create function type
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         // Build type params from the collected BoundVars

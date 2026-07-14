@@ -37,7 +37,7 @@ fn fold(xs: List(a), init: b, f: fn(b, a) ->{e} b) ->{e} b
 ### 순수 함수 (Ability 없음)
 
 ```rust
-fn(a) ->{} b    // 빈 ability 집합 = 순수 함수
+fn(a) ->{} b    // 빈 ability 집합을 명시한 pure 함수
 ```
 
 순수 함수가 필요한 경우 명시적으로 `{}`를 표기한다:
@@ -483,7 +483,7 @@ fn main() ->{Io} Nil {
 | 문법 | 의미 |
 | ---- | ---- |
 | `fn(a) -> b` | `fn(a) ->{e} b` (fresh e) |
-| `fn(a) ->{} b` | 순수 함수 타입 |
+| `fn(a) ->{} b` | 빈 effect row를 명시한 pure 함수 타입 |
 | `fn(a) ->{E} b` | ability E를 수행하는 함수 타입 |
 | `fn(a) ->{e, E} b` | ability E + 나머지 e |
 | `Nil` | Unit 타입/값 |

@@ -186,6 +186,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                minimum_convention,
             } => {
                 let params = params
                     .iter()
@@ -202,6 +203,7 @@ impl<'db> TypeSubst<'db> {
                         params,
                         result,
                         effect,
+                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -364,6 +366,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
                 for p in params {
                     self.collect_unresolved_univars(db, *p, row_subst, out);
@@ -455,6 +458,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                minimum_convention,
             } => {
                 let new_params: Vec<_> = params
                     .iter()
@@ -472,6 +476,7 @@ impl<'db> TypeSubst<'db> {
                         params: new_params,
                         result: new_result,
                         effect: new_effect,
+                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -773,11 +778,13 @@ impl<'db> TypeSolver<'db> {
                     params: ref p1,
                     result: r1,
                     effect: e1,
+                    ..
                 },
                 &TypeKind::Func {
                     params: ref p2,
                     result: r2,
                     effect: e2,
+                    ..
                 },
             ) => {
                 if p1.len() != p2.len() {
@@ -875,13 +882,11 @@ impl<'db> TypeSolver<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
                 params.iter().any(|p| self.occurs_in(var, *p))
                     || self.occurs_in(var, *result)
-                    || effect
-                        .effects(self.db)
-                        .iter()
-                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
+                    || self.occurs_in_effect_row(var, *effect)
             }
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
             TypeKind::App { ctor, args } => {
@@ -894,13 +899,19 @@ impl<'db> TypeSolver<'db> {
             } => {
                 self.occurs_in(var, *arg)
                     || self.occurs_in(var, *result)
-                    || effect
-                        .effects(self.db)
-                        .iter()
-                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
+                    || self.occurs_in_effect_row(var, *effect)
             }
             _ => false,
         }
+    }
+
+    /// Check a substituted effect row's type arguments for a type variable.
+    fn occurs_in_effect_row(&self, var: UniVarId<'db>, effect: EffectRow<'db>) -> bool {
+        self.row_subst
+            .apply(self.db, effect)
+            .effects(self.db)
+            .iter()
+            .any(|effect| effect.args.iter().any(|arg| self.occurs_in(var, *arg)))
     }
 
     /// Check if a row variable occurs in an effect row (for row occurs check).
@@ -932,27 +943,11 @@ impl<'db> TypeSolver<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
-                let row = self.row_subst.apply(self.db, *effect);
-                if row.rest(self.db) == Some(var) {
-                    return true;
-                }
-                // Recursively check effect args
-                for e in row.effects(self.db) {
-                    for arg in &e.args {
-                        if self.row_occurs_in_type(var, *arg) {
-                            return true;
-                        }
-                    }
-                }
-                // Recursively check params and result
-                if params.iter().any(|p| self.row_occurs_in_type(var, *p)) {
-                    return true;
-                }
-                if self.row_occurs_in_type(var, *result) {
-                    return true;
-                }
-                false
+                self.row_occurs_in(var, *effect)
+                    || params.iter().any(|p| self.row_occurs_in_type(var, *p))
+                    || self.row_occurs_in_type(var, *result)
             }
             TypeKind::Named { args, .. } => args.iter().any(|a| self.row_occurs_in_type(var, *a)),
             TypeKind::Tuple(elems) => elems.iter().any(|e| self.row_occurs_in_type(var, *e)),
@@ -1505,6 +1500,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1513,6 +1509,50 @@ mod tests {
             matches!(result, Err(SolveError::OccursCheck { .. })),
             "Expected occurs check failure for ?a = fn() ->{{State(?a)}} Int"
         );
+    }
+
+    #[test]
+    fn test_occurs_check_applies_effect_row_substitution() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = fresh_var(&db, 0);
+        let TypeKind::UniVar { id: var_id } = var_ty.kind(&db) else {
+            unreachable!("fresh_var must create a UniVar")
+        };
+        let row_var = EffectVar { id: 7 };
+        let substituted = EffectRow::new(
+            &db,
+            vec![Effect {
+                ability_id: test_ability_id(&db, "State"),
+                args: vec![var_ty],
+            }],
+            None,
+        );
+        solver.row_subst.insert(row_var.id, substituted);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let effect = EffectRow::open(&db, row_var);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        let continuation_ty = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: int_ty,
+                effect,
+            },
+        );
+
+        assert!(solver.occurs_in(*var_id, func_ty));
+        assert!(solver.occurs_in(*var_id, continuation_ty));
     }
 
     #[test]
@@ -1541,6 +1581,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1620,6 +1661,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let func2 = Type::new(
@@ -1628,6 +1670,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1650,6 +1693,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1662,6 +1706,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: poly_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1936,6 +1981,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect: poly_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1947,6 +1993,7 @@ mod tests {
             params,
             result,
             effect,
+            ..
         } = result.kind(&db)
         {
             assert_eq!(params.len(), 1);
@@ -1987,6 +2034,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2031,6 +2079,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2096,6 +2145,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2134,6 +2184,7 @@ mod tests {
                 params: vec![var_a],
                 result: var_b,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2178,6 +2229,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2621,6 +2673,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let func2 = Type::new(
@@ -2629,6 +2682,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(solver.types_unifiable(func1, func2));
@@ -2640,6 +2694,7 @@ mod tests {
                 params: vec![bool_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(!solver.types_unifiable(func1, func3));
@@ -2651,6 +2706,7 @@ mod tests {
                 params: vec![int_ty],
                 result: bool_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(!solver.types_unifiable(func1, func4));
@@ -2663,6 +2719,7 @@ mod tests {
                 params: vec![var_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(solver.types_unifiable(func1, func_with_var));
@@ -2760,6 +2817,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect: inner_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let outer_effect = EffectRow::new(&db, vec![], None);
@@ -2769,6 +2827,7 @@ mod tests {
                 params: vec![inner_func],
                 result: int_ty,
                 effect: outer_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2795,6 +2854,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect: inner_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let outer_effect = EffectRow::new(&db, vec![], None);
@@ -2804,6 +2864,7 @@ mod tests {
                 params: vec![],
                 result: inner_func,
                 effect: outer_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2831,6 +2892,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

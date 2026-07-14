@@ -431,6 +431,43 @@ mod tests {
     }
 
     #[test]
+    fn omitted_effect_annotation_is_open_but_explicit_empty_is_closed() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"
+fn omitted() { Nil }
+fn explicit() ->{} Nil { Nil }
+"#,
+        );
+
+        let schemes = function_schemes(&db, source).expect("type checking should succeed");
+        let effect_of = |name: &str| {
+            let (_, scheme) = schemes
+                .iter()
+                .find(|(symbol, _)| *symbol == name)
+                .expect("function scheme should exist");
+            let crate::ast::TypeKind::Func {
+                effect,
+                minimum_convention,
+                ..
+            } = scheme.body(&db).kind(&db)
+            else {
+                panic!("expected function type");
+            };
+            (*effect, *minimum_convention)
+        };
+
+        let (omitted, omitted_minimum) = effect_of("omitted");
+        assert!(omitted.rest(&db).is_some());
+        assert_eq!(omitted_minimum, crate::ast::CallingConvention::Direct);
+
+        let (explicit, explicit_minimum) = effect_of("explicit");
+        assert!(explicit.is_pure(&db));
+        assert_eq!(explicit_minimum, crate::ast::CallingConvention::Direct);
+    }
+
+    #[test]
     fn test_type_check_output_has_both_fields() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() { 42 }");
@@ -449,13 +486,28 @@ mod tests {
 
     /// Recursively check if a type contains any unresolved UniVar.
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
+        fn effect_contains_univar(
+            db: &dyn salsa::Database,
+            effect: crate::ast::EffectRow<'_>,
+        ) -> bool {
+            effect
+                .effects(db)
+                .iter()
+                .any(|effect| effect.args.iter().any(|arg| contains_univar(db, *arg)))
+        }
+
         match ty.kind(db) {
             crate::ast::TypeKind::UniVar { .. } => true,
             crate::ast::TypeKind::Func {
                 params,
                 result,
-                effect: _,
-            } => params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result),
+                effect,
+                ..
+            } => {
+                params.iter().any(|p| contains_univar(db, *p))
+                    || contains_univar(db, *result)
+                    || effect_contains_univar(db, *effect)
+            }
             crate::ast::TypeKind::Named { args, .. } => {
                 args.iter().any(|a| contains_univar(db, *a))
             }
@@ -463,8 +515,53 @@ mod tests {
             crate::ast::TypeKind::App { ctor, args } => {
                 contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
             }
+            crate::ast::TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                contains_univar(db, *arg)
+                    || contains_univar(db, *result)
+                    || effect_contains_univar(db, *effect)
+            }
             _ => false,
         }
+    }
+
+    #[test]
+    fn contains_univar_checks_effect_arguments() {
+        let db = salsa::DatabaseImpl::default();
+        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        let var = crate::ast::Type::new(&db, crate::ast::TypeKind::UniVar { id });
+        let effect = crate::ast::EffectRow::new(
+            &db,
+            vec![crate::ast::Effect {
+                ability_id: crate::ast::AbilityId::new(&db, Symbol::new("State")),
+                args: vec![var],
+            }],
+            None,
+        );
+        let ty = crate::ast::Type::new(
+            &db,
+            crate::ast::TypeKind::Func {
+                params: vec![],
+                result: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                effect,
+                minimum_convention: crate::ast::CallingConvention::Cps,
+            },
+        );
+
+        assert!(contains_univar(&db, ty));
+
+        let continuation = crate::ast::Type::new(
+            &db,
+            crate::ast::TypeKind::Continuation {
+                arg: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                result: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                effect,
+            },
+        );
+        assert!(contains_univar(&db, continuation));
     }
 
     #[test]
