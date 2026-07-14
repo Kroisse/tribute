@@ -163,19 +163,59 @@ impl<'db> CtorId<'db> {
     }
 }
 
+/// Compiler-owned abilities with semantics that source declarations cannot request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum BuiltinAbility {
+    Io,
+}
+
+/// The origin of an ability identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum AbilityOrigin {
+    Source,
+    Builtin(BuiltinAbility),
+}
+
 /// A unique identifier for an ability definition.
 ///
-/// AbilityId identifies an ability (effect) definition with its module path.
+/// Source and compiler-owned builtin abilities remain distinct even when their
+/// display paths are the same.
 ///
-/// AbilityId is interned (not tracked) so that the same qualified name
-/// always produces the same AbilityId, regardless of where it's created.
+/// AbilityId is interned (not tracked) so that the same origin and qualified
+/// name always produce the same AbilityId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct AbilityId<'db> {
+    pub origin: AbilityOrigin,
     /// The fully qualified name (e.g., `"std::state::State"`).
     pub qualified: Symbol,
 }
 
 impl<'db> AbilityId<'db> {
+    pub fn source(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
+        Self::new(db, AbilityOrigin::Source, qualified)
+    }
+
+    pub fn builtin_io(db: &'db dyn salsa::Database) -> Self {
+        Self::new(
+            db,
+            AbilityOrigin::Builtin(BuiltinAbility::Io),
+            Symbol::new("std::io::Io"),
+        )
+    }
+
+    /// Resolve a fully-qualified source path through the builtin registry.
+    pub fn from_resolved_path(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
+        if qualified == Symbol::new("std::io::Io") {
+            Self::builtin_io(db)
+        } else {
+            Self::source(db, qualified)
+        }
+    }
+
+    pub fn is_builtin_io(self, db: &'db dyn salsa::Database) -> bool {
+        self.origin(db) == AbilityOrigin::Builtin(BuiltinAbility::Io)
+    }
+
     /// Returns the unqualified ability name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
         self.qualified(db).last_segment()
@@ -358,5 +398,16 @@ mod tests {
                 "LocalIdGen should not produce UNRESOLVED values"
             );
         }
+    }
+
+    #[test]
+    fn builtin_and_source_abilities_with_the_same_path_are_distinct() {
+        let db = salsa::DatabaseImpl::default();
+        let builtin = AbilityId::builtin_io(&db);
+        let source = AbilityId::source(&db, Symbol::new("std::io::Io"));
+
+        assert_ne!(builtin, source);
+        assert!(builtin.is_builtin_io(&db));
+        assert!(!source.is_builtin_io(&db));
     }
 }

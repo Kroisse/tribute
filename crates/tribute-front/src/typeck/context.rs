@@ -150,10 +150,17 @@ pub struct ModuleTypeEnv<'db> {
 impl<'db> ModuleTypeEnv<'db> {
     /// Create a new empty module type environment.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
+        let io = AbilityId::builtin_io(db);
         let mut ability_conventions = HashMap::new();
-        ability_conventions.insert(
-            AbilityId::new(db, Symbol::new("std::io::Io")),
-            CallingConvention::EvidenceDirect,
+        ability_conventions.insert(io, CallingConvention::EvidenceDirect);
+        let mut ability_defs = HashMap::new();
+        ability_defs.insert(
+            io,
+            AbilityInfo {
+                id: io,
+                type_params: vec![],
+                operations: HashMap::new(),
+            },
         );
 
         Self {
@@ -163,7 +170,7 @@ impl<'db> ModuleTypeEnv<'db> {
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
-            ability_defs: HashMap::new(),
+            ability_defs,
             ability_conventions,
             method_index: HashMap::new(),
         }

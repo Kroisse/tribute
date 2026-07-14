@@ -208,12 +208,16 @@ impl<'db> TypeChecker<'db> {
         // the function type's row variable.
         if func.name == "main" {
             let resolved_effect = row_subst.apply(self.db(), body_effect_row);
-            let effects = resolved_effect.effects(self.db());
-            if !effects.is_empty() {
+            let unhandled = resolved_effect
+                .effects(self.db())
+                .iter()
+                .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
+                .collect_vec();
+            if !unhandled.is_empty() {
                 Diagnostic::new(
                     format!(
                         "function 'main' has unhandled effects: {}",
-                        effects.iter().format(", ")
+                        unhandled.iter().format(", ")
                     ),
                     self.get_span(func.id),
                     DiagnosticSeverity::Error,

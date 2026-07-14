@@ -1408,7 +1408,7 @@ mod tests {
 
     /// Create an AbilityId for testing (with empty module path).
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::new(db, Symbol::from_dynamic(name))
+        AbilityId::source(db, Symbol::from_dynamic(name))
     }
 
     /// Create a fresh type variable for testing.

@@ -447,6 +447,73 @@ fn main() { }
 // Edge Cases and Error Detection
 // =============================================================================
 
+#[test]
+fn test_builtin_io_is_allowed_as_main_terminal_effect() {
+    let code = r#"use std::io::Io
+
+fn touch_world() ->{Io} Nil { Nil }
+
+fn main() ->{Io} Nil {
+    touch_world()
+}
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = SourceCst::from_source_str(db, "builtin_io_main.trb", code);
+        let object = common::compile_native_or_panic(db, source);
+        assert!(!object.is_empty(), "native object should not be empty");
+    });
+}
+
+#[test]
+fn test_user_defined_io_is_not_ambient() {
+    let code = r#"ability Io {
+    fn touch() -> Nil
+}
+
+fn touch_world() ->{Io} Nil {
+    Io::touch()
+}
+
+fn main() {
+    touch_world()
+}
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "user_io_main.trb");
+    print_diagnostics(&diagnostics);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.inner.message.contains("unhandled effects")),
+        "a source ability named Io must remain non-ambient: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn test_builtin_io_cannot_be_handled() {
+    let code = r#"use std::io::Io
+
+fn touch_world() ->{Io} Nil { Nil }
+
+fn main() ->{Io} Nil {
+    handle touch_world() {
+        do result { result }
+        fn Io::fake() { Nil }
+    }
+}
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "handle_builtin_io.trb");
+    print_diagnostics(&diagnostics);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.inner.message.contains("cannot be handled")),
+        "handling builtin Io should be rejected: {diagnostics:?}"
+    );
+}
+
 /// Test that unhandled effects in main produce an error.
 /// When main directly calls ability operations without a handler, it should fail.
 #[test]

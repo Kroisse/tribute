@@ -65,8 +65,8 @@ mod tests {
     #[test]
     fn effect_rows_use_ability_level_upper_bounds() {
         let db = salsa::DatabaseImpl::new();
-        let logger = AbilityId::new(&db, Symbol::new("Logger"));
-        let state = AbilityId::new(&db, Symbol::new("State"));
+        let logger = AbilityId::source(&db, Symbol::new("Logger"));
+        let state = AbilityId::source(&db, Symbol::new("State"));
         let mut abilities = HashMap::new();
         abilities.insert(logger, CallingConvention::EvidenceDirect);
         abilities.insert(state, CallingConvention::Cps);
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn open_and_unknown_rows_are_cps() {
         let db = salsa::DatabaseImpl::new();
-        let unknown = AbilityId::new(&db, Symbol::new("Unknown"));
+        let unknown = AbilityId::source(&db, Symbol::new("Unknown"));
         let unknown_row = EffectRow::new(
             &db,
             vec![Effect {

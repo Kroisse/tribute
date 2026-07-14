@@ -64,6 +64,17 @@ fn greet(name: String) ->{Io} Nil {
 Compiler는 이름 문자열만 비교하지 않고 canonical builtin identity
 `std::io::Io`를 등록하여 이 성질을 판정한다.
 
+`Io`의 semantic identity는 source ability identity와 구분되는 compiler-owned
+builtin discriminator를 가진다. Resolver는 `std::io::Io`를 virtual builtin binding으로
+노출하므로 `use std::io::Io`와 qualified effect annotation은 일반 module export처럼
+동작하지만, 사용자 AST에 synthetic `ability` declaration을 삽입하지 않는다. 따라서
+사용자가 선언한 `ability Io {}`는 이름이 같아도 builtin metadata를 얻지 않는다.
+
+이 virtual binding은 아직 file-based module loader를 요구하지 않는다. 이후 기본 I/O
+함수와 오류 타입은 embedded standard-library source로 제공할 수 있지만, `Io`의 ambient
+성질은 source declaration이 아니라 builtin identity에 연결한다. Builtin identity는
+frontend 판정용이며 runtime ability ID나 Evidence marker를 암시하지 않는다.
+
 ## Calling Convention
 
 함수 effect와 호출 규약은 다음 세 단계로 분류한다.

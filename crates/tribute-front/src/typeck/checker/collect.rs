@@ -314,7 +314,7 @@ impl<'db> TypeChecker<'db> {
     /// handler arm type checking.
     fn collect_ability_def(&mut self, a: &AbilityDecl) {
         // Create AbilityId for this ability
-        let ability_id = AbilityId::new(
+        let ability_id = AbilityId::source(
             self.db(),
             crate::qualified_symbol(&mut self.current_prefix().to_owned(), a.name),
         );
