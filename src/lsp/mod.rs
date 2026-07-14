@@ -5,6 +5,7 @@
 //! - Diagnostics: Real-time error and warning reporting
 //! - Go to Definition: Navigate to symbol definitions
 
+mod builtin_index;
 mod completion_index;
 mod definition_index;
 mod pretty;

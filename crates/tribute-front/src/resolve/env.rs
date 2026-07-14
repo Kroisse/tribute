@@ -158,6 +158,11 @@ impl<'db> ModuleEnv<'db> {
         self.imports.get(&name)
     }
 
+    /// Check whether a name is defined locally, excluding imports.
+    pub fn has_definition(&self, name: Symbol) -> bool {
+        self.definitions.contains_key(&name)
+    }
+
     /// Look up a qualified path (e.g., "List::map").
     pub fn lookup_qualified(&self, namespace: Symbol, name: Symbol) -> Option<&Binding<'db>> {
         self.namespaces.get(&namespace)?.get(&name)

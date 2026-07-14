@@ -491,6 +491,33 @@ fn main() {
 }
 
 #[test]
+fn test_user_defined_io_shadows_builtin_import_in_effect_annotation() {
+    let code = r#"use std::io::Io
+
+ability Io {
+    fn touch() -> Nil
+}
+
+fn touch_world() ->{Io} Nil {
+    Io::touch()
+}
+
+fn main() {
+    touch_world()
+}
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "shadowed_builtin_io.trb");
+    print_diagnostics(&diagnostics);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.inner.message.contains("unhandled effects")),
+        "the local Io declaration should shadow the builtin import: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn test_builtin_io_cannot_be_handled() {
     let code = r#"use std::io::Io
 

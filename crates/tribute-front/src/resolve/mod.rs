@@ -36,7 +36,8 @@ pub fn resolve_module<'db>(
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
     // Build the module environment from declarations
-    let env = build_env(db, &module);
+    let mut env = build_env(db, &module);
+    resolve_use_imports(&mut env);
 
     // Create resolver and process the module
     let mut resolver = Resolver::new(db, env, span_map);

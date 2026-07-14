@@ -6,7 +6,7 @@
 use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
-use tribute_front::ast::{Decl, TypeAnnotation, TypeAnnotationKind};
+use tribute_front::ast::{AbilityId, Decl, TypeAnnotation, TypeAnnotationKind};
 use tribute_front::query as ast_query;
 
 // =============================================================================
@@ -125,7 +125,22 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     detail: None,
                 });
             }
-            Decl::Use(_) | Decl::Module(_) => {}
+            Decl::Use(use_decl) => {
+                if let Some(ability) = AbilityId::builtin_from_path(db, &use_decl.path) {
+                    let name = use_decl.alias.unwrap_or_else(|| ability.name(db));
+                    if !items.iter().any(|item| item.name == name) {
+                        items.push(AstCompletionItem {
+                            name,
+                            kind: CompletionKind::Ability,
+                            detail: Some(format!(
+                                "compiler-owned ambient ability ({})",
+                                ability.qualified(db)
+                            )),
+                        });
+                    }
+                }
+            }
+            Decl::Module(_) => {}
         }
     }
 
@@ -460,6 +475,23 @@ mod tests {
             .find(|i| i.name == trunk_ir::Symbol::new("Point"));
         assert!(point_item.is_some());
         assert_eq!(point_item.unwrap().kind, CompletionKind::Struct);
+    }
+
+    #[test]
+    fn test_completion_items_imported_builtin_io() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "use std::io::Io\nfn main() { Nil }");
+
+        let items = completion_items(&db, source);
+        let io = items
+            .iter()
+            .find(|item| item.name == trunk_ir::Symbol::new("Io"))
+            .expect("imported builtin Io should appear in completions");
+        assert_eq!(io.kind, CompletionKind::Ability);
+        assert_eq!(
+            io.detail.as_deref(),
+            Some("compiler-owned ambient ability (std::io::Io)")
+        );
     }
 
     #[test]

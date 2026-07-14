@@ -203,6 +203,12 @@ impl<'db> AbilityId<'db> {
         )
     }
 
+    /// Look up a compiler-owned ability by its source path segments.
+    pub fn builtin_from_path(db: &'db dyn salsa::Database, path: &[Symbol]) -> Option<Self> {
+        (path == [Symbol::new("std"), Symbol::new("io"), Symbol::new("Io")])
+            .then(|| Self::builtin_io(db))
+    }
+
     /// Resolve a fully-qualified source path through the builtin registry.
     pub fn from_resolved_path(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
         if qualified == Symbol::new("std::io::Io") {
