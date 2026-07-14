@@ -186,6 +186,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                minimum_convention,
             } => {
                 let params = params
                     .iter()
@@ -202,6 +203,7 @@ impl<'db> TypeSubst<'db> {
                         params,
                         result,
                         effect,
+                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -364,6 +366,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
                 for p in params {
                     self.collect_unresolved_univars(db, *p, row_subst, out);
@@ -455,6 +458,7 @@ impl<'db> TypeSubst<'db> {
                 params,
                 result,
                 effect,
+                minimum_convention,
             } => {
                 let new_params: Vec<_> = params
                     .iter()
@@ -472,6 +476,7 @@ impl<'db> TypeSubst<'db> {
                         params: new_params,
                         result: new_result,
                         effect: new_effect,
+                        minimum_convention: *minimum_convention,
                     },
                 )
             }
@@ -773,11 +778,13 @@ impl<'db> TypeSolver<'db> {
                     params: ref p1,
                     result: r1,
                     effect: e1,
+                    ..
                 },
                 &TypeKind::Func {
                     params: ref p2,
                     result: r2,
                     effect: e2,
+                    ..
                 },
             ) => {
                 if p1.len() != p2.len() {
@@ -875,6 +882,7 @@ impl<'db> TypeSolver<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
                 params.iter().any(|p| self.occurs_in(var, *p))
                     || self.occurs_in(var, *result)
@@ -932,6 +940,7 @@ impl<'db> TypeSolver<'db> {
                 params,
                 result,
                 effect,
+                ..
             } => {
                 let row = self.row_subst.apply(self.db, *effect);
                 if row.rest(self.db) == Some(var) {
@@ -1505,6 +1514,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1541,6 +1551,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1620,6 +1631,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let func2 = Type::new(
@@ -1628,6 +1640,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1650,6 +1663,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: empty_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1662,6 +1676,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect: poly_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1936,6 +1951,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect: poly_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1947,6 +1963,7 @@ mod tests {
             params,
             result,
             effect,
+            ..
         } = result.kind(&db)
         {
             assert_eq!(params.len(), 1);
@@ -1987,6 +2004,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2031,6 +2049,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2096,6 +2115,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2134,6 +2154,7 @@ mod tests {
                 params: vec![var_a],
                 result: var_b,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2178,6 +2199,7 @@ mod tests {
                 params: vec![var_ty],
                 result: var_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2621,6 +2643,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let func2 = Type::new(
@@ -2629,6 +2652,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(solver.types_unifiable(func1, func2));
@@ -2640,6 +2664,7 @@ mod tests {
                 params: vec![bool_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(!solver.types_unifiable(func1, func3));
@@ -2651,6 +2676,7 @@ mod tests {
                 params: vec![int_ty],
                 result: bool_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(!solver.types_unifiable(func1, func4));
@@ -2663,6 +2689,7 @@ mod tests {
                 params: vec![var_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert!(solver.types_unifiable(func1, func_with_var));
@@ -2760,6 +2787,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect: inner_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let outer_effect = EffectRow::new(&db, vec![], None);
@@ -2769,6 +2797,7 @@ mod tests {
                 params: vec![inner_func],
                 result: int_ty,
                 effect: outer_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2795,6 +2824,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect: inner_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let outer_effect = EffectRow::new(&db, vec![], None);
@@ -2804,6 +2834,7 @@ mod tests {
                 params: vec![],
                 result: inner_func,
                 effect: outer_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2831,6 +2862,7 @@ mod tests {
                 params: vec![],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

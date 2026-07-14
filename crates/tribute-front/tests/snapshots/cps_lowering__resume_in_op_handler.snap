@@ -18,7 +18,7 @@ core.module @test {
   func.func @"test::__lambda_3"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @run() -> core.i32 {
+  func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = closure.lambda() -> tribute_rt.anyref {
           %1 = arith.const {value = 42} : core.i32
           %2 = core.unrealized_conversion_cast %1 : tribute_rt.anyref
@@ -84,7 +84,7 @@ core.module @test {
       %45 = core.unrealized_conversion_cast %26 : core.i32
       func.return %45
   }
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }

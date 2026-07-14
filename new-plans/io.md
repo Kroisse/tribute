@@ -70,12 +70,21 @@ Compiler는 이름 문자열만 비교하지 않고 canonical builtin identity
 
 | Convention | Parameters | Result | Requirement |
 | ---------- | ---------- | ------ | ----------- |
-| `Direct` | source parameters | source result | pure function |
-| `EvidenceDirect` | evidence + source parameters | source result | `Io` 또는 tail-resumptive `fn` effect |
-| `Cps` | evidence + `done_k` + source parameters | `anyref` | general `op`, `Throw`, or another CPS effect |
+| `Direct` | source parameters | source result | pure named worker |
+| `EvidenceDirect` | evidence + source parameters | source result | explicit `->{}`, `Io`, or tail-resumptive `fn` effect |
+| `Cps` | evidence + `done_k` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
 
 규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
 우선한다.
+
+명시적인 빈 effect annotation `->{}`는 effect row 자체는 비어 있지만
+effectful function ABI를 요청한다. 따라서 annotation을 생략해 얻은 pure worker와 달리
+`EvidenceDirect`를 사용한다.
+
+Effect annotation을 생략한 `fn(...) -> T`의 semantic type은
+`fn(...) ->{e} T`다. 열린 row의 간접 호출은 `Cps`지만, 정의에서 concrete residual
+effect가 발견되지 않으면 해당 named definition은 별도의 `Direct` worker를 가질 수
+있다.
 
 `Io`만 요구하는 함수는 현재 `EvidenceDirect`를 사용한다. Evidence는 전달되지만
 `Io` operation을 dispatch하기 위한 handler lookup은 수행하지 않는다. Evidence의
@@ -88,10 +97,12 @@ print_line(ev, message) -> Nil
 main(ev) -> Nil
 ```
 
-`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다.
+`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 논리적
+ABI에서 `done_k`와 함수의 control result는 `Never`이며, 현재 compatibility
+lowering만 이를 `anyref` carrier로 표현한다.
 
 ```text
-read_line(ev, done_k) -> anyref
+read_line(ev, done_k: fn(String) -> Never) -> Never
 ```
 
 ## Entrypoint

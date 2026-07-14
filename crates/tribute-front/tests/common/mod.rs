@@ -98,16 +98,17 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
+    let ability_conventions: std::collections::HashMap<_, _> =
+        result.ability_conventions.into_iter().collect();
     let mut ir = IrContext::new();
-    let module = tribute_front::ast_to_ir::lower_ast_to_ir(
-        db,
-        &mut ir,
-        tdnr_ast,
+    let module = tribute_front::ast_to_ir::TypedModule {
+        ast: tdnr_ast,
         span_map,
-        source.uri(db).as_str(),
-        function_types_map,
-        node_types_map,
-    );
+        function_types: function_types_map,
+        node_types: node_types_map,
+        ability_conventions,
+    }
+    .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     print_module(&ir, module.op())
 }
 

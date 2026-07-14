@@ -46,7 +46,7 @@ core.module @resumptive_op_native {
       func.return %2
   }
 
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = func.call {callee = @__tribute_evidence_empty} : core.ptr
       %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %2 = func.constant {func_ref = @"run_state::__clam_0"} : !t1

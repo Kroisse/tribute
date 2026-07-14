@@ -116,11 +116,20 @@ impl<'db> TypeChecker<'db> {
                     || EffectVar { id: 0 }, // Placeholder, will be replaced during function check
                 )
             }
-            None => EffectRow::pure(self.db()),
+            // Omitting the annotation is effect-polymorphic (`->{e}`), not
+            // an assertion that the row is closed and empty.
+            None => EffectRow::open(self.db(), EffectVar { id: 0 }),
         };
 
         // Create function type
-        let func_ty = self.env.func_type(param_types, return_ty, effect);
+        let minimum_convention = if func.effects.is_some() {
+            crate::ast::CallingConvention::EvidenceDirect
+        } else {
+            crate::ast::CallingConvention::Direct
+        };
+        let func_ty =
+            self.env
+                .func_type_with_convention(param_types, return_ty, effect, minimum_convention);
 
         // Build type params from the collected BoundVars
         let type_params: Vec<TypeParam> = (0..next_bound_var)
@@ -434,7 +443,17 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
                     || EffectVar { id: 0 },
                 );
-                self.env.func_type(param_types, result_ty, effect)
+                let minimum_convention = if abilities.is_empty() {
+                    crate::ast::CallingConvention::EvidenceDirect
+                } else {
+                    crate::ast::CallingConvention::Direct
+                };
+                self.env.func_type_with_convention(
+                    param_types,
+                    result_ty,
+                    effect,
+                    minimum_convention,
+                )
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems
@@ -498,7 +517,17 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
                     || EffectVar { id: 0 },
                 );
-                self.env.func_type(param_types, result_ty, effect)
+                let minimum_convention = if abilities.is_empty() {
+                    crate::ast::CallingConvention::EvidenceDirect
+                } else {
+                    crate::ast::CallingConvention::Direct
+                };
+                self.env.func_type_with_convention(
+                    param_types,
+                    result_ty,
+                    effect,
+                    minimum_convention,
+                )
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems

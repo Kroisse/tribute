@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::set_calling_convention;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func, scf};
@@ -24,6 +25,7 @@ use super::{
     IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, qualified_type_name,
     resolve_enum_type_attr,
 };
+use crate::ast::CallingConvention;
 
 /// Lower an expression to arena TrunkIR.
 pub(super) fn lower_expr<'db>(
@@ -137,6 +139,7 @@ pub(super) fn lower_expr<'db>(
                     func_name,
                     &param_ir_types,
                     result_ir_ty,
+                    None,
                 );
                 Some(result)
             }
@@ -149,8 +152,9 @@ pub(super) fn lower_expr<'db>(
                             .map(|t| builder.ctx.convert_type(builder.ir, *t))
                             .collect();
                         let r = builder.ctx.convert_type(builder.ir, *result);
-                        let result =
-                            super::lambda::wrap_func_as_closure(builder, location, *variant, &p, r);
+                        let result = super::lambda::wrap_func_as_closure(
+                            builder, location, *variant, &p, r, None,
+                        );
                         Some(result)
                     }
                     _ => {
@@ -230,7 +234,8 @@ pub(super) fn lower_expr<'db>(
         ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
 
         ExprKind::Call { callee, args } => {
-            let mut arg_values = builder.collect_args(args)?;
+            let arg_exprs = args;
+            let mut arg_values = builder.collect_args(arg_exprs.clone())?;
 
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
@@ -238,34 +243,50 @@ pub(super) fn lower_expr<'db>(
                         let callee_name = id.qualified(builder.db());
 
                         // Insert casts for arguments if we have type scheme information
+                        adapt_named_function_args(
+                            builder,
+                            location,
+                            callee_name,
+                            &arg_exprs,
+                            &mut arg_values,
+                        );
                         cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
-                        // If callee is effectful and we have done_k, pass it as last arg.
-                        // This enables the CPS chain: the callee calls done_k(result)
-                        // instead of returning directly.
-                        let callee_is_effectful = matches!(
-                            typed_ref.ty.kind(builder.db()),
-                            TypeKind::Func { effect, .. } if !effect.is_pure(builder.db())
-                        );
-                        // If callee is effectful, pass done_k as first arg.
-                        // Use existing done_k if available, otherwise create identity.
-                        if callee_is_effectful {
-                            let evidence = super::get_or_create_evidence(builder, location);
-                            let done_k = builder.ctx.done_k.unwrap_or_else(|| {
-                                super::create_identity_done_k(builder, location)
-                            });
-                            let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                            let mut cps_args = vec![evidence, done_k];
-                            cps_args.append(&mut arg_values);
-                            let op =
-                                func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
-                            builder.ir.push_op(builder.block, op.op_ref());
-                            return Some(op.result(builder.ir));
-                        }
-
                         let result_ty = builder.call_result_type(&typed_ref.ty);
-                        let op =
-                            func::call(builder.ir, location, arg_values, result_ty, callee_name);
+                        let convention = builder
+                            .ctx
+                            .function_calling_convention(callee_name)
+                            .unwrap_or_else(|| {
+                                builder
+                                    .ctx
+                                    .calling_convention_for_type(typed_ref.ty)
+                                    .unwrap_or(CallingConvention::Direct)
+                            });
+                        let call_result_ty = match convention {
+                            CallingConvention::Direct => result_ty,
+                            CallingConvention::EvidenceDirect => {
+                                let evidence = super::get_or_create_evidence(builder, location);
+                                arg_values.insert(0, evidence);
+                                result_ty
+                            }
+                            CallingConvention::Cps => {
+                                let evidence = super::get_or_create_evidence(builder, location);
+                                let done_k = builder.ctx.done_k.unwrap_or_else(|| {
+                                    super::create_identity_done_k(builder, location)
+                                });
+                                arg_values.insert(0, done_k);
+                                arg_values.insert(0, evidence);
+                                builder.ctx.anyref_type(builder.ir)
+                            }
+                        };
+                        let op = func::call(
+                            builder.ir,
+                            location,
+                            arg_values,
+                            call_result_ty,
+                            callee_name,
+                        );
+                        set_calling_convention(builder.ir, op.op_ref(), convention);
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
 
@@ -305,6 +326,11 @@ pub(super) fn lower_expr<'db>(
                                     vec![resume_anyref],
                                     anyref_ty,
                                 );
+                                set_calling_convention(
+                                    builder.ir,
+                                    op.op_ref(),
+                                    CallingConvention::Direct,
+                                );
                                 builder.ir.push_op(builder.block, op.op_ref());
                                 let result = op.result(builder.ir);
                                 Some(result)
@@ -337,35 +363,45 @@ pub(super) fn lower_expr<'db>(
                                 }
                             }
 
-                            // All closures use CPS calling convention: always pass done_k
-                            // as the first argument.
-                            let done_k = builder.ctx.done_k.unwrap_or_else(|| {
-                                super::create_identity_done_k(builder, location)
-                            });
-                            let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-                            // Cast callee to CPS closure type so closure_lower extracts
-                            // the correct return type (anyref, not the source-level type).
-                            let mut cps_param_types = vec![anyref_ty]; // done_k
-                            cps_param_types
-                                .extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                            let cps_func_ty =
-                                builder
-                                    .ctx
-                                    .func_type(builder.ir, &cps_param_types, anyref_ty);
-                            let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
-                            let callee_cps =
-                                builder.cast_if_needed(location, callee_val, cps_closure_ty);
-
-                            let mut cps_args = vec![done_k];
-                            cps_args.append(&mut arg_values);
-                            let op = func::call_indirect(
-                                builder.ir, location, callee_cps, cps_args, anyref_ty,
+                            let convention = calling_convention_for_type(builder.ctx, typed_ref.ty);
+                            let expected_ty = builder.call_result_type(&typed_ref.ty);
+                            let call_result_ty = if convention.needs_done_k() {
+                                builder.ctx.anyref_type(builder.ir)
+                            } else {
+                                expected_ty
+                            };
+                            let mut hidden_args = Vec::new();
+                            if convention.needs_evidence() {
+                                hidden_args.push(super::get_or_create_evidence(builder, location));
+                            }
+                            if convention.needs_done_k() {
+                                let done_k = builder.ctx.done_k.unwrap_or_else(|| {
+                                    super::create_identity_done_k(builder, location)
+                                });
+                                hidden_args.push(done_k);
+                            }
+                            hidden_args.append(&mut arg_values);
+                            let closure_param_types: Vec<_> = hidden_args
+                                .iter()
+                                .map(|v| builder.ir.value_ty(*v))
+                                .collect();
+                            let closure_func_ty = builder.ctx.func_type(
+                                builder.ir,
+                                &closure_param_types,
+                                call_result_ty,
                             );
+                            let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+                            let callee = builder.cast_if_needed(location, callee_val, closure_ty);
+                            let op = func::call_indirect(
+                                builder.ir,
+                                location,
+                                callee,
+                                hidden_args,
+                                call_result_ty,
+                            );
+                            set_calling_convention(builder.ir, op.op_ref(), convention);
                             builder.ir.push_op(builder.block, op.op_ref());
                             let result = op.result(builder.ir);
-                            // Cast anyref result back to the expected type
-                            let expected_ty = builder.call_result_type(&typed_ref.ty);
                             let result = builder.cast_if_needed(location, result, expected_ty);
                             Some(result)
                         }
@@ -414,37 +450,56 @@ pub(super) fn lower_expr<'db>(
                 },
                 _ => {
                     // General expression callee -> indirect call
-                    // All closures use CPS calling convention: pass done_k as first arg.
+                    let callee_node_id = callee.id;
                     let callee_val = lower_expr(builder, callee)?;
-                    let done_k = builder
+                    let convention = builder
                         .ctx
-                        .done_k
-                        .unwrap_or_else(|| super::create_identity_done_k(builder, location));
-                    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-                    // Cast callee to CPS closure type
-                    let mut cps_param_types = vec![anyref_ty]; // done_k
-                    cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                    let cps_func_ty =
-                        builder
-                            .ctx
-                            .func_type(builder.ir, &cps_param_types, anyref_ty);
-                    let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
-                    let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
-
-                    let mut cps_args = vec![done_k];
-                    cps_args.append(&mut arg_values);
-                    let op =
-                        func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
-                    builder.ir.push_op(builder.block, op.op_ref());
-                    let result = op.result(builder.ir);
-
-                    // Cast anyref result back to expected type
+                        .get_node_type(callee_node_id)
+                        .copied()
+                        .map(|ty| calling_convention_for_type(builder.ctx, ty))
+                        .unwrap_or(CallingConvention::Cps);
                     let expected_ty = builder
                         .ctx
                         .get_node_type(expr_node_id)
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
-                        .unwrap_or_else(|| anyref_ty);
+                        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
+                    let call_result_ty = if convention.needs_done_k() {
+                        builder.ctx.anyref_type(builder.ir)
+                    } else {
+                        expected_ty
+                    };
+                    let mut hidden_args = Vec::new();
+                    if convention.needs_evidence() {
+                        hidden_args.push(super::get_or_create_evidence(builder, location));
+                    }
+                    if convention.needs_done_k() {
+                        hidden_args.push(
+                            builder.ctx.done_k.unwrap_or_else(|| {
+                                super::create_identity_done_k(builder, location)
+                            }),
+                        );
+                    }
+                    hidden_args.append(&mut arg_values);
+                    let closure_param_types: Vec<_> = hidden_args
+                        .iter()
+                        .map(|v| builder.ir.value_ty(*v))
+                        .collect();
+                    let closure_func_ty =
+                        builder
+                            .ctx
+                            .func_type(builder.ir, &closure_param_types, call_result_ty);
+                    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+                    let callee = builder.cast_if_needed(location, callee_val, closure_ty);
+                    let op = func::call_indirect(
+                        builder.ir,
+                        location,
+                        callee,
+                        hidden_args,
+                        call_result_ty,
+                    );
+                    set_calling_convention(builder.ir, op.op_ref(), convention);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    let result = op.result(builder.ir);
                     let result = builder.cast_if_needed(location, result, expected_ty);
 
                     Some(result)
@@ -619,35 +674,32 @@ pub(super) fn lower_expr<'db>(
                 node_ty.is_some(),
                 "lambda node type should be populated by typeck"
             );
-            let (param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db))) {
+            let (param_ir_types, result_ir_ty, convention) = match node_ty.map(|t| (t, t.kind(db)))
+            {
                 Some((
-                    _,
+                    func_ty,
                     TypeKind::Func {
-                        params: p,
-                        result,
-                        effect,
+                        params: p, result, ..
                     },
                 )) => {
                     let pir: Vec<_> = p
                         .iter()
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
                         .collect();
-                    // Effectful lambdas with concrete abilities use anyref as
-                    // their return type. This ensures the CPS handler chain
-                    // (which passes boxed values) has consistent types.
-                    // Call sites using these closures via func.call_indirect
-                    // will get anyref and must cast to the expected type.
-                    let has_concrete_abilities = !effect.effects(db).is_empty();
-                    let rir = if has_concrete_abilities {
+                    let convention = builder
+                        .ctx
+                        .calling_convention_for_type(func_ty)
+                        .expect("lambda node type must be a function");
+                    let rir = if convention == CallingConvention::Cps {
                         builder.ctx.anyref_type(builder.ir)
                     } else {
                         builder.ctx.convert_type(builder.ir, *result)
                     };
-                    (pir, rir)
+                    (pir, rir, convention)
                 }
                 _ => {
                     let any = builder.ctx.anyref_type(builder.ir);
-                    (vec![any; params.len()], any)
+                    (vec![any; params.len()], any, CallingConvention::Cps)
                 }
             };
             super::lambda::lower_lambda(
@@ -657,6 +709,7 @@ pub(super) fn lower_expr<'db>(
                 &body,
                 &param_ir_types,
                 result_ir_ty,
+                convention,
             )
         }
 
@@ -863,7 +916,7 @@ fn lower_block_cps<'db>(
             return lower_cps_ability_op(builder, stmt, remaining, value).map(|r| (r, true));
         }
 
-        // CPS-transform effectful calls and closure calls when done_k is set.
+        // CPS-transform calls whose selected convention is Cps when done_k is set.
         // Skip in handler arm bodies (cps_handler_mode) — need scf.yield terminator.
         if can_lower_cps_call_in_current_context(builder.ctx) && is_cps_call_stmt(builder.ctx, stmt)
         {
@@ -881,7 +934,7 @@ fn lower_block_cps<'db>(
         return Some((result, true));
     }
 
-    // Check if the value expression is an effectful named function call with done_k.
+    // Check if the value expression is a named Cps function call with done_k.
     // If so, treat it as a CPS call: done_k is passed to the callee, which will
     // call it internally. The caller must NOT call done_k again (is_cps = true).
     // Skip in handler arm context (cps_handler_mode) — result flows to scf.yield.
@@ -889,17 +942,19 @@ fn lower_block_cps<'db>(
         && let ExprKind::Call { callee: c, .. } = &*value.kind
         && let ExprKind::Var(tr) = &*c.kind
         && !matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
-        && is_callee_effectful_by_definition(builder.ctx, tr)
+        && callee_requires_cps_by_definition(builder.ctx, tr)
         && let Some(result) = try_lower_value_effectful_call(builder, value.clone())
     {
         return Some((result, true));
     }
-    // All local closure calls are CPS (closures always have done_k)
+    // Local closure calls only participate in the CPS chain when their row
+    // requires the CPS convention.
     if can_lower_cps_call_in_current_context(builder.ctx)
         && let ExprKind::Call { callee: c, .. } = &*value.kind
         && let ExprKind::Var(tr) = &*c.kind
         && matches!(&tr.resolved, ResolvedRef::Local { .. })
         && !matches!(&tr.ty.kind(builder.db()), TypeKind::Continuation { .. })
+        && calling_convention_for_type(builder.ctx, tr.ty) == CallingConvention::Cps
     {
         let result = lower_expr(builder, value)?;
         return Some((result, true));
@@ -927,6 +982,14 @@ fn can_lower_cps_call_in_current_context(ctx: &super::super::context::IrLowering
     ctx.done_k.is_some() && !ctx.cps_handler_mode
 }
 
+fn calling_convention_for_type<'db>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    ty: crate::ast::Type<'db>,
+) -> CallingConvention {
+    ctx.calling_convention_for_type(ty)
+        .unwrap_or(CallingConvention::Cps)
+}
+
 fn is_cps_call_expr<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
@@ -935,7 +998,10 @@ fn is_cps_call_expr<'db>(
         return false;
     };
     let ExprKind::Var(tr) = &*callee.kind else {
-        return true;
+        return ctx
+            .get_node_type(callee.id)
+            .copied()
+            .is_some_and(|ty| calling_convention_for_type(ctx, ty) == CallingConvention::Cps);
     };
     match &tr.resolved {
         ResolvedRef::AbilityOp {
@@ -943,8 +1009,11 @@ fn is_cps_call_expr<'db>(
             ..
         } => true,
         ResolvedRef::AbilityOp { .. } => false,
-        ResolvedRef::Local { .. } => !matches!(tr.ty.kind(ctx.db), TypeKind::Continuation { .. }),
-        _ => is_callee_effectful_by_definition(ctx, tr),
+        ResolvedRef::Local { .. } => {
+            !matches!(tr.ty.kind(ctx.db), TypeKind::Continuation { .. })
+                && calling_convention_for_type(ctx, tr.ty) == CallingConvention::Cps
+        }
+        _ => callee_requires_cps_by_definition(ctx, tr),
     }
 }
 
@@ -1214,6 +1283,7 @@ fn try_lower_value_effectful_call<'db>(
     cps_args.append(&mut arg_values);
 
     let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
+    set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
     builder.ir.push_op(builder.block, call_op.op_ref());
     let call_result = call_op.result(builder.ir);
 
@@ -1243,17 +1313,11 @@ fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
     )
 }
 
-/// Check if a statement contains a call to an effectful function (non-pure).
-///
-/// This excludes direct ability op calls (handled by `is_direct_ability_op_stmt`)
-/// and targets regular function calls whose type has non-empty effects.
-/// Check if a statement contains a call to a function whose **definition** has effects.
-///
 /// Check if a statement contains a call that needs CPS transformation.
 ///
 /// This includes:
-/// - Effectful function calls (by definition TypeScheme, not call-site type)
-/// - All local closure calls (closures always have CPS calling convention)
+/// - Named functions whose definition selects Cps
+/// - Local and computed closures whose function type selects Cps
 ///
 /// Ability ops are excluded (handled separately by is_direct_ability_op_stmt).
 fn is_cps_call_stmt<'db>(
@@ -1267,30 +1331,20 @@ fn is_cps_call_stmt<'db>(
     is_cps_call_expr(ctx, call_expr) && !is_direct_ability_op_stmt(stmt)
 }
 
-/// Check if a callee is effectful based on its function **definition** (TypeScheme),
-/// not the call-site resolved type.
-fn is_callee_effectful_by_definition<'db>(
+/// Check whether a named callee's definition selects Cps.
+fn callee_requires_cps_by_definition<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     tr: &TypedRef<'db>,
 ) -> bool {
     let callee_name = match &tr.resolved {
         ResolvedRef::Function { id } => id.qualified(ctx.db),
         _ => {
-            // For locals/closures, fall back to call-site type
-            return match tr.ty.kind(ctx.db) {
-                TypeKind::Func { effect, .. } => !effect.is_pure(ctx.db),
-                _ => false,
-            };
+            // For locals/closures, use the call-site function type.
+            return ctx.calling_convention_for_type(tr.ty) == Some(CallingConvention::Cps);
         }
     };
     // Look up the function's TypeScheme (definition type)
-    if let Some(scheme) = ctx.lookup_function_type(callee_name) {
-        let body = scheme.body(ctx.db);
-        if let TypeKind::Func { effect, .. } = body.kind(ctx.db) {
-            return !effect.is_pure(ctx.db);
-        }
-    }
-    false
+    ctx.function_calling_convention(callee_name) == Some(CallingConvention::Cps)
 }
 
 /// Lower a single non-CPS statement (let binding or expression statement).
@@ -1427,7 +1481,7 @@ fn lower_cps_ability_op<'db>(
     Some(perform_op.result(builder.ir))
 }
 
-/// CPS-transform a statement containing an effectful function call.
+/// CPS-transform a statement containing a Cps function call.
 ///
 /// Similar to `lower_cps_ability_op`, but for regular function calls to effectful
 /// functions. Builds a continuation for the remaining computation and passes it
@@ -1487,12 +1541,13 @@ fn lower_cps_call<'db>(
                 // Insert casts for arguments using type scheme information
                 cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
-                // Call effectful function with evidence + continuation as first args
+                // Call the Cps function with evidence + continuation as hidden args.
                 let evidence = super::get_or_create_evidence(builder, location);
                 let mut cps_args = vec![evidence, continuation];
                 cps_args.append(&mut arg_values);
 
                 let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
+                set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
                 builder.ir.push_op(builder.block, call_op.op_ref());
                 Some(call_op.result(builder.ir))
             }
@@ -1512,7 +1567,8 @@ fn lower_cps_call<'db>(
 
                 // Cast callee to CPS closure type so closure_lower extracts
                 // the correct return type (anyref, not the source-level type).
-                let mut cps_param_types = vec![anyref_ty]; // done_k
+                let evidence = super::get_or_create_evidence(builder, location);
+                let mut cps_param_types = vec![builder.ir.value_ty(evidence), anyref_ty];
                 cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
                 let cps_func_ty = builder
                     .ctx
@@ -1521,11 +1577,12 @@ fn lower_cps_call<'db>(
                 let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
                 // Call closure with continuation as first arg (done_k)
-                let mut cps_args = vec![continuation];
+                let mut cps_args = vec![evidence, continuation];
                 cps_args.append(&mut arg_values);
 
                 let call_op =
                     func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+                set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
                 builder.ir.push_op(builder.block, call_op.op_ref());
                 Some(call_op.result(builder.ir))
             }
@@ -1534,7 +1591,8 @@ fn lower_cps_call<'db>(
         callee_kind => {
             let callee = Expr::new(callee_id, callee_kind);
             let callee_val = lower_expr(builder, callee)?;
-            let mut cps_param_types = vec![anyref_ty];
+            let evidence = super::get_or_create_evidence(builder, location);
+            let mut cps_param_types = vec![builder.ir.value_ty(evidence), anyref_ty];
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
             let cps_func_ty = builder
                 .ctx
@@ -1542,10 +1600,11 @@ fn lower_cps_call<'db>(
             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
             let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
-            let mut cps_args = vec![continuation];
+            let mut cps_args = vec![evidence, continuation];
             cps_args.append(&mut arg_values);
             let call_op =
                 func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+            set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
             builder.ir.push_op(builder.block, call_op.op_ref());
             Some(call_op.result(builder.ir))
         }
@@ -1566,6 +1625,66 @@ fn lower_cps_call<'db>(
 ///
 /// Looks up the callee's TypeScheme and inserts `unrealized_conversion_cast`
 /// for any argument whose IR type doesn't match the declared parameter type.
+fn adapt_named_function_args<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    callee_name: Symbol,
+    arg_exprs: &[Expr<TypedRef<'db>>],
+    arg_values: &mut [ValueRef],
+) {
+    let Some(scheme) = builder.ctx.lookup_function_type(callee_name) else {
+        return;
+    };
+    let TypeKind::Func {
+        params: expected_params,
+        ..
+    } = scheme.body(builder.ctx.db).kind(builder.ctx.db)
+    else {
+        return;
+    };
+    let expected_params = expected_params.clone();
+
+    for (i, (arg_expr, expected_ty)) in arg_exprs.iter().zip(expected_params.iter()).enumerate() {
+        let ExprKind::Var(typed_ref) = &*arg_expr.kind else {
+            continue;
+        };
+        let ResolvedRef::Function { id } = &typed_ref.resolved else {
+            continue;
+        };
+        let TypeKind::Func { params, result, .. } = typed_ref.ty.kind(builder.ctx.db) else {
+            continue;
+        };
+        if !matches!(expected_ty.kind(builder.ctx.db), TypeKind::Func { .. }) {
+            continue;
+        }
+        let func_name = id.qualified(builder.ctx.db);
+        let source_convention = builder
+            .ctx
+            .function_calling_convention(func_name)
+            .unwrap_or_default();
+        let target_convention = builder
+            .ctx
+            .calling_convention_for_type(*expected_ty)
+            .expect("expected parameter type must be a function");
+        if source_convention == target_convention {
+            continue;
+        }
+        let param_ir_types: Vec<_> = params
+            .iter()
+            .map(|ty| builder.ctx.convert_type(builder.ir, *ty))
+            .collect();
+        let result_ir_ty = builder.ctx.convert_type(builder.ir, *result);
+        arg_values[i] = super::lambda::wrap_func_as_closure(
+            builder,
+            location,
+            func_name,
+            &param_ir_types,
+            result_ir_ty,
+            Some(target_convention),
+        );
+    }
+}
+
 fn cast_args_from_signature(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,

@@ -211,9 +211,11 @@ fn state_get(ev: Evidence) -> s {
 
 ### Evidence 전달 규칙
 
-1. **순수 함수** (`fn(a) ->{} b`)는 evidence를 전달받지 않는다
+1. **Direct worker**는 evidence를 전달받지 않는다. Effect annotation을 생략한
+   `fn(a) -> b`의 semantic type은 `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete
+   residual effect가 없다면 worker 자체는 Direct일 수 있다
 2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
-3. **CPS 함수**는 evidence와 `done_k`를 받고 `anyref`를 반환한다
+3. **CPS 함수**는 evidence와 `done_k`를 받고 source result를 직접 반환하지 않는다
 4. **Handler 설치** 시 새 evidence를 할당한다
 5. **Handled ability operation** 시 evidence에서 marker를 조회한다
 
@@ -229,6 +231,18 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 구현 세부사항이다.
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
+
+논리적인 CPS ABI에서 함수와 `done_k`의 control result는 `Never`다:
+
+```text
+fn cps(ev: Evidence, done_k: fn(T) -> Never, args...) -> Never
+```
+
+현재 IR은 true tail call이 모든 경로에서 보장되지 않으므로 continuation chain의
+행정적 반환값을 `anyref`로 전달하는 compatibility representation을 사용한다.
+`anyref`는 source result가 아니며 `Cps` convention의 영구적인 의미도 아니다.
+Control lowering이 분리되면 true tail-call backend는 `Never`, trampoline
+backend는 `Step`, 기존 경로는 `anyref` carrier를 선택할 수 있다.
 
 ### 런타임 함수
 
@@ -272,18 +286,36 @@ fn fetch_all(urls: List(Text), ev: Evidence) -> List(Response) {
 ### Effect Row Granularity and Convention Bound
 
 Source effect row는 operation 집합이 아니라 **ability identity의 집합**을
-기록한다. Calling convention은 row에 들어 있는 각 ability가 요구하는 convention의
-상한으로 결정한다.
+기록한다. Semantic function type의 calling convention은 row에 들어 있는 각
+ability가 요구하는 convention의 상한으로 결정한다.
 
 ```text
 requirement({A₁, ..., Aₙ | e})
   = requirement(A₁) ⊔ ... ⊔ requirement(Aₙ) ⊔ requirement(e)
 
-pure/closed empty row       → Direct
+explicit empty row `->{}`  → EvidenceDirect
 fn-only or empty ability    → EvidenceDirect
 ability containing any op  → Cps
 open or otherwise unknown e → Cps
 ```
+
+Effect annotation 생략은 closed-empty 추론이 아니다.
+
+```text
+fn(a) -> b ≡ fn(a) ->{e} b
+```
+
+따라서 이 타입을 통한 **간접 호출**은 열린 `e` 때문에 `Cps`다. 반면 named
+definition의 physical worker convention은 semantic function type과 별도로 기록한다.
+생략된 annotation으로부터 생긴 generalized tail은 worker requirement에 포함하지
+않고, body에서 발견된 concrete residual abilities의 상한만 사용한다. 그러므로
+effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class function
+boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`는
+이 예외를 적용하지 않고 `EvidenceDirect` worker를 요청한다.
+
+여기서 `Cps`는 source result를 직접 반환하지 않고 `done_k`로 전달한다는
+논리적 convention이다. 실제 lowered result carrier는 control-lowering 전략이
+`Never`, `Step`, 또는 compatibility `anyref` 중에서 결정한다.
 
 따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
 분류한다. 이는 안전한 **ability 단위 상한**이다. 다만 CPS 함수 안에서도 개별
@@ -326,16 +358,18 @@ Operation 종류를 source effect row에 기록하는 대안은 채택하지 않
 
 이 비교에 따라 source effect row의 ability 단위 표현은 유지한다. Operation 단위
 정밀도가 실제로 필요해지면 숨은 최적화 메타데이터가 아니라 타입 시스템 기능으로
-별도 설계해야 한다. 열린 row의 보수적인 `Cps`가 성능 문제가 되면 source type을
-바꾸기보다 Koka와 같은 plain/CPS worker 분리나 specialization을 후속 최적화로
-검토한다.
+별도 설계해야 한다. 열린 row의 간접 호출은 보수적인 `Cps`를 유지하되, named
+definition에는 semantic type과 분리된 worker convention을 사용한다. 추가적인
+plain/CPS worker 복제나 specialization은 후속 최적화로 검토한다.
 
 ### 변환 범위
 
 모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
 
 ```text
-순수 코드 (fn(a) ->{} b)            → Direct
+생략 annotation의 semantic type       → open row, indirect call은 Cps
+concrete residual effect 없는 worker  → Direct
+명시적 빈 effect (fn(a) ->{} b)      → EvidenceDirect
 Ambient/fn effect                    → EvidenceDirect
 General op/Throw effect              → Cps, effect point만 continuation 처리
 ```

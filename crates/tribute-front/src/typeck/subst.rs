@@ -76,6 +76,7 @@ pub fn substitute_bound_vars<'db>(
             params,
             result,
             effect,
+            minimum_convention,
         } => {
             let mut new_params = Vec::with_capacity(params.len());
             for param in params {
@@ -95,6 +96,7 @@ pub fn substitute_bound_vars<'db>(
                     params: new_params,
                     result: new_result,
                     effect: new_effect,
+                    minimum_convention: *minimum_convention,
                 },
             ))
         }
@@ -302,6 +304,7 @@ mod tests {
                 params: vec![bound_var],
                 result: bound_var,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -315,6 +318,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert_eq!(result, SubstResult::Ok(expected));

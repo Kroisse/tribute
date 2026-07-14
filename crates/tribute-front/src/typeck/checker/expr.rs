@@ -33,6 +33,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
             params,
             result,
             effect,
+            ..
         } => {
             params.iter().any(|p| type_contains_univar(db, *p))
                 || type_contains_univar(db, *result)
@@ -266,14 +267,20 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Lambda { params, body } => {
                 // Extract expected effect from mode if checking against a function type.
                 // This is crucial for lambdas passed to higher-order functions with effects.
-                let expected_effect = if let Mode::Check(expected_ty) = &mode {
-                    if let TypeKind::Func { effect, .. } = expected_ty.kind(self.db()) {
-                        Some(*effect)
+                let (expected_effect, minimum_convention) = if let Mode::Check(expected_ty) = &mode
+                {
+                    if let TypeKind::Func {
+                        effect,
+                        minimum_convention,
+                        ..
+                    } = expected_ty.kind(self.db())
+                    {
+                        (Some(*effect), *minimum_convention)
                     } else {
-                        None
+                        (None, crate::ast::CallingConvention::Direct)
                     }
                 } else {
-                    None
+                    (None, crate::ast::CallingConvention::Direct)
                 };
 
                 let param_types: Vec<Type<'db>> = params
@@ -338,7 +345,12 @@ impl<'db> TypeChecker<'db> {
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
-                ctx.func_type(param_types, result_ty, lambda_effect)
+                ctx.func_type_with_convention(
+                    param_types,
+                    result_ty,
+                    lambda_effect,
+                    minimum_convention,
+                )
             }
             ExprKind::Handle { body, handlers } => {
                 // Handle expression:
@@ -1933,7 +1945,12 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || row_var,
                 );
-                ctx.func_type(param_types, result_ty, effect)
+                let minimum_convention = if abilities.is_empty() {
+                    crate::ast::CallingConvention::EvidenceDirect
+                } else {
+                    crate::ast::CallingConvention::Direct
+                };
+                ctx.func_type_with_convention(param_types, result_ty, effect, minimum_convention)
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems
@@ -2339,6 +2356,7 @@ mod tests {
             params,
             result,
             effect,
+            ..
         } = ty.kind(db)
         {
             assert_eq!(params.len(), 1);
@@ -2375,6 +2393,7 @@ mod tests {
             params,
             result,
             effect,
+            ..
         } = ty.kind(db)
         {
             assert_eq!(params.len(), 1);
@@ -2482,6 +2501,7 @@ mod tests {
                 params: vec![bound_var],
                 result: bound_var,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -2495,6 +2515,7 @@ mod tests {
                 params: vec![int_ty],
                 result: int_ty,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         assert_eq!(result, expected);

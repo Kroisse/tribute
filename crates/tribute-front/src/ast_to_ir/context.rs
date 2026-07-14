@@ -15,7 +15,9 @@ use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-use crate::ast::{CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
+use crate::ast::{
+    AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
+};
 
 /// Information about a captured variable.
 #[derive(Clone, Debug)]
@@ -41,6 +43,14 @@ pub struct IrLoweringCtx<'db> {
     scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
+    /// Ability-level calling-convention requirements.
+    ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    /// Physical worker conventions for named function definitions.
+    ///
+    /// These are intentionally separate from semantic function-type
+    /// conventions: an effect-polymorphic pure definition may have a Direct
+    /// worker while its first-class function type requires a CPS adapter.
+    definition_conventions: HashMap<Symbol, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
     module_path: SymbolVec,
     /// Counter for generating unique lambda names.
@@ -87,6 +97,7 @@ impl<'db> IrLoweringCtx<'db> {
         path: PathRef,
         span_map: SpanMap,
         function_types: HashMap<Symbol, TypeScheme<'db>>,
+        ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
         module_path: SymbolVec,
         node_types: HashMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
@@ -96,6 +107,8 @@ impl<'db> IrLoweringCtx<'db> {
             span_map,
             scopes: vec![HashMap::new()],
             function_types,
+            ability_conventions,
+            definition_conventions: HashMap::new(),
             module_path,
             lambda_counter: 0,
             local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
@@ -174,6 +187,41 @@ impl<'db> IrLoweringCtx<'db> {
     /// Look up a function's type scheme by name.
     pub fn lookup_function_type(&self, name: Symbol) -> Option<&TypeScheme<'db>> {
         self.function_types.get(&name)
+    }
+
+    /// Derive a function convention from both its effect row and ABI lower bound.
+    pub(crate) fn calling_convention_for_type(
+        &self,
+        ty: crate::ast::Type<'db>,
+    ) -> Option<CallingConvention> {
+        crate::ast::calling_convention_for_function_type(self.db, ty, &self.ability_conventions)
+    }
+
+    /// Derive a convention from an effect row without a function-level ABI bound.
+    pub(crate) fn calling_convention_for_effect_row(
+        &self,
+        effect: crate::ast::EffectRow<'db>,
+    ) -> CallingConvention {
+        crate::ast::calling_convention_for_effect_row(self.db, effect, &self.ability_conventions)
+    }
+
+    /// Look up a function definition and derive its ABI convention.
+    pub(crate) fn function_calling_convention(&self, name: Symbol) -> Option<CallingConvention> {
+        if let Some(convention) = self.definition_conventions.get(&name) {
+            return Some(*convention);
+        }
+        let scheme = self.lookup_function_type(name)?;
+        let body = scheme.body(self.db);
+        self.calling_convention_for_type(body)
+    }
+
+    /// Register the physical worker convention for a named definition.
+    pub(crate) fn register_definition_convention(
+        &mut self,
+        name: Symbol,
+        convention: CallingConvention,
+    ) {
+        self.definition_conventions.insert(name, convention);
     }
 
     /// Look up a local variable.
@@ -690,6 +738,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );
@@ -709,6 +758,7 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
@@ -737,6 +787,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );
@@ -758,6 +809,7 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
@@ -788,6 +840,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );
@@ -800,6 +853,7 @@ mod tests {
                 params: vec![bound_var],
                 result: bound_var,
                 effect,
+                minimum_convention: CallingConvention::Direct,
             },
         );
         let ir_ty = ctx.convert_type(&mut ir, ty);
@@ -819,6 +873,7 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
@@ -858,6 +913,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             ft,
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );

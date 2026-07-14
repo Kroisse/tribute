@@ -1,10 +1,9 @@
 ---
 source: crates/tribute-front/tests/expr_coverage.rs
-assertion_line: 127
 expression: ir_text
 ---
 core.module @test {
-  func.func @nothing() -> core.nil {
+  func.func @nothing() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }

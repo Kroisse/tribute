@@ -181,6 +181,7 @@ impl<'db> TdnrResolver<'db> {
                                 params: vec![self_ty],
                                 result: field_ty,
                                 effect,
+                                minimum_convention: crate::ast::CallingConvention::Direct,
                             },
                         );
 
@@ -237,6 +238,11 @@ impl<'db> TdnrResolver<'db> {
                 params,
                 result,
                 effect,
+                minimum_convention: if func.effects.is_some() {
+                    crate::ast::CallingConvention::EvidenceDirect
+                } else {
+                    crate::ast::CallingConvention::Direct
+                },
             },
         )
     }
@@ -249,7 +255,7 @@ impl<'db> TdnrResolver<'db> {
         use crate::ast::EffectRow;
 
         let Some(anns) = annotations else {
-            return EffectRow::pure(self.db);
+            return EffectRow::open(self.db, crate::ast::EffectVar { id: 0 });
         };
 
         if anns.is_empty() {
@@ -916,6 +922,7 @@ mod tests {
                 params: vec![int_ty],
                 result: option_int,
                 effect: EffectRow::pure(db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1139,6 +1146,7 @@ mod tests {
                 params: vec![foo_ty],
                 result: Type::new(db, TypeKind::Int),
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -1191,6 +1199,7 @@ mod tests {
                     params: vec![foo_ty],
                     result: result_ty,
                     effect,
+                    minimum_convention: crate::ast::CallingConvention::Direct,
                 },
             )
         };
@@ -1276,6 +1285,7 @@ mod tests {
                 params: vec![list_named],
                 result: Type::new(db, TypeKind::Int),
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

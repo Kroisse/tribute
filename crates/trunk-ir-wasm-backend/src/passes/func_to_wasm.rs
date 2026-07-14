@@ -187,11 +187,21 @@ impl RewritePattern for FuncFuncPattern {
         let sym_name = func_op.sym_name(ctx);
         let func_type = func_op.r#type(ctx);
         let body = func_op.body(ctx);
+        let preserved_attrs: Vec<_> = ctx
+            .op(op)
+            .attributes
+            .iter()
+            .filter(|(name, _)| **name != Symbol::new("sym_name") && **name != Symbol::new("type"))
+            .map(|(name, value)| (*name, value.clone()))
+            .collect();
 
         // Detach body region so it can be reused in the new wasm.func
         ctx.detach_region(body);
 
         let new_op = wasm_dialect::func(ctx, loc, sym_name, func_type, body);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(preserved_attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -371,4 +381,37 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
 /// Intern a wasm.funcref type.
 fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
     wasm_dialect::funcref(ctx).as_type_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::types::Attribute;
+
+    #[test]
+    fn func_to_wasm_preserves_custom_function_attributes() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let original = module.ops(&ctx)[0];
+        ctx.op_mut(original)
+            .attributes
+            .insert(Symbol::new("custom"), Attribute::Int(7));
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let lowered = module.ops(&ctx)[0];
+        assert!(wasm_dialect::Func::from_op(&ctx, lowered).is_ok());
+        assert_eq!(
+            ctx.op(lowered).attributes.get(&Symbol::new("custom")),
+            Some(&Attribute::Int(7))
+        );
+    }
 }

@@ -174,7 +174,7 @@ fn(a) ->{g} b    // 임의의 ability g에 대해 polymorphic
 **순수 함수는 빈 ability 집합으로 명시:**
 
 ```rust
-fn(a) ->{} b    // 순수 함수
+fn(a) ->{} b    // 빈 effect를 명시한 pure-effectful 함수
 ```
 
 ### Ability 추론

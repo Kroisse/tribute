@@ -19,15 +19,15 @@ use trunk_ir::types::{Attribute, Location};
 use super::context::IrLoweringCtx;
 
 use crate::ast::{
-    CtorId, Expr, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation, TypeAnnotationKind,
-    TypeKind, TypedRef,
+    CallingConvention, CtorId, Expr, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypedRef,
 };
 
 /// IR-level function signature extracted from a TypeScheme.
 pub(super) struct FuncSignature {
     pub param_types: Vec<TypeRef>,
     pub return_type: TypeRef,
-    pub is_effectful: bool,
+    pub convention: CallingConvention,
 }
 
 impl FuncSignature {
@@ -38,22 +38,15 @@ impl FuncSignature {
         let scheme = *ctx.lookup_function_type(name)?;
         let body = scheme.body(ctx.db);
         match body.kind(ctx.db) {
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => Some(Self {
+            TypeKind::Func { params, result, .. } => Some(Self {
                 param_types: params.iter().map(|t| ctx.convert_type(ir, *t)).collect(),
                 return_type: ctx.convert_type(ir, *result),
-                is_effectful: !effect.is_pure(ctx.db),
+                convention: ctx.calling_convention_for_type(body)?,
             }),
             _ => None,
         }
     }
 }
-
-// Re-export lower_module as the public entry point
-pub use self::decl::lower_module;
 
 // =============================================================================
 // IrBuilder

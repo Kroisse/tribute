@@ -34,6 +34,7 @@ use crate::ast::{
 
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
+use crate::ast::CallingConvention;
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -43,6 +44,8 @@ pub struct ModuleCheckResult<'db> {
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
     pub node_types: Vec<(NodeId, Type<'db>)>,
+    /// Ability-level calling-convention requirements.
+    pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
 }
 
 /// Type checking mode.
@@ -153,6 +156,7 @@ impl<'db> TypeChecker<'db> {
 
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
+        let ability_conventions = self.env.export_ability_conventions();
 
         // Convert node_types HashMap to Vec for Salsa compatibility
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
@@ -167,6 +171,7 @@ impl<'db> TypeChecker<'db> {
             },
             function_types,
             node_types,
+            ability_conventions,
         }
     }
 
@@ -198,6 +203,7 @@ impl<'db> TypeChecker<'db> {
         let struct_fields = self.env.export_struct_fields();
         let enum_variants = self.env.export_enum_variants();
         let method_index = self.env.export_method_index();
+        let ability_conventions = self.env.export_ability_conventions();
 
         PreludeExports::new(
             self.db(),
@@ -207,6 +213,7 @@ impl<'db> TypeChecker<'db> {
             struct_fields,
             enum_variants,
             method_index,
+            ability_conventions,
         )
     }
 

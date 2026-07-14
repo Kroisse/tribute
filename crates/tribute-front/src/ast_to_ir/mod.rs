@@ -35,35 +35,37 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
 
-use crate::ast::{Module, NodeId, SpanMap, Type, TypeScheme, TypedRef};
+use crate::ast::{
+    AbilityId, CallingConvention, Module as AstModule, NodeId, SpanMap, Type, TypeScheme, TypedRef,
+};
 
 pub use context::IrLoweringCtx;
-pub use lower::lower_module;
 
-/// Lower a typed AST module to arena TrunkIR.
+/// A type-checked module and the metadata required to lower it to TrunkIR.
 ///
-/// This is the main entry point for AST-to-IR transformation.
-/// Emits directly into the given `IrContext`, returning an `Module`.
-///
-/// # Parameters
-/// - `db`: Salsa database (for AST type access and diagnostics)
-/// - `ir`: Arena IR context to emit into
-/// - `module`: Type-checked AST module
-/// - `span_map`: SpanMap for looking up source locations
-/// - `source_uri`: URI of the source file
-/// - `function_types`: Function type schemes from type checking
-/// - `node_types`: Node types from type checking (NodeId → Type)
-pub fn lower_ast_to_ir<'db>(
-    db: &'db dyn salsa::Database,
-    ir: &mut IrContext,
-    module: Module<TypedRef<'db>>,
-    span_map: SpanMap,
-    source_uri: &str,
-    function_types: HashMap<Symbol, TypeScheme<'db>>,
-    node_types: HashMap<NodeId, Type<'db>>,
-) -> IrModule {
-    let path = ir.paths.intern(source_uri.to_owned());
-    lower::lower_module(db, ir, path, span_map, module, function_types, node_types)
+/// This models the boundary between the typed frontend and IR lowering as one
+/// value, instead of passing parallel metadata collections positionally.
+pub struct TypedModule<'db> {
+    pub ast: AstModule<TypedRef<'db>>,
+    pub span_map: SpanMap,
+    pub function_types: HashMap<Symbol, TypeScheme<'db>>,
+    pub node_types: HashMap<NodeId, Type<'db>>,
+    pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+}
+
+impl<'db> TypedModule<'db> {
+    /// Lower this typed module to arena TrunkIR.
+    ///
+    /// This is the main entry point for AST-to-IR transformation.
+    pub fn lower_to_ir(
+        self,
+        db: &'db dyn salsa::Database,
+        ir: &mut IrContext,
+        source_uri: &str,
+    ) -> IrModule {
+        let path = ir.paths.intern(source_uri.to_owned());
+        self.lower_module(db, ir, path)
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +87,7 @@ mod tests {
             &db,
             path,
             span_map,
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
@@ -130,6 +133,7 @@ mod tests {
             path,
             SpanMap::default(),
             HashMap::new(),
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );
@@ -160,6 +164,7 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
@@ -194,6 +199,7 @@ mod tests {
             path,
             SpanMap::default(),
             HashMap::new(),
+            HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),
         );
@@ -221,6 +227,7 @@ mod tests {
             &db,
             path,
             span_map,
+            HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
             HashMap::new(),

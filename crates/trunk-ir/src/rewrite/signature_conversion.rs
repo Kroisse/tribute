@@ -6,6 +6,7 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
+use crate::Symbol;
 use crate::context::IrContext;
 use crate::dialect::{core, func, wasm};
 use crate::ops::{DialectOp, DialectType};
@@ -110,6 +111,13 @@ fn rewrite_function_signature(
     make_op: impl FnOnce(&mut IrContext, TypeRef) -> OpRef,
 ) -> bool {
     let converter = rewriter.type_converter();
+    let preserved_attrs: Vec<_> = ctx
+        .op(op)
+        .attributes
+        .iter()
+        .filter(|(name, _)| **name != Symbol::new("sym_name") && **name != Symbol::new("type"))
+        .map(|(name, value)| (*name, value.clone()))
+        .collect();
 
     let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
         return false;
@@ -128,6 +136,7 @@ fn rewrite_function_signature(
 
     // Create replacement op with new type
     let new_op = make_op(ctx, new_func_type);
+    ctx.op_mut(new_op).attributes.extend(preserved_attrs);
 
     rewriter.replace_op(new_op);
     true
@@ -402,6 +411,9 @@ mod tests {
 
         let func_ty = make_func_type(&mut ctx, &[i32_ty, i32_ty], i32_ty);
         let func_op = make_wasm_func_op(&mut ctx, loc, "wasm_fn", func_ty, &[i32_ty, i32_ty]);
+        ctx.op_mut(func_op)
+            .attributes
+            .insert(Symbol::new("custom"), Attribute::Int(7));
         let module = make_module(&mut ctx, loc, vec![func_op]);
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
@@ -424,6 +436,11 @@ mod tests {
         assert_eq!(td.params[0], i64_ty, "return type should be i64");
         assert_eq!(td.params[1], i64_ty, "first param should be i64");
         assert_eq!(td.params[2], i64_ty, "second param should be i64");
+        assert_eq!(
+            ctx.op(ops[0]).attributes.get(&Symbol::new("custom")),
+            Some(&Attribute::Int(7)),
+            "signature conversion should preserve custom metadata"
+        );
 
         // Verify entry block args
         let body = new_func.body(&ctx);

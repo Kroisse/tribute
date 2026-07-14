@@ -6,7 +6,7 @@ core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
   !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
 
-  func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       func.return %2
   }
@@ -19,19 +19,19 @@ core.module @test {
   func.func @"test::__lambda_2"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @run() -> core.i32 {
+  func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
           %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
               %4 = core.unrealized_conversion_cast %3 : core.i32
               %5 = arith.const {value = 1} : core.i32
-              %6 = func.call %4, %5 {callee = @"Int::+"} : core.i32
+              %6 = func.call %4, %5 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
               %7 = core.unrealized_conversion_cast %6 : tribute_rt.anyref
               %8 = core.unrealized_conversion_cast %1 : !t0
               %9 = func.call_indirect %8, %7 : tribute_rt.anyref
               func.return %9
           }
           %10 = adt.ref_null {type = !t1} : !t1
-          %11 = func.call %10, %2 {callee = @read} : tribute_rt.anyref
+          %11 = func.call %10, %2 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
           func.return %11
       }
       %12 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -73,7 +73,7 @@ core.module @test {
       %39 = core.unrealized_conversion_cast %28 : core.i32
       func.return %39
   }
-  func.func @main() -> core.nil {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }

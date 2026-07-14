@@ -186,6 +186,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         tdnr_ast,
         result.function_types,
         result.node_types,
+        result.ability_conventions,
         span_map,
     ))
 }
@@ -252,48 +253,67 @@ fn merge_and_lower_to_ir<'db>(
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
-    let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
-        if let Some(prelude) = prelude_module(db) {
-            let prelude_module_ast = prelude.module(db);
-            let prelude_fn_types = prelude.function_types(db);
-            let prelude_node_types = prelude.node_types(db);
-            let prelude_span_map = prelude.span_map(db);
+    let user_ability_conventions = typed.ability_conventions(db);
+    let (
+        merged_module,
+        merged_fn_types,
+        merged_node_types,
+        merged_ability_conventions,
+        merged_span_map,
+    ) = if let Some(prelude) = prelude_module(db) {
+        let prelude_module_ast = prelude.module(db);
+        let prelude_fn_types = prelude.function_types(db);
+        let prelude_node_types = prelude.node_types(db);
+        let prelude_ability_conventions = prelude.ability_conventions(db);
+        let prelude_span_map = prelude.span_map(db);
 
-            // Prepend prelude decls before user decls
-            let mut merged_decls = prelude_module_ast.decls.clone();
-            merged_decls.extend(user_module.decls.iter().cloned());
+        // Prepend prelude decls before user decls
+        let mut merged_decls = prelude_module_ast.decls.clone();
+        merged_decls.extend(user_module.decls.iter().cloned());
 
-            let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
-                user_module.id,
-                user_module.name,
-                merged_decls,
-            );
+        let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
+            user_module.id,
+            user_module.name,
+            merged_decls,
+        );
 
-            // Merge function_types: prelude first, user overrides
-            let mut fn_types: std::collections::HashMap<_, _> =
-                prelude_fn_types.iter().cloned().collect();
-            fn_types.extend(user_fn_types.iter().cloned());
+        // Merge function_types: prelude first, user overrides
+        let mut fn_types: std::collections::HashMap<_, _> =
+            prelude_fn_types.iter().cloned().collect();
+        fn_types.extend(user_fn_types.iter().cloned());
 
-            // Merge node_types: prelude first, user overrides
-            let mut node_types: std::collections::HashMap<_, _> =
-                prelude_node_types.iter().cloned().collect();
-            node_types.extend(user_node_types.iter().cloned());
+        // Merge node_types: prelude first, user overrides
+        let mut node_types: std::collections::HashMap<_, _> =
+            prelude_node_types.iter().cloned().collect();
+        node_types.extend(user_node_types.iter().cloned());
 
-            // Merge span maps (user overrides prelude on conflict)
-            let merged_span_map = user_span_map.merge(&prelude_span_map);
+        let mut ability_conventions: std::collections::HashMap<_, _> =
+            prelude_ability_conventions.iter().cloned().collect();
+        ability_conventions.extend(user_ability_conventions.iter().cloned());
 
-            (merged_ast, fn_types, node_types, merged_span_map)
-        } else {
-            let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
-            let node_types: std::collections::HashMap<_, _> =
-                user_node_types.iter().cloned().collect();
-            (
-                user_module.clone(),
-                fn_types,
-                node_types,
-                user_span_map.clone(),
-            )
-        };
+        // Merge span maps (user overrides prelude on conflict)
+        let merged_span_map = user_span_map.merge(&prelude_span_map);
+
+        (
+            merged_ast,
+            fn_types,
+            node_types,
+            ability_conventions,
+            merged_span_map,
+        )
+    } else {
+        let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
+        let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
+        let ability_conventions: std::collections::HashMap<_, _> =
+            user_ability_conventions.iter().cloned().collect();
+        (
+            user_module.clone(),
+            fn_types,
+            node_types,
+            ability_conventions,
+            user_span_map.clone(),
+        )
+    };
 
     // Monomorphize generic functions
     let mono_result =
@@ -305,15 +325,14 @@ fn merge_and_lower_to_ir<'db>(
     // AST → TrunkIR (arena)
     let source_uri = source.uri(db).as_str();
     let mut ir = IrContext::new();
-    let module = ast_to_ir::lower_ast_to_ir(
-        db,
-        &mut ir,
-        merged_module,
-        merged_span_map,
-        source_uri,
-        merged_fn_types,
-        merged_node_types,
-    );
+    let module = ast_to_ir::TypedModule {
+        ast: merged_module,
+        span_map: merged_span_map,
+        function_types: merged_fn_types,
+        node_types: merged_node_types,
+        ability_conventions: merged_ability_conventions,
+    }
+    .lower_to_ir(db, &mut ir, source_uri);
 
     (ir, module)
 }
@@ -1020,6 +1039,7 @@ pub fn parse_and_lower_ast<'db>(
         tdnr_ast,
         result.function_types,
         result.node_types,
+        result.ability_conventions,
         span_map,
     ))
 }

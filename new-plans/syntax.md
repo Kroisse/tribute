@@ -1085,7 +1085,7 @@ fn main() ->{Io} Nil {
 | `List(a)`, `Option(Int)`           | 제네릭 타입                    |
 | `#(Int, Text)`                     | Tuple 타입                     |
 | `fn(a) -> b`                       | 함수 타입 (암묵적 polymorphic) |
-| `fn(a) ->{} b`                     | 순수 함수 타입                 |
+| `fn(a) ->{} b`                     | 명시적 빈 effect 함수 타입     |
 | `fn(a) ->{E} b`                    | Effect E를 수행하는 함수       |
 | `fn(a) ->{E, e} b`                 | E + row variable e             |
 

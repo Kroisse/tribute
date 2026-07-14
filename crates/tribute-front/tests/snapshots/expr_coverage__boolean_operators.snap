@@ -1,10 +1,9 @@
 ---
 source: crates/tribute-front/tests/expr_coverage.rs
-assertion_line: 163
 expression: ir_text
 ---
 core.module @test {
-  func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 {
+  func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 attributes {tribute.calling_convention = 0} {
       %2 = scf.if %0 : core.i1 {
           %3 = arith.const {value = true} : core.i1
           scf.yield %3

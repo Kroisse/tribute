@@ -522,6 +522,7 @@ mod tests {
                 params: vec![bv0],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 1, scheme_body);
@@ -533,6 +534,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -552,6 +554,7 @@ mod tests {
                 params: vec![bv0, bv1],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 2, scheme_body);
@@ -564,6 +567,7 @@ mod tests {
                 params: vec![int, float],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -582,6 +586,7 @@ mod tests {
                 params: vec![bv0, bv0],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 1, scheme_body);
@@ -593,6 +598,7 @@ mod tests {
                 params: vec![int, int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -611,6 +617,7 @@ mod tests {
                 params: vec![bv0, bv0],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 1, scheme_body);
@@ -629,6 +636,7 @@ mod tests {
                 params: vec![int, text],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -653,6 +661,7 @@ mod tests {
                 params: vec![option_bv],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 1, scheme_body);
@@ -671,6 +680,7 @@ mod tests {
                 params: vec![option_int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -688,6 +698,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 0, body);
@@ -769,6 +780,7 @@ mod tests {
                 params: vec![pair_int_int],
                 result: int,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 
@@ -818,6 +830,7 @@ mod tests {
                 params: vec![bv0],
                 result: bv1,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme_body = Type::new(
@@ -826,6 +839,7 @@ mod tests {
                 params: vec![fn_param, bv0],
                 result: bv1,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = make_scheme(&db, 2, scheme_body);
@@ -838,6 +852,7 @@ mod tests {
                 params: vec![int],
                 result: bool_ty,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let concrete = Type::new(
@@ -846,6 +861,7 @@ mod tests {
                 params: vec![fn_concrete, int],
                 result: bool_ty,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
 

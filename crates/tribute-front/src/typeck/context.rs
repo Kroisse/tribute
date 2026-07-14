@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeKind, TypeParam, TypeScheme,
+    AbilityId, CallingConvention, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeKind,
+    TypeParam, TypeScheme,
 };
 
 // =========================================================================
@@ -137,6 +138,9 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
 
+    /// Ability-level upper bounds used to derive function calling conventions.
+    ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+
     /// Method index for UFCS resolution: method_name → candidates.
     /// Populated from function declarations (first param = receiver)
     /// and struct field accessors.
@@ -146,6 +150,12 @@ pub struct ModuleTypeEnv<'db> {
 impl<'db> ModuleTypeEnv<'db> {
     /// Create a new empty module type environment.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
+        let mut ability_conventions = HashMap::new();
+        ability_conventions.insert(
+            AbilityId::new(db, Symbol::new("std::io::Io")),
+            CallingConvention::EvidenceDirect,
+        );
+
         Self {
             db,
             function_types: HashMap::new(),
@@ -154,6 +164,7 @@ impl<'db> ModuleTypeEnv<'db> {
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
             ability_defs: HashMap::new(),
+            ability_conventions,
             method_index: HashMap::new(),
         }
     }
@@ -228,6 +239,12 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Register an ability definition.
     pub fn register_ability(&mut self, id: AbilityId<'db>, info: AbilityInfo<'db>) {
+        let convention = if info.operations.values().any(|op| op.kind == OpDeclKind::Op) {
+            CallingConvention::Cps
+        } else {
+            CallingConvention::EvidenceDirect
+        };
+        self.ability_conventions.insert(id, convention);
         self.ability_defs.insert(id, info);
     }
 
@@ -332,6 +349,9 @@ impl<'db> ModuleTypeEnv<'db> {
                 .entry(*name)
                 .or_default()
                 .extend(entries.iter().copied());
+        }
+        for (ability, convention) in exports.ability_conventions(self.db) {
+            self.ability_conventions.insert(*ability, *convention);
         }
     }
 
@@ -444,6 +464,20 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
+    /// Export ability calling-convention requirements in deterministic order.
+    pub fn export_ability_conventions(&self) -> Vec<(AbilityId<'db>, CallingConvention)> {
+        let mut result: Vec<_> = self
+            .ability_conventions
+            .iter()
+            .map(|(ability, convention)| (*ability, *convention))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
+        });
+        result
+    }
+
     // =========================================================================
     // Primitive types (convenience methods)
     // =========================================================================
@@ -510,12 +544,24 @@ impl<'db> ModuleTypeEnv<'db> {
         result: Type<'db>,
         effect: EffectRow<'db>,
     ) -> Type<'db> {
+        self.func_type_with_convention(params, result, effect, CallingConvention::Direct)
+    }
+
+    /// Create a function type with an explicit calling-convention lower bound.
+    pub fn func_type_with_convention(
+        &self,
+        params: Vec<Type<'db>>,
+        result: Type<'db>,
+        effect: EffectRow<'db>,
+        minimum_convention: CallingConvention,
+    ) -> Type<'db> {
         Type::new(
             self.db,
             TypeKind::Func {
                 params,
                 result,
                 effect,
+                minimum_convention,
             },
         )
     }
@@ -762,6 +808,7 @@ mod tests {
                     params: vec![receiver],
                     result: int_ty,
                     effect,
+                    minimum_convention: crate::ast::CallingConvention::Direct,
                 },
             );
             env.register_method(
@@ -819,6 +866,7 @@ mod tests {
                 params: params.to_vec(),
                 result,
                 effect: EffectRow::pure(db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         )
     }

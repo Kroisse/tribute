@@ -19,6 +19,7 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
+use tribute_core::{CallableAbi, get_calling_convention};
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
@@ -181,7 +182,7 @@ impl RewritePattern for LowerClosureNewArena {
 
 /// Lower `func.call_indirect` on closure values.
 struct LowerClosureCallArena {
-    evidence_from_param: Option<ValueRef>,
+    legacy_evidence: Option<ValueRef>,
 }
 
 impl RewritePattern for LowerClosureCallArena {
@@ -249,18 +250,25 @@ impl RewritePattern for LowerClosureCallArena {
         let env_op = closure::env(ctx, loc, callee, anyref_ty);
         let env = ctx.op_result(env_op.op_ref(), 0);
 
-        let evidence = if let Some(evidence) = self.evidence_from_param {
-            evidence
+        let new_args = if let Some(convention) = get_calling_convention(ctx, op) {
+            let hidden =
+                usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
+            let abi = CallableAbi::new(convention, args[hidden..].iter().copied(), env);
+            abi.interpose_environment(&args, env)
         } else {
-            let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-            let null_op = adt::ref_null(ctx, loc, evidence_ty, evidence_ty);
-            rewriter.insert_op(null_op.op_ref());
-            null_op.result(ctx)
+            // Compatibility for hand-written legacy IR without metadata.
+            let evidence = if let Some(evidence) = self.legacy_evidence {
+                evidence
+            } else {
+                let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
+                let null_op = adt::ref_null(ctx, loc, evidence_ty, evidence_ty);
+                rewriter.insert_op(null_op.op_ref());
+                null_op.result(ctx)
+            };
+            let mut legacy = vec![evidence, env];
+            legacy.extend_from_slice(&args);
+            legacy
         };
-
-        // Generate: %result = func.call_indirect %table_idx, [%evidence, %env, %args...]
-        let mut new_args = vec![evidence, env];
-        new_args.extend(args);
         let new_call = func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
 
         rewriter.insert_op(table_idx_op.op_ref());
@@ -367,12 +375,9 @@ fn evidence_param_for_func(ctx: &IrContext, func_op: func::Func) -> Option<Value
     if !crate::evidence::has_evidence_first_param(ctx, func_ty) {
         return None;
     }
-
     let body = func_op.body(ctx);
     let entry = ctx.region(body).blocks.first().copied()?;
-    let evidence = *ctx.block_args(entry).first()?;
-    tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence))
-        .then_some(evidence)
+    ctx.block_args(entry).first().copied()
 }
 
 /// Lower closures using arena IR.
@@ -403,20 +408,17 @@ pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
 
 /// Lower closure operations in one function body.
 ///
-/// Closure calls receive the enclosing function's evidence parameter directly
-/// while the call is rewritten. Pure functions synthesize null evidence at the
-/// call site, avoiding a module-wide span-based post-processing pass.
+/// Closure calls already carry convention-specific hidden operands. This pass
+/// only interposes the physical closure environment.
 pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
-    let evidence_from_param = evidence_param_for_func(ctx, func_op);
+    let legacy_evidence = evidence_param_for_func(ctx, func_op);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
             ConversionTarget::new()
                 .legal_op("func", "func")
                 .recursive_legal_op("func", "func"),
         )
-        .add_pattern(LowerClosureCallArena {
-            evidence_from_param,
-        })
+        .add_pattern(LowerClosureCallArena { legacy_evidence })
         .add_pattern(LowerClosureNewArena)
         .add_pattern(LowerClosureFuncArena)
         .add_pattern(LowerClosureEnvArena);

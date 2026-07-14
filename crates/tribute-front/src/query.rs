@@ -431,6 +431,46 @@ mod tests {
     }
 
     #[test]
+    fn omitted_effect_annotation_is_open_but_explicit_empty_is_closed() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"
+fn omitted() { Nil }
+fn explicit() ->{} Nil { Nil }
+"#,
+        );
+
+        let schemes = function_schemes(&db, source).expect("type checking should succeed");
+        let effect_of = |name: &str| {
+            let (_, scheme) = schemes
+                .iter()
+                .find(|(symbol, _)| *symbol == Symbol::from_dynamic(name))
+                .expect("function scheme should exist");
+            let crate::ast::TypeKind::Func {
+                effect,
+                minimum_convention,
+                ..
+            } = scheme.body(&db).kind(&db)
+            else {
+                panic!("expected function type");
+            };
+            (*effect, *minimum_convention)
+        };
+
+        let (omitted, omitted_minimum) = effect_of("omitted");
+        assert!(omitted.rest(&db).is_some());
+        assert_eq!(omitted_minimum, crate::ast::CallingConvention::Direct);
+
+        let (explicit, explicit_minimum) = effect_of("explicit");
+        assert!(explicit.is_pure(&db));
+        assert_eq!(
+            explicit_minimum,
+            crate::ast::CallingConvention::EvidenceDirect
+        );
+    }
+
+    #[test]
     fn test_type_check_output_has_both_fields() {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() { 42 }");
@@ -451,11 +491,9 @@ mod tests {
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
         match ty.kind(db) {
             crate::ast::TypeKind::UniVar { .. } => true,
-            crate::ast::TypeKind::Func {
-                params,
-                result,
-                effect: _,
-            } => params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result),
+            crate::ast::TypeKind::Func { params, result, .. } => {
+                params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result)
+            }
             crate::ast::TypeKind::Named { args, .. } => {
                 args.iter().any(|a| contains_univar(db, *a))
             }

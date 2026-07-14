@@ -5,13 +5,13 @@ expression: ir_text
 core.module @test {
   !__tuple_i32_i32 = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}
 
-  func.func @test() -> core.i32 {
+  func.func @test() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = adt.struct_new %0, %1 {type = !__tuple_i32_i32} : adt.typeref() {name = @__tuple_i32_i32}
       %3 = adt.struct_get %2 {field = 0, type = !__tuple_i32_i32} : core.i32
       %4 = adt.struct_get %2 {field = 1, type = !__tuple_i32_i32} : core.i32
-      %5 = func.call %3, %4 {callee = @"Nat::+"} : core.i32
+      %5 = func.call %3, %4 {callee = @"Nat::+", tribute.calling_convention = 0} : core.i32
       func.return %5
   }
 }

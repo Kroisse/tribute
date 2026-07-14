@@ -270,6 +270,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             params,
             result,
             effect,
+            minimum_convention,
         } => {
             // Preserve the effect row as ability annotations. Each Effect
             // becomes a Named (or App) annotation; a row variable (`rest`) is
@@ -303,7 +304,10 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
                     }
                 })
                 .collect();
-            if effect.rest(db).is_some() {
+            if effect.rest(db).is_some()
+                || (abilities.is_empty()
+                    && *minimum_convention == crate::ast::CallingConvention::Direct)
+            {
                 abilities.push(TypeAnnotation {
                     id,
                     kind: TypeAnnotationKind::Infer,
@@ -895,6 +899,7 @@ mod tests {
                 params: vec![bv0],
                 result: bv0,
                 effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let scheme = TypeScheme::new(&db, vec![TypeParam::anonymous()], scheme_body);
@@ -1019,6 +1024,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));
@@ -1067,6 +1073,7 @@ mod tests {
                 params: vec![int],
                 result: int,
                 effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let ann = type_to_annotation(&db, func_ty, node_id(1));

@@ -107,6 +107,11 @@ pub enum TypeKind<'db> {
         params: Vec<Type<'db>>,
         result: Type<'db>,
         effect: EffectRow<'db>,
+        /// Calling-convention lower bound requested independently of the row.
+        ///
+        /// An explicit empty effect annotation (`->{}`) uses
+        /// `EvidenceDirect`, while an inferred pure function uses `Direct`.
+        minimum_convention: super::CallingConvention,
     },
 
     /// Tuple type.
@@ -530,7 +535,7 @@ pub enum TypeAnnotationKind {
     /// A function type: `fn(Int, Int) -> Int`
     ///
     /// The `abilities` field contains the ability row items:
-    /// - `vec![]`: pure function (`fn(a) ->{} b`)
+    /// - `vec![]`: explicit pure-effectful function (`fn(a) ->{} b`)
     /// - `vec![Infer]`: effect polymorphic (`fn(a) -> b` — no ability row written)
     /// - `vec![Named("State")]`: explicit effects (`fn(a) ->{State} b`)
     /// - `vec![Named("State"), Named("e")]`: mixed (`fn(a) ->{State, e} b`)

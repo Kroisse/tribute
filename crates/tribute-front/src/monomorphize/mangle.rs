@@ -203,6 +203,7 @@ mod tests {
                 params: vec![int_ty],
                 result: bool_ty,
                 effect: crate::ast::EffectRow::new(&db, vec![], None),
+                minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
         let result = mangle_name(&db, base, &[func_ty]);
