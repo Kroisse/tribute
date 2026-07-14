@@ -518,12 +518,21 @@ fn explicit() ->{} Nil { Nil }
             crate::ast::TypeKind::App { ctor, args } => {
                 contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
             }
+            crate::ast::TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                contains_univar(db, *arg)
+                    || contains_univar(db, *result)
+                    || effect_contains_univar(db, *effect)
+            }
             _ => false,
         }
     }
 
     #[test]
-    fn contains_univar_checks_function_effect_arguments() {
+    fn contains_univar_checks_effect_arguments() {
         let db = salsa::DatabaseImpl::default();
         let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
         let var = crate::ast::Type::new(&db, crate::ast::TypeKind::UniVar { id });
@@ -546,6 +555,16 @@ fn explicit() ->{} Nil { Nil }
         );
 
         assert!(contains_univar(&db, ty));
+
+        let continuation = crate::ast::Type::new(
+            &db,
+            crate::ast::TypeKind::Continuation {
+                arg: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                result: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                effect,
+            },
+        );
+        assert!(contains_univar(&db, continuation));
     }
 
     #[test]

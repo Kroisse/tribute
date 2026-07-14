@@ -1945,11 +1945,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || row_var,
                 );
-                let minimum_convention = if abilities.is_empty() {
-                    crate::ast::CallingConvention::EvidenceDirect
-                } else {
-                    crate::ast::CallingConvention::Direct
-                };
+                let minimum_convention = crate::ast::function_type_abi_floor(abilities);
                 ctx.func_type_with_convention(param_types, result_ty, effect, minimum_convention)
             }
             TypeAnnotationKind::Tuple(elems) => {

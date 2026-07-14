@@ -884,13 +884,9 @@ impl<'db> TypeSolver<'db> {
                 effect,
                 ..
             } => {
-                let effect = self.row_subst.apply(self.db, *effect);
                 params.iter().any(|p| self.occurs_in(var, *p))
                     || self.occurs_in(var, *result)
-                    || effect
-                        .effects(self.db)
-                        .iter()
-                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
+                    || self.occurs_in_effect_row(var, *effect)
             }
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
             TypeKind::App { ctor, args } => {
@@ -901,16 +897,21 @@ impl<'db> TypeSolver<'db> {
                 result,
                 effect,
             } => {
-                let effect = self.row_subst.apply(self.db, *effect);
                 self.occurs_in(var, *arg)
                     || self.occurs_in(var, *result)
-                    || effect
-                        .effects(self.db)
-                        .iter()
-                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
+                    || self.occurs_in_effect_row(var, *effect)
             }
             _ => false,
         }
+    }
+
+    /// Check a substituted effect row's type arguments for a type variable.
+    fn occurs_in_effect_row(&self, var: UniVarId<'db>, effect: EffectRow<'db>) -> bool {
+        self.row_subst
+            .apply(self.db, effect)
+            .effects(self.db)
+            .iter()
+            .any(|effect| effect.args.iter().any(|arg| self.occurs_in(var, *arg)))
     }
 
     /// Check if a row variable occurs in an effect row (for row occurs check).
