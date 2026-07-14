@@ -6,11 +6,11 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
-use crate::Symbol;
 use crate::context::IrContext;
 use crate::dialect::{core, func, wasm};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef, TypeRef};
+use crate::rewrite::clone_attrs_except;
 use crate::rewrite::pattern::RewritePattern;
 use crate::rewrite::rewriter::PatternRewriter;
 use crate::rewrite::type_converter::TypeConverter;
@@ -111,13 +111,7 @@ fn rewrite_function_signature(
     make_op: impl FnOnce(&mut IrContext, TypeRef) -> OpRef,
 ) -> bool {
     let converter = rewriter.type_converter();
-    let preserved_attrs: Vec<_> = ctx
-        .op(op)
-        .attributes
-        .iter()
-        .filter(|(name, _)| **name != Symbol::new("sym_name") && **name != Symbol::new("type"))
-        .map(|(name, value)| (*name, value.clone()))
-        .collect();
+    let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
     let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
         return false;
@@ -136,7 +130,7 @@ fn rewrite_function_signature(
 
     // Create replacement op with new type
     let new_op = make_op(ctx, new_func_type);
-    ctx.op_mut(new_op).attributes.extend(preserved_attrs);
+    ctx.op_mut(new_op).attributes.extend(attrs_to_preserve);
 
     rewriter.replace_op(new_op);
     true

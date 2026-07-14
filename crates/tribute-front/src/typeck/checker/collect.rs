@@ -122,11 +122,8 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Create function type
-        let minimum_convention = if func.effects.is_some() {
-            crate::ast::CallingConvention::EvidenceDirect
-        } else {
-            crate::ast::CallingConvention::Direct
-        };
+        let minimum_convention =
+            crate::ast::function_declaration_abi_floor(func.effects.as_deref());
         let func_ty =
             self.env
                 .func_type_with_convention(param_types, return_ty, effect, minimum_convention);
@@ -443,11 +440,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
                     || EffectVar { id: 0 },
                 );
-                let minimum_convention = if abilities.is_empty() {
-                    crate::ast::CallingConvention::EvidenceDirect
-                } else {
-                    crate::ast::CallingConvention::Direct
-                };
+                let minimum_convention = crate::ast::function_type_abi_floor(abilities);
                 self.env.func_type_with_convention(
                     param_types,
                     result_ty,
@@ -517,11 +510,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
                     || EffectVar { id: 0 },
                 );
-                let minimum_convention = if abilities.is_empty() {
-                    crate::ast::CallingConvention::EvidenceDirect
-                } else {
-                    crate::ast::CallingConvention::Direct
-                };
+                let minimum_convention = crate::ast::function_type_abi_floor(abilities);
                 self.env.func_type_with_convention(
                     param_types,
                     result_ty,

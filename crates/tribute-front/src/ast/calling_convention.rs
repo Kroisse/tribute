@@ -2,8 +2,26 @@
 
 use std::collections::HashMap;
 
-use super::{AbilityId, EffectRow, Type, TypeKind};
+use super::{AbilityId, EffectRow, Type, TypeAnnotation, TypeKind};
 pub use tribute_core::CallingConvention;
+
+/// ABI floor requested by a function declaration's effect annotation.
+pub fn function_declaration_abi_floor(effects: Option<&[TypeAnnotation]>) -> CallingConvention {
+    if effects.is_some() {
+        CallingConvention::EvidenceDirect
+    } else {
+        CallingConvention::Direct
+    }
+}
+
+/// ABI floor requested by an explicit function-type effect list.
+pub fn function_type_abi_floor(abilities: &[TypeAnnotation]) -> CallingConvention {
+    if abilities.is_empty() {
+        CallingConvention::EvidenceDirect
+    } else {
+        CallingConvention::Direct
+    }
+}
 
 /// Derive a convention from an effect row and ability-level requirements.
 ///

@@ -238,11 +238,9 @@ impl<'db> TdnrResolver<'db> {
                 params,
                 result,
                 effect,
-                minimum_convention: if func.effects.is_some() {
-                    crate::ast::CallingConvention::EvidenceDirect
-                } else {
-                    crate::ast::CallingConvention::Direct
-                },
+                minimum_convention: crate::ast::function_declaration_abi_floor(
+                    func.effects.as_deref(),
+                ),
             },
         )
     }

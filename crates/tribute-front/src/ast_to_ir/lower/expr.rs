@@ -289,6 +289,7 @@ pub(super) fn lower_expr<'db>(
                         set_calling_convention(builder.ir, op.op_ref(), convention);
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
+                        let result = builder.cast_if_needed(location, result, result_ty);
 
                         Some(result)
                     }
@@ -1001,7 +1002,7 @@ fn is_cps_call_expr<'db>(
         return ctx
             .get_node_type(callee.id)
             .copied()
-            .is_some_and(|ty| calling_convention_for_type(ctx, ty) == CallingConvention::Cps);
+            .is_none_or(|ty| calling_convention_for_type(ctx, ty) == CallingConvention::Cps);
     };
     match &tr.resolved {
         ResolvedRef::AbilityOp {
@@ -1269,9 +1270,11 @@ fn try_lower_value_effectful_call<'db>(
     };
 
     let location = builder.location(expr.id);
-    let mut arg_values = builder.collect_args(args)?;
+    let arg_exprs = args;
+    let mut arg_values = builder.collect_args(arg_exprs.clone())?;
 
     // Insert casts for arguments using type scheme information
+    adapt_named_function_args(builder, location, callee_name, &arg_exprs, &mut arg_values);
     cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
@@ -1508,7 +1511,8 @@ fn lower_cps_call<'db>(
     let callee_kind = *callee.kind;
 
     // Lower arguments
-    let mut arg_values = builder.collect_args(args)?;
+    let arg_exprs = args;
+    let mut arg_values = builder.collect_args(arg_exprs.clone())?;
 
     // Determine the logical result type of the function call
     let logical_result_ty = builder
@@ -1539,6 +1543,13 @@ fn lower_cps_call<'db>(
                 let callee_name = id.qualified(builder.db());
 
                 // Insert casts for arguments using type scheme information
+                adapt_named_function_args(
+                    builder,
+                    location,
+                    callee_name,
+                    &arg_exprs,
+                    &mut arg_values,
+                );
                 cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
                 // Call the Cps function with evidence + continuation as hidden args.

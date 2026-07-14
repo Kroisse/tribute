@@ -23,7 +23,7 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
 };
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{BlockData, RegionData};
@@ -187,13 +187,7 @@ impl RewritePattern for FuncFuncPattern {
         let sym_name = func_op.sym_name(ctx);
         let func_type = func_op.r#type(ctx);
         let body = func_op.body(ctx);
-        let preserved_attrs: Vec<_> = ctx
-            .op(op)
-            .attributes
-            .iter()
-            .filter(|(name, _)| **name != Symbol::new("sym_name") && **name != Symbol::new("type"))
-            .map(|(name, value)| (*name, value.clone()))
-            .collect();
+        let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
         // Detach body region so it can be reused in the new wasm.func
         ctx.detach_region(body);
@@ -201,7 +195,7 @@ impl RewritePattern for FuncFuncPattern {
         let new_op = wasm_dialect::func(ctx, loc, sym_name, func_type, body);
         ctx.op_mut(new_op.op_ref())
             .attributes
-            .extend(preserved_attrs);
+            .extend(attrs_to_preserve);
         rewriter.replace_op(new_op.op_ref());
         true
     }

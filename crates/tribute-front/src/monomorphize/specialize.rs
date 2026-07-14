@@ -305,6 +305,9 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
                 })
                 .collect();
             if effect.rest(db).is_some()
+                // Preserve omitted effect-polymorphic functions whose resolved
+                // ability set is empty as Direct when annotations round-trip,
+                // rather than reclassifying them as EvidenceDirect.
                 || (abilities.is_empty()
                     && *minimum_convention == crate::ast::CallingConvention::Direct)
             {

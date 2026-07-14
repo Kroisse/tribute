@@ -445,7 +445,7 @@ fn explicit() ->{} Nil { Nil }
         let effect_of = |name: &str| {
             let (_, scheme) = schemes
                 .iter()
-                .find(|(symbol, _)| *symbol == Symbol::from_dynamic(name))
+                .find(|(symbol, _)| *symbol == name)
                 .expect("function scheme should exist");
             let crate::ast::TypeKind::Func {
                 effect,
@@ -489,10 +489,27 @@ fn explicit() ->{} Nil { Nil }
 
     /// Recursively check if a type contains any unresolved UniVar.
     fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
+        fn effect_contains_univar(
+            db: &dyn salsa::Database,
+            effect: crate::ast::EffectRow<'_>,
+        ) -> bool {
+            effect
+                .effects(db)
+                .iter()
+                .any(|effect| effect.args.iter().any(|arg| contains_univar(db, *arg)))
+        }
+
         match ty.kind(db) {
             crate::ast::TypeKind::UniVar { .. } => true,
-            crate::ast::TypeKind::Func { params, result, .. } => {
-                params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result)
+            crate::ast::TypeKind::Func {
+                params,
+                result,
+                effect,
+                ..
+            } => {
+                params.iter().any(|p| contains_univar(db, *p))
+                    || contains_univar(db, *result)
+                    || effect_contains_univar(db, *effect)
             }
             crate::ast::TypeKind::Named { args, .. } => {
                 args.iter().any(|a| contains_univar(db, *a))
@@ -503,6 +520,32 @@ fn explicit() ->{} Nil { Nil }
             }
             _ => false,
         }
+    }
+
+    #[test]
+    fn contains_univar_checks_function_effect_arguments() {
+        let db = salsa::DatabaseImpl::default();
+        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        let var = crate::ast::Type::new(&db, crate::ast::TypeKind::UniVar { id });
+        let effect = crate::ast::EffectRow::new(
+            &db,
+            vec![crate::ast::Effect {
+                ability_id: crate::ast::AbilityId::new(&db, Symbol::new("State")),
+                args: vec![var],
+            }],
+            None,
+        );
+        let ty = crate::ast::Type::new(
+            &db,
+            crate::ast::TypeKind::Func {
+                params: vec![],
+                result: crate::ast::Type::new(&db, crate::ast::TypeKind::Nil),
+                effect,
+                minimum_convention: crate::ast::CallingConvention::Cps,
+            },
+        );
+
+        assert!(contains_univar(&db, ty));
     }
 
     #[test]

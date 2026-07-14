@@ -5,8 +5,24 @@
 
 use smallvec::SmallVec;
 
+use crate::Symbol;
 use crate::context::{BlockData, IrContext};
 use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::types::Attribute;
+
+/// Clone an operation's attributes except for the named exclusions.
+pub fn clone_attrs_except(
+    ctx: &IrContext,
+    op: OpRef,
+    excluded_names: &[&str],
+) -> Vec<(Symbol, Attribute)> {
+    ctx.op(op)
+        .attributes
+        .iter()
+        .filter(|(name, _)| !excluded_names.iter().any(|excluded| **name == *excluded))
+        .map(|(name, value)| (*name, value.clone()))
+        .collect()
+}
 
 /// Split a block at `before_op`, moving `before_op` and all subsequent
 /// operations into a new block.
