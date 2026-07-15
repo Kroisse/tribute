@@ -22,7 +22,7 @@ use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{CompilationConfig, compile_to_native_binary};
+use tribute::pipeline::{CompilationConfig, OptimizationOptions, compile_to_native_binary};
 use tribute_front::SourceCst;
 
 /// Helper to compile code and collect diagnostics using CLI pipeline.
@@ -35,7 +35,7 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        let config = CompilationConfig::new(db, false);
+        let config = CompilationConfig::new(db, false, OptimizationOptions::production());
         compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config)
             .into_iter()
             .cloned()

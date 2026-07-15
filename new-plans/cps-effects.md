@@ -19,6 +19,8 @@ root에 한 번만 만들고 모든 사용 지점에서 같은 함수 심볼을 
 지점의 null environment와 `closure.new`는 SSA 영역 가시성을 지키기 위해 해당 영역에
 각각 생성한다. 독립적으로 codegen되는 compilation unit은 자체 정의를 가지며, 향후
 separate compilation이 도입되면 backend의 link-once 정책으로 합칠 수 있다.
+이 deduplication은 독립적으로 끌 수 있어야 하며, 동일한 frontend IR
+경계에서 enabled/disabled snapshot과 native 실행 결과를 비교한다.
 
 ## 핵심 설계
 
@@ -220,6 +222,9 @@ ast_to_ir
 → effect ABI verification
 → backend-specific lowering
 ```
+
+Future effect specialization and handler inlining use the same validation
+contract defined in `optimizations.md`.
 
 `ast_to_ir` 단계에서 effectful function과 closure는 evidence parameter와
 현재 compatibility CPS representation을 반영한 IR로 생성된다. Shared lowering removes

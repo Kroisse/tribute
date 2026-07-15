@@ -63,7 +63,7 @@ flowchart TB
 
     subgraph native_passes["tribute-passes/src/native/"]
         cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
-        rc_pass["rc 삽입 (future)\nretain/release 삽입"]
+        rc_pass["RC insertion\nretain/release 삽입"]
     end
 
     subgraph clif_passes["trunk-ir-cranelift-backend/passes/"]

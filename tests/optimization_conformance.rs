@@ -1,0 +1,133 @@
+//! Semantic and structural gates for independently selectable optimizations.
+
+mod common;
+
+use common::compile_and_run_native_with_done_continuation_dedup;
+use insta::assert_snapshot;
+use salsa_test_macros::salsa_test;
+use tribute::pipeline::{OptimizationOptions, SharedPipelineStage, dump_shared_ir_at_stage};
+use tribute_front::SourceCst;
+use tribute_front::ast_to_ir::DoneContinuationPolicy;
+
+const DONE_CONTINUATION_DEDUP_STATE: &str =
+    include_str!("fixtures/optimizations/done_continuation_dedup_state.trb");
+
+fn identity_done_symbols(ir: &str) -> Vec<&str> {
+    let lines: Vec<_> = ir.lines().collect();
+    lines
+        .windows(2)
+        .filter_map(|pair| {
+            let header = pair[0].trim_start();
+            (header.starts_with("func.func ")
+                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
+                && pair[1].trim() == "func.return %2")
+                .then(|| {
+                    header
+                        .strip_prefix("func.func ")
+                        .expect("checked prefix")
+                        .split('(')
+                        .next()
+                        .expect("function header has parameters")
+                })
+        })
+        .collect()
+}
+
+fn focused_identity_done_ir(ir: &str) -> String {
+    let symbols = identity_done_symbols(ir);
+    ir.lines()
+        .filter(|line| symbols.iter().any(|symbol| line.contains(symbol)))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn lambda_function_count(ir: &str) -> usize {
+    ir.lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("func.func ") && line.contains("::__lambda_")
+        })
+        .count()
+}
+
+#[test]
+fn done_continuation_dedup_preserves_native_execution() {
+    let disabled = compile_and_run_native_with_done_continuation_dedup(
+        "done_continuation_dedup_disabled.trb",
+        DONE_CONTINUATION_DEDUP_STATE,
+        DoneContinuationPolicy::PerUse,
+    );
+    let enabled = compile_and_run_native_with_done_continuation_dedup(
+        "done_continuation_dedup_enabled.trb",
+        DONE_CONTINUATION_DEDUP_STATE,
+        DoneContinuationPolicy::PerCompilationUnit,
+    );
+
+    assert!(
+        disabled.status.success(),
+        "disabled pipeline failed: {}",
+        String::from_utf8_lossy(&disabled.stderr)
+    );
+    assert!(
+        enabled.status.success(),
+        "enabled pipeline failed: {}",
+        String::from_utf8_lossy(&enabled.stderr)
+    );
+    assert_eq!(disabled.stdout, enabled.stdout);
+    assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
+}
+
+#[salsa_test]
+fn done_continuation_dedup_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "done_continuation_dedup_snapshot.trb",
+        DONE_CONTINUATION_DEDUP_STATE,
+    );
+    let before = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterFrontend,
+        OptimizationOptions::baseline(),
+    )
+    .expect("unoptimized frontend IR should be available");
+    let after = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterFrontend,
+        OptimizationOptions::production(),
+    )
+    .expect("optimized frontend IR should be available");
+
+    let before_symbols = identity_done_symbols(&before);
+    let after_symbols = identity_done_symbols(&after);
+    assert!(
+        before_symbols.len() > 1,
+        "fixture must generate duplicate identity done continuations"
+    );
+    assert_eq!(after_symbols.len(), 1);
+    assert_eq!(
+        lambda_function_count(&before) - before_symbols.len(),
+        lambda_function_count(&after) - after_symbols.len(),
+        "capturing and user-authored lambdas must remain distinct"
+    );
+
+    let before_references: usize = before_symbols
+        .iter()
+        .map(|symbol| before.matches(&format!("func_ref = {symbol}")).count())
+        .sum();
+    let after_references = after
+        .matches(&format!("func_ref = {}", after_symbols[0]))
+        .count();
+    assert_eq!(before_references, after_references);
+
+    assert_snapshot!(
+        "done_continuation_dedup_before",
+        focused_identity_done_ir(&before)
+    );
+    assert_snapshot!(
+        "done_continuation_dedup_after",
+        focused_identity_done_ir(&after)
+    );
+}

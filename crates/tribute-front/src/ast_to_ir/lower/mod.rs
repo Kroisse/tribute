@@ -328,7 +328,7 @@ pub(super) fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> 
 
 /// Create an identity `done_k` closure: `fn(result: anyref) -> anyref { return result }`.
 ///
-/// The direct `func.func` definition is shared by the entire compilation unit.
+/// The direct `func.func` definition may be shared by the compilation unit.
 /// Each call still creates a region-local `closure.new`, so SSA values do not
 /// cross region boundaries. This bypasses `lower_closure_lambda` and has a
 /// fixed, known signature:
@@ -385,7 +385,6 @@ pub(super) fn create_identity_done_k(
             blocks: trunk_ir::smallvec::smallvec![dk_block],
             parent_op: None,
         });
-
         let dk_func_op = func::func(builder.ir, location, name, dk_func_ty, dk_region);
 
         builder.ir.push_op(module_block, dk_func_op.op_ref());

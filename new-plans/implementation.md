@@ -687,7 +687,7 @@ flowchart TB
     subgraph ability["Ability Processing"]
         evidence["evidence_insert"]
         resolve_ev["resolve_evidence"]
-        tail_opt["tail_resumptive_optimize (TODO)"]
+        tail_opt["convert_tail_resumptive"]
     end
 
     subgraph lowering["Final Lowering"]

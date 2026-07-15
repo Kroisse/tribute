@@ -13,6 +13,40 @@
 | Tail-resumptive optimization    | 지원       | shift/reset 제거          |
 | Handler inlining                | 지원       | 간접 호출 제거            |
 
+### Optimization validation contract
+
+Every optimization must be independently selectable in the compiler pipeline.
+The production profile enables the optimizations that are ready for general
+use, while tests may disable one optimization without changing the rest of the
+pipeline.
+
+An optimization is not ready to be enabled broadly until all of the following
+gates exist:
+
+1. The same source fixture is compiled and executed with the optimization
+   disabled and enabled, and both executions have the same observable result.
+2. Named pipeline boundaries expose focused before/after IR snapshots. A
+   lowering-time optimization compares disabled and enabled output at the same
+   boundary; an IR-to-IR pass captures its immediate input and output.
+3. Structural assertions count the operations expected to disappear and the
+   semantically required operations expected to remain.
+4. Negative fixtures cover cases where the proof is incomplete and the
+   optimization must leave the IR unchanged.
+5. Ability and RC optimizations share fixtures and test helpers rather than
+   defining pass-specific execution models.
+
+The comparison toggles only the optimization under test. Other optimization
+settings, target selection, and sanitizer settings remain identical so that a
+failure is attributable to one transformation.
+
+Lowering-time choices are represented by immutable, stage-specific option
+objects rather than individual boolean fields on the lowering context. When a
+choice controls reuse of compiler-generated helpers, the context keeps that
+mutable reuse state in a dedicated generated-function cache. Policies with
+meaningful modes use named enums—for example, identity done continuations are
+either generated `PerUse` or shared `PerCompilationUnit`—so production and
+conformance profiles remain explicit as more optimizations are added.
+
 ---
 
 ## Optimization Pipeline

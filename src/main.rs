@@ -126,7 +126,11 @@ fn compile_file(
             "native" => {
                 println!("Compiling {} to native executable...", input_path.display());
 
-                let config = CompilationConfig::new(db, sanitize_address);
+                let config = CompilationConfig::new(
+                    db,
+                    sanitize_address,
+                    tribute::pipeline::OptimizationOptions::production(),
+                );
                 if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
                     if let Err(e) = link_native_binary(&object_bytes, &output) {
