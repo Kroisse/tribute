@@ -1384,6 +1384,7 @@ mod tests {
         let source = source_from_str(
             "io.trb",
             r#"
+use std::io::print
 use std::io::print_line
 use std::io::read_line
 
@@ -1392,6 +1393,7 @@ fn input() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
 }
 
 fn main() ->{std::io::Io} Nil {
+    print("hello")
     print_line("hello")
 }
 "#,
@@ -1405,6 +1407,21 @@ fn main() ->{std::io::Io} Nil {
         assert!(output.contains("tribute_io.write"), "{output}");
         assert!(output.contains("tribute_io.read_line"), "{output}");
         assert!(!output.contains("__tribute_io_"), "{output}");
+
+        let mut newline_values = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if let Ok(write) = tribute_ir::dialect::tribute_io::Write::from_op(&ctx, op)
+                && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
+                    ctx.value_def(write.newline(&ctx))
+                && let Ok(constant) = trunk_ir::dialect::arith::Const::from_op(&ctx, producer)
+                && let trunk_ir::Attribute::Bool(value) = constant.value(&ctx)
+            {
+                newline_values.push(value);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        newline_values.sort_unstable();
+        assert_eq!(newline_values, [false, true], "{output}");
     }
 
     #[salsa_test]

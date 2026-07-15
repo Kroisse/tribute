@@ -132,4 +132,39 @@ mod tests {
         assert!(output.contains("tribute_io.read_line"), "{output}");
         assert!(!output.contains("__tribute_io_"), "{output}");
     }
+
+    #[test]
+    fn leaves_malformed_and_unrelated_calls_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @other(%0: core.ptr) -> core.ptr {
+                ^bb0:
+                    func.return %0
+                }
+                func.func @caller(%0: core.ptr) -> core.ptr {
+                ^bb0:
+                    %1 = func.call %0 {callee = @"std::io::__tribute_io_write"} : core.ptr
+                    %2 = func.call %0 {callee = @"std::io::__tribute_io_read_line"} : core.ptr
+                    %3 = func.call %0 {callee = @other} : core.ptr
+                    func.return %3
+                }
+            }
+            "#,
+        );
+        let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
+
+        LowerIoIntrinsics.run(&mut ctx, core).unwrap();
+
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("tribute_io."), "{output}");
+        assert!(output.contains("std::io::__tribute_io_write"), "{output}");
+        assert!(
+            output.contains("std::io::__tribute_io_read_line"),
+            "{output}"
+        );
+        assert!(output.contains("func.func @other"), "{output}");
+    }
 }
