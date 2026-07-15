@@ -456,7 +456,6 @@ fn lower_struct_decl<'db>(
 ) {
     let location = ctx.location(decl.id);
     let name = decl.name;
-    let struct_ty = ctx.adt_typeref(ir, name);
 
     // Generate accessor module with getter functions
     let fields: Vec<(Symbol, TypeRef)> = decl
@@ -487,6 +486,7 @@ fn lower_struct_decl<'db>(
             qualified_key
         )
     });
+    let struct_ty = ctx.adt_typeref(ir, qualified_key);
 
     let module_path = ctx.module_path().clone();
 

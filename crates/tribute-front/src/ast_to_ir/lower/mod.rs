@@ -183,7 +183,7 @@ pub(super) fn extract_type_name<'db>(
     resolved: &ResolvedRef<'db>,
 ) -> Symbol {
     match resolved {
-        ResolvedRef::Constructor { id, .. } => id.name(db),
+        ResolvedRef::Constructor { id, .. } => id.qualified(db),
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }

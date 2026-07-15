@@ -295,7 +295,7 @@ impl<'db> TdnrResolver<'db> {
                 }
             }
             TypeAnnotationKind::Path(path) if !path.is_empty() => {
-                let name = path.last().copied().unwrap();
+                let name = crate::qualified_path_symbol(path).unwrap();
                 Type::new(self.db, TypeKind::Named { name, args: vec![] })
             }
             TypeAnnotationKind::App { ctor, args } => {
@@ -329,7 +329,9 @@ impl<'db> TdnrResolver<'db> {
         let ann = annotation.as_ref()?;
         match &ann.kind {
             TypeAnnotationKind::Named(name) => Some(*name),
-            TypeAnnotationKind::Path(path) if !path.is_empty() => path.last().copied(),
+            TypeAnnotationKind::Path(path) if !path.is_empty() => {
+                crate::qualified_path_symbol(path)
+            }
             TypeAnnotationKind::App { ctor, .. } => {
                 self.extract_receiver_type_from_annotation(&Some((**ctor).clone()))
             }

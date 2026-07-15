@@ -75,9 +75,11 @@ builtin discriminator를 가진다. Resolver는 `std::io::Io`를 virtual builtin
 사용자가 선언한 `ability Io {}`는 이름이 같아도 builtin metadata를 얻지 않는다.
 
 이 virtual binding은 아직 file-based module loader를 요구하지 않는다. 이후 기본 I/O
-함수와 오류 타입은 embedded standard-library source로 제공할 수 있지만, `Io`의 ambient
-성질은 source declaration이 아니라 builtin identity에 연결한다. Builtin identity는
-frontend 판정용이며 runtime ability ID나 Evidence marker를 암시하지 않는다.
+함수와 오류 타입은 embedded standard-library source의 `std::io` module로 제공하지만,
+`Io`의 ambient 성질은 source declaration이 아니라 builtin identity에 연결한다. Source
+module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespace에서
+결합된다. Builtin identity는 frontend 판정용이며 runtime ability ID나 Evidence marker를
+암시하지 않는다.
 
 ## Calling Convention
 
@@ -157,6 +159,27 @@ EOF는 runtime failure와 같은 `Throw(Error)` 채널을 사용하므로 반환
 Public API는 `extern "C"`, WASI import, `__print_line` 같은 target detail을
 노출하지 않는다. Shared lowering은 동적 `Bytes`를 읽고 쓸 수 있는
 target-independent I/O boundary를 생성한다.
+
+```text
+tribute_io.write(bytes: Bytes, newline: Bool) -> Nil
+tribute_io.read_line() -> ReadLineResult
+
+ReadLineResult =
+    Line(valid_utf8: Bytes)
+  | EndOfFile
+  | InvalidEncoding
+  | System(code: Int, message_utf8: Bytes)
+```
+
+Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write`를
+호출한다. `read_line`의 `Line` payload와 `System` message는 boundary가 유효한 UTF-8임을
+보장하므로 source wrapper가 `String::from_bytes`로 감싼다. 나머지 status는
+`std::io::Error`로 변환하여 `Throw(Error)` operation을 호출한다.
+
+`tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
+사용하는 private intrinsic stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
+target pipeline 이전에는 제거된다. #770은 이 shared contract까지 구현하고, 실제 native와
+Wasm lowering은 각각 #772와 #771이 담당한다.
 
 - Native lowering은 `tribute-runtime`의 stdin/stdout ABI로 변환한다.
 - Wasm lowering은 현재 backend가 지원하는 WASI 또는 custom host import로 변환한다.

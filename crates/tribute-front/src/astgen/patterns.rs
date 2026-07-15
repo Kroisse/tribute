@@ -104,7 +104,7 @@ fn lower_constructor_pattern(
     ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> PatternKind<UnresolvedName> {
-    // grammar.js: field("name", $.type_identifier)
+    // grammar.js: field("name", $.type_path)
     //   + optional choice of:
     //     - Tuple-style: field("args", $.pattern_list)
     //     - Struct-style: field("fields", $.pattern_fields)
@@ -700,6 +700,24 @@ mod tests {
             panic!("Expected bind pattern in variant");
         };
         assert_eq!(name.to_string(), "y");
+    }
+
+    #[test]
+    fn test_qualified_constructor_pattern() {
+        let source = r#"
+            fn main() {
+                case x {
+                    std::io::ReadLine(bytes) -> bytes
+                    _ -> b""
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Variant { ctor, fields } = pattern else {
+            panic!("Expected variant pattern, got {:?}", pattern);
+        };
+        assert_eq!(ctor.qualified.to_string(), "std::io::ReadLine");
+        assert_eq!(fields.len(), 1);
     }
 
     #[test]

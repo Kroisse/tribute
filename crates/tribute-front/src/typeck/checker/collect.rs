@@ -193,6 +193,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name;
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
         let type_params: Vec<TypeParam> = s
             .type_params
             .iter()
@@ -211,10 +212,10 @@ impl<'db> TypeChecker<'db> {
         let args: Vec<Type<'db>> = (0..type_params.len() as u32)
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
-        let struct_ty = self.env.named_type(name, args);
+        let struct_ty = self.env.named_type(qualified_name, args);
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), struct_ty);
-        self.env.register_type_def(name, scheme);
+        self.env.register_type_def(qualified_name, scheme);
 
         // Register struct constructor
         // Constructor type is: fn(field_types...) -> StructType
@@ -234,10 +235,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-        let ctor_id = CtorId::new(
-            self.db(),
-            crate::qualified_symbol(&mut self.current_prefix().to_owned(), name),
-        );
+        let ctor_id = CtorId::new(self.db(), qualified_name);
         self.env.register_constructor(ctor_id, ctor_scheme);
 
         // Register struct field information for accessor resolution
@@ -250,12 +248,14 @@ impl<'db> TypeChecker<'db> {
                 Some((field_name, field_ty))
             })
             .collect();
-        self.env.register_struct_fields(name, type_params, fields);
+        self.env
+            .register_struct_fields(qualified_name, type_params, fields);
     }
 
     /// Collect an enum definition.
     fn collect_enum_def(&mut self, e: &EnumDecl) {
         let name = e.name;
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
         let type_params: Vec<TypeParam> = e
             .type_params
             .iter()
@@ -266,14 +266,15 @@ impl<'db> TypeChecker<'db> {
         let args: Vec<Type<'db>> = (0..type_params.len() as u32)
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
-        let enum_ty = self.env.named_type(name, args);
+        let enum_ty = self.env.named_type(qualified_name, args);
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), enum_ty);
-        self.env.register_type_def(name, scheme);
+        self.env.register_type_def(qualified_name, scheme);
 
         // Register enum variant names for exhaustiveness checking
         let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name).collect();
-        self.env.register_enum_variants(name, variant_names);
+        self.env
+            .register_enum_variants(qualified_name, variant_names);
 
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
@@ -399,7 +400,7 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::Named(name) => self.primitive_or_named_type(*name),
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(&name) = parts.last() {
+                if let Some(name) = crate::qualified_path_symbol(parts) {
                     self.env.named_type(name, vec![])
                 } else {
                     self.env.error_type()
@@ -509,7 +510,7 @@ impl<'db> TypeChecker<'db> {
                 self.env.tuple_type(elem_types)
             }
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(&name) = parts.last() {
+                if let Some(name) = crate::qualified_path_symbol(parts) {
                     self.env.named_type(name, vec![])
                 } else {
                     self.env.error_type()

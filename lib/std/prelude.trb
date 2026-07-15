@@ -306,8 +306,66 @@ pub mod abilities {
 }
 
 // =============================================================================
-// I/O functions
+// Standard I/O
 // =============================================================================
+
+pub mod std {
+    pub mod io {
+        /// Platform error details reported by an I/O operation.
+        pub struct SystemError { code: Int, message: String }
+
+        /// Errors that may be raised by standard I/O operations.
+        pub enum Error {
+            EndOfFile,
+            InvalidEncoding,
+            System(std::io::SystemError),
+        }
+
+        // Private transport value used only between the embedded wrapper and
+        // the compiler-owned, target-independent I/O boundary.
+        enum ReadLineResult {
+            ReadLine(Bytes),
+            ReadEndOfFile,
+            ReadInvalidEncoding,
+            ReadSystem(Int, Bytes),
+        }
+
+        extern "intrinsic" fn __tribute_io_write(bytes: Bytes, newline: Bool) -> Nil
+        extern "intrinsic" fn __tribute_io_read_line() -> std::io::ReadLineResult
+
+        /// Print a string to standard output (no trailing newline).
+        pub fn print(message: String) ->{std::io::Io} Nil {
+            std::io::__tribute_io_write(String::to_bytes(message), False)
+        }
+
+        /// Print a line to standard output.
+        pub fn print_line(message: String) ->{std::io::Io} Nil {
+            std::io::__tribute_io_write(String::to_bytes(message), True)
+        }
+
+        /// Read one UTF-8 line from standard input.
+        pub fn read_line() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
+            case std::io::__tribute_io_read_line() {
+                std::io::ReadLineResult::ReadLine(bytes) -> String::from_bytes(bytes)
+                std::io::ReadLineResult::ReadEndOfFile -> abilities::Throw::throw(
+                    std::io::Error::EndOfFile
+                )
+                std::io::ReadLineResult::ReadInvalidEncoding -> abilities::Throw::throw(
+                    std::io::Error::InvalidEncoding
+                )
+                std::io::ReadLineResult::ReadSystem(code, message) -> abilities::Throw::throw(
+                    std::io::Error::System(std::io::SystemError {
+                        code: code,
+                        message: String::from_bytes(message),
+                    })
+                )
+            }
+        }
+    }
+}
+
+// Legacy target-specific helpers remain available until the native and Wasm
+// backends lower the shared I/O boundary.
 
 /// Print a string to standard output (no trailing newline).
 fn print(message: String) -> Nil {

@@ -207,7 +207,12 @@ pub(super) fn lower_type_annotation(
     // Check if the node itself is already a type node
     if matches!(
         node.kind(),
-        "type_identifier" | "type_variable" | "generic_type" | "function_type" | "tuple_type"
+        "type_identifier"
+            | "type_path"
+            | "type_variable"
+            | "generic_type"
+            | "function_type"
+            | "tuple_type"
     ) {
         return lower_type_node(ctx, node);
     }
@@ -216,8 +221,8 @@ pub(super) fn lower_type_annotation(
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "type_identifier" | "type_variable" | "generic_type" | "function_type"
-            | "tuple_type" => {
+            "type_identifier" | "type_path" | "type_variable" | "generic_type"
+            | "function_type" | "tuple_type" => {
                 return lower_type_node(ctx, child);
             }
             _ => {}
@@ -240,6 +245,7 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
                 kind: TypeAnnotationKind::Named(name),
             })
         }
+        "type_path" => Some(lower_type_path(ctx, node)),
         "generic_type" => {
             // Generic type like List(a) or Map(k, v)
             let id = ctx.fresh_id_with_span(&node);
@@ -248,11 +254,11 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
             let mut cursor = node.walk();
             let children: Vec<_> = node.named_children(&mut cursor).collect();
 
-            if let Some(name_node) = children.first().filter(|n| n.kind() == "type_identifier") {
-                let ctor = Box::new(TypeAnnotation {
-                    id: ctx.fresh_id_with_span(name_node),
-                    kind: TypeAnnotationKind::Named(ctx.node_symbol(name_node)),
-                });
+            if let Some(name_node) = children
+                .first()
+                .filter(|n| matches!(n.kind(), "type_identifier" | "type_path"))
+            {
+                let ctor = Box::new(lower_type_node(ctx, *name_node)?);
 
                 // Collect type arguments (remaining children)
                 let args: Vec<TypeAnnotation> = children
@@ -377,7 +383,7 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAn
         .first()
         .filter(|n| n.kind() == "ability_path" || n.kind() == "type_identifier")?;
     let id = ctx.fresh_id_with_span(&node);
-    let name_ann = lower_ability_path(ctx, *path_node);
+    let name_ann = lower_type_path(ctx, *path_node);
 
     // Check for type_arguments (e.g. State(Int))
     let type_args_node = children.iter().find(|n| n.kind() == "type_arguments");
@@ -399,13 +405,13 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAn
     }
 }
 
-/// Lower an ability_path into a TypeAnnotation.
+/// Lower a type path into a TypeAnnotation.
 ///
 /// Single segment (`Abort`) → `Named`, multi-segment (`abilities::Throw`) → `Path`.
-fn lower_ability_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
+fn lower_type_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
     let id = ctx.fresh_id_with_span(&node);
 
-    // Single segment: ability_path is just a type_identifier
+    // A single-segment path is represented as a type_identifier.
     if node.kind() == "type_identifier" {
         let name = ctx.node_symbol(&node);
         return TypeAnnotation {
@@ -414,7 +420,7 @@ fn lower_ability_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotatio
         };
     }
 
-    // Multi-segment or single-segment ability_path
+    // Collect the segments of a qualified type or ability path.
     let mut segments = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
