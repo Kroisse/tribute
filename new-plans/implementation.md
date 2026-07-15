@@ -233,6 +233,12 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
 
+기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
+Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
+`tribute_io.read_line` operation으로 바꾼다. 이 boundary는 rope 표현 대신 `Bytes`와
+target-independent `ReadLineResult`를 사용한다. Native와 Wasm pipeline은 이후 각자의
+runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.
+
 논리적인 CPS ABI에서 함수와 `done_k`의 control result는 `Never`다:
 
 ```text

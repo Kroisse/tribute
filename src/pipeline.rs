@@ -493,6 +493,7 @@ fn run_shared_pipeline(
     structural_pm
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+        .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics)
         // Evidence params are now inserted directly during ast_to_ir lowering.
         .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
     structural_pm
@@ -1376,6 +1377,34 @@ mod tests {
         assert!(result.is_some(), "Should compile successfully");
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[salsa_test]
+    fn test_std_io_lowers_to_shared_dialect(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "io.trb",
+            r#"
+use std::io::print_line
+use std::io::read_line
+
+fn input() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
+    read_line()
+}
+
+fn main() ->{std::io::Io} Nil {
+    print_line("hello")
+}
+"#,
+        );
+
+        let (ctx, module) = compile_ast(db, source)
+            .expect("pipeline should not fail")
+            .expect("pipeline should produce a module");
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+
+        assert!(output.contains("tribute_io.write"), "{output}");
+        assert!(output.contains("tribute_io.read_line"), "{output}");
+        assert!(!output.contains("__tribute_io_"), "{output}");
     }
 
     #[salsa_test]

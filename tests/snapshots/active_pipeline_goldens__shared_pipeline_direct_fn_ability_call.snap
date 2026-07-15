@@ -7,13 +7,17 @@ core.module @direct_fn {
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)
+  !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
+  !t3 = core.ability_ref() {name = @"abilities::Throw"}
   !"Result$T3$T4" = adt.enum() {name = @"Result$T3$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T6$T5" = adt.enum() {name = @"Result$T6$T5", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T2" = adt.enum() {name = @"Option$T2", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
   !t2 = closure.closure(core.func(tribute_rt.anyref, !t0, closure.closure(!t1), tribute_rt.anyref))
+  !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
   !"Result$T4$T3" = adt.enum() {name = @"Result$T4$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T1" = adt.enum() {name = @"Option$T1", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"Option$T3" = adt.enum() {name = @"Option$T3", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
@@ -33,6 +37,7 @@ core.module @direct_fn {
   func.func @"direct_fn::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
+    !"std::io::SystemError_1" = adt.typeref() {name = @"std::io::SystemError"}
 
   func.func @use_console(%0: !t0) -> core.i32 attributes {tribute.calling_convention = 1} {
       %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref

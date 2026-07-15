@@ -3,4 +3,5 @@
 pub mod ability;
 pub mod closure;
 pub mod effect;
+pub mod tribute_io;
 pub mod tribute_rt;
