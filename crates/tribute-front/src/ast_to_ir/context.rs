@@ -19,6 +19,8 @@ use crate::ast::{
     AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
 };
 
+use super::{AstToIrOptions, DoneContinuationPolicy};
+
 /// Information about a captured variable.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -33,10 +35,18 @@ pub struct CaptureInfo {
     pub value: ValueRef,
 }
 
+/// Mutable reuse state for helper functions synthesized during lowering.
+#[derive(Default)]
+struct GeneratedFunctionCache {
+    identity_done_k: Option<Symbol>,
+}
+
 /// Context for lowering AST to arena TrunkIR.
 pub struct IrLoweringCtx<'db> {
     pub db: &'db dyn salsa::Database,
     pub path: PathRef,
+    /// Immutable policies selected for this lowering invocation.
+    options: AstToIrOptions,
     /// Span map for looking up source locations.
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
@@ -55,11 +65,8 @@ pub struct IrLoweringCtx<'db> {
     module_path: SymbolVec,
     /// Counter for generating unique lambda names.
     lambda_counter: u64,
-    /// Shared identity `done_k` function for this compilation unit.
-    ///
-    /// The function definition is emitted once in the compilation root, while
-    /// each SSA region still creates its own closure value referencing it.
-    identity_done_k_func: Option<Symbol>,
+    /// Compiler-generated helper functions available for reuse.
+    generated_functions: GeneratedFunctionCache,
     /// Counter for generating unique local IDs (for synthetic bindings like continuations).
     local_id_counter: u32,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
@@ -109,6 +116,7 @@ impl<'db> IrLoweringCtx<'db> {
         Self {
             db,
             path,
+            options: AstToIrOptions::production(),
             span_map,
             scopes: vec![HashMap::new()],
             function_types,
@@ -116,7 +124,7 @@ impl<'db> IrLoweringCtx<'db> {
             definition_conventions: HashMap::new(),
             module_path,
             lambda_counter: 0,
-            identity_done_k_func: None,
+            generated_functions: GeneratedFunctionCache::default(),
             local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             module_block: None,
             struct_fields: HashMap::new(),
@@ -129,6 +137,13 @@ impl<'db> IrLoweringCtx<'db> {
             done_k: None,
             evidence: None,
         }
+    }
+
+    /// Select immutable policies before lowering begins.
+    pub(crate) fn with_options(mut self, options: AstToIrOptions) -> Self {
+        debug_assert!(self.generated_functions.identity_done_k.is_none());
+        self.options = options;
+        self
     }
 
     /// Get the current module path.
@@ -345,17 +360,26 @@ impl<'db> IrLoweringCtx<'db> {
         )
     }
 
-    /// Return the shared identity `done_k` function, initializing it if needed.
+    /// Return the identity `done_k` function selected by the optimization profile.
     ///
     /// The symbol is cached only after `init` completes successfully.
     pub(crate) fn identity_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
-        if let Some(name) = self.identity_done_k_func {
+        match self.options.done_continuation {
+            DoneContinuationPolicy::PerUse => {
+                let name = self.gen_lambda_name();
+                init(name);
+                return name;
+            }
+            DoneContinuationPolicy::PerCompilationUnit => {}
+        }
+
+        if let Some(name) = self.generated_functions.identity_done_k {
             return name;
         }
 
         let name = self.gen_compilation_unit_lambda_name();
         init(name);
-        self.identity_done_k_func = Some(name);
+        self.generated_functions.identity_done_k = Some(name);
         name
     }
 

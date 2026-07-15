@@ -41,6 +41,41 @@ use crate::ast::{
 
 pub use context::IrLoweringCtx;
 
+/// Policy for compiler-generated identity done continuations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum DoneContinuationPolicy {
+    /// Emit a separate helper function at every use site.
+    PerUse,
+    /// Share one helper function across the compilation unit.
+    PerCompilationUnit,
+}
+
+/// Independently selectable AST-to-IR policies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AstToIrOptions {
+    pub done_continuation: DoneContinuationPolicy,
+}
+
+impl AstToIrOptions {
+    pub const fn production() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
+        }
+    }
+
+    pub const fn baseline() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerUse,
+        }
+    }
+}
+
+impl Default for AstToIrOptions {
+    fn default() -> Self {
+        Self::production()
+    }
+}
+
 /// A type-checked module and the metadata required to lower it to TrunkIR.
 ///
 /// This models the boundary between the typed frontend and IR lowering as one
@@ -63,8 +98,19 @@ impl<'db> TypedModule<'db> {
         ir: &mut IrContext,
         source_uri: &str,
     ) -> IrModule {
+        self.lower_to_ir_with_options(db, ir, source_uri, AstToIrOptions::production())
+    }
+
+    /// Lower this typed module with explicit optimization selection.
+    pub fn lower_to_ir_with_options(
+        self,
+        db: &'db dyn salsa::Database,
+        ir: &mut IrContext,
+        source_uri: &str,
+        options: AstToIrOptions,
+    ) -> IrModule {
         let path = ir.paths.intern(source_uri.to_owned());
-        self.lower_module(db, ir, path)
+        self.lower_module(db, ir, path, options)
     }
 }
 

@@ -478,6 +478,16 @@ field_offsets[2] = 8   // c at byte 8
 
 - E2E: Tribute source → native binary with RC
 - Memory safety: Valgrind/AddressSanitizer (no leaks, no double-frees)
+- Optimization conformance: compile and execute the same fixture with one RC
+  optimization disabled and enabled, preserving exit status and output
+- Before/after IR: snapshot the named boundary after RC insertion and before RC
+  lowering, and assert the exact retain/release operations removed
+- Conservative negatives: calls, stores, branch arguments, aliases, closure
+  captures, handler captures, and continuation captures must block elision
+
+RC optimization tests follow the shared validation contract in
+`optimizations.md`. AddressSanitizer runs use the same sanitizer configuration
+for both sides of the optimization comparison.
 
 ### Test Scenarios
 

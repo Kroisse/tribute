@@ -135,6 +135,7 @@ impl<'db> TypedModule<'db> {
         db: &'db dyn salsa::Database,
         ir: &mut IrContext,
         path: PathRef,
+        options: super::super::AstToIrOptions,
     ) -> IrModule {
         let Self {
             ast,
@@ -156,7 +157,8 @@ impl<'db> TypedModule<'db> {
             ability_conventions,
             module_path,
             node_types,
-        );
+        )
+        .with_options(options);
 
         prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
 

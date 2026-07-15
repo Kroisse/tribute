@@ -5,8 +5,11 @@ use std::process::{Command, Output};
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::{CompilationConfig, compile_to_native_binary, link_native_binary};
+use tribute::pipeline::{
+    CompilationConfig, OptimizationOptions, compile_to_native_binary, link_native_binary,
+};
 use tribute_front::SourceCst;
+use tribute_front::ast_to_ir::{AstToIrOptions, DoneContinuationPolicy};
 use tribute_passes::Diagnostic;
 
 /// Compile source to a native object file, panicking with diagnostics on failure.
@@ -22,7 +25,23 @@ pub fn compile_native_or_panic_with(
     source_file: SourceCst,
     sanitize_address: bool,
 ) -> Vec<u8> {
-    let config = CompilationConfig::new(db, sanitize_address);
+    compile_native_or_panic_with_options(
+        db,
+        source_file,
+        sanitize_address,
+        OptimizationOptions::production(),
+    )
+}
+
+/// Compile source with explicit optimization selection.
+#[allow(dead_code)]
+pub fn compile_native_or_panic_with_options(
+    db: &dyn salsa::Database,
+    source_file: SourceCst,
+    sanitize_address: bool,
+    optimizations: OptimizationOptions,
+) -> Vec<u8> {
+    let config = CompilationConfig::new(db, sanitize_address, optimizations);
     compile_to_native_binary(db, source_file, config).unwrap_or_else(|| {
         let diagnostics: Vec<_> =
             compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config);
@@ -42,7 +61,22 @@ pub fn compile_native_or_panic_with(
 /// Panics if compilation, linking, or execution fails.
 #[allow(dead_code)]
 pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
-    compile_and_run_native_impl(source_name, source_code, false)
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        false,
+        DoneContinuationPolicy::PerCompilationUnit,
+    )
+}
+
+/// Compile and run with explicit done-continuation deduplication selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_done_continuation_dedup(
+    source_name: &str,
+    source_code: &str,
+    policy: DoneContinuationPolicy,
+) -> Output {
+    compile_and_run_native_impl(source_name, source_code, false, policy)
 }
 
 /// Extern declarations for print intrinsics, prepended to test source code.
@@ -82,13 +116,19 @@ pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdou
 /// Panics if compilation, linking, or execution fails.
 #[allow(dead_code)]
 pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Output {
-    compile_and_run_native_impl(source_name, source_code, true)
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        true,
+        DoneContinuationPolicy::PerCompilationUnit,
+    )
 }
 
 fn compile_and_run_native_impl(
     source_name: &str,
     source_code: &str,
     sanitize_address: bool,
+    done_continuation: DoneContinuationPolicy,
 ) -> Output {
     use tribute::database::parse_with_thread_local;
 
@@ -98,7 +138,11 @@ fn compile_and_run_native_impl(
         let tree = parse_with_thread_local(&source_rope, None);
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
-        let object_bytes = compile_native_or_panic_with(db, source_file, sanitize_address);
+        let optimizations = OptimizationOptions {
+            ast_to_ir: AstToIrOptions { done_continuation },
+        };
+        let object_bytes =
+            compile_native_or_panic_with_options(db, source_file, sanitize_address, optimizations);
 
         // Link into executable
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");

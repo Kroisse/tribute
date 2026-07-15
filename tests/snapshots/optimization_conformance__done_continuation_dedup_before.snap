@@ -1,0 +1,30 @@
+---
+source: tests/optimization_conformance.rs
+expression: focused_identity_done_ir(&before)
+---
+func.func @"done_continuation_dedup_snapshot::Option::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%8 = closure.new %7 {func_ref = @"done_continuation_dedup_snapshot::Option::__lambda_0"} : !t1
+func.func @"done_continuation_dedup_snapshot::Option::__lambda_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%8 = closure.new %7 {func_ref = @"done_continuation_dedup_snapshot::Option::__lambda_1"} : !t1
+func.func @"done_continuation_dedup_snapshot::Result::__lambda_2"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%8 = closure.new %7 {func_ref = @"done_continuation_dedup_snapshot::Result::__lambda_2"} : !t1
+func.func @"done_continuation_dedup_snapshot::Result::__lambda_3"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%11 = closure.new %10 {func_ref = @"done_continuation_dedup_snapshot::Result::__lambda_3"} : !t1
+func.func @"done_continuation_dedup_snapshot::Result::__lambda_4"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%8 = closure.new %7 {func_ref = @"done_continuation_dedup_snapshot::Result::__lambda_4"} : !t1
+func.func @"done_continuation_dedup_snapshot::std::io::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::std::io::__lambda_6"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::std::io::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%13 = closure.new %12 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_5"} : !t1
+%20 = closure.new %19 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_6"} : !t1
+%27 = closure.new %26 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_7"} : !t1
+func.func @"done_continuation_dedup_snapshot::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::__lambda_10"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::__lambda_11"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+func.func @"done_continuation_dedup_snapshot::__lambda_12"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+%5 = closure.new %4 {func_ref = @"done_continuation_dedup_snapshot::__lambda_8"} : !t1
+%15 = closure.new %14 {func_ref = @"done_continuation_dedup_snapshot::__lambda_11"} : !t1
+%23 = closure.new %22 {func_ref = @"done_continuation_dedup_snapshot::__lambda_12"} : !t1
+%35 = closure.new %34 {func_ref = @"done_continuation_dedup_snapshot::__lambda_9"} : !t1
+%43 = closure.new %42 {func_ref = @"done_continuation_dedup_snapshot::__lambda_10"} : !t1

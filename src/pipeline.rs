@@ -101,6 +101,41 @@ impl From<PassError> for DumpIrError {
 pub struct CompilationConfig {
     /// Enable AddressSanitizer instrumentation.
     pub sanitize_address: bool,
+    /// Stage-specific optimization policies.
+    pub optimizations: OptimizationOptions,
+}
+
+/// Independently selectable optimization stages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct OptimizationOptions {
+    pub ast_to_ir: ast_to_ir::AstToIrOptions,
+}
+
+impl OptimizationOptions {
+    pub const fn production() -> Self {
+        Self {
+            ast_to_ir: ast_to_ir::AstToIrOptions::production(),
+        }
+    }
+
+    pub const fn baseline() -> Self {
+        Self {
+            ast_to_ir: ast_to_ir::AstToIrOptions::baseline(),
+        }
+    }
+}
+
+impl Default for OptimizationOptions {
+    fn default() -> Self {
+        Self::production()
+    }
+}
+
+/// Stable shared-pipeline boundaries available to optimization tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum SharedPipelineStage {
+    /// Immediately after AST-to-IR lowering, before shared middle-end passes.
+    AfterFrontend,
 }
 
 // AST-based pipeline imports
@@ -244,6 +279,7 @@ fn merge_and_lower_to_ir<'db>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
+    options: OptimizationOptions,
 ) -> (IrContext, Module) {
     use tribute_front::ast::TypedRef;
 
@@ -332,7 +368,7 @@ fn merge_and_lower_to_ir<'db>(
         node_types: merged_node_types,
         ability_conventions: merged_ability_conventions,
     }
-    .lower_to_ir(db, &mut ir, source_uri);
+    .lower_to_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
 
     (ir, module)
 }
@@ -345,6 +381,14 @@ pub fn compile_frontend(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
+    compile_frontend_with_options(db, source, OptimizationOptions::production())
+}
+
+fn compile_frontend_with_options(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    options: OptimizationOptions,
+) -> Option<(IrContext, Module)> {
     let typed = parse_and_lower_ast(db, source)?;
     let has_frontend_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         .iter()
@@ -352,7 +396,7 @@ pub fn compile_frontend(
     if has_frontend_errors {
         return None;
     }
-    Some(merge_and_lower_to_ir(db, &typed, source))
+    Some(merge_and_lower_to_ir(db, &typed, source, options))
 }
 
 /// Result of the full compilation pipeline.
@@ -481,9 +525,22 @@ fn run_shared_pipeline(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    run_shared_pipeline_with_options(db, source, OptimizationOptions::production(), None)
+}
+
+fn run_shared_pipeline_with_options(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    options: OptimizationOptions,
+    stop_after: Option<SharedPipelineStage>,
+) -> PassResult<Option<(IrContext, Module)>> {
+    let Some((mut ctx, m)) = compile_frontend_with_options(db, source, options) else {
         return Ok(None);
     };
+
+    if stop_after == Some(SharedPipelineStage::AfterFrontend) {
+        return Ok(Some((ctx, m)));
+    }
 
     // Middle-end passes, sequenced through the PassManager (#268).
     // Registration order == execution order.
@@ -527,6 +584,24 @@ fn run_shared_pipeline(
     ability_boundary_pm.run(&mut ctx, core_module)?;
 
     Ok(Some((ctx, m)))
+}
+
+/// Dump shared IR at a named optimization boundary.
+///
+/// This entry point exists for conformance gates. Production compilation still
+/// runs the complete shared pipeline.
+#[salsa::tracked]
+pub fn dump_shared_ir_at_stage(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    stage: SharedPipelineStage,
+    options: OptimizationOptions,
+) -> Result<String, DumpIrError> {
+    let Some((ctx, module)) = run_shared_pipeline_with_options(db, source, options, Some(stage))?
+    else {
+        return Ok(String::new());
+    };
+    Ok(trunk_ir::printer::print_module(&ctx, module.op()))
 }
 
 fn install_debug_use_chain_verifier(pm: &mut PassManager) {
@@ -928,7 +1003,8 @@ pub fn compile_to_native_binary<'db>(
     source: SourceCst,
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
-    let (mut ctx, m) = match run_shared_pipeline(db, source) {
+    let options = config.optimizations(db);
+    let (mut ctx, m) = match run_shared_pipeline_with_options(db, source, options, None) {
         Ok(Some(result)) => result,
         Ok(None) => return None,
         Err(error) => {
