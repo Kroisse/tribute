@@ -235,10 +235,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-        let ctor_id = CtorId::new(
-            self.db(),
-            crate::qualified_symbol(&mut self.current_prefix().to_owned(), name),
-        );
+        let ctor_id = CtorId::new(self.db(), qualified_name);
         self.env.register_constructor(ctor_id, ctor_scheme);
 
         // Register struct field information for accessor resolution

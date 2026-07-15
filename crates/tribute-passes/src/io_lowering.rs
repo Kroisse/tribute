@@ -47,15 +47,15 @@ impl RewritePattern for IoCallPattern {
         let callee = call.callee(ctx);
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op).first().copied();
-        let operands = ctx.op_operands(op).to_vec();
 
         let replacement = if callee == WRITE_INTRINSIC {
-            let (Some(result_ty), [bytes, newline]) = (result_ty, operands.as_slice()) else {
+            let (Some(result_ty), [bytes, newline]) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };
-            tribute_io::write(ctx, loc, *bytes, *newline, result_ty).op_ref()
+            let (bytes, newline) = (*bytes, *newline);
+            tribute_io::write(ctx, loc, bytes, newline, result_ty).op_ref()
         } else if callee == READ_LINE_INTRINSIC {
-            let (Some(result_ty), []) = (result_ty, operands.as_slice()) else {
+            let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };
             tribute_io::read_line(ctx, loc, result_ty).op_ref()
