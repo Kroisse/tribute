@@ -30,11 +30,7 @@ core.module @direct_fn_native {
       func.unreachable
   }
 
-  func.func @"direct_fn_native::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"direct_fn_native::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @"direct_fn_native::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
 

@@ -10,18 +10,6 @@ core.module @test {
   func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @"test::__lambda_1"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-  func.func @"test::__lambda_2"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-  func.func @"test::__lambda_3"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-  func.func @"test::__lambda_4"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
   func.func @run_state(%0: !t1, %1: tribute_rt.anyref, %2: core.func(tribute_rt.anyref), %3: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %4 = closure.lambda(%5: tribute_rt.anyref) -> tribute_rt.anyref [%2] {
           %6 = core.unrealized_conversion_cast %2 : !t2
@@ -36,7 +24,7 @@ core.module @test {
           %16 = arith.cmpi %13, %15 {predicate = @eq} : core.i1
           %17 = scf.if %16 : tribute_rt.anyref {
               %18 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %19 = closure.new %18 {func_ref = @"test::__lambda_3"} : !t0
+              %19 = closure.new %18 {func_ref = @"test::__lambda_0"} : !t0
               %20 = closure.lambda(%21: !t1, %22: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%12, %3] {
                   %23 = core.unrealized_conversion_cast %12 : !t0
                   %24 = func.call_indirect %23, %3 : tribute_rt.anyref
@@ -50,7 +38,7 @@ core.module @test {
               %28 = arith.const {value = 1} : core.i1
               %29 = scf.if %28 : tribute_rt.anyref {
                   %30 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-                  %31 = closure.new %30 {func_ref = @"test::__lambda_4"} : !t0
+                  %31 = closure.new %30 {func_ref = @"test::__lambda_0"} : !t0
                   %32 = closure.lambda(%33: !t1, %34: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%12] {
                       %35 = arith.const {value = unit} : core.nil
                       %36 = core.unrealized_conversion_cast %35 : tribute_rt.anyref
@@ -78,7 +66,7 @@ core.module @test {
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
             ^bb11(%45: tribute_rt.anyref, %46: tribute_rt.anyref):
               %47 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %48 = closure.new %47 {func_ref = @"test::__lambda_1"} : !t0
+              %48 = closure.new %47 {func_ref = @"test::__lambda_0"} : !t0
               %49 = closure.lambda(%50: !t1, %51: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%45, %3] {
                   %52 = core.unrealized_conversion_cast %45 : !t0
                   %53 = func.call_indirect %52, %3 : tribute_rt.anyref
@@ -92,7 +80,7 @@ core.module @test {
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
             ^bb13(%57: tribute_rt.anyref, %58: tribute_rt.anyref):
               %59 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %60 = closure.new %59 {func_ref = @"test::__lambda_2"} : !t0
+              %60 = closure.new %59 {func_ref = @"test::__lambda_0"} : !t0
               %61 = closure.lambda(%62: !t1, %63: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%57] {
                   %64 = arith.const {value = unit} : core.nil
                   %65 = core.unrealized_conversion_cast %64 : tribute_rt.anyref

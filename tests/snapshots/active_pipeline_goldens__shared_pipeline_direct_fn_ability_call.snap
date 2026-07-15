@@ -30,6 +30,10 @@ core.module @direct_fn {
       func.unreachable
   }
 
+  func.func @"direct_fn::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+
   func.func @use_console(%0: !t0) -> core.i32 attributes {tribute.calling_convention = 1} {
       %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %2 = effect.dispatch_tail %0, %1 {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
@@ -38,22 +42,6 @@ core.module @direct_fn {
       %5 = effect.dispatch_tail %0, %4 {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : tribute_rt.anyref
       %6 = core.unrealized_conversion_cast %5 : core.nil
       func.return %3
-  }
-
-  func.func @"direct_fn::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"direct_fn::__lambda_6"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"direct_fn::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"direct_fn::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
   }
 
   func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
@@ -98,7 +86,7 @@ core.module @direct_fn {
       %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
       %7 = scf.if %6 : tribute_rt.anyref {
           %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"direct_fn::__lambda_7"} : !t1
+          %9 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t1
           %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
           %11 = arith.const {value = 41} : core.i32
           %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
@@ -107,7 +95,7 @@ core.module @direct_fn {
           %13 = arith.const {value = 1} : core.i1
           %14 = scf.if %13 : tribute_rt.anyref {
               %15 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %16 = func.constant {func_ref = @"direct_fn::__lambda_8"} : !t1
+              %16 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t1
               %17 = adt.struct_new %16, %15 {type = !_closure} : !_closure
               %18 = arith.const {value = unit} : core.nil
               %19 = core.unrealized_conversion_cast %18 : tribute_rt.anyref

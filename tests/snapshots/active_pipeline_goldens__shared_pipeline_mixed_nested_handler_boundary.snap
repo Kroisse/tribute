@@ -34,6 +34,10 @@ core.module @mixed_nested {
       func.unreachable
   }
 
+  func.func @"mixed_nested::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+
   func.func @step(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %3 = effect.dispatch_tail %0, %2 {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
@@ -47,32 +51,12 @@ core.module @mixed_nested {
       func.return %10
   }
 
-  func.func @"mixed_nested::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_6"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
   func.func @run_state_with_console(%0: !t0) -> core.i32 attributes {tribute.calling_convention = 1} {
       %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %2 = func.constant {func_ref = @"run_state_with_console::__clam_0"} : !t1
       %3 = adt.struct_new %2, %1 {type = !_closure} : !_closure
       %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %5 = func.constant {func_ref = @"mixed_nested::__lambda_5"} : !t1
+      %5 = func.constant {func_ref = @"mixed_nested::__lambda_0"} : !t1
       %6 = adt.struct_new %5, %4 {type = !_closure} : !_closure
       %7 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
       %8 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
@@ -87,22 +71,6 @@ core.module @mixed_nested {
       %17 = core.unrealized_conversion_cast %16 : tribute_rt.anyref
       %18 = core.unrealized_conversion_cast %17 : core.i32
       func.return %18
-  }
-
-  func.func @"mixed_nested::__lambda_10"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_11"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_12"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested::__lambda_13"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
   }
 
   func.func @run_all() -> core.i32 attributes {tribute.calling_convention = 0} {
@@ -160,7 +128,7 @@ core.module @mixed_nested {
       %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
       %7 = scf.if %6 : tribute_rt.anyref {
           %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"mixed_nested::__lambda_8"} : !t1
+          %9 = func.constant {func_ref = @"mixed_nested::__lambda_0"} : !t1
           %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
           %11 = arith.const {value = 7} : core.i32
           %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
@@ -173,7 +141,7 @@ core.module @mixed_nested {
           %17 = arith.const {value = 1} : core.i1
           %18 = scf.if %17 : tribute_rt.anyref {
               %19 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %20 = func.constant {func_ref = @"mixed_nested::__lambda_9"} : !t1
+              %20 = func.constant {func_ref = @"mixed_nested::__lambda_0"} : !t1
               %21 = adt.struct_new %20, %19 {type = !_closure} : !_closure
               %22 = arith.const {value = unit} : core.nil
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
@@ -202,7 +170,7 @@ core.module @mixed_nested {
       %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
       %7 = scf.if %6 : tribute_rt.anyref {
           %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"mixed_nested::__lambda_12"} : !t1
+          %9 = func.constant {func_ref = @"mixed_nested::__lambda_0"} : !t1
           %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
           %11 = arith.const {value = 3} : core.i32
           %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
@@ -211,7 +179,7 @@ core.module @mixed_nested {
           %13 = arith.const {value = 1} : core.i1
           %14 = scf.if %13 : tribute_rt.anyref {
               %15 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %16 = func.constant {func_ref = @"mixed_nested::__lambda_13"} : !t1
+              %16 = func.constant {func_ref = @"mixed_nested::__lambda_0"} : !t1
               %17 = adt.struct_new %16, %15 {type = !_closure} : !_closure
               %18 = arith.const {value = unit} : core.nil
               %19 = core.unrealized_conversion_cast %18 : tribute_rt.anyref

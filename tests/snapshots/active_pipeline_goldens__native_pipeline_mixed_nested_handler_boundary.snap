@@ -35,23 +35,7 @@ core.module @mixed_nested_native {
       func.unreachable
   }
 
-  func.func @"mixed_nested_native::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested_native::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested_native::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested_native::__lambda_12"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"mixed_nested_native::__lambda_13"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @"mixed_nested_native::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
 
@@ -151,7 +135,7 @@ core.module @mixed_nested_native {
       %4 = func.constant {func_ref = @"run_state_with_console::__clam_0"} : !t1
       %5 = adt.struct_new %4, %3 {type = !_closure} : !_closure
       %6 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %7 = func.constant {func_ref = @"mixed_nested_native::__lambda_5"} : !t1
+      %7 = func.constant {func_ref = @"mixed_nested_native::__lambda_0"} : !t1
       %8 = adt.struct_new %7, %6 {type = !_closure} : !_closure
       %9 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
       %10 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
