@@ -9,6 +9,7 @@ crate-type = ["lib"]
 
 [dependencies]
 itoa.workspace = true
+libc.workspace = true
 smallvec.workspace = true
 tribute-rc.workspace = true
 zmij.workspace = true
