@@ -209,9 +209,7 @@ pub unsafe extern "C" fn __tribute_print_bytes(ptr: *const u8, len: u64) {
 /// Signature: `() -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_print_newline() {
-    unsafe {
-        write(1, b"\n".as_ptr(), 1);
-    }
+    write_stdout_all(b"\n");
 }
 
 // =============================================================================
@@ -239,10 +237,36 @@ pub struct TributeBytes {
 pub unsafe extern "C" fn __tribute_bytes_print(bytes: *const TributeBytes) {
     let b = unsafe { &*bytes };
     if b.len > 0 && !b.ptr.is_null() {
-        unsafe {
-            write(1, b.ptr, b.len as usize);
+        let bytes = unsafe { core::slice::from_raw_parts(b.ptr, b.len as usize) };
+        write_stdout_all(bytes);
+    }
+}
+
+fn write_stdout_all(bytes: &[u8]) {
+    let _ = write_all_with(bytes, |remaining| {
+        let written = unsafe { write(1, remaining.as_ptr(), remaining.len()) };
+        if written >= 0 {
+            Ok(written as usize)
+        } else {
+            Err(last_errno())
+        }
+    });
+}
+
+fn write_all_with(
+    mut remaining: &[u8],
+    mut write_once: impl FnMut(&[u8]) -> Result<usize, i32>,
+) -> bool {
+    while !remaining.is_empty() {
+        match write_once(remaining) {
+            Ok(0) => return false,
+            Ok(written) if written <= remaining.len() => remaining = &remaining[written..],
+            Ok(_) => return false,
+            Err(code) if code == libc::EINTR => {}
+            Err(_) => return false,
         }
     }
+    true
 }
 
 // =============================================================================
@@ -951,6 +975,26 @@ mod tests {
         let _: extern "C" fn() -> *mut NativeReadLineResult = __tribute_io_read_line;
         let _: unsafe extern "C" fn(*mut NativeReadLineResult) =
             __tribute_io_read_line_result_dealloc;
+    }
+
+    #[test]
+    fn test_write_all_retries_short_writes_and_interrupts() {
+        let mut results = [Ok(2), Err(libc::EINTR), Ok(3)].into_iter();
+        let mut attempts = Vec::new();
+
+        let completed = write_all_with(b"hello", |remaining| {
+            attempts.push(remaining.to_vec());
+            results.next().expect("write script exhausted")
+        });
+
+        assert!(completed);
+        assert_eq!(attempts, [b"hello".as_slice(), b"llo", b"llo"]);
+    }
+
+    #[test]
+    fn test_write_all_stops_on_zero_or_other_error() {
+        assert!(!write_all_with(b"hello", |_| Ok(0)));
+        assert!(!write_all_with(b"hello", |_| Err(libc::EIO)));
     }
 
     #[test]
