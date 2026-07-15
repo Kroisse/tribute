@@ -1,6 +1,7 @@
 //! Common test utilities for e2e tests.
 
-use std::process::{Command, Output};
+use std::io::Write;
+use std::process::{Command, Output, Stdio};
 
 use ropey::Rope;
 use salsa::Database;
@@ -66,6 +67,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
         source_code,
         false,
         DoneContinuationPolicy::PerCompilationUnit,
+        None,
     )
 }
 
@@ -76,7 +78,23 @@ pub fn compile_and_run_native_with_done_continuation_dedup(
     source_code: &str,
     policy: DoneContinuationPolicy,
 ) -> Output {
-    compile_and_run_native_impl(source_name, source_code, false, policy)
+    compile_and_run_native_impl(source_name, source_code, false, policy, None)
+}
+
+/// Compile and run Tribute source with raw bytes supplied to native stdin.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin(
+    source_name: &str,
+    source_code: &str,
+    stdin: &[u8],
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        false,
+        DoneContinuationPolicy::PerCompilationUnit,
+        Some(stdin),
+    )
 }
 
 /// Extern declarations for print intrinsics, prepended to test source code.
@@ -121,6 +139,7 @@ pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Outp
         source_code,
         true,
         DoneContinuationPolicy::PerCompilationUnit,
+        None,
     )
 }
 
@@ -129,6 +148,7 @@ fn compile_and_run_native_impl(
     source_code: &str,
     sanitize_address: bool,
     done_continuation: DoneContinuationPolicy,
+    stdin: Option<&[u8]>,
 ) -> Output {
     use tribute::database::parse_with_thread_local;
 
@@ -161,8 +181,25 @@ fn compile_and_run_native_impl(
         }
 
         // Run the executable
-        Command::new(&exec_path)
-            .output()
-            .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
+        let mut command = Command::new(&exec_path);
+        if let Some(input) = stdin {
+            let mut child = command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"));
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(input)
+                .expect("write native stdin");
+            child.wait_with_output().expect("wait for native binary")
+        } else {
+            command
+                .output()
+                .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
+        }
     })
 }

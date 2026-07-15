@@ -9,7 +9,31 @@
 
 mod common;
 
-use common::{assert_native_output, compile_and_run_native};
+use common::{assert_native_output, compile_and_run_native, compile_and_run_native_with_stdin};
+
+fn std_io_read_line_program() -> &'static str {
+    r#"
+use abilities::Throw
+use std::io::{Error, Io, print_line, read_line}
+
+fn read_or_error() ->{Io} String {
+    handle read_line() {
+        do line { line }
+        op Throw::throw(error) {
+            case error {
+                Error::EndOfFile -> "eof"
+                Error::InvalidEncoding -> "invalid"
+                Error::System(_) -> "system"
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(read_or_error())
+}
+"#
+}
 
 #[test]
 fn test_native_simple_literal() {
@@ -512,6 +536,78 @@ fn main() {
         stderr,
     );
     assert_eq!(stdout, "Hello\nWorld\n");
+}
+
+#[test]
+fn test_native_std_io_prints_dynamic_strings() {
+    let output = compile_and_run_native(
+        "std_io_dynamic_print.trb",
+        r#"
+use std::io::{print, print_line}
+
+fn message() -> String {
+    "Hello" <> ", World"
+}
+
+fn main() ->{std::io::Io} Nil {
+    print(message())
+    print_line("!")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout, "Hello, World!\n");
+}
+
+#[test]
+fn test_native_std_io_read_line_contract() {
+    for (name, stdin, expected) in [
+        ("empty", b"\n".as_slice(), "\n"),
+        ("crlf", b"hello\r\n".as_slice(), "hello\n"),
+        ("partial", b"partial".as_slice(), "partial\n"),
+    ] {
+        let output = compile_and_run_native_with_stdin(
+            &format!("std_io_read_line_{name}.trb"),
+            std_io_read_line_program(),
+            stdin,
+        );
+        assert!(
+            output.status.success(),
+            "{name}: exit={:?}, stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{name}");
+    }
+}
+
+#[test]
+fn test_native_std_io_read_line_errors() {
+    for (name, stdin, expected) in [
+        ("eof", b"".as_slice(), "eof\n"),
+        ("invalid", b"\xff\n".as_slice(), "invalid\n"),
+    ] {
+        let output = compile_and_run_native_with_stdin(
+            &format!("std_io_read_line_{name}.trb"),
+            std_io_read_line_program(),
+            stdin,
+        );
+        assert!(
+            output.status.success(),
+            "{name}: exit={:?}, stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{name}");
+    }
 }
 
 #[test]

@@ -17,6 +17,7 @@ pub mod const_to_native;
 pub mod entrypoint;
 pub mod evidence;
 pub mod intrinsic_to_native;
+pub mod io;
 pub mod rc_insertion;
 pub mod rc_lowering;
 pub mod rtti;

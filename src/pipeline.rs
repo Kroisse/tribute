@@ -864,6 +864,9 @@ fn compile_module_to_native(
     tribute_passes::native::intrinsic_to_native::lower(ctx, module)
         .map_err(native_conversion_failure)?;
 
+    // Phase -0.2 - Lower target-independent I/O to the native runtime ABI.
+    tribute_passes::native::io::lower(ctx, module).map_err(native_conversion_failure)?;
+
     // Phase 0 - Lower structured control flow to CFG-based control flow
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, module.op()) {
         let mut pm = PassManager::new();
