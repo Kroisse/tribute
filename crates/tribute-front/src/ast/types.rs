@@ -414,7 +414,7 @@ pub fn annotation_to_effect<'db>(
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
             let qualified = crate::qualified_symbol(&mut prefix.to_owned(), *name);
-            let ability_id = super::AbilityId::new(db, qualified);
+            let ability_id = super::AbilityId::source(db, qualified);
             Some(Effect {
                 ability_id,
                 args: vec![],
@@ -431,7 +431,7 @@ pub fn annotation_to_effect<'db>(
                 crate::push_prefix(&mut buf, *seg);
             }
             let qualified = crate::qualified_symbol(&mut buf, name);
-            let ability_id = super::AbilityId::new(db, qualified);
+            let ability_id = super::AbilityId::from_resolved_path(db, qualified);
             Some(Effect {
                 ability_id,
                 args: vec![],
@@ -456,7 +456,10 @@ pub fn annotation_to_effect<'db>(
                 _ => return None,
             };
             let type_args: Vec<Type<'db>> = args.iter().map(&mut *convert_type).collect();
-            let ability_id = super::AbilityId::new(db, qualified);
+            let ability_id = match &ctor.kind {
+                TypeAnnotationKind::Path(_) => super::AbilityId::from_resolved_path(db, qualified),
+                _ => super::AbilityId::source(db, qualified),
+            };
             Some(Effect {
                 ability_id,
                 args: type_args,

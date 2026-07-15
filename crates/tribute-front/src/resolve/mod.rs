@@ -36,7 +36,8 @@ pub fn resolve_module<'db>(
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
     // Build the module environment from declarations
-    let env = build_env(db, &module);
+    let mut env = build_env(db, &module);
+    resolve_use_imports(&mut env);
 
     // Create resolver and process the module
     let mut resolver = Resolver::new(db, env, span_map);
@@ -128,7 +129,20 @@ pub fn build_env<'db>(
         collect_definition(db, &mut env, decl, &mut prefix);
     }
 
+    inject_builtin_bindings(db, &mut env);
+
     env
+}
+
+/// Expose compiler-owned definitions through the ordinary resolver namespace.
+fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEnv<'db>) {
+    env.add_to_namespace(
+        Symbol::new("std::io"),
+        Symbol::new("Io"),
+        Binding::Ability {
+            id: AbilityId::builtin_io(db),
+        },
+    );
 }
 
 /// Collect a definition from a declaration into the environment.
@@ -204,7 +218,7 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Create AbilityId for this ability
             let qualified = qualified_symbol(prefix, a.name);
-            let ability_id = AbilityId::new(db, qualified);
+            let ability_id = AbilityId::source(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)
             env.add_ability(a.name, ability_id);

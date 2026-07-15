@@ -45,6 +45,24 @@ fn test_compile_failure_returns_diagnostics(db: &salsa::DatabaseImpl) {
 // =============================================================================
 
 #[salsa_test]
+fn test_compile_builtin_io_entrypoint(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "builtin_io_main.trb",
+        r#"use std::io::Io
+
+fn touch_world() ->{Io} Nil { Nil }
+
+fn main() ->{Io} Nil {
+    touch_world()
+}
+"#,
+    );
+    let bytes = expect_wasm_compilation_success(db, source, "Should compile builtin Io main");
+    assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+}
+
+#[salsa_test]
 fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

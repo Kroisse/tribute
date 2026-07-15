@@ -89,6 +89,9 @@ fn prompt() ->{Io, Throw(Error)} String {
 제공하는 일반 함수이며 `Io`를 effect annotation으로 요구한다. 사용자는
 `ambient ability`나 `builtin ability`를 선언하는 문법을 사용할 수 없다.
 오직 canonical builtin identity인 `std::io::Io`만 ambient로 취급된다.
+Compiler는 builtin/source origin을 포함한 identity로 이를 구분하고,
+`std::io::Io`를 resolver namespace에 virtual export로 주입한다. 사용자 AST에
+synthetic ability declaration을 추가하지 않는다.
 
 Ambient는 "CPS를 사용하지 않는다"는 뜻이 아니다. 현재 ABI에서 `Io`만
 요구하는 함수는 evidence를 전달받되 continuation을 받지 않는

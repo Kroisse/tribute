@@ -423,7 +423,8 @@ impl<'db> Resolver<'db> {
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
             {
                 // Check if this name was imported via `use` with a qualified path
-                if let Some(path) = self.env.get_use_path(*sym)
+                if !self.env.has_definition(*sym)
+                    && let Some(path) = self.env.get_use_path(*sym)
                     && path.len() >= 2
                 {
                     return TypeAnnotation {

@@ -314,7 +314,7 @@ impl<'db> TypeChecker<'db> {
     /// handler arm type checking.
     fn collect_ability_def(&mut self, a: &AbilityDecl) {
         // Create AbilityId for this ability
-        let ability_id = AbilityId::new(
+        let ability_id = AbilityId::source(
             self.db(),
             crate::qualified_symbol(&mut self.current_prefix().to_owned(), a.name),
         );
@@ -531,6 +531,8 @@ impl<'db> TypeChecker<'db> {
             self.env.float_type()
         } else if name == "Bool" {
             self.env.bool_type()
+        } else if name == "String" {
+            self.env.string_type()
         } else if name == "Bytes" {
             self.env.bytes_type()
         } else if name == "Rune" {

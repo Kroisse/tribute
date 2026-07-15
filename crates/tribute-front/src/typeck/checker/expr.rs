@@ -370,16 +370,30 @@ impl<'db> TypeChecker<'db> {
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
 
                 // Extract handled ability IDs from effect handlers
-                let handled_ability_ids: Vec<AbilityId<'db>> = handlers
-                    .iter()
-                    .filter_map(|h| match &h.kind {
+                let mut handled_ability_ids = Vec::new();
+                for handler in handlers {
+                    let ability_id = match &handler.kind {
                         HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
                             // Get the ability ID from the ResolvedRef
                             self.extract_ability_id_from_ref(ability)
                         }
                         HandlerKind::Do { .. } => None,
-                    })
-                    .collect();
+                    };
+                    let Some(ability_id) = ability_id else {
+                        continue;
+                    };
+                    if ability_id.is_builtin_io(self.db()) {
+                        Diagnostic::new(
+                            "builtin ambient ability `std::io::Io` cannot be handled",
+                            self.get_span(handler.id),
+                            DiagnosticSeverity::Error,
+                            CompilationPhase::TypeChecking,
+                        )
+                        .accumulate(self.db());
+                    } else {
+                        handled_ability_ids.push(ability_id);
+                    }
+                }
 
                 // Get the body's effect after checking (may have effects added)
                 let body_effect_after = ctx.current_effect();
@@ -2161,7 +2175,7 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same qualified name
-                Some(AbilityId::new(self.db(), id.qualified(self.db())))
+                Some(AbilityId::source(self.db(), id.qualified(self.db())))
             }
             // Other reference types are not abilities
             _ => None,

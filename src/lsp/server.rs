@@ -31,6 +31,7 @@ use ropey::Rope;
 use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
+use super::builtin_index::{builtin_at, builtin_symbols};
 use super::completion_index::{
     self, complete_keywords, completion_items, filter_completions, find_signature,
     function_signatures,
@@ -203,19 +204,29 @@ impl LspServer {
         let offset = offset_from_position(&rope, position.line, position.character)?;
         let source_cst = self.db.source_cst(uri)?;
 
-        let (type_str, span) = self.db.attach(|db| {
-            let index = ast_type_index(db, source_cst)?;
-            index.type_at(db, offset).map(|entry| {
-                let type_str = print_ast_type(db, entry.ty);
-                (type_str, entry.span)
-            })
+        let (contents, span) = self.db.attach(|db| {
+            if let Some(entry) = ast_type_index(db, source_cst)?.type_at(db, offset) {
+                return Some((
+                    format!("```tribute\n{}\n```", print_ast_type(db, entry.ty)),
+                    entry.span,
+                ));
+            }
+
+            let entry = builtin_at(builtin_symbols(db, source_cst), offset)?;
+            Some((
+                format!(
+                    "```tribute\nability {}\n```\n\nCompiler-owned ambient ability `{}`.",
+                    entry.name, entry.qualified
+                ),
+                entry.span,
+            ))
         })?;
 
-        tracing::debug!(type_str = %type_str, "Found type");
+        tracing::debug!("Found hover information");
 
         let contents = HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: format!("```tribute\n{}\n```", type_str),
+            value: contents,
         });
         let range = span_to_range(&rope, span);
 
@@ -1555,6 +1566,35 @@ mod tests {
 
         let result: Option<Hover> = harness.request::<HoverRequest>(params);
         assert!(result.is_some(), "Hover should return type information");
+    }
+
+    #[test]
+    fn test_hover_imported_builtin_io_via_message() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_builtin_io");
+        let source = "use std::io::Io\nfn main() ->{Io} Nil { Nil }";
+
+        harness.open_document(&uri, source);
+
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 13,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let hover = harness
+            .request::<HoverRequest>(params)
+            .expect("builtin Io should provide hover information");
+        let HoverContents::Markup(contents) = hover.contents else {
+            panic!("expected markdown hover contents");
+        };
+        assert!(contents.value.contains("Compiler-owned ambient ability"));
+        assert!(contents.value.contains("std::io::Io"));
     }
 
     #[test]

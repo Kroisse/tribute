@@ -999,8 +999,8 @@ mod tests {
     fn test_type_to_annotation_func_preserves_abilities() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let console_id = crate::ast::AbilityId::new(&db, Symbol::new("std::console::Console"));
-        let state_id = crate::ast::AbilityId::new(&db, Symbol::new("std::state::State"));
+        let console_id = crate::ast::AbilityId::source(&db, Symbol::new("std::console::Console"));
+        let state_id = crate::ast::AbilityId::source(&db, Symbol::new("std::state::State"));
         let effect = EffectRow::new(
             &db,
             vec![

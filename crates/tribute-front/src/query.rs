@@ -536,7 +536,7 @@ fn explicit() ->{} Nil { Nil }
         let effect = crate::ast::EffectRow::new(
             &db,
             vec![crate::ast::Effect {
-                ability_id: crate::ast::AbilityId::new(&db, Symbol::new("State")),
+                ability_id: crate::ast::AbilityId::source(&db, Symbol::new("State")),
                 args: vec![var],
             }],
             None,
