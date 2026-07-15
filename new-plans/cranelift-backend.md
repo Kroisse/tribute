@@ -178,6 +178,16 @@ Array:  [length: i64] [elements...]
 - `tribute compile --target native file.trb` → 실행 파일
 - E2E 테스트 (ability 포함)
 
+### Phase 6: Native Basic I/O
+
+- shared `tribute_io.write`와 `tribute_io.read_line`을
+  [io.md](io.md#native-runtime-abi)의 private runtime ABI로 낮춘다.
+- Runtime descriptor를 high-level `ReadLineResult` ADT로 바꾼 뒤 기존 SCF, ADT,
+  memory lowering을 적용한다.
+- Native runtime은 Tribute enum/RTTI layout에 의존하지 않는다.
+- E2E 테스트는 subprocess stdin에 raw bytes를 주입하여 빈 줄, partial EOF, EOF,
+  invalid UTF-8을 검증한다.
+
 ---
 
 ## References

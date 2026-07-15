@@ -186,6 +186,32 @@ Wasm lowering은 각각 #772와 #771이 담당한다.
 - WASI preview2/component model 전환은 이 source API와 독립적인 후속 backend
   작업이다.
 
+### Native Runtime ABI
+
+Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API가 아니며
+`tribute-runtime`과 native compiler pipeline 사이에서만 공유된다.
+
+```text
+__tribute_io_write(bytes: *const TributeBytes, newline: u32) -> void
+__tribute_io_read_line() -> *mut NativeReadLineResult
+__tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) -> void
+
+NativeReadLineResult = repr(C) {
+    tag: u32,                  // 0 Line, 1 EOF, 2 InvalidEncoding, 3 System
+    code: i32,                // System에서만 사용
+    bytes: *mut TributeBytes, // Line에서만 사용
+    message: *mut TributeBytes, // System에서만 사용, valid UTF-8
+}
+```
+
+Runtime은 Tribute enum이나 RTTI layout을 직접 생성하지 않는다. Native lowering이
+descriptor의 필드를 읽어 `std::io::ReadLineResult` ADT를 만들고 descriptor를 즉시
+해제한다. `bytes`와 `message`는 RC-managed `Bytes` payload이며 해당 variant로 소유권이
+이전된다. 사용하지 않는 pointer field는 null이다.
+
+`newline`은 native ABI에서 `u32` 0/1로 전달한다. Runtime은 `bytes`를 먼저 모두 쓰고,
+값이 1일 때만 `\n` 하나를 추가한다.
+
 `String` 출력은 rope를 `Bytes` chunk로 순회하거나 flatten하여 처리할 수 있지만,
 source-level `Io` 계약과 target-independent boundary는 어느 표현을 선택하든
 동일해야 한다. Wasm도 문자열 literal뿐 아니라 동적으로 만든 `String`을 출력할
