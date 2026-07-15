@@ -148,8 +148,8 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
             ExprKind::Error
         }
 
-        // === Path expression ===
-        "path_expression" | "qualified_identifier" => {
+        // === Value path ===
+        "value_path" => {
             let sym = ctx.node_symbol(&node);
             let name_id = ctx.fresh_id_with_span(&node);
             ExprKind::Var(UnresolvedName::new(sym, name_id))

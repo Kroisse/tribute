@@ -847,6 +847,34 @@ mod tests {
     }
 
     #[test]
+    fn test_qualified_method_path_for_field_update() {
+        let source = "fn main() { user.name::set(\"Jane\") }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", value.kind);
+        };
+        let ExprKind::Var(name) = receiver.kind.as_ref() else {
+            panic!("Expected var receiver");
+        };
+
+        assert_eq!(name.name().to_string(), "user");
+        assert_eq!(method.to_string(), "name::set");
+        assert_eq!(args.len(), 1);
+    }
+
+    #[test]
     fn test_method_call_with_multiple_args() {
         let source = "fn main() { bytes.slice(0, 5) }";
         let module = parse_and_lower(source);
@@ -948,6 +976,23 @@ mod tests {
     }
 
     #[test]
+    fn test_qualified_constructor_expression() {
+        let source = "fn main() { std::io::Error::EndOfFile }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Cons { ctor, .. } = value.kind.as_ref() else {
+            panic!("Expected constructor, got {:?}", value.kind);
+        };
+        assert_eq!(ctor.qualified.to_string(), "std::io::Error::EndOfFile");
+    }
+
+    #[test]
     fn test_constructor_no_args() {
         let source = "fn main() { None() }";
         let module = parse_and_lower(source);
@@ -982,6 +1027,39 @@ mod tests {
             panic!("Expected record, got {:?}", value.kind);
         };
         assert_eq!(type_name.name().to_string(), "Point");
+    }
+
+    #[test]
+    fn test_qualified_record_expression() {
+        let source = "fn main() { std::io::SystemError { code: 1 } }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Record { type_name, .. } = value.kind.as_ref() else {
+            panic!("Expected record, got {:?}", value.kind);
+        };
+        assert_eq!(type_name.qualified.to_string(), "std::io::SystemError");
+    }
+
+    #[test]
+    fn test_qualified_type_annotation() {
+        let source = "fn identity(error: std::io::Error) -> std::io::Error { error }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        assert!(matches!(
+            func.params[0].ty.as_ref().map(|ty| &ty.kind),
+            Some(TypeAnnotationKind::Path(path))
+                if path.iter().map(ToString::to_string).collect::<Vec<_>>()
+                    == ["std", "io", "Error"]
+        ));
     }
 
     // =============================================================================

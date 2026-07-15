@@ -276,7 +276,10 @@ fn collect_definition<'db>(
                     }
                     // Also add the inner namespace itself under the module
                     // so Foo::Bar resolves to the Bar namespace
-                    env.add_to_namespace(
+                    // A type definition and its member namespace share a name
+                    // (`Point` and `Point::x`, `Error` and `Error::Variant`).
+                    // Preserve the type binding already transferred above.
+                    env.add_to_namespace_if_absent(
                         m.name,
                         inner_ns,
                         Binding::Module {
@@ -652,6 +655,29 @@ mod tests {
 
         let input = TestModuleInput::new(db, module);
         verify_nested_module_enum_namespace(db, input);
+    }
+
+    #[salsa_test]
+    fn test_nested_module_preserves_type_bindings(db: &dyn salsa::Database) {
+        // A type's member namespace must not replace the type/constructor
+        // binding when nested module namespaces are flattened.
+        let module = Module::new(
+            fresh_node_id(),
+            Some(Symbol::new("test")),
+            vec![Decl::Module(inline_module(
+                "std",
+                vec![Decl::Module(inline_module(
+                    "io",
+                    vec![Decl::Struct(simple_struct("SystemError"))],
+                ))],
+            ))],
+        );
+
+        let env = build_env(db, &module);
+        assert!(matches!(
+            env.lookup_qualified(Symbol::new("std::io"), Symbol::new("SystemError")),
+            Some(Binding::Constructor { .. })
+        ));
     }
 
     #[salsa_test]

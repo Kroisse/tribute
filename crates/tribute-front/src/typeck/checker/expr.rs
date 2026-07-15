@@ -1923,7 +1923,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(&name) = parts.last() {
+                if let Some(name) = crate::qualified_path_symbol(parts) {
                     ctx.named_type(name, vec![])
                 } else {
                     ctx.error_type()
@@ -2307,9 +2307,9 @@ mod tests {
         ]));
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
-        // Should use last segment as name
+        // Qualified type identity preserves the complete path.
         if let TypeKind::Named { name, args } = ty.kind(db) {
-            assert_eq!(*name, Symbol::new("Option"));
+            assert_eq!(*name, Symbol::new("std::Option"));
             assert!(args.is_empty());
         } else {
             panic!("Path type should be Named");

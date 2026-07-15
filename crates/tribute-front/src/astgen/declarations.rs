@@ -207,7 +207,12 @@ pub(super) fn lower_type_annotation(
     // Check if the node itself is already a type node
     if matches!(
         node.kind(),
-        "type_identifier" | "type_variable" | "generic_type" | "function_type" | "tuple_type"
+        "type_identifier"
+            | "type_path"
+            | "type_variable"
+            | "generic_type"
+            | "function_type"
+            | "tuple_type"
     ) {
         return lower_type_node(ctx, node);
     }
@@ -216,8 +221,8 @@ pub(super) fn lower_type_annotation(
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "type_identifier" | "type_variable" | "generic_type" | "function_type"
-            | "tuple_type" => {
+            "type_identifier" | "type_path" | "type_variable" | "generic_type"
+            | "function_type" | "tuple_type" => {
                 return lower_type_node(ctx, child);
             }
             _ => {}
@@ -240,6 +245,7 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
                 kind: TypeAnnotationKind::Named(name),
             })
         }
+        "type_path" => Some(lower_ability_path(ctx, node)),
         "generic_type" => {
             // Generic type like List(a) or Map(k, v)
             let id = ctx.fresh_id_with_span(&node);
@@ -248,11 +254,11 @@ fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnot
             let mut cursor = node.walk();
             let children: Vec<_> = node.named_children(&mut cursor).collect();
 
-            if let Some(name_node) = children.first().filter(|n| n.kind() == "type_identifier") {
-                let ctor = Box::new(TypeAnnotation {
-                    id: ctx.fresh_id_with_span(name_node),
-                    kind: TypeAnnotationKind::Named(ctx.node_symbol(name_node)),
-                });
+            if let Some(name_node) = children
+                .first()
+                .filter(|n| matches!(n.kind(), "type_identifier" | "type_path"))
+            {
+                let ctor = Box::new(lower_type_node(ctx, *name_node)?);
 
                 // Collect type arguments (remaining children)
                 let args: Vec<TypeAnnotation> = children

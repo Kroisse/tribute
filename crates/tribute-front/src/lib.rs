@@ -48,6 +48,16 @@ pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
     }
 }
 
+/// Build a qualified symbol from parsed path segments.
+pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
+    let (&name, prefix) = path.split_last()?;
+    let mut buf = String::new();
+    for &segment in prefix {
+        push_prefix(&mut buf, segment);
+    }
+    Some(qualified_symbol(&mut buf, name))
+}
+
 /// Push a segment onto a prefix buffer. Returns the length before push (for truncate).
 pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
     let len = prefix.len();
