@@ -284,12 +284,19 @@ pub mod List {
 }
 ```
 
-### Path Expression
+### Item Paths
 
 ```ebnf
 Path ::= PathSegment ('::' PathSegment)*
 PathSegment ::= Identifier | TypeId
+ValuePath ::= (PathSegment '::')* Identifier
+TypePath ::= (PathSegment '::')* TypeId
 ```
+
+선언 이름은 단일 `Identifier` 또는 `TypeId`지만, 참조 위치의 CST는 단일
+이름도 각각 `value_path` 또는 `type_path`로 감싼다. 따라서 `print`와
+`std::io::print`, `String`과 `std::io::Error`는 세그먼트 수와 무관하게 같은
+종류의 path node로 처리된다.
 
 **예시:**
 
@@ -307,7 +314,7 @@ std::io::print_line("hello")
 ConstDecl ::= 'pub'? 'const' Identifier (':' Type)? '=' ConstExpr
 
 ConstExpr ::= Literal                        // -1은 Int 리터럴로 처리
-            | Path                           // 다른 상수 참조
+            | ValuePath                      // 다른 상수 참조
             | ConstExpr BinOp ConstExpr      // 상수 폴딩
             | '{' ConstExpr '}'              // 그룹화
 ```
@@ -491,8 +498,8 @@ HandleExpr ::= 'handle' Expression '{' HandlerArm+ '}'
 HandlerArm ::= CompletionArm | FnHandlerArm | OpHandlerArm
 
 CompletionArm  ::= 'do' Identifier Block                        // do result { body }
-FnHandlerArm   ::= 'fn' Path '(' PatternList? ')' Block        // fn Op(args) { body }
-OpHandlerArm   ::= 'op' Path '(' PatternList? ')' Block        // op Op(args) { body }
+FnHandlerArm   ::= 'fn' ValuePath '(' PatternList? ')' Block   // fn Op(args) { body }
+OpHandlerArm   ::= 'op' ValuePath '(' PatternList? ')' Block   // op Op(args) { body }
 ```
 
 `handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다.
@@ -624,8 +631,7 @@ fn(x) {
 
 ```ebnf
 PrimaryExpr ::= Literal
-              | Identifier
-              | Path
+              | ValuePath
               | Block                             // { expr } 로 그룹화
               | ListExpr
               | TupleExpr
@@ -675,7 +681,7 @@ x * { y + z }           // x * (y + z) 와 동일
 ### Record Expression
 
 ```ebnf
-RecordExpr ::= TypeId '{' RecordFields? '}'
+RecordExpr ::= TypePath '{' RecordFields? '}'
 RecordFields ::= RecordField (',' RecordField)* ','?
 RecordField ::= '..' Expression                    // spread
               | Identifier ':' Expression          // field: value
@@ -694,9 +700,9 @@ Point { x: 10, y: 20 }
 ### Variant Construction
 
 ```ebnf
-VariantExpr ::= TypeId '(' ExprList? ')'     // positional
-              | TypeId '{' RecordFields '}'   // named
-              | TypeId                         // unit variant
+VariantExpr ::= TypePath '(' ExprList? ')'     // positional
+              | TypePath '{' RecordFields '}'   // named
+              | TypePath                         // unit variant
 ```
 
 **예시:**
@@ -713,7 +719,7 @@ Error { error: "failed" }
 
 ```ebnf
 CallExpr ::= Expression '(' ExprList? ')'
-UFCSExpr ::= Expression '.' Path CallArgs?
+UFCSExpr ::= Expression '.' ValuePath CallArgs?
 CallArgs ::= '(' ExprList? ')'
            | /* empty - 인자 없으면 괄호 생략 가능 */
 
@@ -857,8 +863,8 @@ AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 LiteralPattern ::= Number | StringLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
-VariantPattern ::= TypeId ('(' PatternList ')' | '{' RecordPatternFields '}')?
-RecordPattern ::= TypeId '{' RecordPatternFields '}'
+VariantPattern ::= TypePath ('(' PatternList ')' | '{' RecordPatternFields '}')?
+RecordPattern ::= TypePath '{' RecordPatternFields '}'
 ListPattern ::= '[' PatternList? ']'
               | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
 TuplePattern ::= '#(' PatternList? ')'
@@ -891,6 +897,8 @@ None
 Cons(head, tail)
 Ok { value }
 Error { error: e }
+std::io::Error::EndOfFile
+std::io::ReadLineResult::Line(bytes)
 
 // Record destructuring
 User { name, age }
