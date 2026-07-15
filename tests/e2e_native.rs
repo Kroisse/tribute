@@ -9,6 +9,8 @@
 
 mod common;
 
+#[cfg(unix)]
+use common::compile_and_run_native_with_closed_stdin;
 use common::{assert_native_output, compile_and_run_native, compile_and_run_native_with_stdin};
 
 fn std_io_read_line_program() -> &'static str {
@@ -590,6 +592,61 @@ fn test_native_std_io_read_line_contract() {
 }
 
 #[test]
+fn test_native_std_io_read_line_preserves_buffered_input() {
+    let output = compile_and_run_native_with_stdin(
+        "std_io_read_line_buffered.trb",
+        r#"
+use abilities::Throw
+use std::io::{Error, Io, print_line, read_line}
+
+fn read_or_error() ->{Io} String {
+    handle read_line() {
+        do line { line }
+        op Throw::throw(error) {
+            case error {
+                Error::EndOfFile -> "eof"
+                Error::InvalidEncoding -> "invalid"
+                Error::System(_) -> "system"
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(read_or_error())
+    print_line(read_or_error())
+}
+"#,
+        b"first\nsecond\n",
+    );
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "first\nsecond\n");
+}
+
+#[test]
+fn test_native_std_io_accepts_large_stdin() {
+    let mut stdin = vec![b'x'; 256 * 1024];
+    stdin.push(b'\n');
+    let output = compile_and_run_native_with_stdin(
+        "std_io_read_line_large.trb",
+        std_io_read_line_program(),
+        &stdin,
+    );
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(output.stdout, stdin);
+}
+
+#[test]
 fn test_native_std_io_read_line_errors() {
     for (name, stdin, expected) in [
         ("eof", b"".as_slice(), "eof\n"),
@@ -608,6 +665,22 @@ fn test_native_std_io_read_line_errors() {
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{name}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_native_std_io_read_line_system_error() {
+    let output = compile_and_run_native_with_closed_stdin(
+        "std_io_read_line_system.trb",
+        std_io_read_line_program(),
+    );
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "system\n");
 }
 
 #[test]

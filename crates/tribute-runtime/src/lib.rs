@@ -273,6 +273,51 @@ enum ReadByte {
     Error(i32),
 }
 
+enum ReadChunk {
+    Bytes(usize),
+    EndOfFile,
+    Interrupted,
+    Error(i32),
+}
+
+const STDIN_BUFFER_SIZE: usize = 8 * 1024;
+
+struct StdinBuffer {
+    bytes: [u8; STDIN_BUFFER_SIZE],
+    position: usize,
+    length: usize,
+}
+
+impl StdinBuffer {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; STDIN_BUFFER_SIZE],
+            position: 0,
+            length: 0,
+        }
+    }
+
+    fn read_byte(&mut self, mut refill: impl FnMut(&mut [u8]) -> ReadChunk) -> ReadByte {
+        if self.position < self.length {
+            let byte = self.bytes[self.position];
+            self.position += 1;
+            return ReadByte::Byte(byte);
+        }
+
+        match refill(&mut self.bytes) {
+            ReadChunk::Bytes(length) => {
+                debug_assert!(length > 0 && length <= self.bytes.len());
+                self.position = 1;
+                self.length = length;
+                ReadByte::Byte(self.bytes[0])
+            }
+            ReadChunk::EndOfFile => ReadByte::EndOfFile,
+            ReadChunk::Interrupted => ReadByte::Interrupted,
+            ReadChunk::Error(code) => ReadByte::Error(code),
+        }
+    }
+}
+
 /// Write a flattened `Bytes` payload, optionally followed by one newline.
 ///
 /// # Safety
@@ -289,21 +334,26 @@ pub unsafe extern "C" fn __tribute_io_write(bytes: *const TributeBytes, newline:
 /// Read one line from native stdin and return a C-compatible result descriptor.
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_io_read_line() -> *mut NativeReadLineResult {
+    let mut stdin = unsafe { thread_state() }.stdin_buffer();
     read_line_with(|| {
-        let mut byte = 0u8;
-        let read = unsafe { libc::read(libc::STDIN_FILENO, (&raw mut byte).cast(), 1) };
-        match read {
-            1 => ReadByte::Byte(byte),
-            0 => ReadByte::EndOfFile,
-            _ => {
-                let code = last_errno();
-                if code == libc::EINTR {
-                    ReadByte::Interrupted
-                } else {
-                    ReadByte::Error(code)
+        stdin.read_byte(|buffer| {
+            let read =
+                unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if read > 0 {
+                return ReadChunk::Bytes(read as usize);
+            }
+            match read {
+                0 => ReadChunk::EndOfFile,
+                _ => {
+                    let code = last_errno();
+                    if code == libc::EINTR {
+                        ReadChunk::Interrupted
+                    } else {
+                        ReadChunk::Error(code)
+                    }
                 }
             }
-        }
+        })
     })
 }
 
@@ -797,6 +847,26 @@ mod tests {
         read_line_with(|| events.next().expect("read script exhausted"))
     }
 
+    fn buffered_scripted_read(
+        buffer: &mut StdinBuffer,
+        input: &[u8],
+        offset: &mut usize,
+        refill_count: &mut usize,
+    ) -> *mut NativeReadLineResult {
+        read_line_with(|| {
+            buffer.read_byte(|destination| {
+                *refill_count += 1;
+                if *offset == input.len() {
+                    return ReadChunk::EndOfFile;
+                }
+                let length = destination.len().min(input.len() - *offset);
+                destination[..length].copy_from_slice(&input[*offset..*offset + length]);
+                *offset += length;
+                ReadChunk::Bytes(length)
+            })
+        })
+    }
+
     unsafe fn bytes_contents(bytes: *const TributeBytes) -> Vec<u8> {
         if bytes.is_null() {
             return Vec::new();
@@ -892,6 +962,33 @@ mod tests {
             assert_eq!(unsafe { bytes_contents(result_ref.bytes) }, b"hello");
             unsafe { dealloc_test_read_result(result) };
         }
+    }
+
+    #[test]
+    fn test_stdin_buffer_preserves_bytes_between_lines() {
+        let mut buffer = StdinBuffer::new();
+        let mut offset = 0;
+        let mut refill_count = 0;
+
+        let first = buffered_scripted_read(
+            &mut buffer,
+            b"first\nsecond\n",
+            &mut offset,
+            &mut refill_count,
+        );
+        assert_eq!(unsafe { bytes_contents((*first).bytes) }, b"first");
+        unsafe { dealloc_test_read_result(first) };
+
+        let second = buffered_scripted_read(
+            &mut buffer,
+            b"first\nsecond\n",
+            &mut offset,
+            &mut refill_count,
+        );
+        assert_eq!(unsafe { bytes_contents((*second).bytes) }, b"second");
+        unsafe { dealloc_test_read_result(second) };
+
+        assert_eq!(refill_count, 1, "second line should use buffered bytes");
     }
 
     #[test]
