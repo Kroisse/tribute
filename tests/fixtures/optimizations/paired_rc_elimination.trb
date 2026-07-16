@@ -1,0 +1,24 @@
+extern "C" fn __tribute_print_int(value: Int) -> Nil
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn bump() ->{State(Int)} Int {
+    let n = State::get()
+    State::set(n + +1)
+    n
+}
+
+fn run_state() -> Int {
+    handle bump() {
+        do result { result }
+        op State::get() { resume +10 }
+        op State::set(value) { resume Nil }
+    }
+}
+
+fn main() {
+    __tribute_print_int(run_state())
+}

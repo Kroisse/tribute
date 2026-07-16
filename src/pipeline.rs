@@ -109,20 +109,50 @@ pub struct CompilationConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OptimizationOptions {
     pub ast_to_ir: ast_to_ir::AstToIrOptions,
+    pub native: NativeOptimizationOptions,
 }
 
 impl OptimizationOptions {
     pub const fn production() -> Self {
         Self {
             ast_to_ir: ast_to_ir::AstToIrOptions::production(),
+            native: NativeOptimizationOptions::production(),
         }
     }
 
     pub const fn baseline() -> Self {
         Self {
             ast_to_ir: ast_to_ir::AstToIrOptions::baseline(),
+            native: NativeOptimizationOptions::baseline(),
         }
     }
+}
+
+/// Independently selectable native-backend optimizations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct NativeOptimizationOptions {
+    pub paired_rc_elimination: PairedRcEliminationPolicy,
+}
+
+impl NativeOptimizationOptions {
+    pub const fn production() -> Self {
+        Self {
+            paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
+        }
+    }
+
+    pub const fn baseline() -> Self {
+        Self {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+        }
+    }
+}
+
+/// Policy for local retain/release pair elimination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum PairedRcEliminationPolicy {
+    Disabled,
+    Enabled,
 }
 
 impl Default for OptimizationOptions {
@@ -136,6 +166,15 @@ impl Default for OptimizationOptions {
 pub enum SharedPipelineStage {
     /// Immediately after AST-to-IR lowering, before shared middle-end passes.
     AfterFrontend,
+}
+
+/// Stable native-pipeline boundaries available to optimization tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum NativePipelineStage {
+    /// Immediately after reference-counting operations are inserted.
+    AfterRcInsertion,
+    /// After optional local RC optimization, before cast resolution and lowering.
+    AfterRcOptimization,
 }
 
 // AST-based pipeline imports
@@ -604,6 +643,31 @@ pub fn dump_shared_ir_at_stage(
     Ok(trunk_ir::printer::print_module(&ctx, module.op()))
 }
 
+/// Dump native IR at a named RC optimization boundary.
+///
+/// The same optimization options are used for the shared and native portions
+/// of the pipeline. Native emission is intentionally skipped.
+#[salsa::tracked]
+pub fn dump_native_ir_at_stage(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    stage: NativePipelineStage,
+    options: OptimizationOptions,
+) -> Result<String, DumpIrError> {
+    let Some((mut ctx, module)) = run_shared_pipeline_with_options(db, source, options, None)?
+    else {
+        return Ok(String::new());
+    };
+    validate_and_report_arity(db, &ctx, module);
+    run_native_target_pipeline(&mut ctx, module)?;
+    prepare_module_to_native(&mut ctx, module, false, options.native, Some(stage)).map_err(
+        |error| DumpIrError {
+            message: error.to_string(),
+        },
+    )?;
+    Ok(trunk_ir::printer::print_module(&ctx, module.op()))
+}
+
 fn install_debug_use_chain_verifier(pm: &mut PassManager) {
     // Debug-only regression guard: re-check use-chain consistency after every
     // shared pass. step 1+2 (#710) made this invariant hold across the shared
@@ -842,12 +906,14 @@ pub fn compile_to_wasm_binary(
 /// 3. Runs RTTI, RC insertion, and RC lowering passes
 /// 4. Resolves unrealized conversion casts
 /// 5. Validates and emits the native object file via Cranelift
-fn compile_module_to_native(
+fn prepare_module_to_native(
     ctx: &mut IrContext,
     module: Module,
     sanitize: bool,
-) -> NativeCompilationResult<Vec<u8>> {
-    let _span = tracing::info_span!("compile_module_to_native").entered();
+    optimizations: NativeOptimizationOptions,
+    stop_after: Option<NativePipelineStage>,
+) -> NativeCompilationResult<Option<Vec<RodataEntry>>> {
+    let _span = tracing::info_span!("prepare_module_to_native").entered();
 
     // Phase -1 - Generate native entrypoint
     tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
@@ -936,6 +1002,20 @@ fn compile_module_to_native(
         tribute_passes::native::rc_insertion::insert_rc(ctx, module);
     }
 
+    if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
+        return Ok(None);
+    }
+
+    // Phase 2.9 - Eliminate local retain/release pairs while they are still
+    // directly observable tribute_rt operations.
+    if optimizations.paired_rc_elimination == PairedRcEliminationPolicy::Enabled {
+        tribute_passes::native::rc_optimization::eliminate_paired_rc(ctx, module);
+    }
+
+    if stop_after == Some(NativePipelineStage::AfterRcOptimization) {
+        return Ok(None);
+    }
+
     // Phase 3 - Resolve unrealized_conversion_cast operations
     {
         let (type_converter, _) =
@@ -977,6 +1057,17 @@ fn compile_module_to_native(
             data: data.clone(),
         })
         .collect();
+    Ok(Some(rodata))
+}
+
+fn compile_module_to_native(
+    ctx: &mut IrContext,
+    module: Module,
+    sanitize: bool,
+    optimizations: NativeOptimizationOptions,
+) -> NativeCompilationResult<Vec<u8>> {
+    let rodata = prepare_module_to_native(ctx, module, sanitize, optimizations, None)?
+        .expect("complete native preparation must produce rodata");
     emit_module_to_native(ctx, module, &rodata)
 }
 
@@ -1030,7 +1121,7 @@ pub fn compile_to_native_binary<'db>(
 
     // Native backend lowering + emit
     let sanitize = config.sanitize_address(db);
-    match compile_module_to_native(&mut ctx, m, sanitize) {
+    match compile_module_to_native(&mut ctx, m, sanitize, options.native) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             Diagnostic::new(
