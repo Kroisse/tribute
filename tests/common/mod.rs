@@ -7,7 +7,8 @@ use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::{
-    CompilationConfig, OptimizationOptions, compile_to_native_binary, link_native_binary,
+    CompilationConfig, NativeOptimizationOptions, OptimizationOptions, PairedRcEliminationPolicy,
+    compile_to_native_binary, link_native_binary,
 };
 use tribute_front::SourceCst;
 use tribute_front::ast_to_ir::{AstToIrOptions, DoneContinuationPolicy};
@@ -72,6 +73,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
         source_code,
         false,
         DoneContinuationPolicy::PerCompilationUnit,
+        PairedRcEliminationPolicy::Enabled,
         NativeStdin::Null,
     )
 }
@@ -83,7 +85,31 @@ pub fn compile_and_run_native_with_done_continuation_dedup(
     source_code: &str,
     policy: DoneContinuationPolicy,
 ) -> Output {
-    compile_and_run_native_impl(source_name, source_code, false, policy, NativeStdin::Null)
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        false,
+        policy,
+        PairedRcEliminationPolicy::Enabled,
+        NativeStdin::Null,
+    )
+}
+
+/// Compile and run with explicit paired RC elimination selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_paired_rc_elimination(
+    source_name: &str,
+    source_code: &str,
+    policy: PairedRcEliminationPolicy,
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        false,
+        DoneContinuationPolicy::PerCompilationUnit,
+        policy,
+        NativeStdin::Null,
+    )
 }
 
 /// Compile and run Tribute source with raw bytes supplied to native stdin.
@@ -98,6 +124,7 @@ pub fn compile_and_run_native_with_stdin(
         source_code,
         false,
         DoneContinuationPolicy::PerCompilationUnit,
+        PairedRcEliminationPolicy::Enabled,
         NativeStdin::Bytes(stdin),
     )
 }
@@ -111,6 +138,7 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
         source_code,
         false,
         DoneContinuationPolicy::PerCompilationUnit,
+        PairedRcEliminationPolicy::Enabled,
         NativeStdin::Closed,
     )
 }
@@ -157,6 +185,7 @@ pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Outp
         source_code,
         true,
         DoneContinuationPolicy::PerCompilationUnit,
+        PairedRcEliminationPolicy::Enabled,
         NativeStdin::Null,
     )
 }
@@ -173,6 +202,7 @@ fn compile_and_run_native_impl(
     source_code: &str,
     sanitize_address: bool,
     done_continuation: DoneContinuationPolicy,
+    paired_rc_elimination: PairedRcEliminationPolicy,
     stdin: NativeStdin<'_>,
 ) -> Output {
     use tribute::database::parse_with_thread_local;
@@ -185,6 +215,9 @@ fn compile_and_run_native_impl(
 
         let optimizations = OptimizationOptions {
             ast_to_ir: AstToIrOptions { done_continuation },
+            native: NativeOptimizationOptions {
+                paired_rc_elimination,
+            },
         };
         let object_bytes =
             compile_native_or_panic_with_options(db, source_file, sanitize_address, optimizations);

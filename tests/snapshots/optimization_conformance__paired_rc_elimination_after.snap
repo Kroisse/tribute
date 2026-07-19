@@ -1,0 +1,28 @@
+---
+source: tests/optimization_conformance.rs
+expression: after
+---
+%3 = tribute_rt.retain %2 : core.ptr
+tribute_rt.release %43 {alloc_size = 0}
+%3 = tribute_rt.retain %1 : core.ptr
+%6 = tribute_rt.retain %5 : core.ptr
+tribute_rt.release %1 {alloc_size = 0}
+%16 = tribute_rt.retain %5 : core.ptr
+tribute_rt.release %5 {alloc_size = 0}
+tribute_rt.release %36 {alloc_size = 12}
+%3 = tribute_rt.retain %2 : core.ptr
+%11 = tribute_rt.retain %2 : core.ptr
+tribute_rt.release %2 {alloc_size = 0}
+%5 = tribute_rt.retain %2 : core.ptr
+tribute_rt.release %2 {alloc_size = 0}
+tribute_rt.release %18 {alloc_size = 12}
+tribute_rt.release %2 {alloc_size = 0}
+tribute_rt.release %26 {alloc_size = 0}
+%3 = tribute_rt.retain %1 : core.ptr
+%4 = tribute_rt.retain %2 : core.ptr
+%9 = tribute_rt.retain %8 : core.ptr
+tribute_rt.release %1 {alloc_size = 0}
+tribute_rt.release %2 {alloc_size = 0}
+tribute_rt.release %8 {alloc_size = 0}
+tribute_rt.release %18 {alloc_size = 12}
+tribute_rt.release %4 {alloc_size = 0}

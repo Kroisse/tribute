@@ -196,18 +196,38 @@ based on SSA liveness analysis.
 
 **Pointer detection:** Use `core::Ptr::from_type()` to identify RC-managed values.
 
-### 2. RC Optimization Pass (Future)
+### 2. RC Optimization Pass
 
 **Location:** `tribute-passes/src/native/rc_optimization.rs`
 
-**Purpose:** Eliminate redundant retain/release pairs.
+**Purpose:** Eliminate redundant retain/release pairs before they are expanded
+into control flow and atomic operations by RC lowering.
 
 **Optimizations:**
 
-- **Paired elimination:** Remove adjacent `retain` followed by `release` on
-  same value
-- **Borrow analysis:** Identify temporary borrows that don't need RC ops
-- **Constant propagation:** Elide RC for compile-time-known lifetimes
+- **Paired elimination:** Within one basic block, remove a `retain` followed by
+  a matching `release` when every intervening use is proven not to let the
+  reference escape. The release operand may be either the original pointer
+  passed to `retain` or the `retain` result. The initial safe-use whitelist is
+  deliberately narrow: loads through the reference and stores that use it only
+  as the destination address. Storing the reference as a value, passing it to
+  a call or branch, crossing an unknown operation, entering a nested region,
+  or encountering an alias/cast prevents elimination. If the `retain` result
+  is used, its uses are replaced with the original pointer before erasing the
+  pair. This optimization does not cross basic-block boundaries or chase
+  aliases.
+- **Borrow analysis (planned):** Identify temporary borrows that don't need RC
+  ops
+- **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
+
+The paired-elimination policy is selected by the native pipeline options, not
+stored in an IR lowering context. Production enables the proven optimization;
+the baseline profile disables it for conformance comparisons.
+
+**Pipeline position:** Immediately after RC insertion and before unrealized
+cast resolution and RC lowering. Running before cast resolution keeps alias
+handling conservative and makes the inserted and optimized RC boundaries
+directly observable in tests.
 
 ### 3. RC Lowering Pass (PR 4)
 

@@ -2,15 +2,31 @@
 
 mod common;
 
-use common::compile_and_run_native_with_done_continuation_dedup;
+use common::{
+    compile_and_run_native_with_done_continuation_dedup,
+    compile_and_run_native_with_paired_rc_elimination,
+};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{OptimizationOptions, SharedPipelineStage, dump_shared_ir_at_stage};
+use tribute::pipeline::{
+    NativePipelineStage, OptimizationOptions, PairedRcEliminationPolicy, SharedPipelineStage,
+    dump_native_ir_at_stage, dump_shared_ir_at_stage,
+};
 use tribute_front::SourceCst;
 use tribute_front::ast_to_ir::DoneContinuationPolicy;
 
 const DONE_CONTINUATION_DEDUP_STATE: &str =
     include_str!("fixtures/optimizations/done_continuation_dedup_state.trb");
+const PAIRED_RC_ELIMINATION: &str =
+    include_str!("fixtures/optimizations/paired_rc_elimination.trb");
+
+fn focused_rc_ops(ir: &str) -> String {
+    ir.lines()
+        .filter(|line| line.contains("tribute_rt.retain") || line.contains("tribute_rt.release"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 fn identity_done_symbols(ir: &str) -> Vec<&str> {
     let lines: Vec<_> = ir.lines().collect();
@@ -76,6 +92,82 @@ fn done_continuation_dedup_preserves_native_execution() {
     );
     assert_eq!(disabled.stdout, enabled.stdout);
     assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
+}
+
+#[test]
+fn paired_rc_elimination_preserves_native_execution() {
+    let disabled = compile_and_run_native_with_paired_rc_elimination(
+        "paired_rc_elimination_disabled.trb",
+        PAIRED_RC_ELIMINATION,
+        PairedRcEliminationPolicy::Disabled,
+    );
+    let enabled = compile_and_run_native_with_paired_rc_elimination(
+        "paired_rc_elimination_enabled.trb",
+        PAIRED_RC_ELIMINATION,
+        PairedRcEliminationPolicy::Enabled,
+    );
+
+    assert!(
+        disabled.status.success(),
+        "disabled pipeline failed: {}",
+        String::from_utf8_lossy(&disabled.stderr)
+    );
+    assert!(
+        enabled.status.success(),
+        "enabled pipeline failed: {}",
+        String::from_utf8_lossy(&enabled.stderr)
+    );
+    assert_eq!(disabled.stdout, enabled.stdout);
+    assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
+}
+
+#[salsa_test]
+fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "paired_rc_elimination_snapshot.trb",
+        PAIRED_RC_ELIMINATION,
+    );
+    let before = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcInsertion,
+        OptimizationOptions::production(),
+    )
+    .expect("RC insertion IR should be available");
+    let after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcOptimization,
+        OptimizationOptions::production(),
+    )
+    .expect("RC optimization IR should be available");
+    let disabled_after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcOptimization,
+        OptimizationOptions {
+            native: tribute::pipeline::NativeOptimizationOptions::baseline(),
+            ..OptimizationOptions::production()
+        },
+    )
+    .expect("disabled RC optimization IR should be available");
+
+    let before = focused_rc_ops(&before);
+    let after = focused_rc_ops(&after);
+    let disabled_after = focused_rc_ops(&disabled_after);
+
+    assert_eq!(before, disabled_after);
+    let before_retain = before.matches("tribute_rt.retain").count();
+    let before_release = before.matches("tribute_rt.release").count();
+    let after_retain = after.matches("tribute_rt.retain").count();
+    let after_release = after.matches("tribute_rt.release").count();
+    assert!(before_retain > after_retain, "before RC ops:\n{before}");
+    assert!(before_release > after_release, "before RC ops:\n{before}");
+    assert_eq!(before_retain - after_retain, before_release - after_release);
+
+    assert_snapshot!("paired_rc_elimination_before", before);
+    assert_snapshot!("paired_rc_elimination_after", after);
 }
 
 #[salsa_test]
