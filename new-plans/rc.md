@@ -206,17 +206,19 @@ into control flow and atomic operations by RC lowering.
 **Optimizations:**
 
 - **Paired elimination:** Within one basic block, remove a `retain` followed by
-  a `release` of the same SSA value when every intervening use is proven not to
-  let the reference escape. The initial safe-use whitelist is deliberately
-  narrow: loads through the reference and stores that use it only as the
-  destination address. Storing the reference as a value, passing it to a call
-  or branch, crossing an unknown operation, entering a nested region, or
-  encountering an alias/cast prevents elimination. If the `retain` result is
-  used, its uses are replaced with the original pointer before erasing the
+  a matching `release` when every intervening use is proven not to let the
+  reference escape. The release operand may be either the original pointer
+  passed to `retain` or the `retain` result. The initial safe-use whitelist is
+  deliberately narrow: loads through the reference and stores that use it only
+  as the destination address. Storing the reference as a value, passing it to
+  a call or branch, crossing an unknown operation, entering a nested region,
+  or encountering an alias/cast prevents elimination. If the `retain` result
+  is used, its uses are replaced with the original pointer before erasing the
   pair. This optimization does not cross basic-block boundaries or chase
   aliases.
-- **Borrow analysis:** Identify temporary borrows that don't need RC ops
-- **Constant propagation:** Elide RC for compile-time-known lifetimes
+- **Borrow analysis (planned):** Identify temporary borrows that don't need RC
+  ops
+- **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
 The paired-elimination policy is selected by the native pipeline options, not
 stored in an IR lowering context. Production enables the proven optimization;
