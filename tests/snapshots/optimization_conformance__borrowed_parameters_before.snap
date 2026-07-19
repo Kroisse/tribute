@@ -1,0 +1,9 @@
+---
+source: tests/optimization_conformance.rs
+expression: before
+---
+%4 = tribute_rt.retain %1 : core.ptr
+%5 = tribute_rt.retain %2 : core.ptr
+tribute_rt.release %1 {alloc_size = 0}
+tribute_rt.release %2 {alloc_size = 0}
+tribute_rt.release %15 {alloc_size = 12}

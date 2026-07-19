@@ -1,0 +1,13 @@
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn choose_while_borrowing(value: fn(Nat) -> Nat, flag: Bool) -> Nat {
+    case flag {
+        True -> 10
+        False -> 20
+    }
+}
+
+fn main() {
+    let increment = fn(value) { value + 1 }
+    __tribute_print_nat(choose_while_borrowing(increment, True))
+}

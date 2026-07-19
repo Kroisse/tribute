@@ -45,6 +45,15 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
+/// Policy for eliding RC ownership of proven borrowed function parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorrowedParameterPolicy {
+    /// Preserve the current owned-parameter convention for every parameter.
+    Preserve,
+    /// Omit parameter RC only when all uses are proven non-escaping.
+    ElideProvenBorrowed,
+}
+
 /// Check if a type is `tribute_rt.anyref` (RC-managed reference type).
 fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
@@ -368,10 +377,21 @@ struct InsertionPlan {
 /// Insert reference counting operations for all `tribute_rt.anyref`-typed values,
 /// then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
 pub fn insert_rc(ctx: &mut IrContext, module: Module) {
+    insert_rc_with_policy(ctx, module, BorrowedParameterPolicy::Preserve);
+}
+
+/// Insert reference counting operations with an explicit borrowed-parameter
+/// policy, then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
+pub fn insert_rc_with_policy(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
         if let Ok(func_op) = clif::Func::from_op(ctx, *op) {
@@ -380,13 +400,72 @@ pub fn insert_rc(ctx: &mut IrContext, module: Module) {
                 continue;
             }
             let body = func_op.body(ctx);
-            insert_rc_in_function(ctx, body);
+            let function_policy = if borrow_safe_functions.contains(&sym) {
+                borrowed_parameters
+            } else {
+                BorrowedParameterPolicy::Preserve
+            };
+            insert_rc_in_function(ctx, body, function_policy);
         }
     }
 
     // After RC insertion, lower all remaining `tribute_rt.anyref` types to `core.ptr`.
     // This ensures anyref doesn't survive past RC insertion into the Cranelift emit phase.
     lower_anyref_to_ptr(ctx, module);
+}
+
+/// Functions whose callers are guaranteed to keep an owning frame alive for
+/// the duration of an ordinary synchronous call.
+///
+/// A function is ineligible when it is externally callable, is the target of a
+/// direct tail call, or its address is materialized for an indirect/escaping
+/// call. These exclusions preserve the caller-lifetime premise of borrowed
+/// parameters without requiring inter-procedural ownership summaries.
+fn borrow_safe_functions(ctx: &IrContext, module_ops: &[OpRef]) -> HashSet<Symbol> {
+    let mut candidates = HashSet::new();
+    for &op in module_ops {
+        if let Ok(func_op) = clif::Func::from_op(ctx, op)
+            && !ctx.op(op).attributes.contains_key(&Symbol::new("abi"))
+        {
+            candidates.insert(func_op.sym_name(ctx));
+        }
+    }
+
+    let mut unsafe_callees = HashSet::new();
+    for &op in module_ops {
+        if let Ok(func_op) = clif::Func::from_op(ctx, op) {
+            collect_borrow_unsafe_callees(ctx, func_op.body(ctx), &candidates, &mut unsafe_callees);
+        }
+    }
+    candidates.retain(|symbol| !unsafe_callees.contains(symbol));
+    candidates
+}
+
+fn collect_borrow_unsafe_callees(
+    ctx: &IrContext,
+    region: RegionRef,
+    candidates: &HashSet<Symbol>,
+    unsafe_callees: &mut HashSet<Symbol>,
+) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if let Ok(return_call) = clif::ReturnCall::from_op(ctx, op) {
+                let callee = return_call.callee(ctx);
+                if candidates.contains(&callee) {
+                    unsafe_callees.insert(callee);
+                }
+            }
+            if let Ok(symbol_addr) = clif::SymbolAddr::from_op(ctx, op) {
+                let symbol = symbol_addr.sym(ctx);
+                if candidates.contains(&symbol) {
+                    unsafe_callees.insert(symbol);
+                }
+            }
+            for &nested in &ctx.op(op).regions {
+                collect_borrow_unsafe_callees(ctx, nested, candidates, unsafe_callees);
+            }
+        }
+    }
 }
 
 /// Rewrite all `tribute_rt.anyref` types to `core.ptr` in the module.
@@ -540,7 +619,11 @@ fn rewrite_type_anyref(
 }
 
 /// Insert RC in a function body.
-fn insert_rc_in_function(ctx: &mut IrContext, body: RegionRef) {
+fn insert_rc_in_function(
+    ctx: &mut IrContext,
+    body: RegionRef,
+    borrowed_parameter_policy: BorrowedParameterPolicy,
+) {
     let mut ptr_values = collect_ptr_values(ctx, body);
 
     if ptr_values.is_empty() {
@@ -549,6 +632,10 @@ fn insert_rc_in_function(ctx: &mut IrContext, body: RegionRef) {
 
     let ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
     let liveness = compute_liveness(ctx, body, &ptr_values, &ptr_alias_map);
+    let borrowed_parameters = match borrowed_parameter_policy {
+        BorrowedParameterPolicy::Preserve => HashSet::new(),
+        BorrowedParameterPolicy::ElideProvenBorrowed => analyze_borrowed_parameters(ctx, body),
+    };
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
     for (block_idx, &block) in blocks.iter().enumerate() {
@@ -559,8 +646,53 @@ fn insert_rc_in_function(ctx: &mut IrContext, body: RegionRef) {
             &ptr_values,
             &liveness,
             &ptr_alias_map,
+            &borrowed_parameters,
         );
     }
+}
+
+/// Return entry parameters whose complete use set is proven not to escape the
+/// dynamic extent of the function call.
+fn analyze_borrowed_parameters(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
+    let Some(&entry) = ctx.region(body).blocks.first() else {
+        return HashSet::new();
+    };
+
+    ctx.block_args(entry)
+        .iter()
+        .copied()
+        .filter(|&parameter| is_anyref_value(ctx, parameter))
+        .filter(|&parameter| parameter_is_proven_borrowed(ctx, body, parameter))
+        .collect()
+}
+
+fn parameter_is_proven_borrowed(ctx: &IrContext, body: RegionRef, parameter: ValueRef) -> bool {
+    ctx.uses(parameter).iter().all(|use_| {
+        let op = use_.user;
+        let Some(parent_block) = ctx.op(op).parent_block else {
+            return false;
+        };
+        if ctx.block(parent_block).parent_region != Some(body) {
+            return false;
+        }
+        is_proven_borrowed_parameter_use(ctx, op, use_.operand_index as usize)
+    })
+}
+
+fn is_proven_borrowed_parameter_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+    if clif::Load::matches(ctx, op) {
+        return operand_index == 0;
+    }
+
+    // `clif.store(value, addr)`: using the parameter as the address borrows it;
+    // storing the parameter as the value publishes an owned alias.
+    if clif::Store::matches(ctx, op) {
+        return operand_index == 1;
+    }
+
+    // Pointer equality/ordering observes the value without extending its
+    // lifetime. All other operations remain escape barriers by default.
+    clif::Icmp::matches(ctx, op)
 }
 
 /// Insert RC ops in a single block.
@@ -571,6 +703,7 @@ fn insert_rc_in_block(
     ptr_values: &HashSet<ValueRef>,
     liveness: &LivenessInfo,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    borrowed_parameters: &HashSet<ValueRef>,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let loc = ctx.block(block).location;
@@ -615,7 +748,8 @@ fn insert_rc_in_block(
     if is_entry {
         let args: Vec<ValueRef> = ctx.block_args(block).to_vec();
         for arg_val in args {
-            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
+            if is_anyref_type(ctx, ctx.value_ty(arg_val)) && !borrowed_parameters.contains(&arg_val)
+            {
                 let retain_op = tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
             }
@@ -659,12 +793,16 @@ fn insert_rc_in_block(
     let mut dying_values: HashSet<ValueRef> = HashSet::new();
 
     for v in &live_in {
-        if !live_out.contains(v) && !returned_values.contains(v) {
+        if !live_out.contains(v) && !returned_values.contains(v) && !borrowed_parameters.contains(v)
+        {
             dying_values.insert(*v);
         }
     }
     for v in &defs_in_block {
-        if !live_out.contains(v) && !returned_values.contains(v) && !is_alloc_intermediate(ctx, *v)
+        if !live_out.contains(v)
+            && !returned_values.contains(v)
+            && !is_alloc_intermediate(ctx, *v)
+            && !borrowed_parameters.contains(v)
         {
             dying_values.insert(*v);
         }
@@ -776,9 +914,13 @@ mod tests {
     use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
+        run_pass_with_policy(ir, BorrowedParameterPolicy::Preserve)
+    }
+
+    fn run_pass_with_policy(ir: &str, policy: BorrowedParameterPolicy) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        insert_rc(&mut ctx, module);
+        insert_rc_with_policy(&mut ctx, module, policy);
         print_module(&ctx, module.op())
     }
 
@@ -1013,5 +1155,169 @@ mod tests {
             retain_count, 1,
             "should retain only anyref param, got {retain_count}"
         );
+    }
+
+    #[test]
+    fn borrowed_read_only_parameter_omits_entry_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(!output.contains("tribute_rt.retain"));
+        assert!(!output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn borrowed_parameter_can_be_read_across_blocks() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+  ^bb0:
+    clif.jump [^bb1]
+  ^bb1:
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(!output.contains("tribute_rt.retain"));
+        assert!(!output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn borrowed_parameter_allows_store_address_and_comparison() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.i32) -> core.i8 {
+    clif.store %1, %0 {offset = 0}
+    %2 = clif.icmp %0, %0 {cond = @eq} : core.i8
+    clif.return %2
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(!output.contains("tribute_rt.retain"));
+        assert!(!output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn returned_parameter_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+    clif.return %0
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+    }
+
+    #[test]
+    fn stored_parameter_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
+    clif.store %0, %1 {offset = 0}
+    clif.return
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn opaque_call_parameter_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    %1 = clif.call %0 {callee = @opaque} : core.nil
+    clif.return
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn branch_forwarded_parameter_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+  ^bb0:
+    clif.jump %0 [^bb1]
+  ^bb1(%1: tribute_rt.anyref):
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+    }
+
+    #[test]
+    fn cast_alias_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = core.unrealized_conversion_cast %0 : core.ptr
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn tail_call_target_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+  clif.func @caller(%0: tribute_rt.anyref) -> core.i32 {
+    clif.return_call %0 {callee = @f}
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(
+            output.matches("tribute_rt.retain").count() >= 2,
+            "tail-call target and caller must preserve owned parameters:\n{output}"
+        );
+    }
+
+    #[test]
+    fn address_taken_function_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+  clif.func @address() -> core.ptr {
+    %0 = clif.symbol_addr {sym = @f} : core.ptr
+    clif.return %0
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
     }
 }

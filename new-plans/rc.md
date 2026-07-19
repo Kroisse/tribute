@@ -216,13 +216,28 @@ into control flow and atomic operations by RC lowering.
   is used, its uses are replaced with the original pointer before erasing the
   pair. This optimization does not cross basic-block boundaries or chase
   aliases.
-- **Borrow analysis (planned):** Identify temporary borrows that don't need RC
-  ops
+- **Borrowed parameter elision:** Before RC insertion, classify an `anyref`
+  function parameter as borrowed only when every use is proven to remain within
+  the dynamic extent of the call. Loads through the parameter, comparisons,
+  and stores that use it only as the destination address are borrowed uses.
+  Returning or storing the parameter as a value, passing it to a call or branch,
+  using it through an alias/cast or nested region, and every unknown operation
+  are escapes. Analysis failure preserves the existing owned-parameter RC.
+  The callee must also have the ordinary synchronous caller-lifetime guarantee:
+  C ABI entry points, direct tail-call targets, and functions whose address
+  escapes are ineligible because their caller may not retain an owning frame
+  for the full invocation.
+  For a proven borrowed parameter, RC insertion omits both the entry `retain`
+  and every parameter `release`; this keeps acquisition and release decisions
+  under one ownership proof instead of matching generated releases afterward.
+- **Temporary borrow analysis (planned):** Identify temporary values, including
+  field loads, that don't need RC ops
 - **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
-The paired-elimination policy is selected by the native pipeline options, not
-stored in an IR lowering context. Production enables the proven optimization;
-the baseline profile disables it for conformance comparisons.
+The paired-elimination and borrowed-parameter policies are selected by the
+native pipeline options, not stored in an IR lowering context. Production
+enables proven optimizations; the baseline profile disables them for
+conformance comparisons.
 
 **Pipeline position:** Immediately after RC insertion and before unrealized
 cast resolution and RC lowering. Running before cast resolution keeps alias

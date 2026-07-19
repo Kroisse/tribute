@@ -132,18 +132,21 @@ impl OptimizationOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct NativeOptimizationOptions {
     pub paired_rc_elimination: PairedRcEliminationPolicy,
+    pub borrowed_parameters: BorrowedParameterPolicy,
 }
 
 impl NativeOptimizationOptions {
     pub const fn production() -> Self {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
+            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
         }
     }
 
     pub const fn baseline() -> Self {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
         }
     }
 }
@@ -153,6 +156,13 @@ impl NativeOptimizationOptions {
 pub enum PairedRcEliminationPolicy {
     Disabled,
     Enabled,
+}
+
+/// Policy for eliding ownership of proven borrowed native parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum BorrowedParameterPolicy {
+    Preserve,
+    ElideProvenBorrowed,
 }
 
 impl Default for OptimizationOptions {
@@ -173,6 +183,8 @@ pub enum SharedPipelineStage {
 pub enum NativePipelineStage {
     /// Immediately after reference-counting operations are inserted.
     AfterRcInsertion,
+    /// After borrowed-parameter-aware insertion, before paired elimination.
+    AfterBorrowedParameterOptimization,
     /// After optional local RC optimization, before cast resolution and lowering.
     AfterRcOptimization,
 }
@@ -999,10 +1011,31 @@ fn prepare_module_to_native(
             tribute_passes::native::type_converter::native_type_converter(ctx);
         tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter)
             .map_err(native_conversion_failure)?;
-        tribute_passes::native::rc_insertion::insert_rc(ctx, module);
+        let borrowed_parameters = if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
+            BorrowedParameterPolicy::Preserve
+        } else {
+            optimizations.borrowed_parameters
+        };
+        let borrowed_parameters = match borrowed_parameters {
+            BorrowedParameterPolicy::Preserve => {
+                tribute_passes::native::rc_insertion::BorrowedParameterPolicy::Preserve
+            }
+            BorrowedParameterPolicy::ElideProvenBorrowed => {
+                tribute_passes::native::rc_insertion::BorrowedParameterPolicy::ElideProvenBorrowed
+            }
+        };
+        tribute_passes::native::rc_insertion::insert_rc_with_policy(
+            ctx,
+            module,
+            borrowed_parameters,
+        );
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
+        return Ok(None);
+    }
+
+    if stop_after == Some(NativePipelineStage::AfterBorrowedParameterOptimization) {
         return Ok(None);
     }
 
