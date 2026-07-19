@@ -267,7 +267,7 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     assert!(before_retain > after_retain, "before RC ops:\n{before}");
     assert!(before_release > after_release, "before RC ops:\n{before}");
     assert_eq!(before_retain - after_retain, 1);
-    assert_eq!(before_release - after_release, 1);
+    assert_eq!(before_release - after_release, 2);
     assert!(
         after_retain > 0,
         "escaping parameters must retain ownership"

@@ -1,13 +1,18 @@
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
-fn choose_while_borrowing(value: fn(Nat) -> Nat, flag: Bool) -> Nat {
-    case flag {
-        True -> 10
-        False -> 20
+enum BoxedNat {
+    Boxed(Nat)
+    Wrapped(BoxedNat)
+}
+
+fn read_while_borrowing(boxed: BoxedNat) -> Nat {
+    case boxed {
+        Boxed(value) -> value
+        Wrapped(inner) -> read_while_borrowing(inner) + 0
     }
 }
 
 fn main() {
-    let increment = fn(value) { value + 1 }
-    __tribute_print_nat(choose_while_borrowing(increment, True))
+    let boxed = Boxed(10)
+    __tribute_print_nat(read_while_borrowing(boxed))
 }

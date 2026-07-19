@@ -667,7 +667,20 @@ fn analyze_borrowed_parameters(ctx: &IrContext, body: RegionRef) -> HashSet<Valu
 }
 
 fn parameter_is_proven_borrowed(ctx: &IrContext, body: RegionRef, parameter: ValueRef) -> bool {
-    ctx.uses(parameter).iter().all(|use_| {
+    value_is_proven_borrowed(ctx, body, parameter, &mut HashSet::new())
+}
+
+fn value_is_proven_borrowed(
+    ctx: &IrContext,
+    body: RegionRef,
+    value: ValueRef,
+    visited: &mut HashSet<ValueRef>,
+) -> bool {
+    if !visited.insert(value) {
+        return true;
+    }
+
+    ctx.uses(value).iter().all(|use_| {
         let op = use_.user;
         let Some(parent_block) = ctx.op(op).parent_block else {
             return false;
@@ -675,7 +688,17 @@ fn parameter_is_proven_borrowed(ctx: &IrContext, body: RegionRef, parameter: Val
         if ctx.block(parent_block).parent_region != Some(body) {
             return false;
         }
-        is_proven_borrowed_parameter_use(ctx, op, use_.operand_index as usize)
+
+        let operand_index = use_.operand_index as usize;
+        if is_proven_borrowed_parameter_use(ctx, op, operand_index) {
+            return true;
+        }
+
+        core::UnrealizedConversionCast::matches(ctx, op)
+            && operand_index == 0
+            && ctx.op_operands(op).len() == 1
+            && ctx.op_results(op).len() == 1
+            && value_is_proven_borrowed(ctx, body, ctx.op_results(op)[0], visited)
     })
 }
 
@@ -1235,6 +1258,21 @@ mod tests {
     }
 
     #[test]
+    fn continuation_frame_capture_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
+    clif.store %0, %1 {offset = 16}
+    clif.return
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
     fn opaque_call_parameter_preserves_owned_rc() {
         let output = run_pass_with_policy(
             r#"core.module @test {
@@ -1267,13 +1305,64 @@ mod tests {
     }
 
     #[test]
-    fn cast_alias_preserves_owned_rc() {
+    fn loop_block_argument_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+  ^entry:
+    clif.jump %0 [^loop]
+  ^loop(%1: tribute_rt.anyref):
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.jump %1 [^loop]
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+    }
+
+    #[test]
+    fn nested_region_capture_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    func.func @capturing_closure() -> core.i32 {
+      %1 = clif.load %0 {offset = 0} : core.i32
+      func.return %1
+    }
+    clif.return
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(output.contains("tribute_rt.retain"));
+        assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn transparent_cast_allows_borrowed_read() {
         let output = run_pass_with_policy(
             r#"core.module @test {
   clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
     %1 = core.unrealized_conversion_cast %0 : core.ptr
     %2 = clif.load %1 {offset = 0} : core.i32
     clif.return %2
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        assert!(!output.contains("tribute_rt.retain"));
+        assert!(!output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn escaping_cast_alias_preserves_owned_rc() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    %1 = core.unrealized_conversion_cast %0 : core.ptr
+    %2 = clif.call %1 {callee = @opaque} : core.nil
+    clif.return
   }
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
