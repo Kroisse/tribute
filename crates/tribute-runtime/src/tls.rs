@@ -7,8 +7,10 @@
 //! lazily allocated on first access via [`thread_state()`].
 
 use alloc::boxed::Box;
-use core::cell::Cell;
+use core::cell::{Cell, RefCell, RefMut};
 use core::ffi::c_void;
+
+use crate::StdinBuffer;
 
 // =============================================================================
 // Thread-local state
@@ -19,12 +21,14 @@ use core::ffi::c_void;
 
 pub(crate) struct ThreadState {
     tag_counter: Cell<i32>,
+    stdin: RefCell<StdinBuffer>,
 }
 
 impl ThreadState {
     fn new() -> Self {
         Self {
             tag_counter: Cell::new(0),
+            stdin: RefCell::new(StdinBuffer::new()),
         }
     }
 
@@ -32,6 +36,10 @@ impl ThreadState {
         let tag = self.tag_counter.get();
         self.tag_counter.set(tag.wrapping_add(1));
         tag
+    }
+
+    pub(crate) fn stdin_buffer(&self) -> RefMut<'_, StdinBuffer> {
+        self.stdin.borrow_mut()
     }
 }
 

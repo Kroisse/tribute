@@ -24,6 +24,7 @@ itertools = "0.14"
 itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
+libc = "0.2"
 lsp-server = "0.7"
 lsp-types = "0.97"
 object = { version = "0.38", features = ["write_core"] }

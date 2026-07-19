@@ -11,6 +11,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use smallvec::SmallVec;
 
@@ -208,9 +209,7 @@ pub unsafe extern "C" fn __tribute_print_bytes(ptr: *const u8, len: u64) {
 /// Signature: `() -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_print_newline() {
-    unsafe {
-        write(1, b"\n".as_ptr(), 1);
-    }
+    write_stdout_all(b"\n");
 }
 
 // =============================================================================
@@ -238,10 +237,261 @@ pub struct TributeBytes {
 pub unsafe extern "C" fn __tribute_bytes_print(bytes: *const TributeBytes) {
     let b = unsafe { &*bytes };
     if b.len > 0 && !b.ptr.is_null() {
-        unsafe {
-            write(1, b.ptr, b.len as usize);
+        let bytes = unsafe { core::slice::from_raw_parts(b.ptr, b.len as usize) };
+        write_stdout_all(bytes);
+    }
+}
+
+fn write_stdout_all(bytes: &[u8]) {
+    let _ = write_all_with(bytes, |remaining| {
+        let written = unsafe { write(1, remaining.as_ptr(), remaining.len()) };
+        if written >= 0 {
+            Ok(written as usize)
+        } else {
+            Err(last_errno())
+        }
+    });
+}
+
+fn write_all_with(
+    mut remaining: &[u8],
+    mut write_once: impl FnMut(&[u8]) -> Result<usize, i32>,
+) -> bool {
+    while !remaining.is_empty() {
+        match write_once(remaining) {
+            Ok(0) => return false,
+            Ok(written) if written <= remaining.len() => remaining = &remaining[written..],
+            Ok(_) => return false,
+            Err(code) if code == libc::EINTR => {}
+            Err(_) => return false,
         }
     }
+    true
+}
+
+// =============================================================================
+// Native basic I/O
+// =============================================================================
+
+pub const IO_READ_LINE: u32 = 0;
+pub const IO_READ_END_OF_FILE: u32 = 1;
+pub const IO_READ_INVALID_ENCODING: u32 = 2;
+pub const IO_READ_SYSTEM: u32 = 3;
+
+/// Target-neutral line-read result returned across the native runtime ABI.
+///
+/// The compiler copies the fields into `std::io::ReadLineResult` and then
+/// releases this descriptor with [`__tribute_io_read_line_result_dealloc`].
+#[repr(C)]
+pub struct NativeReadLineResult {
+    pub tag: u32,
+    pub code: i32,
+    pub bytes: *mut TributeBytes,
+    pub message: *mut TributeBytes,
+}
+
+enum ReadByte {
+    Byte(u8),
+    EndOfFile,
+    Interrupted,
+    Error(i32),
+}
+
+enum ReadChunk {
+    Bytes(usize),
+    EndOfFile,
+    Interrupted,
+    Error(i32),
+}
+
+const STDIN_BUFFER_SIZE: usize = 8 * 1024;
+
+struct StdinBuffer {
+    bytes: [u8; STDIN_BUFFER_SIZE],
+    position: usize,
+    length: usize,
+}
+
+impl StdinBuffer {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; STDIN_BUFFER_SIZE],
+            position: 0,
+            length: 0,
+        }
+    }
+
+    fn read_byte(&mut self, mut refill: impl FnMut(&mut [u8]) -> ReadChunk) -> ReadByte {
+        if self.position < self.length {
+            let byte = self.bytes[self.position];
+            self.position += 1;
+            return ReadByte::Byte(byte);
+        }
+
+        match refill(&mut self.bytes) {
+            ReadChunk::Bytes(length) => {
+                debug_assert!(length > 0 && length <= self.bytes.len());
+                self.position = 1;
+                self.length = length;
+                ReadByte::Byte(self.bytes[0])
+            }
+            ReadChunk::EndOfFile => ReadByte::EndOfFile,
+            ReadChunk::Interrupted => ReadByte::Interrupted,
+            ReadChunk::Error(code) => ReadByte::Error(code),
+        }
+    }
+}
+
+/// Write a flattened `Bytes` payload, optionally followed by one newline.
+///
+/// # Safety
+///
+/// `bytes` must point to a valid [`TributeBytes`] payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_io_write(bytes: *const TributeBytes, newline: u32) {
+    unsafe { __tribute_bytes_print(bytes) };
+    if newline == 1 {
+        __tribute_print_newline();
+    }
+}
+
+/// Read one line from native stdin and return a C-compatible result descriptor.
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_io_read_line() -> *mut NativeReadLineResult {
+    let mut stdin = unsafe { thread_state() }.stdin_buffer();
+    read_line_with(|| {
+        stdin.read_byte(|buffer| {
+            let read =
+                unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if read > 0 {
+                return ReadChunk::Bytes(read as usize);
+            }
+            match read {
+                0 => ReadChunk::EndOfFile,
+                _ => {
+                    let code = last_errno();
+                    if code == libc::EINTR {
+                        ReadChunk::Interrupted
+                    } else {
+                        ReadChunk::Error(code)
+                    }
+                }
+            }
+        })
+    })
+}
+
+/// Release a descriptor returned by [`__tribute_io_read_line`].
+///
+/// The RC-managed `bytes` and `message` payloads, if any, have already been
+/// transferred to the compiler-created result ADT and are not released here.
+///
+/// # Safety
+///
+/// `result` must be null or a pointer returned by [`__tribute_io_read_line`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_io_read_line_result_dealloc(result: *mut NativeReadLineResult) {
+    unsafe {
+        __tribute_dealloc(
+            result.cast(),
+            core::mem::size_of::<NativeReadLineResult>() as u64,
+        )
+    };
+}
+
+fn read_line_with(mut read_byte: impl FnMut() -> ReadByte) -> *mut NativeReadLineResult {
+    let mut bytes = Vec::new();
+    loop {
+        match read_byte() {
+            ReadByte::Byte(b'\n') => {
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
+                return line_result(bytes);
+            }
+            ReadByte::Byte(byte) => bytes.push(byte),
+            ReadByte::EndOfFile if bytes.is_empty() => {
+                return allocate_read_result(NativeReadLineResult {
+                    tag: IO_READ_END_OF_FILE,
+                    code: 0,
+                    bytes: core::ptr::null_mut(),
+                    message: core::ptr::null_mut(),
+                });
+            }
+            ReadByte::EndOfFile => return line_result(bytes),
+            ReadByte::Interrupted => {}
+            ReadByte::Error(code) => {
+                return allocate_read_result(NativeReadLineResult {
+                    tag: IO_READ_SYSTEM,
+                    code,
+                    bytes: core::ptr::null_mut(),
+                    message: allocate_bytes(b"stdin read failed"),
+                });
+            }
+        }
+    }
+}
+
+fn line_result(bytes: Vec<u8>) -> *mut NativeReadLineResult {
+    if core::str::from_utf8(&bytes).is_err() {
+        return allocate_read_result(NativeReadLineResult {
+            tag: IO_READ_INVALID_ENCODING,
+            code: 0,
+            bytes: core::ptr::null_mut(),
+            message: core::ptr::null_mut(),
+        });
+    }
+
+    allocate_read_result(NativeReadLineResult {
+        tag: IO_READ_LINE,
+        code: 0,
+        bytes: allocate_bytes(&bytes),
+        message: core::ptr::null_mut(),
+    })
+}
+
+fn allocate_read_result(result: NativeReadLineResult) -> *mut NativeReadLineResult {
+    let size = core::mem::size_of::<NativeReadLineResult>() as u64;
+    let raw = unsafe { __tribute_alloc(size) }.cast::<NativeReadLineResult>();
+    unsafe { raw.write(result) };
+    raw
+}
+
+fn allocate_bytes(bytes: &[u8]) -> *mut TributeBytes {
+    let len = bytes.len() as u64;
+    let data = if bytes.is_empty() {
+        core::ptr::null_mut()
+    } else {
+        let data = unsafe { __tribute_alloc(len) };
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
+        data
+    };
+
+    let size = core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64;
+    let raw = unsafe { __tribute_alloc(size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
+    unsafe {
+        (*rc_box).payload.ptr = data;
+        (*rc_box).payload.len = len;
+        &raw mut (*rc_box).payload
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn last_errno() -> i32 {
+    unsafe { *libc::__errno_location() }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn last_errno() -> i32 {
+    unsafe { *libc::__error() }
 }
 
 /// Return the byte length of a Bytes value.
@@ -616,6 +866,66 @@ pub unsafe extern "C" fn __tribute_evidence_lookup_handler(
 mod tests {
     use super::*;
 
+    fn scripted_read(events: impl IntoIterator<Item = ReadByte>) -> *mut NativeReadLineResult {
+        let mut events = events.into_iter();
+        read_line_with(|| events.next().expect("read script exhausted"))
+    }
+
+    fn buffered_scripted_read(
+        buffer: &mut StdinBuffer,
+        input: &[u8],
+        offset: &mut usize,
+        refill_count: &mut usize,
+    ) -> *mut NativeReadLineResult {
+        read_line_with(|| {
+            buffer.read_byte(|destination| {
+                *refill_count += 1;
+                if *offset == input.len() {
+                    return ReadChunk::EndOfFile;
+                }
+                let length = destination.len().min(input.len() - *offset);
+                destination[..length].copy_from_slice(&input[*offset..*offset + length]);
+                *offset += length;
+                ReadChunk::Bytes(length)
+            })
+        })
+    }
+
+    unsafe fn bytes_contents(bytes: *const TributeBytes) -> Vec<u8> {
+        if bytes.is_null() {
+            return Vec::new();
+        }
+        let bytes = unsafe { &*bytes };
+        if bytes.len == 0 {
+            return Vec::new();
+        }
+        unsafe { core::slice::from_raw_parts(bytes.ptr, bytes.len as usize) }.to_vec()
+    }
+
+    unsafe fn dealloc_test_bytes(bytes: *mut TributeBytes) {
+        if bytes.is_null() {
+            return;
+        }
+        let payload = unsafe { &*bytes };
+        unsafe { __tribute_dealloc(payload.ptr.cast_mut(), payload.len) };
+        let raw = unsafe { tribute_rc::RcBox::from_payload_ptr_mut(bytes) }.cast();
+        unsafe {
+            __tribute_dealloc(
+                raw,
+                core::mem::size_of::<tribute_rc::RcBox<TributeBytes>>() as u64,
+            )
+        };
+    }
+
+    unsafe fn dealloc_test_read_result(result: *mut NativeReadLineResult) {
+        let result_ref = unsafe { &*result };
+        unsafe {
+            dealloc_test_bytes(result_ref.bytes);
+            dealloc_test_bytes(result_ref.message);
+            __tribute_io_read_line_result_dealloc(result);
+        }
+    }
+
     #[test]
     fn test_alloc_dealloc() {
         unsafe {
@@ -651,6 +961,130 @@ mod tests {
             __tribute_dealloc(core::ptr::null_mut(), 64);
             __tribute_dealloc(core::ptr::null_mut(), 0);
         }
+    }
+
+    #[test]
+    fn test_native_io_abi_layout() {
+        assert_eq!(core::mem::offset_of!(NativeReadLineResult, tag), 0);
+        assert_eq!(core::mem::offset_of!(NativeReadLineResult, code), 4);
+        assert_eq!(core::mem::offset_of!(NativeReadLineResult, bytes), 8);
+        assert_eq!(core::mem::offset_of!(NativeReadLineResult, message), 16);
+        assert_eq!(core::mem::size_of::<NativeReadLineResult>(), 24);
+
+        let _: unsafe extern "C" fn(*const TributeBytes, u32) = __tribute_io_write;
+        let _: extern "C" fn() -> *mut NativeReadLineResult = __tribute_io_read_line;
+        let _: unsafe extern "C" fn(*mut NativeReadLineResult) =
+            __tribute_io_read_line_result_dealloc;
+    }
+
+    #[test]
+    fn test_write_all_retries_short_writes_and_interrupts() {
+        let mut results = [Ok(2), Err(libc::EINTR), Ok(3)].into_iter();
+        let mut attempts = Vec::new();
+
+        let completed = write_all_with(b"hello", |remaining| {
+            attempts.push(remaining.to_vec());
+            results.next().expect("write script exhausted")
+        });
+
+        assert!(completed);
+        assert_eq!(attempts, [b"hello".as_slice(), b"llo", b"llo"]);
+    }
+
+    #[test]
+    fn test_write_all_stops_on_zero_or_other_error() {
+        assert!(!write_all_with(b"hello", |_| Ok(0)));
+        assert!(!write_all_with(b"hello", |_| Err(libc::EIO)));
+    }
+
+    #[test]
+    fn test_read_line_strips_lf_and_crlf() {
+        for input in [b"hello\n".as_slice(), b"hello\r\n".as_slice()] {
+            let result = scripted_read(input.iter().copied().map(ReadByte::Byte));
+            let result_ref = unsafe { &*result };
+            assert_eq!(result_ref.tag, IO_READ_LINE);
+            assert_eq!(unsafe { bytes_contents(result_ref.bytes) }, b"hello");
+            unsafe { dealloc_test_read_result(result) };
+        }
+    }
+
+    #[test]
+    fn test_stdin_buffer_preserves_bytes_between_lines() {
+        let mut buffer = StdinBuffer::new();
+        let mut offset = 0;
+        let mut refill_count = 0;
+
+        let first = buffered_scripted_read(
+            &mut buffer,
+            b"first\nsecond\n",
+            &mut offset,
+            &mut refill_count,
+        );
+        assert_eq!(unsafe { bytes_contents((*first).bytes) }, b"first");
+        unsafe { dealloc_test_read_result(first) };
+
+        let second = buffered_scripted_read(
+            &mut buffer,
+            b"first\nsecond\n",
+            &mut offset,
+            &mut refill_count,
+        );
+        assert_eq!(unsafe { bytes_contents((*second).bytes) }, b"second");
+        unsafe { dealloc_test_read_result(second) };
+
+        assert_eq!(refill_count, 1, "second line should use buffered bytes");
+    }
+
+    #[test]
+    fn test_read_line_preserves_empty_and_partial_lines() {
+        let empty = scripted_read([ReadByte::Byte(b'\n')]);
+        assert_eq!(unsafe { &*empty }.tag, IO_READ_LINE);
+        assert_eq!(unsafe { bytes_contents((*empty).bytes) }, b"");
+        unsafe { dealloc_test_read_result(empty) };
+
+        let partial = scripted_read(
+            b"partial"
+                .iter()
+                .copied()
+                .map(ReadByte::Byte)
+                .chain([ReadByte::EndOfFile]),
+        );
+        assert_eq!(unsafe { &*partial }.tag, IO_READ_LINE);
+        assert_eq!(unsafe { bytes_contents((*partial).bytes) }, b"partial");
+        unsafe { dealloc_test_read_result(partial) };
+    }
+
+    #[test]
+    fn test_read_line_distinguishes_eof_and_invalid_encoding() {
+        let eof = scripted_read([ReadByte::EndOfFile]);
+        assert_eq!(unsafe { &*eof }.tag, IO_READ_END_OF_FILE);
+        unsafe { dealloc_test_read_result(eof) };
+
+        let invalid = scripted_read([ReadByte::Byte(0xff), ReadByte::Byte(b'\n')]);
+        assert_eq!(unsafe { &*invalid }.tag, IO_READ_INVALID_ENCODING);
+        unsafe { dealloc_test_read_result(invalid) };
+    }
+
+    #[test]
+    fn test_read_line_retries_interrupt_and_reports_system_error() {
+        let line = scripted_read([
+            ReadByte::Interrupted,
+            ReadByte::Byte(b'x'),
+            ReadByte::EndOfFile,
+        ]);
+        assert_eq!(unsafe { &*line }.tag, IO_READ_LINE);
+        assert_eq!(unsafe { bytes_contents((*line).bytes) }, b"x");
+        unsafe { dealloc_test_read_result(line) };
+
+        let error = scripted_read([ReadByte::Error(5)]);
+        let error_ref = unsafe { &*error };
+        assert_eq!(error_ref.tag, IO_READ_SYSTEM);
+        assert_eq!(error_ref.code, 5);
+        assert_eq!(
+            unsafe { bytes_contents(error_ref.message) },
+            b"stdin read failed"
+        );
+        unsafe { dealloc_test_read_result(error) };
     }
 
     // =========================================================================
