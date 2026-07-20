@@ -151,6 +151,11 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
         });
     }
 
+    let string_segment_count = collector.string_allocations.len() as u32;
+    for (_, data_idx, _) in &mut collector.bytes_allocations {
+        *data_idx += string_segment_count;
+    }
+
     ConstAnalysis {
         string_allocations: collector.string_allocations,
         bytes_allocations: collector.bytes_allocations,
@@ -205,7 +210,7 @@ impl RewritePattern for StringConstPattern {
         let value_str = string_const.value(ctx);
         let content = value_str.into_bytes();
 
-        let Some((offset, _len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((offset, len)) = lookup_offset(&self.allocations, &content) else {
             return false;
         };
 
@@ -214,9 +219,11 @@ impl RewritePattern for StringConstPattern {
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
-        // Use typed helper to create wasm.i32_const with just the offset.
-        // Length information is available in ConstAnalysis and will be used by emit.rs.
+        // Preserve the literal length for legacy print intrinsic analysis.
         let new_op = wasm_dialect::i32_const(ctx, location, i32_ty, offset as i32);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .insert(Symbol::new("literal_len"), Attribute::Int(len.into()));
 
         rewriter.replace_op(new_op.op_ref());
         true

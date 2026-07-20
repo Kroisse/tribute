@@ -22,8 +22,9 @@ use super::helpers;
 
 /// Intern a core.func type from params and result type.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
-    let mut all_params: SmallVec<[TypeRef; 4]> = params.into();
-    all_params.push(result_ty); // last param is the return type
+    let mut all_params = SmallVec::with_capacity(params.len() + 1);
+    all_params.push(result_ty);
+    all_params.extend_from_slice(params);
     ctx.types.intern(TypeData {
         dialect: Symbol::new("core"),
         name: Symbol::new("func"),
@@ -350,4 +351,24 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
 
     let body = module.body(ctx).unwrap();
     check_region(ctx, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indirect_function_type_uses_result_first_layout() {
+        let mut ctx = IrContext::new();
+        let result = intern_simple_wasm_type(&mut ctx, "i32");
+        let first = intern_simple_wasm_type(&mut ctx, "i64");
+        let second = intern_simple_wasm_type(&mut ctx, "f32");
+
+        let func_ty = intern_func_type(&mut ctx, &[first, second], result);
+
+        assert_eq!(
+            helpers::func_type_parts(&ctx, func_ty),
+            Some((&[first, second][..], result))
+        );
+    }
 }

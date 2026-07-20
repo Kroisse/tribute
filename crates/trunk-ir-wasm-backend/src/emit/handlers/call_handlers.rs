@@ -272,8 +272,8 @@ use super::super::helpers::attr_u32;
 /// Find a core.func type in the `type_idx_by_type` / `func_types` registries by
 /// matching params and result.
 ///
-/// core.func types encode parameters followed by a single result in `TypeData.params`:
-/// `[param1, .., paramN, result]`.
+/// core.func types encode a single result followed by parameters in `TypeData.params`:
+/// `[result, param1, .., paramN]`.
 ///
 /// This performs a linear O(n) scan over the registries to avoid requiring
 /// `&mut IrContext` for interning a new type. The trade-off is O(n) per
@@ -286,36 +286,19 @@ fn find_func_type_in_registry(
     result: TypeRef,
     module_info: &ModuleInfo,
 ) -> CompilationResult<TypeRef> {
-    let core_sym = Symbol::new("core");
-    let func_sym = Symbol::new("func");
-    let expected_len = params.len() + 1;
-
     // Search through registered func types (from imports, funcs, and call_indirect collection)
     for &ty_ref in module_info.type_idx_by_type.keys() {
-        let data = ctx.types.get(ty_ref);
-        if data.dialect != core_sym || data.name != func_sym {
-            continue;
-        }
-        if data.params.len() != expected_len {
-            continue;
-        }
-        // Check params match (all but last)
-        let (ty_params, ty_result) = data.params.split_at(data.params.len() - 1);
-        if ty_params == params && ty_result[0] == result {
+        if helpers::func_type_parts(ctx, ty_ref)
+            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+        {
             return Ok(ty_ref);
         }
     }
     // Also check func_types map
     for &ty_ref in module_info.func_types.values() {
-        let data = ctx.types.get(ty_ref);
-        if data.dialect != core_sym || data.name != func_sym {
-            continue;
-        }
-        if data.params.len() != expected_len {
-            continue;
-        }
-        let (ty_params, ty_result) = data.params.split_at(data.params.len() - 1);
-        if ty_params == params && ty_result[0] == result {
+        if helpers::func_type_parts(ctx, ty_ref)
+            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+        {
             return Ok(ty_ref);
         }
     }

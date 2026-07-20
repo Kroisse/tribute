@@ -18,6 +18,7 @@
 
 mod common;
 
+use std::io::Write as _;
 use std::process::Command;
 
 use salsa_test_macros::salsa_test;
@@ -138,11 +139,15 @@ fn test_execute_dynamic_bytes_write_boundary() {
     let ir = format!(
         r#"core.module @test {{
   func.func @main() -> core.nil {{
+    %before = adt.string_const {{value = "before|"}} : core.string
+    wasm.call %before {{callee = @__print_line}}
     %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
     %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
     %joined = func.call %left, %right {{callee = @__bytes_concat}} : core.bytes
     %newline = arith.const {{value = 1}} : core.i1
     %result = tribute_io.write %joined, %newline : core.nil
+    %after = adt.string_const {{value = "|after"}} : core.string
+    wasm.call %after {{callee = @__print_line}}
     func.return
   }}
 }}"#
@@ -152,8 +157,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
         .expect("lower dynamic output to Wasm");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
         .expect("emit dynamic output Wasm");
-    let wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    std::fs::write(wasm.path(), &binary.bytes).expect("write Wasm module");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary.bytes).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -164,9 +169,11 @@ fn test_execute_dynamic_bytes_write_boundary() {
         "wasmtime failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut expected = left.into_bytes();
+    let mut expected = b"before|".to_vec();
+    expected.extend_from_slice(left.as_bytes());
     expected.extend_from_slice(right.as_bytes());
     expected.push(b'\n');
+    expected.extend_from_slice(b"|after");
     assert_eq!(output.stdout, expected);
 }
 
