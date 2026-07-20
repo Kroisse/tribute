@@ -17,6 +17,7 @@
 pub mod const_to_wasm;
 pub mod evidence_to_wasm;
 pub mod intrinsic_to_wasm;
+pub mod io;
 pub mod lower;
 pub mod normalize_primitive_types;
 pub mod tribute_rt_to_wasm;

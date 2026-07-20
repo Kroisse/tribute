@@ -26,6 +26,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::const_to_wasm::ConstAnalysis;
 use super::intrinsic_to_wasm::IntrinsicAnalysis;
+use super::io::IoAnalysis;
 use super::type_converter::{self, wasm_type_converter};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, STEP_IDX, STEP_TAG_DONE};
 
@@ -77,6 +78,13 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
 
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
+    let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
+    let io_analysis = IoAnalysis::analyze(ctx, module, const_analysis.total_size());
+    {
+        let _span = tracing::info_span!("io_to_wasm").entered();
+        super::io::lower(ctx, module, &io_analysis)?;
+    }
+
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();
@@ -147,16 +155,17 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
 
     // Const analysis and lowering (string/bytes constants to data segments)
-    let const_analysis = {
+    {
         let _span = tracing::info_span!("const_to_wasm").entered();
-        let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
         super::const_to_wasm::lower(ctx, module, &const_analysis);
-        const_analysis
-    };
+    }
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
-    let intrinsic_analysis =
-        super::intrinsic_to_wasm::analyze_intrinsics(ctx, module, const_analysis.total_size());
+    let intrinsic_analysis = super::intrinsic_to_wasm::analyze_intrinsics(
+        ctx,
+        module,
+        const_analysis.total_size() + io_analysis.total_size,
+    );
     {
         let _span = tracing::info_span!("intrinsic_to_wasm").entered();
         super::intrinsic_to_wasm::lower(ctx, module, &intrinsic_analysis);
@@ -165,7 +174,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     // Phase 2: Module-level operations via WasmLowerer (in-place)
     {
         let _span = tracing::info_span!("wasm_lowerer").entered();
-        let mut lowerer = WasmLowerer::new(&const_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
         lowerer.lower_module(ctx, module);
     }
 
@@ -368,6 +377,7 @@ impl ArenaMemoryPlan {
 /// 3. Appends data segment ops and module-level extras (exports, _start function)
 struct WasmLowerer<'a> {
     const_analysis: &'a ConstAnalysis,
+    io_analysis: &'a IoAnalysis,
     intrinsic_analysis: &'a IntrinsicAnalysis,
     memory_plan: ArenaMemoryPlan,
     main_exports: MainExports,
@@ -375,9 +385,14 @@ struct WasmLowerer<'a> {
 }
 
 impl<'a> WasmLowerer<'a> {
-    fn new(const_analysis: &'a ConstAnalysis, intrinsic_analysis: &'a IntrinsicAnalysis) -> Self {
+    fn new(
+        const_analysis: &'a ConstAnalysis,
+        io_analysis: &'a IoAnalysis,
+        intrinsic_analysis: &'a IntrinsicAnalysis,
+    ) -> Self {
         Self {
             const_analysis,
+            io_analysis,
             intrinsic_analysis,
             memory_plan: ArenaMemoryPlan::new(),
             main_exports: MainExports::new(),
@@ -484,7 +499,7 @@ impl<'a> WasmLowerer<'a> {
         let mut preamble_ops: Vec<OpRef> = Vec::new();
 
         // Emit fd_write only when an explicit intrinsic needs it.
-        if self.intrinsic_analysis.needs_fd_write {
+        if self.io_analysis.needs_fd_write || self.intrinsic_analysis.needs_fd_write {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
             let op = wasm_dialect::import_func(
@@ -500,13 +515,14 @@ impl<'a> WasmLowerer<'a> {
 
         // Check if memory is needed
         let const_size = self.const_analysis.total_size();
+        let io_size = self.io_analysis.total_size;
         let intrinsic_size = self.intrinsic_analysis.total_size;
-        if const_size > 0 || intrinsic_size > 0 {
+        if const_size > 0 || io_size > 0 || intrinsic_size > 0 {
             self.memory_plan.needs_memory = true;
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            let total_data_size = const_size + intrinsic_size;
+            let total_data_size = const_size + io_size + intrinsic_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
             let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
             preamble_ops.push(op.op_ref());
@@ -842,7 +858,14 @@ mod tests {
             nwritten_offset: None,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &intrinsic_analysis);
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
         lowerer.main_exports.saw_main = true;
         lowerer.main_exports.main_result_type = Some(nil_ty);
         lowerer.main_exports.main_param_types = vec![evidence_ty];
@@ -893,7 +916,14 @@ mod tests {
             nwritten_offset: Some(16),
             total_size: 20,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &intrinsic_analysis);
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 4,
+            nwritten_offset: 4,
+            scratch_offset: 4,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
         let module_block = module.first_block(&ctx).expect("module body block");
         let placeholder = ctx.block(module_block).ops[0];
 

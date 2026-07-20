@@ -100,6 +100,12 @@ itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 # Profile for building tribute-runtime as a lean no_std staticlib.
 # Usage: cargo build -p tribute-runtime --profile runtime
 [profile.runtime]

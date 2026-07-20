@@ -321,6 +321,26 @@ impl RewritePattern for PrintLinePattern {
 
         let fd_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // stdout
         let iovec_const = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_offset as i32);
+        let ptr_const = wasm_dialect::i32_const(ctx, location, i32_ty, ptr as i32);
+        let len_const = wasm_dialect::i32_const(ctx, location, i32_ty, len as i32);
+        let store_ptr = wasm_dialect::i32_store(
+            ctx,
+            location,
+            iovec_const.result(ctx),
+            ptr_const.result(ctx),
+            0,
+            2,
+            0,
+        );
+        let store_len = wasm_dialect::i32_store(
+            ctx,
+            location,
+            iovec_const.result(ctx),
+            len_const.result(ctx),
+            4,
+            2,
+            0,
+        );
         let iovec_len_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // one iovec entry
         let nwritten_const = wasm_dialect::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
 
@@ -346,6 +366,10 @@ impl RewritePattern for PrintLinePattern {
             // Void: emit operations and drop the fd_write result
             rewriter.insert_op(fd_const.op_ref());
             rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(ptr_const.op_ref());
+            rewriter.insert_op(len_const.op_ref());
+            rewriter.insert_op(store_ptr.op_ref());
+            rewriter.insert_op(store_len.op_ref());
             rewriter.insert_op(iovec_len_const.op_ref());
             rewriter.insert_op(nwritten_const.op_ref());
             rewriter.insert_op(call.op_ref());
@@ -354,6 +378,10 @@ impl RewritePattern for PrintLinePattern {
             // Non-void: emit operations, call result becomes the replacement value
             rewriter.insert_op(fd_const.op_ref());
             rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(ptr_const.op_ref());
+            rewriter.insert_op(len_const.op_ref());
+            rewriter.insert_op(store_ptr.op_ref());
+            rewriter.insert_op(store_len.op_ref());
             rewriter.insert_op(iovec_len_const.op_ref());
             rewriter.insert_op(nwritten_const.op_ref());
             rewriter.replace_op(call.op_ref());

@@ -316,6 +316,21 @@ impl RewritePattern for UpdateStructGetPattern {
             return false;
         }
 
+        // Builtin GC layouts have canonical indices and must not be
+        // re-inferred from a value flowing through generic IR bookkeeping.
+        if ctx
+            .op(op)
+            .attributes
+            .get(&Symbol::new(ATTR_TYPE_IDX))
+            .and_then(|attr| match attr {
+                Attribute::Int(idx) => u32::try_from(*idx).ok(),
+                _ => None,
+            })
+            .is_some_and(|idx| idx < FIRST_USER_TYPE_IDX)
+        {
+            return false;
+        }
+
         // Get the struct operand and trace to find its type_idx
         let operands = ctx.op_operands(op).to_vec();
         let Some(&struct_val) = operands.first() else {

@@ -12,7 +12,7 @@ use trunk_ir::types::Attribute;
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
+use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -99,8 +99,8 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
     if data.params.is_empty() {
         return None;
     }
-    let (params, ret) = data.params.split_at(data.params.len() - 1);
-    Some((params, ret[0]))
+    let (ret, params) = data.params.split_first()?;
+    Some((params, *ret))
 }
 
 /// Convert an IR type to a WebAssembly value type.
@@ -119,8 +119,17 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::F64)
     } else if is_type(ctx, ty, "core", "bytes") {
         Ok(ValType::Ref(RefType {
-            nullable: true,
+            nullable: false,
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
+        }))
+    } else if is_bytes_array_ref(ctx, ty) {
+        let nullable = matches!(
+            ctx.types.get(ty).attrs.get(&Symbol::new("nullable")),
+            Some(Attribute::Bool(true))
+        );
+        Ok(ValType::Ref(RefType {
+            nullable,
+            heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
         }))
     } else if is_type(ctx, ty, "core", "string") || is_type(ctx, ty, "core", "ptr") {
         Ok(ValType::I32)
@@ -197,6 +206,21 @@ pub(crate) fn type_to_valtype(
             data.dialect, data.name
         )))
     }
+}
+
+fn is_bytes_array_ref(ctx: &IrContext, ty: TypeRef) -> bool {
+    let reference = ctx.types.get(ty);
+    if reference.dialect != Symbol::new("core")
+        || reference.name != Symbol::new("ref")
+        || reference.params.len() != 1
+    {
+        return false;
+    }
+    let array = ctx.types.get(reference.params[0]);
+    array.dialect == Symbol::new("core")
+        && array.name == Symbol::new("array")
+        && array.params.len() == 1
+        && is_type(ctx, array.params[0], "core", "i8")
 }
 
 /// Convert an IR return type to WebAssembly result types.

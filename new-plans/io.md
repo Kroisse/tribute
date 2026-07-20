@@ -186,6 +186,30 @@ Wasm lowering은 각각 #772와 #771이 담당한다.
 - WASI preview2/component model 전환은 이 source API와 독립적인 후속 backend
   작업이다.
 
+### Wasm Runtime Boundary
+
+현재 Wasm backend의 `Bytes`는 WasmGC `array i8`와 slice offset/length를 가진
+struct다. WASI preview1 `fd_write`의 iovec은 linear memory에 있어야 하므로 GC array
+reference를 직접 전달할 수 없다. 첫 구현은 instance-local linear scratch buffer를
+사용한다.
+
+- 출력할 `Bytes` slice를 GC array에서 scratch buffer로 복사한다.
+- `print_line`은 payload 끝에 `\n` 하나를 붙여 하나의 연속 구간으로 쓴다.
+- iovec과 `nwritten` cell도 compiler가 예약한 linear memory에 둔다.
+- payload가 현재 scratch capacity보다 크면 checked arithmetic으로 필요한 page 수를
+  계산해 memory를 grow한다. 실패는 현재 trap으로 처리한다.
+- `fd_write`가 partial write를 반환하면 iovec의 pointer/length를 갱신하여 남은 구간을
+  다시 쓴다. interrupt는 재시도하고 다른 host failure는 source-level `Throw`로
+  노출하지 않는다.
+- scratch pointer는 동기 host call 동안만 유효하며 host가 보관해서는 안 된다.
+- buffer는 instance 안에서 재사용한다. 현재 실행 모델은 single-threaded이며 threads나
+  reentrant host callback은 별도 정책이 필요하다.
+
+이 선택은 `tribute_io.write`의 target lowering 내부에만 존재한다. 이후 WASI
+preview2/component model이나 custom host import로 교체해도 source API와 shared IR
+boundary는 바뀌지 않는다. #771은 동적 출력만 다루며 Wasm `read_line`은 별도 후속
+범위다.
+
 ### Native Runtime ABI
 
 Native lowering은 다음 private C ABI를 사용한다. 이 ABI는 source API가 아니며
