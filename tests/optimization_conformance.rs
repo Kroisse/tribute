@@ -3,14 +3,16 @@
 mod common;
 
 use common::{
+    compile_and_run_native_with_borrowed_parameters,
     compile_and_run_native_with_done_continuation_dedup,
     compile_and_run_native_with_paired_rc_elimination,
 };
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{
-    NativePipelineStage, OptimizationOptions, PairedRcEliminationPolicy, SharedPipelineStage,
-    dump_native_ir_at_stage, dump_shared_ir_at_stage,
+    BorrowedParameterPolicy, NativeOptimizationOptions, NativePipelineStage, OptimizationOptions,
+    PairedRcEliminationPolicy, SharedPipelineStage, dump_native_ir_at_stage,
+    dump_shared_ir_at_stage,
 };
 use tribute_front::SourceCst;
 use tribute_front::ast_to_ir::DoneContinuationPolicy;
@@ -19,6 +21,20 @@ const DONE_CONTINUATION_DEDUP_STATE: &str =
     include_str!("fixtures/optimizations/done_continuation_dedup_state.trb");
 const PAIRED_RC_ELIMINATION: &str =
     include_str!("fixtures/optimizations/paired_rc_elimination.trb");
+const BORROWED_PARAMETERS: &str = include_str!("fixtures/optimizations/borrowed_parameters.trb");
+
+fn native_optimization_options(
+    paired_rc_elimination: PairedRcEliminationPolicy,
+    borrowed_parameters: BorrowedParameterPolicy,
+) -> OptimizationOptions {
+    OptimizationOptions {
+        native: NativeOptimizationOptions {
+            paired_rc_elimination,
+            borrowed_parameters,
+        },
+        ..OptimizationOptions::production()
+    }
+}
 
 fn focused_rc_ops(ir: &str) -> String {
     ir.lines()
@@ -121,6 +137,37 @@ fn paired_rc_elimination_preserves_native_execution() {
     assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
 }
 
+#[test]
+fn borrowed_parameters_preserve_native_execution() {
+    for sanitize_address in [false, true] {
+        let preserved = compile_and_run_native_with_borrowed_parameters(
+            "borrowed_parameters_preserved.trb",
+            BORROWED_PARAMETERS,
+            BorrowedParameterPolicy::Preserve,
+            sanitize_address,
+        );
+        let elided = compile_and_run_native_with_borrowed_parameters(
+            "borrowed_parameters_elided.trb",
+            BORROWED_PARAMETERS,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            sanitize_address,
+        );
+
+        assert!(
+            preserved.status.success(),
+            "preserved pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&preserved.stderr)
+        );
+        assert!(
+            elided.status.success(),
+            "elided pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&elided.stderr)
+        );
+        assert_eq!(preserved.stdout, elided.stdout);
+        assert_eq!(String::from_utf8_lossy(&elided.stdout).trim(), "10");
+    }
+}
+
 #[salsa_test]
 fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -139,17 +186,20 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
         db,
         source,
         NativePipelineStage::AfterRcOptimization,
-        OptimizationOptions::production(),
+        native_optimization_options(
+            PairedRcEliminationPolicy::Enabled,
+            BorrowedParameterPolicy::Preserve,
+        ),
     )
     .expect("RC optimization IR should be available");
     let disabled_after = dump_native_ir_at_stage(
         db,
         source,
         NativePipelineStage::AfterRcOptimization,
-        OptimizationOptions {
-            native: tribute::pipeline::NativeOptimizationOptions::baseline(),
-            ..OptimizationOptions::production()
-        },
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::Preserve,
+        ),
     )
     .expect("disabled RC optimization IR should be available");
 
@@ -168,6 +218,67 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
 
     assert_snapshot!("paired_rc_elimination_before", before);
     assert_snapshot!("paired_rc_elimination_after", after);
+}
+
+#[salsa_test]
+fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
+    let source =
+        SourceCst::from_source_str(db, "borrowed_parameters_snapshot.trb", BORROWED_PARAMETERS);
+    let before = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcInsertion,
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::Preserve,
+        ),
+    )
+    .expect("owned-parameter RC insertion IR should be available");
+    let after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        ),
+    )
+    .expect("borrowed-parameter IR should be available");
+    let preserved_after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::Preserve,
+        ),
+    )
+    .expect("preserved parameter RC IR should be available");
+
+    let before = focused_rc_ops(&before);
+    let after = focused_rc_ops(&after);
+    let preserved_after = focused_rc_ops(&preserved_after);
+
+    assert_eq!(before, preserved_after);
+    let before_retain = before.matches("tribute_rt.retain").count();
+    let before_release = before.matches("tribute_rt.release").count();
+    let after_retain = after.matches("tribute_rt.retain").count();
+    let after_release = after.matches("tribute_rt.release").count();
+    assert!(before_retain > after_retain, "before RC ops:\n{before}");
+    assert!(before_release > after_release, "before RC ops:\n{before}");
+    assert_eq!(before_retain - after_retain, 1);
+    assert_eq!(before_release - after_release, 2);
+    assert!(
+        after_retain > 0,
+        "escaping parameters must retain ownership"
+    );
+    assert!(
+        after_release > 0,
+        "escaping parameters must still be released"
+    );
+
+    assert_snapshot!("borrowed_parameters_before", before);
+    assert_snapshot!("borrowed_parameters_after", after);
 }
 
 #[salsa_test]

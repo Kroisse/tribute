@@ -1,0 +1,6 @@
+---
+source: tests/optimization_conformance.rs
+expression: after
+---
+%9 = tribute_rt.retain %8 : core.ptr
+tribute_rt.release %8 {alloc_size = 0}

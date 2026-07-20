@@ -1,0 +1,18 @@
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+enum BoxedNat {
+    Boxed(Nat)
+    Wrapped(BoxedNat)
+}
+
+fn read_while_borrowing(boxed: BoxedNat) -> Nat {
+    case boxed {
+        Boxed(value) -> value
+        Wrapped(inner) -> read_while_borrowing(inner) + 0
+    }
+}
+
+fn main() {
+    let boxed = Boxed(10)
+    __tribute_print_nat(read_while_borrowing(boxed))
+}

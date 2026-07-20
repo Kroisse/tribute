@@ -7,8 +7,8 @@ use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::{
-    CompilationConfig, NativeOptimizationOptions, OptimizationOptions, PairedRcEliminationPolicy,
-    compile_to_native_binary, link_native_binary,
+    BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
+    PairedRcEliminationPolicy, compile_to_native_binary, link_native_binary,
 };
 use tribute_front::SourceCst;
 use tribute_front::ast_to_ir::{AstToIrOptions, DoneContinuationPolicy};
@@ -74,6 +74,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
         false,
         DoneContinuationPolicy::PerCompilationUnit,
         PairedRcEliminationPolicy::Enabled,
+        BorrowedParameterPolicy::ElideProvenBorrowed,
         NativeStdin::Null,
     )
 }
@@ -91,6 +92,7 @@ pub fn compile_and_run_native_with_done_continuation_dedup(
         false,
         policy,
         PairedRcEliminationPolicy::Enabled,
+        BorrowedParameterPolicy::ElideProvenBorrowed,
         NativeStdin::Null,
     )
 }
@@ -107,6 +109,26 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
         source_code,
         false,
         DoneContinuationPolicy::PerCompilationUnit,
+        policy,
+        BorrowedParameterPolicy::Preserve,
+        NativeStdin::Null,
+    )
+}
+
+/// Compile and run with explicit borrowed-parameter RC selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_borrowed_parameters(
+    source_name: &str,
+    source_code: &str,
+    policy: BorrowedParameterPolicy,
+    sanitize_address: bool,
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        DoneContinuationPolicy::PerCompilationUnit,
+        PairedRcEliminationPolicy::Disabled,
         policy,
         NativeStdin::Null,
     )
@@ -125,6 +147,7 @@ pub fn compile_and_run_native_with_stdin(
         false,
         DoneContinuationPolicy::PerCompilationUnit,
         PairedRcEliminationPolicy::Enabled,
+        BorrowedParameterPolicy::ElideProvenBorrowed,
         NativeStdin::Bytes(stdin),
     )
 }
@@ -139,6 +162,7 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
         false,
         DoneContinuationPolicy::PerCompilationUnit,
         PairedRcEliminationPolicy::Enabled,
+        BorrowedParameterPolicy::ElideProvenBorrowed,
         NativeStdin::Closed,
     )
 }
@@ -186,6 +210,7 @@ pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Outp
         true,
         DoneContinuationPolicy::PerCompilationUnit,
         PairedRcEliminationPolicy::Enabled,
+        BorrowedParameterPolicy::ElideProvenBorrowed,
         NativeStdin::Null,
     )
 }
@@ -203,6 +228,7 @@ fn compile_and_run_native_impl(
     sanitize_address: bool,
     done_continuation: DoneContinuationPolicy,
     paired_rc_elimination: PairedRcEliminationPolicy,
+    borrowed_parameters: BorrowedParameterPolicy,
     stdin: NativeStdin<'_>,
 ) -> Output {
     use tribute::database::parse_with_thread_local;
@@ -217,6 +243,7 @@ fn compile_and_run_native_impl(
             ast_to_ir: AstToIrOptions { done_continuation },
             native: NativeOptimizationOptions {
                 paired_rc_elimination,
+                borrowed_parameters,
             },
         };
         let object_bytes =
