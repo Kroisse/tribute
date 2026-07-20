@@ -94,6 +94,7 @@ fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S)
 
 /// Replace evidence runtime function stubs with real implementations.
 fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
+    let (needs_lookup, needs_extend) = evidence_helper_requirements(ctx, module);
     let ops = module.ops(ctx);
     let mut has_lookup = false;
     let mut has_extend = false;
@@ -129,15 +130,39 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
         }
     }
 
-    if !has_lookup {
+    if needs_lookup && !has_lookup {
         let new_op = generate_evidence_lookup_function(ctx, location);
         prepend_module_op(ctx, module, new_op);
     }
 
-    if !has_extend {
+    if needs_extend && !has_extend {
         let new_op = generate_evidence_extend_function(ctx, location);
         prepend_module_op(ctx, module, new_op);
     }
+}
+
+fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool) {
+    fn visit(ctx: &IrContext, region: RegionRef, lookup: &mut bool, extend: &mut bool) {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                *lookup |= ability::EvidenceLookup::from_op(ctx, op).is_ok()
+                    || effect::DispatchTail::from_op(ctx, op).is_ok()
+                    || effect::DispatchCps::from_op(ctx, op).is_ok();
+                *extend |= ability::EvidenceExtend::from_op(ctx, op).is_ok()
+                    || effect::Extend::from_op(ctx, op).is_ok();
+                for &nested in &ctx.op(op).regions {
+                    visit(ctx, nested, lookup, extend);
+                }
+            }
+        }
+    }
+
+    let mut lookup = false;
+    let mut extend = false;
+    if let Some(body) = module.body(ctx) {
+        visit(ctx, body, &mut lookup, &mut extend);
+    }
+    (lookup, extend)
 }
 
 /// Replace a top-level module operation with a new one.

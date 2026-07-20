@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -20,6 +20,7 @@ use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -321,6 +322,26 @@ impl RewritePattern for PrintLinePattern {
 
         let fd_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // stdout
         let iovec_const = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_offset as i32);
+        let ptr_const = wasm_dialect::i32_const(ctx, location, i32_ty, ptr as i32);
+        let len_const = wasm_dialect::i32_const(ctx, location, i32_ty, len as i32);
+        let store_ptr = wasm_dialect::i32_store(
+            ctx,
+            location,
+            iovec_const.result(ctx),
+            ptr_const.result(ctx),
+            0,
+            2,
+            0,
+        );
+        let store_len = wasm_dialect::i32_store(
+            ctx,
+            location,
+            iovec_const.result(ctx),
+            len_const.result(ctx),
+            4,
+            2,
+            0,
+        );
         let iovec_len_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // one iovec entry
         let nwritten_const = wasm_dialect::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
 
@@ -342,18 +363,55 @@ impl RewritePattern for PrintLinePattern {
         // Emit all operations
         let result_types = ctx.op_result_types(op).to_vec();
         let nil_ty = core::nil(ctx).as_type_ref();
-        if result_types.is_empty() || (result_types.len() == 1 && result_types[0] == nil_ty) {
-            // Void: emit operations and drop the fd_write result
+        if result_types.is_empty() {
+            // Void: emit operations and drop the fd_write result.
             rewriter.insert_op(fd_const.op_ref());
             rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(ptr_const.op_ref());
+            rewriter.insert_op(len_const.op_ref());
+            rewriter.insert_op(store_ptr.op_ref());
+            rewriter.insert_op(store_len.op_ref());
             rewriter.insert_op(iovec_len_const.op_ref());
             rewriter.insert_op(nwritten_const.op_ref());
             rewriter.insert_op(call.op_ref());
             rewriter.replace_op(drop_op.op_ref());
+        } else if result_types.len() == 1 && result_types[0] == nil_ty {
+            // Keep the IR-level nil result while emitting no Wasm value.
+            let block = ctx.create_block(BlockData {
+                location,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            for op in [
+                fd_const.op_ref(),
+                iovec_const.op_ref(),
+                ptr_const.op_ref(),
+                len_const.op_ref(),
+                store_ptr.op_ref(),
+                store_len.op_ref(),
+                iovec_len_const.op_ref(),
+                nwritten_const.op_ref(),
+                call.op_ref(),
+                drop_op.op_ref(),
+            ] {
+                ctx.push_op(block, op);
+            }
+            let region = ctx.create_region(RegionData {
+                location,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+            let block_op = wasm_dialect::block(ctx, location, nil_ty, region);
+            rewriter.replace_op(block_op.op_ref());
         } else {
             // Non-void: emit operations, call result becomes the replacement value
             rewriter.insert_op(fd_const.op_ref());
             rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(ptr_const.op_ref());
+            rewriter.insert_op(len_const.op_ref());
+            rewriter.insert_op(store_ptr.op_ref());
+            rewriter.insert_op(store_len.op_ref());
             rewriter.insert_op(iovec_len_const.op_ref());
             rewriter.insert_op(nwritten_const.op_ref());
             rewriter.replace_op(call.op_ref());

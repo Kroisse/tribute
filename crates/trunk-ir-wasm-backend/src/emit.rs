@@ -1206,7 +1206,7 @@ fn set_result_local(
     function: &mut Function,
 ) -> CompilationResult<()> {
     let results = ctx.op_result_types(op);
-    if results.is_empty() {
+    if results.is_empty() || helpers::is_nil_type(ctx, results[0]) {
         return Ok(());
     }
     let local = emit_ctx

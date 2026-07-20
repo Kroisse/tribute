@@ -14,7 +14,8 @@ use trunk_ir::types::Attribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
 use crate::gc_types::{
-    ATTR_FIELD_COUNT, ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
+    ATTR_FIELD_COUNT, ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -209,6 +210,13 @@ fn resolve_struct_get_type_idx(
     attrs: &BTreeMap<Symbol, Attribute>,
     module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
+    if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX())
+        && let Ok(idx) = u32::try_from(*idx)
+        && idx < FIRST_USER_TYPE_IDX
+    {
+        return Ok(idx);
+    }
+
     let Some(op_val) = operand else {
         debug!("struct_get: no operand, using fallback");
         return get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)

@@ -18,6 +18,9 @@
 
 mod common;
 
+use std::io::Write as _;
+use std::process::Command;
+
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
@@ -115,19 +118,63 @@ fn main() {
     expect_wasm_compilation_success(db, source, "Should compile function with params");
 }
 
-// Note: String literals work as intrinsic arguments (e.g., __print_line)
-// but require additional lowering for case branch return values.
-// This test calls the intrinsic directly (not through prelude's print_line,
-// which now depends on native-only extern "C" functions).
 #[salsa_test]
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
     let code = r#"
-extern "intrinsic" fn __print_line(message: String) -> Nil
-fn my_print(message: String) -> Nil { __print_line(message) }
-fn main() { my_print("Hello, World!") }
+fn main() ->{std::io::Io} Nil {
+    let left = b"Hello, "
+    let right = b"World!"
+    std::io::print_line(String::from_bytes(left <> right))
+}
 "#;
     let source = SourceCst::from_source_str(db, "hello.trb", code);
-    expect_wasm_compilation_success(db, source, "Should compile print_line");
+    expect_wasm_compilation_success(db, source, "Should compile dynamic print_line");
+}
+
+#[test]
+fn test_execute_dynamic_bytes_write_boundary() {
+    let mut ctx = trunk_ir::IrContext::new();
+    let left = "x".repeat(35_000);
+    let right = "y".repeat(35_000);
+    let ir = format!(
+        r#"core.module @test {{
+  func.func @main() -> core.nil {{
+    %before = adt.string_const {{value = "before|"}} : core.string
+    wasm.call %before {{callee = @__print_line}}
+    %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
+    %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
+    %joined = func.call %left, %right {{callee = @__bytes_concat}} : core.bytes
+    %newline = arith.const {{value = 1}} : core.i1
+    %result = tribute_io.write %joined, %newline : core.nil
+    %after = adt.string_const {{value = "|after"}} : core.string
+    wasm.call %after {{callee = @__print_line}}
+    func.return
+  }}
+}}"#
+    );
+    let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
+    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module)
+        .expect("lower dynamic output to Wasm");
+    let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+        .expect("emit dynamic output Wasm");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary.bytes).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected = b"before|".to_vec();
+    expected.extend_from_slice(left.as_bytes());
+    expected.extend_from_slice(right.as_bytes());
+    expected.push(b'\n');
+    expected.extend_from_slice(b"|after");
+    assert_eq!(output.stdout, expected);
 }
 
 #[salsa_test]

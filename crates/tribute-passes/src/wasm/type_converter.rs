@@ -200,6 +200,10 @@ fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
 /// variant instance types, and trampoline types that get lowered to ADT structs.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
+    if is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")) {
+        return true;
+    }
+
     // wasm.structref or wasm.anyref
     if is_type(ctx, ty, Symbol::new("wasm"), Symbol::new("structref"))
         || is_type(ctx, ty, Symbol::new("wasm"), Symbol::new("anyref"))

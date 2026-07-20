@@ -99,6 +99,19 @@ Printing program results belongs in explicit standard I/O calls such as
 `std::io::print_line`, which shared lowering maps to the target-independent I/O
 boundary described in [io.md](io.md), not in backend entrypoint lowering.
 
+### Dynamic basic output
+
+WASI preview1 `fd_write` cannot read a WasmGC `Bytes` array directly because its
+iovec points into linear memory. The initial `tribute_io.write` lowering copies
+the dynamic `Bytes` slice into an instance-local linear scratch buffer, appends
+the optional newline there, and invokes `fd_write` with compiler-owned iovec and
+`nwritten` cells. The lowering grows memory when required and retries partial or
+interrupted writes. See [io.md](io.md#wasm-runtime-boundary) for lifetime and
+failure rules.
+
+The old `__print_line` literal analysis is a compatibility path to remove. New
+source programs must reach Wasm output only through `tribute_io.write`.
+
 ---
 
 ## WasmGC 타입 처리
