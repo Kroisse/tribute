@@ -843,16 +843,13 @@ fn insert_rc_in_block(
     for v in &dying_sorted {
         if let Some(&last_use_idx) = last_use_in_block.get(v) {
             let last_op = ops[last_use_idx];
-            if clif::Return::matches(ctx, last_op) {
+            if clif::Return::matches(ctx, last_op) || clif::Jump::matches(ctx, last_op) {
                 continue;
             }
             let alloc_size = infer_alloc_size(ctx, *v);
             let op_loc = ctx.op(last_op).location;
             let release_op = tribute_rt::release(ctx, op_loc, *v, alloc_size);
             if is_terminator_op(ctx, last_op) {
-                if clif::Jump::matches(ctx, last_op) {
-                    continue;
-                }
                 plan.before
                     .entry(last_use_idx)
                     .or_default()
@@ -935,6 +932,7 @@ mod tests {
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir::validation::validate_use_chains;
 
     fn run_pass(ir: &str) -> String {
         run_pass_with_policy(ir, BorrowedParameterPolicy::Preserve)
@@ -943,8 +941,33 @@ mod tests {
     fn run_pass_with_policy(ir: &str, policy: BorrowedParameterPolicy) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
+        let validation = validate_use_chains(&ctx, module);
+        assert!(
+            validation.is_ok(),
+            "input fixture must have valid SSA use chains: {validation}"
+        );
         insert_rc_with_policy(&mut ctx, module, policy);
+        let validation = validate_use_chains(&ctx, module);
+        assert!(
+            validation.is_ok(),
+            "RC insertion must preserve SSA use chains: {validation}"
+        );
         print_module(&ctx, module.op())
+    }
+
+    fn focused_rc_ops(output: &str) -> String {
+        output
+            .lines()
+            .filter(|line| {
+                line.contains("tribute_rt.retain") || line.contains("tribute_rt.release")
+            })
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn assert_focused_rc(output: &str, expected: &str) {
+        assert_eq!(focused_rc_ops(output), expected, "full IR:\n{output}");
     }
 
     // =========================================================================
@@ -1191,8 +1214,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(!output.contains("tribute_rt.retain"));
-        assert!(!output.contains("tribute_rt.release"));
+        assert_focused_rc(&output, "");
     }
 
     #[test]
@@ -1209,8 +1231,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(!output.contains("tribute_rt.retain"));
-        assert!(!output.contains("tribute_rt.release"));
+        assert_focused_rc(&output, "");
     }
 
     #[test]
@@ -1225,8 +1246,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(!output.contains("tribute_rt.retain"));
-        assert!(!output.contains("tribute_rt.release"));
+        assert_focused_rc(&output, "");
     }
 
     #[test]
@@ -1239,7 +1259,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
+        assert_focused_rc(&output, "%1 = tribute_rt.retain %0 : core.ptr");
     }
 
     #[test]
@@ -1253,8 +1273,14 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%2 = tribute_rt.retain %0 : core.ptr\n",
+                "%3 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1268,8 +1294,14 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%2 = tribute_rt.retain %0 : core.ptr\n",
+                "%3 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1283,8 +1315,13 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1301,7 +1338,13 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %2 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1318,7 +1361,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
+        assert_focused_rc(&output, "%1 = tribute_rt.retain %0 : core.ptr");
     }
 
     #[test]
@@ -1335,8 +1378,13 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1351,8 +1399,7 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(!output.contains("tribute_rt.retain"));
-        assert!(!output.contains("tribute_rt.release"));
+        assert_focused_rc(&output, "");
     }
 
     #[test]
@@ -1367,8 +1414,13 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 
     #[test]
@@ -1385,9 +1437,14 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(
-            output.matches("tribute_rt.retain").count() >= 2,
-            "tail-call target and caller must preserve owned parameters:\n{output}"
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}\n",
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
         );
     }
 
@@ -1406,7 +1463,12 @@ mod tests {
 }"#,
             BorrowedParameterPolicy::ElideProvenBorrowed,
         );
-        assert!(output.contains("tribute_rt.retain"));
-        assert!(output.contains("tribute_rt.release"));
+        assert_focused_rc(
+            &output,
+            concat!(
+                "%1 = tribute_rt.retain %0 : core.ptr\n",
+                "tribute_rt.release %0 {alloc_size = 0}"
+            ),
+        );
     }
 }
