@@ -11,7 +11,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
-use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
+use wasm_encoder::{BlockType, Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -163,53 +163,8 @@ fn compute_block_type(
 
     let ty = result_ty.expect("result_ty should be Some when has_result is true");
 
-    // IMPORTANT: Check primitive types BEFORE type_idx_by_type lookup.
-    // Primitive types should use their native WASM types, not GC struct references.
-
-    // core.func types should use funcref block type
-    if helpers::is_type(ctx, ty, "core", "func") {
-        debug!(
-            "block_type: using funcref for core.func type {}.{}",
-            ctx.types.get(ty).dialect,
-            ctx.types.get(ty).name
-        );
-        return Ok(BlockType::Result(ValType::Ref(RefType::FUNCREF)));
-    }
-
-    // Check for core primitive types (i32, i64, f32, f64)
-    if helpers::is_type(ctx, ty, "core", "i32") {
-        debug!("block_type: using i32 for core.i32");
-        return Ok(BlockType::Result(ValType::I32));
-    }
-    if helpers::is_type(ctx, ty, "core", "i64") {
-        debug!("block_type: using i64 for core.i64");
-        return Ok(BlockType::Result(ValType::I64));
-    }
-    if helpers::is_type(ctx, ty, "core", "f32") {
-        debug!("block_type: using f32 for core.f32");
-        return Ok(BlockType::Result(ValType::F32));
-    }
-    if helpers::is_type(ctx, ty, "core", "f64") {
-        debug!("block_type: using f64 for core.f64");
-        return Ok(BlockType::Result(ValType::F64));
-    }
-
-    if let Some(&type_idx) = module_info.type_idx_by_type.get(&ty) {
-        // ADT types - use concrete GC type reference
-        debug!(
-            "block_type: using concrete type_idx={} for {}.{}",
-            type_idx,
-            ctx.types.get(ty).dialect,
-            ctx.types.get(ty).name
-        );
-        return Ok(BlockType::Result(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Concrete(type_idx),
-        })));
-    }
-
     debug!(
-        "block_type: no type_idx for {}.{}, using type_to_valtype",
+        "block_type: converting {}.{} with canonical value-type rules",
         ctx.types.get(ty).dialect,
         ctx.types.get(ty).name
     );

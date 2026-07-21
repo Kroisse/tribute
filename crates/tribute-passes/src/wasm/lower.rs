@@ -137,7 +137,14 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
     debug_func_params(ctx, module, "after tribute_rt_to_wasm");
 
-    // Convert ALL adt ops to wasm (including those from tribute_rt_to_wasm)
+    // Lower constants before adt_to_wasm so string constants can become the
+    // ordinary prelude String::Leaf variant.
+    {
+        let _span = tracing::info_span!("const_to_wasm").entered();
+        super::const_to_wasm::lower(ctx, module, &const_analysis);
+    }
+
+    // Convert ALL adt ops to wasm (including String::Leaf from const lowering).
     {
         let _span = tracing::info_span!("adt_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
@@ -157,12 +164,6 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
         } else {
             super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
         }
-    }
-
-    // Const analysis and lowering (string/bytes constants to data segments)
-    {
-        let _span = tracing::info_span!("const_to_wasm").entered();
-        super::const_to_wasm::lower(ctx, module, &const_analysis);
     }
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
@@ -572,20 +573,8 @@ impl<'a> WasmLowerer<'a> {
 
     /// Append data segment ops at the end of the module block.
     fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
-        // Emit active data segments for string constants (linear memory)
-        for (content, offset, _len) in self.const_analysis.string_allocations.iter() {
-            let op = wasm_dialect::data(
-                ctx,
-                location,
-                *offset,
-                Attribute::Bytes(content.as_slice().into()),
-                false,
-            );
-            ctx.push_op(module_block, op.op_ref());
-        }
-
-        // Emit passive data segments for bytes constants (for array.new_data)
-        for (content, _data_idx, _len) in self.const_analysis.bytes_allocations.iter() {
+        // String and Bytes constants share passive data segments.
+        for (content, _data_idx, _len) in self.const_analysis.allocations.iter() {
             let op = wasm_dialect::data(
                 ctx,
                 location,
@@ -847,6 +836,20 @@ mod tests {
         print_module(&ctx, module.op())
     }
 
+    fn empty_module_with_block(ctx: &mut IrContext) -> Module {
+        let module = parse_test_module(
+            ctx,
+            r#"core.module @test {
+  func.func @placeholder() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let placeholder = module.ops(ctx)[0];
+        trunk_ir::rewrite::erase_op(ctx, placeholder);
+        module
+    }
+
     #[test]
     fn wasm_start_passes_empty_evidence_to_evidence_direct_main() {
         let mut ctx = IrContext::new();
@@ -854,9 +857,8 @@ mod tests {
         let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
         let nil_ty = intern_type(&mut ctx, "core", "nil");
         let const_analysis = ConstAnalysis {
-            string_allocations: vec![],
-            bytes_allocations: vec![],
-            string_total_size: 0,
+            allocations: vec![],
+            string_enum_ty: None,
         };
         let intrinsic_analysis = IntrinsicAnalysis {
             needs_fd_write: false,
@@ -900,6 +902,86 @@ mod tests {
     }
 
     #[test]
+    fn wasm_start_checks_step_result_before_returning() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let step_ty = type_converter::step_adt_type(&mut ctx);
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.main_exports.saw_main = true;
+        lowerer.main_exports.main_result_type = Some(step_ty);
+
+        let start = lowerer.build_start_function(&mut ctx, location);
+        let start = wasm_dialect::Func::from_op(&ctx, start).expect("wasm _start function");
+        let entry = ctx.region(start.body(&ctx)).blocks[0];
+        let names: Vec<_> = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .map(|&op| ctx.op(op).name)
+            .collect();
+
+        assert!(names.contains(&Symbol::new("call")));
+        assert!(names.contains(&Symbol::new("struct_get")));
+        assert!(names.contains(&Symbol::new("i32_eq")));
+        assert!(names.contains(&Symbol::new("if")));
+        assert!(names.contains(&Symbol::new("unreachable")));
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        assert!(!is_step_adt(&ctx, i32_ty));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cps `main` is invalid")]
+    fn wasm_start_rejects_cps_main() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let body_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.main_exports.main_convention = CallingConvention::Cps;
+
+        lowerer.build_main_args(&mut ctx, body_block, location, i32_ty);
+    }
+
+    #[test]
     fn module_lowerer_emits_explicit_intrinsic_and_data_requirements() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -912,9 +994,8 @@ mod tests {
 }"#,
         );
         let const_analysis = ConstAnalysis {
-            string_allocations: vec![(b"text".to_vec(), 0, 4)],
-            bytes_allocations: vec![(vec![1, 2], 0, 2)],
-            string_total_size: 4,
+            allocations: vec![(b"text".to_vec(), 0, 4), (vec![1, 2], 1, 2)],
+            string_enum_ty: None,
         };
         let intrinsic_analysis = IntrinsicAnalysis {
             needs_fd_write: true,
@@ -991,6 +1072,170 @@ mod tests {
         let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .expect("lowered module requirements should emit");
         assert_eq!(&binary.bytes[..4], b"\0asm");
+    }
+
+    #[test]
+    fn module_lowerer_recognizes_existing_exports_memory_and_main_signature() {
+        let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let module_block = module.first_block(&ctx).expect("module body block");
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let nil_ty = intern_type(&mut ctx, "core", "nil");
+
+        let memory = wasm_dialect::memory(&mut ctx, location, 1, 0, false, false);
+        let export_memory = wasm_dialect::export_memory(&mut ctx, location, "memory".into(), 0);
+        let export_main =
+            wasm_dialect::export_func(&mut ctx, location, "main".into(), Symbol::new("main"));
+        for op in [
+            memory.op_ref(),
+            export_memory.op_ref(),
+            export_main.op_ref(),
+        ] {
+            ctx.push_op(module_block, op);
+        }
+
+        let main_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let ret = wasm_dialect::r#return(&mut ctx, location, vec![]);
+        ctx.push_op(main_block, ret.op_ref());
+        let main_body = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![main_block],
+            parent_op: None,
+        });
+        let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
+        let main = wasm_dialect::func(&mut ctx, location, Symbol::new("main"), main_ty, main_body);
+        ctx.push_op(module_block, main.op_ref());
+
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.scan_module_ops(&ctx, module.body(&ctx).expect("module body"));
+
+        assert!(lowerer.memory_plan.has_memory);
+        assert!(lowerer.memory_plan.has_exported_memory);
+        assert!(lowerer.main_exports.saw_main);
+        assert!(lowerer.main_exports.main_exported);
+        assert_eq!(lowerer.main_exports.main_result_type, Some(nil_ty));
+        assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
+
+        ctx.op_mut(main.op_ref())
+            .attributes
+            .remove(&Symbol::new("sym_name"));
+        lowerer.main_exports.saw_main = false;
+        lowerer.scan_wasm_func(&ctx, main.op_ref());
+        assert!(!lowerer.main_exports.saw_main);
+    }
+
+    #[test]
+    fn module_lowerer_populates_an_empty_module() {
+        let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+
+        lowerer.lower_module(&mut ctx, module);
+
+        assert!(!module.ops(&ctx).is_empty());
+    }
+
+    #[test]
+    fn debug_func_params_accepts_source_functions_with_parameters() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @identity(%value: core.i32) -> core.i32 {
+    func.return %value
+  }
+}"#,
+        );
+
+        debug_func_params(&ctx, module, "test");
+
+        assert_eq!(module.ops(&ctx).len(), 1);
+    }
+
+    #[test]
+    fn module_lowerer_ignores_modules_without_a_body() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, "core.module @test {}");
+        check_all_wasm_dialect(&ctx, module);
+        debug_func_params(&ctx, module, "test");
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+
+        lowerer.lower_module(&mut ctx, module);
+
+        assert!(module.body(&ctx).is_none());
+    }
+
+    #[test]
+    fn wasm_dialect_check_visits_function_bodies() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %value = arith.const {value = 1} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        check_all_wasm_dialect(&ctx, module);
     }
 
     #[test]

@@ -121,7 +121,7 @@ pub(crate) fn type_to_valtype(
             nullable,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
         }))
-    } else if is_type(ctx, ty, "core", "string") || is_type(ctx, ty, "core", "ptr") {
+    } else if is_type(ctx, ty, "core", "ptr") {
         Ok(ValType::I32)
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         Ok(ValType::Ref(RefType {

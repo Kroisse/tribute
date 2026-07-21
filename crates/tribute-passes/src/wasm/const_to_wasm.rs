@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
+use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -20,75 +21,53 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::Attribute;
 use trunk_ir::types::TypeDataBuilder;
 
-/// Result of const analysis - maps content to allocated offset.
+/// Result of constant analysis.
 pub struct ConstAnalysis {
-    /// String allocations: (content, offset, length) - for active data segments.
-    pub string_allocations: Vec<(Vec<u8>, u32, u32)>,
-    /// Bytes allocations: (content, data_idx, length) - for passive data segments.
-    /// data_idx is the index into the passive data segment array.
-    pub bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
-    /// Total size of string data segments (for linear memory).
-    pub string_total_size: u32,
+    /// Shared passive data allocations: (content, data_idx, length).
+    pub allocations: Vec<(Vec<u8>, u32, u32)>,
+    /// Canonical prelude String enum type, when string constants are present.
+    pub(crate) string_enum_ty: Option<trunk_ir::TypeRef>,
 }
 
 impl ConstAnalysis {
-    /// Legacy accessor for backwards compatibility.
-    /// Returns string allocations only.
-    pub fn allocations(&self) -> &[(Vec<u8>, u32, u32)] {
-        &self.string_allocations
-    }
-
-    /// Legacy accessor for backwards compatibility.
+    /// Passive data segments do not reserve linear memory.
     pub fn total_size(&self) -> u32 {
-        self.string_total_size
+        0
     }
 
-    /// Look up the offset for given string content.
-    /// Returns (offset, length).
-    pub fn offset_for(&self, content: &[u8]) -> Option<(u32, u32)> {
-        self.string_allocations
+    /// Look up the passive data segment for the given content.
+    pub fn data_info_for(&self, content: &[u8]) -> Option<(u32, u32)> {
+        self.allocations
             .iter()
             .find(|(data, _, _)| data.as_slice() == content)
-            .map(|(_, offset, len)| (*offset, *len))
-    }
-
-    /// Look up the bytes allocation info for given content.
-    /// Returns (data_idx, 0, length) where data_idx is the passive data segment index.
-    pub fn bytes_info_for(&self, content: &[u8]) -> Option<(u32, u32, u32)> {
-        self.bytes_allocations
-            .iter()
-            .find(|(data, _, _)| data.as_slice() == content)
-            .map(|(_, data_idx, len)| (*data_idx, 0, *len))
+            .map(|(_, data_idx, len)| (*data_idx, *len))
     }
 }
 
 /// Context for collecting const allocations during analysis.
 struct ConstCollector {
-    string_allocations: Vec<(Vec<u8>, u32, u32)>,
-    bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
-    string_seen: HashMap<Vec<u8>, usize>,
-    bytes_seen: HashMap<Vec<u8>, usize>,
-    next_string_offset: u32,
-    next_bytes_idx: u32,
+    allocations: Vec<(Vec<u8>, u32, u32)>,
+    seen: HashMap<Vec<u8>, usize>,
+    has_string_consts: bool,
 }
 
 impl ConstCollector {
     fn new() -> Self {
         Self {
-            string_allocations: Vec::new(),
-            bytes_allocations: Vec::new(),
-            string_seen: HashMap::new(),
-            bytes_seen: HashMap::new(),
-            next_string_offset: 0,
-            next_bytes_idx: 0,
+            allocations: Vec::new(),
+            seen: HashMap::new(),
+            has_string_consts: false,
         }
     }
 
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
+    fn collect_content(&mut self, bytes: Vec<u8>) {
+        if self.seen.contains_key(&bytes) {
+            return;
         }
-        value.div_ceil(align) * align
+        let data_idx = self.allocations.len() as u32;
+        let len = bytes.len() as u32;
+        self.seen.insert(bytes.clone(), self.allocations.len());
+        self.allocations.push((bytes, data_idx, len));
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -97,31 +76,42 @@ impl ConstCollector {
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
                 if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
-                    let bytes = s.clone().into_bytes();
-                    if !self.string_seen.contains_key(&bytes) {
-                        let offset = Self::align_to(self.next_string_offset, 4);
-                        let len = bytes.len() as u32;
-                        self.string_seen
-                            .insert(bytes.clone(), self.string_allocations.len());
-                        self.string_allocations.push((bytes, offset, len));
-                        self.next_string_offset = offset + len;
-                    }
+                    self.has_string_consts = true;
+                    self.collect_content(s.clone().into_bytes());
                 }
             } else if data.name == Symbol::new("bytes_const")
                 && let Some(Attribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
             {
-                let bytes: Vec<u8> = b.to_vec();
-                if !self.bytes_seen.contains_key(&bytes) {
-                    let data_idx = self.next_bytes_idx;
-                    let len = bytes.len() as u32;
-                    self.bytes_seen
-                        .insert(bytes.clone(), self.bytes_allocations.len());
-                    self.bytes_allocations.push((bytes, data_idx, len));
-                    self.next_bytes_idx += 1;
-                }
+                self.collect_content(b.to_vec());
             }
         }
     }
+}
+
+/// Find the canonical prelude String enum type.
+fn find_string_enum_type(ctx: &IrContext) -> Option<trunk_ir::TypeRef> {
+    ctx.types.iter().find_map(|(ty_ref, data)| {
+        if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
+            return None;
+        }
+        if !matches!(
+            data.attrs.get(&Symbol::new("name")),
+            Some(Attribute::Symbol(name)) if *name == Symbol::new("String")
+        ) {
+            return None;
+        }
+        let variants = get_enum_variants(ctx, ty_ref)?;
+        let has_bytes_leaf = variants.iter().any(|(tag, fields)| {
+            *tag == Symbol::new("Leaf") && fields.len() == 1 && {
+                let field = ctx.types.get(fields[0]);
+                field.dialect == Symbol::new("core") && field.name == Symbol::new("bytes")
+            }
+        });
+        let has_branch = variants
+            .iter()
+            .any(|(tag, fields)| *tag == Symbol::new("Branch") && fields.len() == 3);
+        (has_bytes_leaf && has_branch).then_some(ty_ref)
+    })
 }
 
 /// Walk all operations in a region recursively.
@@ -151,48 +141,51 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
         });
     }
 
-    let string_segment_count = collector.string_allocations.len() as u32;
-    for (_, data_idx, _) in &mut collector.bytes_allocations {
-        *data_idx += string_segment_count;
-    }
-
     ConstAnalysis {
-        string_allocations: collector.string_allocations,
-        bytes_allocations: collector.bytes_allocations,
-        string_total_size: collector.next_string_offset,
+        allocations: collector.allocations,
+        string_enum_ty: collector
+            .has_string_consts
+            .then(|| find_string_enum_type(ctx))
+            .flatten(),
     }
 }
 
 /// Lower const operations using pre-computed analysis.
 pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
-    let string_allocations = analysis.string_allocations.clone();
-    let bytes_allocations = analysis.bytes_allocations.clone();
+    let allocations = analysis.allocations.clone();
 
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(StringConstPattern::new(string_allocations))
-        .add_pattern(BytesConstPattern::new(bytes_allocations));
+        .add_pattern(StringConstPattern::new(
+            allocations.clone(),
+            analysis.string_enum_ty,
+        ))
+        .add_pattern(BytesConstPattern::new(allocations));
     applicator.apply_partial(ctx, module);
 }
 
-/// Allocation data: (content, offset, length).
+/// Allocation data: (content, data index, length).
 type Allocations = Vec<(Vec<u8>, u32, u32)>;
 
-/// Look up offset and length for given content.
+/// Look up data index and length for given content.
 fn lookup_offset(allocations: &Allocations, content: &[u8]) -> Option<(u32, u32)> {
     allocations
         .iter()
         .find(|(data, _, _)| data.as_slice() == content)
-        .map(|(_, offset, len)| (*offset, *len))
+        .map(|(_, data_idx, len)| (*data_idx, *len))
 }
 
-/// Pattern for `adt.string_const` -> `wasm.i32_const`
+/// Pattern for `adt.string_const` -> `String::Leaf(wasm.bytes_from_data)`.
 struct StringConstPattern {
     allocations: Allocations,
+    string_enum_ty: Option<trunk_ir::TypeRef>,
 }
 
 impl StringConstPattern {
-    fn new(allocations: Allocations) -> Self {
-        Self { allocations }
+    fn new(allocations: Allocations, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
+        Self {
+            allocations,
+            string_enum_ty,
+        }
     }
 }
 
@@ -210,22 +203,31 @@ impl RewritePattern for StringConstPattern {
         let value_str = string_const.value(ctx);
         let content = value_str.into_bytes();
 
-        let Some((offset, len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((data_idx, len)) = lookup_offset(&self.allocations, &content) else {
+            return false;
+        };
+        let Some(string_enum_ty) = self.string_enum_ty else {
+            tracing::warn!("const_to_wasm: canonical String enum type not found");
             return false;
         };
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx
+        let bytes_ty = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+        let bytes = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
+        let result_ty = ctx.op_result_types(op)[0];
+        let leaf = adt::variant_new(
+            ctx,
+            location,
+            [bytes.result(ctx)],
+            result_ty,
+            string_enum_ty,
+            Symbol::new("Leaf"),
+        );
 
-        // Preserve the literal length for legacy print intrinsic analysis.
-        let new_op = wasm_dialect::i32_const(ctx, location, i32_ty, offset as i32);
-        ctx.op_mut(new_op.op_ref())
-            .attributes
-            .insert(Symbol::new("literal_len"), Attribute::Int(len.into()));
-
-        rewriter.replace_op(new_op.op_ref());
+        rewriter.insert_op(bytes.op_ref());
+        rewriter.replace_op(leaf.op_ref());
         true
     }
 
@@ -288,5 +290,98 @@ impl RewritePattern for BytesConstPattern {
 
     fn name(&self) -> &'static str {
         "BytesConstPattern"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    fn string_module(ctx: &mut IrContext, values: &[&str]) -> Module {
+        let constants = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                format!(
+                    "    %value{index} = adt.string_const {{value = \"{value}\"}} : tribute_rt.anyref"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse_test_module(
+            ctx,
+            &format!(
+                "core.module @test {{\n  wasm.func @main() -> core.nil {{\n{constants}\n    wasm.return\n  }}\n}}"
+            ),
+        )
+    }
+
+    fn string_const_count(ctx: &IrContext, module: Module) -> usize {
+        let func = module.ops(ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        ctx.block(block)
+            .ops
+            .iter()
+            .filter(|&&op| adt::StringConst::from_op(ctx, op).is_ok())
+            .count()
+    }
+
+    #[test]
+    fn analysis_deduplicates_and_looks_up_passive_data() {
+        let mut ctx = IrContext::new();
+        let module = string_module(&mut ctx, &["hello", "hello"]);
+
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(analysis.allocations, vec![(b"hello".to_vec(), 0, 5)]);
+        assert_eq!(analysis.data_info_for(b"hello"), Some((0, 5)));
+        assert_eq!(analysis.data_info_for(b"missing"), None);
+    }
+
+    #[test]
+    fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
+        let mut missing_data_ctx = IrContext::new();
+        let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
+        let placeholder_ty = missing_data_ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
+        lower(
+            &mut missing_data_ctx,
+            missing_data_module,
+            &ConstAnalysis {
+                allocations: Vec::new(),
+                string_enum_ty: Some(placeholder_ty),
+            },
+        );
+        assert_eq!(
+            string_const_count(&missing_data_ctx, missing_data_module),
+            1
+        );
+
+        let mut missing_type_ctx = IrContext::new();
+        let missing_type_module = string_module(&mut missing_type_ctx, &["hello"]);
+        lower(
+            &mut missing_type_ctx,
+            missing_type_module,
+            &ConstAnalysis {
+                allocations: vec![(b"hello".to_vec(), 0, 5)],
+                string_enum_ty: None,
+            },
+        );
+        assert_eq!(
+            string_const_count(&missing_type_ctx, missing_type_module),
+            1
+        );
+
+        assert_eq!(
+            StringConstPattern::new(Vec::new(), None).name(),
+            "StringConstPattern"
+        );
+        assert_eq!(
+            BytesConstPattern::new(Vec::new()).name(),
+            "BytesConstPattern"
+        );
     }
 }

@@ -71,11 +71,10 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
         db,
         "literal.trb",
         r#"
-extern "intrinsic" fn __print_line(message: String) -> Nil
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case 42 {
-        42 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        42 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#,
@@ -90,11 +89,10 @@ fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
         db,
         "arith.trb",
         r#"
-extern "intrinsic" fn __print_line(message: String) -> Nil
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case 1 + 2 * 3 {
-        7 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        7 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#,
@@ -105,12 +103,11 @@ fn main() {
 #[salsa_test]
 fn test_compile_function_with_params(db: &salsa::DatabaseImpl) {
     let code = r#"
-extern "intrinsic" fn __print_line(message: String) -> Nil
 fn add(a: Nat, b: Nat) -> Nat { a + b }
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case add(1, 2) {
-        3 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        3 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#;
@@ -139,15 +136,11 @@ fn test_execute_dynamic_bytes_write_boundary() {
     let ir = format!(
         r#"core.module @test {{
   func.func @main() -> core.nil {{
-    %before = adt.string_const {{value = "before|"}} : core.string
-    wasm.call %before {{callee = @__print_line}}
     %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
     %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
     %joined = func.call %left, %right {{callee = @__bytes_concat}} : core.bytes
     %newline = arith.const {{value = 1}} : core.i1
     %result = tribute_io.write %joined, %newline : core.nil
-    %after = adt.string_const {{value = "|after"}} : core.string
-    wasm.call %after {{callee = @__print_line}}
     func.return
   }}
 }}"#
@@ -171,12 +164,45 @@ fn test_execute_dynamic_bytes_write_boundary() {
         "wasmtime failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut expected = b"before|".to_vec();
-    expected.extend_from_slice(left.as_bytes());
+    let mut expected = left.into_bytes();
     expected.extend_from_slice(right.as_bytes());
     expected.push(b'\n');
-    expected.extend_from_slice(b"|after");
     assert_eq!(output.stdout, expected);
+}
+
+#[salsa_test]
+fn test_execute_string_literals_and_dynamic_bytes(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "string_literals.trb",
+        r#"
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line("before")
+    std::io::print_line("")
+    std::io::print_line("안녕")
+    let dynamic = b"dynamic bytes"
+    std::io::print_line(String::from_bytes(dynamic))
+    std::io::print_line("after")
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile String literals");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout,
+        "before\n\n안녕\ndynamic bytes\nafter\n".as_bytes()
+    );
 }
 
 #[salsa_test]
@@ -187,11 +213,10 @@ fn test_ops() -> Nat {
     let b = 3
     a + b
 }
-extern "intrinsic" fn __print_line(message: String) -> Nil
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case test_ops() {
-        13 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        13 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#;
@@ -216,8 +241,7 @@ fn classify(n: Nat) -> String {
         _ -> "other"
     }
 }
-extern "intrinsic" fn __print_line(message: String) -> Nil
-fn main() { __print_line(classify(1)) }
+fn main() ->{std::io::Io} Nil { std::io::print_line(classify(1)) }
 "#;
     let source = SourceCst::from_source_str(db, "case_expr.trb", code);
     expect_wasm_compilation_success(db, source, "Should compile case expression");
@@ -230,8 +254,6 @@ ability Console {
     fn read() -> Int
     fn print(value: Int) -> Nil
 }
-
-extern "intrinsic" fn __print_line(message: String) -> Nil
 
 fn use_console() ->{Console} Int {
     let n = Console::read()
@@ -247,10 +269,10 @@ fn run() -> Int {
     }
 }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case run() {
-        +41 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        +41 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#;
@@ -270,8 +292,6 @@ ability State(s) {
     op set(value: s) -> Nil
 }
 
-extern "intrinsic" fn __print_line(message: String) -> Nil
-
 fn bump() ->{State(Int)} Int {
     let n = State::get()
     State::set(n + +1)
@@ -286,10 +306,10 @@ fn run_state() -> Int {
     }
 }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     case run_state() {
-        +41 -> __print_line("ok")
-        _ -> __print_line("unexpected")
+        +41 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
     }
 }
 "#;

@@ -78,15 +78,21 @@ enum String {
 - 큰 텍스트도 효율적으로 처리
 - 부분 문자열 공유 가능
 
-**Library vs Builtin:**
+`String`은 prelude에 정의된 library enum이다. 컴파일러는 문자열 리터럴과
+interpolation을 위해 canonical prelude identity를 well-known type으로 인식하지만,
+별도의 compiler-owned `String` 타입이나 target 전용 source-visible 타입을 만들지
+않는다.
 
-| | Library Type | Built-in Type |
-| --- | --- | --- |
-| 정의 위치 | 표준 라이브러리 | 컴파일러 내장 |
-| Bytes 의존 | String이 Bytes 사용 | 독립적 primitive |
-| 확장성 | 사용자 정의 가능 | 컴파일러만 정의 |
+```tribute
+enum String {
+    Leaf(Bytes)
+    Branch(String, String, Nat)
+}
+```
 
-어느 쪽이든 컴파일러는 `String`을 "well-known type"으로 인식해야 한다 (리터럴, interpolation 지원).
+Backend는 이 ADT의 source variant와 field 순서를 보존해야 한다. 특히 문자열
+리터럴을 `core.string`으로 위장한 integer pointer 같은 별도 표현으로 lowering하면
+안 된다.
 
 ### 리터럴
 
@@ -331,7 +337,9 @@ ability Display {
 ### String (Rope)
 
 ```wasm
-;; Rope node (abstract base)
+;; The ordinary WasmGC representation of the prelude String enum.
+;; Concrete indices are assigned with the other ADT types; they are not
+;; reserved builtin indices.
 (type $string (sub (struct)))
 
 ;; Leaf: UTF-8 bytes
@@ -342,9 +350,32 @@ ability Display {
 (type $string_branch (sub $string (struct
   (field $left (ref $string))
   (field $right (ref $string))
-  (field $len i32)
-  (field $depth i32))))  ;; balancing을 위한 깊이
+  (field $len i32))))
 ```
+
+### Constant lowering
+
+`adt.bytes_const`와 `adt.string_const`는 같은 passive data-segment index 공간을
+사용한다.
+
+```text
+adt.bytes_const(bytes)
+  -> passive data segment
+  -> Bytes { data: array.new_data, offset: 0, len }
+
+adt.string_const(text)
+  -> UTF-8 passive data segment
+  -> Bytes { data: array.new_data, offset: 0, len }
+  -> String::Leaf(bytes)
+```
+
+동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를 재사용할 수
+있다. `String::Leaf` 생성은 target의 일반 enum/variant lowering보다 먼저 일어나고,
+그 이후에는 source에서 작성한 `Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
+
+Native와 Wasm 모두 이 의미적 경계를 공유한다. 정적 문자열을 linear-memory
+pointer와 별도 길이 metadata로 표현하는 legacy `__print_line` ABI는 canonical
+`String` 표현이 아니며 public source 또는 최종 backend 경계에서 요구하지 않는다.
 
 ### Rune
 
@@ -382,6 +413,8 @@ ability Display {
 | 항목 | 결정 |
 | ---- | ---- |
 | String 정의 위치 | Library type (prelude에 enum으로 정의) |
+| String backend 표현 | 일반 ADT layout 사용 (target별 별도 builtin identity 없음) |
+| String literal lowering | UTF-8 `Bytes`를 담은 `String::Leaf` |
 
 ---
 
