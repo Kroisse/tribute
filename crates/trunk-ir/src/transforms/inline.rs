@@ -258,11 +258,7 @@ fn should_inline(
     }
     // Skip extern/ABI functions: they are externally callable and the body
     // may be empty or have calling-convention constraints.
-    if ctx
-        .op(callee_op)
-        .attributes
-        .contains_key(&Symbol::new("abi"))
-    {
+    if ctx.op(callee_op).attributes.contains_key("abi") {
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.

@@ -1137,9 +1137,7 @@ mod tests {
         assert_eq!(lowerer.main_exports.main_result_type, Some(nil_ty));
         assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
 
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .remove(&Symbol::new("sym_name"));
+        ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
         lowerer.main_exports.saw_main = false;
         lowerer.scan_wasm_func(&ctx, main.op_ref());
         assert!(!lowerer.main_exports.saw_main);

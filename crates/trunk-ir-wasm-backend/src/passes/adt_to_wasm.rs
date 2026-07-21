@@ -696,10 +696,12 @@ mod tests {
                     )
             })
             .expect("lowered variant_get");
-        let Attribute::Type(variant_ty) = ctx.op(variant_get).attributes[&Symbol::new("type")]
-        else {
-            unreachable!("struct_get type must be a Type attribute");
-        };
+        let variant_ty = ctx
+            .op(variant_get)
+            .attributes
+            .get("type")
+            .and_then(Attribute::as_type)
+            .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
     }
 }

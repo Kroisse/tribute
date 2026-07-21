@@ -1,7 +1,6 @@
 //! Type interning and path interning for arena-based IR.
 
 use std::collections::{BTreeMap, HashMap};
-use std::ops::{Deref, DerefMut};
 
 use cranelift_entity::PrimaryMap;
 use smallvec::SmallVec;
@@ -180,33 +179,36 @@ impl From<Location> for Attribute {
 }
 
 /// A deterministic map of IR attributes with ergonomic symbol and string lookup.
-///
-/// Existing `BTreeMap` mutation and iteration APIs remain available through
-/// [`Deref`] and [`DerefMut`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct AttributeMap(BTreeMap<Symbol, Attribute>);
 
+pub type AttributeIter<'a> = std::collections::btree_map::Iter<'a, Symbol, Attribute>;
+pub type AttributeIterMut<'a> = std::collections::btree_map::IterMut<'a, Symbol, Attribute>;
+pub type AttributeKeys<'a> = std::collections::btree_map::Keys<'a, Symbol, Attribute>;
+pub type AttributeValues<'a> = std::collections::btree_map::Values<'a, Symbol, Attribute>;
+pub type AttributeValuesMut<'a> = std::collections::btree_map::ValuesMut<'a, Symbol, Attribute>;
+pub type AttributeIntoIter = std::collections::btree_map::IntoIter<Symbol, Attribute>;
+
 /// A key accepted by [`AttributeMap::get`].
-pub enum AttributeKey<'a> {
-    Symbol(Symbol),
-    Text(&'a str),
+pub trait AttributeKey {
+    fn lookup_symbol(self) -> Option<Symbol>;
 }
 
-impl From<Symbol> for AttributeKey<'_> {
-    fn from(value: Symbol) -> Self {
-        Self::Symbol(value)
+impl AttributeKey for Symbol {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Some(self)
     }
 }
 
-impl From<&Symbol> for AttributeKey<'_> {
-    fn from(value: &Symbol) -> Self {
-        Self::Symbol(*value)
+impl AttributeKey for &Symbol {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Some(*self)
     }
 }
 
-impl<'a> From<&'a str> for AttributeKey<'a> {
-    fn from(value: &'a str) -> Self {
-        Self::Text(value)
+impl AttributeKey for &str {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Symbol::lookup(self)
     }
 }
 
@@ -218,26 +220,62 @@ impl AttributeMap {
     /// Return the attribute associated with a symbol or already-interned string.
     ///
     /// A missing string key is not added to the global symbol interner.
-    pub fn get<'a>(&self, key: impl Into<AttributeKey<'a>>) -> Option<&Attribute> {
-        let symbol = match key.into() {
-            AttributeKey::Symbol(symbol) => symbol,
-            AttributeKey::Text(text) => Symbol::lookup(text)?,
-        };
+    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
+        let symbol = key.lookup_symbol()?;
         self.0.get(&symbol)
     }
-}
 
-impl Deref for AttributeMap {
-    type Target = BTreeMap<Symbol, Attribute>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    pub fn get_mut(&mut self, key: impl AttributeKey) -> Option<&mut Attribute> {
+        let symbol = key.lookup_symbol()?;
+        self.0.get_mut(&symbol)
     }
-}
 
-impl DerefMut for AttributeMap {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
+        let Some(symbol) = key.lookup_symbol() else {
+            return false;
+        };
+        self.0.contains_key(&symbol)
+    }
+
+    pub fn insert(&mut self, key: Symbol, value: Attribute) -> Option<Attribute> {
+        self.0.insert(key, value)
+    }
+
+    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
+        let symbol = key.lookup_symbol()?;
+        self.0.remove(&symbol)
+    }
+
+    pub fn iter(&self) -> AttributeIter<'_> {
+        self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> AttributeIterMut<'_> {
+        self.0.iter_mut()
+    }
+
+    pub fn keys(&self) -> AttributeKeys<'_> {
+        self.0.keys()
+    }
+
+    pub fn values(&self) -> AttributeValues<'_> {
+        self.0.values()
+    }
+
+    pub fn values_mut(&mut self) -> AttributeValuesMut<'_> {
+        self.0.values_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 }
 
@@ -255,7 +293,7 @@ impl Extend<(Symbol, Attribute)> for AttributeMap {
 
 impl IntoIterator for AttributeMap {
     type Item = (Symbol, Attribute);
-    type IntoIter = std::collections::btree_map::IntoIter<Symbol, Attribute>;
+    type IntoIter = AttributeIntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -264,7 +302,7 @@ impl IntoIterator for AttributeMap {
 
 impl<'a> IntoIterator for &'a AttributeMap {
     type Item = (&'a Symbol, &'a Attribute);
-    type IntoIter = std::collections::btree_map::Iter<'a, Symbol, Attribute>;
+    type IntoIter = AttributeIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -273,7 +311,7 @@ impl<'a> IntoIterator for &'a AttributeMap {
 
 impl<'a> IntoIterator for &'a mut AttributeMap {
     type Item = (&'a Symbol, &'a mut Attribute);
-    type IntoIter = std::collections::btree_map::IterMut<'a, Symbol, Attribute>;
+    type IntoIter = AttributeIterMut<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter_mut()
@@ -468,14 +506,16 @@ mod tests {
         assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
         assert_eq!(attrs.get(answer), Some(&Attribute::Int(42)));
         assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
+        assert!(attrs.contains_key("answer"));
         assert_eq!(attrs.keys().copied().collect::<Vec<_>>(), vec![answer]);
 
         let missing = "__trunk_ir_attribute_map_missing_key__";
         assert_eq!(Symbol::lookup(missing), None);
         assert_eq!(attrs.get(missing), None);
+        assert!(!attrs.contains_key(missing));
         assert_eq!(Symbol::lookup(missing), None);
 
-        assert_eq!(attrs.remove(&answer), Some(Attribute::Int(42)));
+        assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
         assert!(attrs.is_empty());
     }
 

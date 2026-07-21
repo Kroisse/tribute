@@ -425,7 +425,7 @@ fn borrow_safe_functions(ctx: &IrContext, module_ops: &[OpRef]) -> HashSet<Symbo
     let mut candidates = HashSet::new();
     for &op in module_ops {
         if let Ok(func_op) = clif::Func::from_op(ctx, op)
-            && !ctx.op(op).attributes.contains_key(&Symbol::new("abi"))
+            && !ctx.op(op).attributes.contains_key("abi")
         {
             candidates.insert(func_op.sym_name(ctx));
         }

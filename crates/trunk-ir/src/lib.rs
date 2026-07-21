@@ -88,7 +88,8 @@ pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::Module;
 pub use types::{
-    Attribute, AttributeKey, AttributeMap, Location, PathInterner, TypeData, TypeDataBuilder,
-    TypeInterner,
+    Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
+    AttributeMap, AttributeValues, AttributeValuesMut, Location, PathInterner, TypeData,
+    TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;
