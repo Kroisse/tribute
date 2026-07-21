@@ -53,16 +53,6 @@ pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     is_named_adt_struct(ctx, ty, "_closure")
 }
 
-/// Check if a type is a continuation struct (adt.struct with name "_Continuation").
-pub(crate) fn is_continuation_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_named_adt_struct(ctx, ty, "_Continuation")
-}
-
-/// Check if a type is a resume wrapper struct (adt.struct with name "_ResumeWrapper").
-pub(crate) fn is_resume_wrapper_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_named_adt_struct(ctx, ty, "_ResumeWrapper")
-}
-
 /// Check if a type is an adt.struct with the given name.
 fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str) -> bool {
     let data = ctx.types.get(ty);
@@ -320,47 +310,6 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 }
 
 // ============================================================================
-// Type index helpers
-// ============================================================================
-
-/// Get type_idx from attributes or inferred type.
-///
-/// Priority: type_idx attr > type attr > inferred_type (from result/operand)
-pub(crate) fn get_type_idx_from_attrs(
-    ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
-    inferred_type: Option<TypeRef>,
-    type_idx_by_type: &HashMap<TypeRef, u32>,
-) -> Option<u32> {
-    // First try type_idx attribute
-    match attrs.get(&Symbol::new("type_idx")) {
-        Some(Attribute::Int(idx)) => {
-            return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
-        }
-        Some(_) => {
-            // type_idx present but wrong variant — this is an invariant violation
-            panic!("type_idx attribute has unexpected variant (expected Int)");
-        }
-        None => {} // not present, continue to fallback
-    }
-    // Fall back to type attribute
-    if let Some(Attribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
-        if is_closure_struct_type(ctx, *ty) {
-            return Some(CLOSURE_STRUCT_IDX);
-        }
-        return type_idx_by_type.get(ty).copied();
-    }
-    // Fall back to inferred type
-    if let Some(ty) = inferred_type {
-        if is_closure_struct_type(ctx, ty) {
-            return Some(CLOSURE_STRUCT_IDX);
-        }
-        return type_idx_by_type.get(&ty).copied();
-    }
-    None
-}
-
-// ============================================================================
 // Attribute extraction helpers
 // ============================================================================
 
@@ -383,17 +332,5 @@ pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> Comp
             key, other
         ))),
         None => Err(CompilationError::missing_attribute("u32")),
-    }
-}
-
-/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
-///
-/// Only falls back to `field` when `field_idx` is missing. If `field_idx` is present
-/// but has a wrong variant or out-of-range value, that error is propagated immediately.
-pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, Attribute>) -> CompilationResult<u32> {
-    match attr_u32(attrs, Symbol::new("field_idx")) {
-        Ok(v) => Ok(v),
-        Err(e) if e.is_missing_attribute() => attr_u32(attrs, Symbol::new("field")),
-        Err(e) => Err(e),
     }
 }

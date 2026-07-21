@@ -424,4 +424,36 @@ mod tests {
             .expect("typed struct.new should be lowered");
         assert_eq!(op.type_idx(&ctx), BYTES_STRUCT_IDX);
     }
+
+    #[test]
+    fn only_concrete_heap_types_receive_indices() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !A = adt.struct() {fields = [], name = @A}
+
+  wasm.func @main() -> core.nil {
+    %null = wasm.ref_null {heap_type = @anyref} : wasm.anyref
+    %concrete = wasm_gc.ref_cast %null {target_type = !A} : !A
+    %abstract = wasm_gc.ref_cast %null {target_type = wasm.anyref} : wasm.anyref
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module);
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let indices: Vec<Option<u32>> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| wasm::RefCast::from_op(&ctx, op).ok())
+            .map(|op| op.type_idx(&ctx))
+            .collect();
+        assert_eq!(indices, vec![Some(FIRST_USER_TYPE_IDX), None]);
+    }
 }

@@ -35,9 +35,9 @@
 //! Note: `adt.string_const` and `adt.bytes_const` are handled by WasmLowerer
 //! because they require data segment allocation.
 //!
-//! Type information is preserved as `type` attribute when available from the source operation.
-//! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
-//! emit can infer type_idx from result/operand types without the attribute.
+//! GC operations first lower to `wasm_gc`, which preserves semantic `TypeRef`
+//! identity. A module-wide pass assigns the explicit indices required by
+//! indexed `wasm` operations before emission.
 
 use tracing::warn;
 use trunk_ir::Symbol;
@@ -200,8 +200,7 @@ impl RewritePattern for VariantNewPattern {
         // Create variant-specific type: Expr + Add -> Expr$Add
         let variant_type = make_variant_type(ctx, base_type, tag_sym);
 
-        // Create wasm.struct_new with variant-specific type (no tag field)
-        // Result type is the variant-specific type - emit infers type_idx from it
+        // Create wasm_gc.struct_new with variant-specific type (no tag field).
         let new_op = wasm_gc_dialect::struct_new(ctx, loc, fields, variant_type, variant_type);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -327,8 +326,7 @@ impl RewritePattern for VariantCastPattern {
         // Create variant-specific type for the ref.cast
         let variant_type = make_variant_type(ctx, enum_type, tag);
 
-        // Create wasm.ref_cast with variant-specific type
-        // Result type is the variant-specific type - emit infers type_idx from it
+        // Create wasm_gc.ref_cast with variant-specific type.
         let new_op = wasm_gc_dialect::ref_cast(ctx, loc, ref_val, variant_type, variant_type);
         rewriter.replace_op(new_op.op_ref());
         true

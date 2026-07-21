@@ -123,7 +123,9 @@ carry semantic heap types as mandatory `TypeRef` attributes and must not infer
 nominal identity from an erased operand such as `anyref`. A module-wide type
 layout pass assigns binary type-section indices and fully converts these
 operations to `wasm.*` operations, whose required integer attributes correspond
-to WebAssembly instruction immediates.
+to WebAssembly instruction immediates. This pass runs once, after unrealized
+conversion casts have been materialized, because materialization may introduce
+additional typed GC operations.
 
 ```text
 wasm_gc.struct_get { type = !String$Leaf, field_idx = 0 }

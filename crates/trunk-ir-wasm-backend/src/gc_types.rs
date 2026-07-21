@@ -79,17 +79,6 @@ pub const STEP_TAG_DONE: i32 = 0;
 /// Tag value for Shift (suspended with continuation, needs handler dispatch).
 pub const STEP_TAG_SHIFT: i32 = 1;
 
-trunk_ir::symbols! {
-    /// Attribute name for type information on wasm operations.
-    ATTR_TYPE => "type",
-    /// Attribute name for explicit type index.
-    ATTR_TYPE_IDX => "type_idx",
-    /// Attribute name for field index on struct operations.
-    ATTR_FIELD_IDX => "field_idx",
-    /// Attribute name for field count (used with placeholder types).
-    ATTR_FIELD_COUNT => "field_count",
-}
-
 /// Definition of a GC type (struct or array).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GcTypeDef {

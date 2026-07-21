@@ -74,7 +74,11 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
     ConversionTarget::new()
         .illegal_dialect("ability")
         .illegal_dialect("effect")
-        .illegal_dialect("wasm_gc")
+}
+
+/// Conversion target immediately before WebAssembly emission.
+pub fn wasm_emission_ready_target() -> ConversionTarget {
+    wasm_backend_ready_target().illegal_dialect("wasm_gc")
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
@@ -179,18 +183,19 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
         lowerer.lower_module(ctx, module);
     }
 
-    // Resolve semantic WasmGC types to module-local WebAssembly type indices.
-    {
-        let _span = tracing::info_span!("wasm_gc_to_wasm").entered();
-        trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(ctx, module);
-    }
+    verify_wasm_backend_ready(ctx, module)?;
+    Ok(())
+}
 
-    // Debug: Verify all operations are now in wasm dialect
+/// Assign module-local GC indices after all type-conversion materialization.
+pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+    trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(ctx, module);
+    PatternApplicator::new(TypeConverter::new())
+        .with_target(wasm_emission_ready_target())
+        .apply_partial_conversion(ctx, module, "wasm-emission-ready")?;
     if cfg!(debug_assertions) {
         check_all_wasm_dialect(ctx, module);
     }
-
-    verify_wasm_backend_ready(ctx, module)?;
     Ok(())
 }
 

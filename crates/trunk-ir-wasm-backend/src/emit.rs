@@ -221,8 +221,6 @@ struct ModuleInfo {
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<TypeRef, u32>,
-    /// Placeholder struct type_idx lookup (for wasm.structref types)
-    placeholder_struct_type_idx: HashMap<(TypeRef, usize), u32>,
     /// Function type lookup map (core.func TypeRef).
     func_types: HashMap<Symbol, TypeRef>,
     /// Function index lookup map (import index or func index).
@@ -639,8 +637,7 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
     collect_wasm_ops_from_region(ctx, body, &mut info)?;
 
     // Collect GC types
-    let (gc_types, mut type_idx_by_type, placeholder_struct_type_idx) =
-        collect_gc_types(ctx, module)?;
+    let (gc_types, mut type_idx_by_type) = collect_gc_types(ctx, module)?;
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
@@ -669,7 +666,6 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
 
     info.type_idx_by_type = type_idx_by_type;
     info.call_indirect_types = call_indirect_types;
-    info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
     // Build function type lookup map
     for func in &info.funcs {
@@ -812,90 +808,7 @@ fn assign_locals_in_region(
             }
             if let Some(&result_ty) = result_types.first() {
                 let effective_ty = result_ty;
-
-                let is_ref_cast = wasm_dialect::RefCast::matches(ctx, op);
-                let is_struct_new = wasm_dialect::StructNew::matches(ctx, op);
-                let val_type = if is_ref_cast || is_struct_new {
-                    let attrs = &ctx.op(op).attributes;
-
-                    let placeholder_ty = if is_ref_cast {
-                        attrs.get(&ATTR_TARGET_TYPE()).and_then(|attr| {
-                            if let Attribute::Type(ty) = attr {
-                                if is_type(ctx, *ty, "wasm", "structref") {
-                                    Some(*ty)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                    } else if is_struct_new {
-                        attrs
-                            .get(&Symbol::new("type"))
-                            .and_then(|attr| {
-                                if let Attribute::Type(ty) = attr {
-                                    if is_type(ctx, *ty, "wasm", "structref") {
-                                        Some(*ty)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            })
-                            .or_else(|| {
-                                ctx.op_result_types(op)
-                                    .first()
-                                    .copied()
-                                    .filter(|&ty| is_type(ctx, ty, "wasm", "structref"))
-                            })
-                    } else {
-                        None
-                    };
-
-                    if let Some(placeholder_type) = placeholder_ty {
-                        let field_count = if is_struct_new {
-                            Some(ctx.op_operands(op).len())
-                        } else {
-                            attrs.get(&Symbol::new("field_count")).and_then(|attr| {
-                                if let Attribute::Int(fc) = attr {
-                                    usize::try_from(*fc).ok()
-                                } else {
-                                    None
-                                }
-                            })
-                        };
-
-                        if let Some(fc) = field_count {
-                            if let Some(&type_idx) = module_info
-                                .placeholder_struct_type_idx
-                                .get(&(placeholder_type, fc))
-                            {
-                                debug!(
-                                    "{} local: using concrete type_idx={} for placeholder (field_count={})",
-                                    if is_ref_cast {
-                                        "ref_cast"
-                                    } else {
-                                        "struct_new"
-                                    },
-                                    type_idx,
-                                    fc
-                                );
-                                ValType::Ref(RefType {
-                                    nullable: true,
-                                    heap_type: HeapType::Concrete(type_idx),
-                                })
-                            } else {
-                                type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
-                            }
-                        } else {
-                            type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
-                        }
-                    } else {
-                        type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
-                    }
-                } else {
+                let val_type =
                     match type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type) {
                         Ok(vt) => vt,
                         Err(e) => {
@@ -906,8 +819,7 @@ fn assign_locals_in_region(
                             );
                             return Err(e);
                         }
-                    }
-                };
+                    };
                 let local_index = param_count + locals.len() as u32;
                 let result_value = ctx.op_result(op, 0);
                 emit_ctx.value_locals.insert(result_value, local_index);
