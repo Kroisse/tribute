@@ -888,6 +888,86 @@ mod tests {
     }
 
     #[test]
+    fn wasm_start_checks_step_result_before_returning() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let step_ty = type_converter::step_adt_type(&mut ctx);
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.main_exports.saw_main = true;
+        lowerer.main_exports.main_result_type = Some(step_ty);
+
+        let start = lowerer.build_start_function(&mut ctx, location);
+        let start = wasm_dialect::Func::from_op(&ctx, start).expect("wasm _start function");
+        let entry = ctx.region(start.body(&ctx)).blocks[0];
+        let names: Vec<_> = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .map(|&op| ctx.op(op).name)
+            .collect();
+
+        assert!(names.contains(&Symbol::new("call")));
+        assert!(names.contains(&Symbol::new("struct_get")));
+        assert!(names.contains(&Symbol::new("i32_eq")));
+        assert!(names.contains(&Symbol::new("if")));
+        assert!(names.contains(&Symbol::new("unreachable")));
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        assert!(!is_step_adt(&ctx, i32_ty));
+    }
+
+    #[test]
+    #[should_panic(expected = "Cps `main` is invalid")]
+    fn wasm_start_rejects_cps_main() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let body_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.main_exports.main_convention = CallingConvention::Cps;
+
+        lowerer.build_main_args(&mut ctx, body_block, location, i32_ty);
+    }
+
+    #[test]
     fn module_lowerer_emits_explicit_intrinsic_and_data_requirements() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
