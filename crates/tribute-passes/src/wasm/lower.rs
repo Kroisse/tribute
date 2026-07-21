@@ -836,6 +836,20 @@ mod tests {
         print_module(&ctx, module.op())
     }
 
+    fn empty_module_with_block(ctx: &mut IrContext) -> Module {
+        let module = parse_test_module(
+            ctx,
+            r#"core.module @test {
+  func.func @placeholder() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let placeholder = module.ops(ctx)[0];
+        trunk_ir::rewrite::erase_op(ctx, placeholder);
+        module
+    }
+
     #[test]
     fn wasm_start_passes_empty_evidence_to_evidence_direct_main() {
         let mut ctx = IrContext::new();
@@ -1058,6 +1072,152 @@ mod tests {
         let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .expect("lowered module requirements should emit");
         assert_eq!(&binary.bytes[..4], b"\0asm");
+    }
+
+    #[test]
+    fn module_lowerer_recognizes_existing_exports_memory_and_main_signature() {
+        let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let module_block = module.first_block(&ctx).expect("module body block");
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let nil_ty = intern_type(&mut ctx, "core", "nil");
+
+        let memory = wasm_dialect::memory(&mut ctx, location, 1, 0, false, false);
+        let export_memory = wasm_dialect::export_memory(&mut ctx, location, "memory".into(), 0);
+        let export_main =
+            wasm_dialect::export_func(&mut ctx, location, "main".into(), Symbol::new("main"));
+        for op in [
+            memory.op_ref(),
+            export_memory.op_ref(),
+            export_main.op_ref(),
+        ] {
+            ctx.push_op(module_block, op);
+        }
+
+        let main_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let ret = wasm_dialect::r#return(&mut ctx, location, vec![]);
+        ctx.push_op(main_block, ret.op_ref());
+        let main_body = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![main_block],
+            parent_op: None,
+        });
+        let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
+        let main = wasm_dialect::func(&mut ctx, location, Symbol::new("main"), main_ty, main_body);
+        ctx.push_op(module_block, main.op_ref());
+
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        lowerer.scan_module_ops(&ctx, module.body(&ctx).expect("module body"));
+
+        assert!(lowerer.memory_plan.has_memory);
+        assert!(lowerer.memory_plan.has_exported_memory);
+        assert!(lowerer.main_exports.saw_main);
+        assert!(lowerer.main_exports.main_exported);
+        assert_eq!(lowerer.main_exports.main_result_type, Some(nil_ty));
+        assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
+
+        ctx.op_mut(main.op_ref())
+            .attributes
+            .remove(&Symbol::new("sym_name"));
+        lowerer.main_exports.saw_main = false;
+        lowerer.scan_wasm_func(&ctx, main.op_ref());
+        assert!(!lowerer.main_exports.saw_main);
+    }
+
+    #[test]
+    fn module_lowerer_populates_an_empty_module() {
+        let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+
+        lowerer.lower_module(&mut ctx, module);
+
+        assert!(!module.ops(&ctx).is_empty());
+    }
+
+    #[test]
+    fn debug_func_params_accepts_source_functions_with_parameters() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @identity(%value: core.i32) -> core.i32 {
+    func.return %value
+  }
+}"#,
+        );
+
+        debug_func_params(&ctx, module, "test");
+
+        assert_eq!(module.ops(&ctx).len(), 1);
+    }
+
+    #[test]
+    fn module_lowerer_ignores_modules_without_a_body() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, "core.module @test {}");
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let intrinsic_analysis = IntrinsicAnalysis {
+            needs_fd_write: false,
+            iovec_allocations: vec![],
+            nwritten_offset: None,
+            total_size: 0,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+
+        lowerer.lower_module(&mut ctx, module);
+
+        assert!(module.body(&ctx).is_none());
     }
 
     #[test]
