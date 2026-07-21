@@ -76,6 +76,11 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
         .illegal_dialect("effect")
 }
 
+/// Conversion target immediately before WebAssembly emission.
+pub fn wasm_emission_ready_target() -> ConversionTarget {
+    wasm_backend_ready_target().illegal_dialect("wasm_gc")
+}
+
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
@@ -178,18 +183,19 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
         lowerer.lower_module(ctx, module);
     }
 
-    // Debug: Verify all operations are now in wasm dialect
+    verify_wasm_backend_ready(ctx, module)?;
+    Ok(())
+}
+
+/// Assign module-local GC indices after all type-conversion materialization.
+pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+    trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(ctx, module);
+    PatternApplicator::new(TypeConverter::new())
+        .with_target(wasm_emission_ready_target())
+        .apply_partial_conversion(ctx, module, "wasm-emission-ready")?;
     if cfg!(debug_assertions) {
         check_all_wasm_dialect(ctx, module);
     }
-
-    // Phase 3: Assign unique type_idx to GC struct operations before emit
-    {
-        let _span = tracing::info_span!("assign_gc_type_indices").entered();
-        super::wasm_gc_type_assign::assign_gc_type_indices(ctx, module);
-    }
-
-    verify_wasm_backend_ready(ctx, module)?;
     Ok(())
 }
 

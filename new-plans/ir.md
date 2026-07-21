@@ -118,6 +118,28 @@ support.
 `wasm.*` is the Wasm backend dialect. It models Wasm control flow, calls,
 numeric operations, memory operations, and WasmGC constructs.
 
+`wasm_gc.*` is a typed intermediate dialect for WasmGC lowering. Its operations
+carry semantic heap types as mandatory `TypeRef` attributes and must not infer
+nominal identity from an erased operand such as `anyref`. A module-wide type
+layout pass assigns binary type-section indices and fully converts these
+operations to `wasm.*` operations, whose required integer attributes correspond
+to WebAssembly instruction immediates. This pass runs once, after unrealized
+conversion casts have been materialized, because materialization may introduce
+additional typed GC operations.
+
+```text
+wasm_gc.struct_get { type = !String$Leaf, field_idx = 0 }
+  -- module GC type layout -->
+wasm.struct_get { type_idx = 9, field_idx = 0 }
+```
+
+Builtin layouts follow the same rule. Lowering refers to canonical semantic
+types such as `core.bytes` or the marker/evidence ADT types; the layout pass
+maps those identities to reserved indices. The Wasm emitter accepts no residual
+`wasm_gc.*` operations and does not infer missing indices. Function-signature
+indices used by `call_indirect` are a separate concern and are not GC heap-type
+identities.
+
 `clif.*` is the native backend dialect. It models Cranelift-style functions,
 calls, arithmetic, CFG control flow, memory access, stack slots, symbol
 addresses, and numeric conversions.

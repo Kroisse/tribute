@@ -26,6 +26,7 @@ use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -534,7 +535,14 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 return Some(MaterializeResult { value, ops: vec![] });
             }
 
-            let cast_op = wasm_dialect::ref_cast(ctx, location, value, to_ty, to_ty, None);
+            if is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref")) {
+                let cast_op = wasm_dialect::ref_cast(ctx, location, value, to_ty, to_ty, None);
+                return Some(MaterializeResult {
+                    value: cast_op.result(ctx),
+                    ops: vec![cast_op.op_ref()],
+                });
+            }
+            let cast_op = wasm_gc_dialect::ref_cast(ctx, location, value, to_ty, to_ty);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -572,7 +580,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                     ),
                 "ICE: trampoline type reached materialization without conversion"
             );
-            let cast_op = wasm_dialect::ref_cast(ctx, location, value, to_ty, to_ty, None);
+            let cast_op = wasm_gc_dialect::ref_cast(ctx, location, value, to_ty, to_ty);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],

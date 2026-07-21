@@ -155,6 +155,8 @@ fn test_execute_dynamic_bytes_write_boundary() {
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
     tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module)
         .expect("lower dynamic output to Wasm");
+    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module)
+        .expect("finalize semantic WasmGC types");
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
         .expect("emit dynamic output Wasm");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");

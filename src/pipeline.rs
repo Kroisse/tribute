@@ -507,6 +507,15 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
         }
     }
 
+    // Materialization may introduce semantic WasmGC operations after the main
+    // lowering pipeline. Assign their module-local indices before emission.
+    {
+        let _span = tracing::info_span!("wasm_gc_to_wasm_after_casts").entered();
+        tribute_passes::wasm::lower::finalize_wasm_gc_types(ctx, module)
+            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
+            .map_err(wasm_lowering_failure)?;
+    }
+
     // Phase 3 - Emit WASM binary
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
     trunk_ir_wasm_backend::emit_module_to_wasm(ctx, module)

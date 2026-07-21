@@ -9,7 +9,7 @@
 //! - `tribute_rt_to_wasm`: Lower boxing/unboxing operations to wasm equivalents
 //! - `const_to_wasm`: Lower string/bytes constants to wasm data segments
 //! - `intrinsic_to_wasm`: Lower intrinsic calls to WASM operations
-//! - `wasm_gc_type_assign`: Assign unique type indices to GC struct types
+//! - `wasm_gc_to_wasm`: Resolve semantic GC types to indexed WASM operations
 //! - `evidence_to_wasm`: Lower evidence runtime functions to inline WASM operations
 //! - `lower`: Main orchestrator for lowering mid-level IR to WASM
 //! - `type_converter`: WASM type converter for IR-level type transformations
@@ -22,4 +22,3 @@ pub mod lower;
 pub mod normalize_primitive_types;
 pub mod tribute_rt_to_wasm;
 pub mod type_converter;
-pub mod wasm_gc_type_assign;
