@@ -357,7 +357,6 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
-
     #[test]
     fn nominal_types_with_equal_layout_receive_distinct_indices() {
         let mut ctx = IrContext::new();
@@ -455,5 +454,137 @@ mod tests {
             .map(|op| op.type_idx(&ctx))
             .collect();
         assert_eq!(indices, vec![Some(FIRST_USER_TYPE_IDX), None]);
+    }
+
+    #[test]
+    fn lowers_all_typed_gc_operations_and_preserves_operands_and_attributes() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct() {fields = [[@value, core.i32]], name = @S}
+  !A = core.array(core.i32)
+  !B = core.array(core.i32)
+
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %one = wasm.i32_const {value = 1} : core.i32
+    %struct = wasm_gc.struct_new %one {type = !S} : !S
+    %field = wasm_gc.struct_get %struct {type = !S, field_idx = 3} : core.i32
+    wasm_gc.struct_set %struct, %field {type = !S, field_idx = 4}
+    %array = wasm_gc.array_new %one, %zero {type = !A} : !A
+    %default = wasm_gc.array_new_default %one {type = !A} : !A
+    %data = wasm_gc.array_new_data %zero, %one {type = !A, data_idx = 5} : !A
+    %element = wasm_gc.array_get %array, %zero {type = !A} : core.i32
+    %signed = wasm_gc.array_get_s %default, %zero {type = !A} : core.i32
+    %unsigned = wasm_gc.array_get_u %data, %zero {type = !A} : core.i32
+    wasm_gc.array_set %array, %zero, %element {type = !A}
+    wasm_gc.array_copy %array, %zero, %default, %one, %one {dst_type = !A, src_type = !B}
+    %null = wasm_gc.ref_null {target_type = !S} : !S
+    %cast = wasm_gc.ref_cast %null {target_type = !S} : !S
+    %tested = wasm_gc.ref_test %cast {target_type = !S} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module);
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let ops = &ctx.block(block).ops;
+        assert!(
+            ops.iter()
+                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+        );
+
+        let struct_new = ops
+            .iter()
+            .find_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
+            .unwrap();
+        let struct_get = ops
+            .iter()
+            .find_map(|&op| wasm::StructGet::from_op(&ctx, op).ok())
+            .unwrap();
+        let struct_set = ops
+            .iter()
+            .find_map(|&op| wasm::StructSet::from_op(&ctx, op).ok())
+            .unwrap();
+        assert_eq!(struct_new.type_idx(&ctx), FIRST_USER_TYPE_IDX);
+        assert_eq!(struct_get.r#ref(&ctx), struct_new.result(&ctx));
+        assert_eq!(struct_get.field_idx(&ctx), 3);
+        assert_eq!(struct_set.r#ref(&ctx), struct_new.result(&ctx));
+        assert_eq!(struct_set.value(&ctx), struct_get.result(&ctx));
+        assert_eq!(struct_set.field_idx(&ctx), 4);
+
+        let array_new = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayNew::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_default = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayNewDefault::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_data = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayNewData::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_get = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayGet::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_get_s = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayGetS::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_get_u = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayGetU::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_set = ops
+            .iter()
+            .find_map(|&op| wasm::ArraySet::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_copy = ops
+            .iter()
+            .find_map(|&op| wasm::ArrayCopy::from_op(&ctx, op).ok())
+            .unwrap();
+        let array_idx = FIRST_USER_TYPE_IDX + 1;
+        assert_eq!(array_new.type_idx(&ctx), array_idx);
+        assert_eq!(array_default.type_idx(&ctx), array_idx);
+        assert_eq!(array_data.type_idx(&ctx), array_idx);
+        assert_eq!(array_data.data_idx(&ctx), 5);
+        assert_eq!(array_get.r#ref(&ctx), array_new.result(&ctx));
+        assert_eq!(array_get.type_idx(&ctx), array_idx);
+        assert_eq!(array_get_s.r#ref(&ctx), array_default.result(&ctx));
+        assert_eq!(array_get_s.type_idx(&ctx), array_idx);
+        assert_eq!(array_get_u.r#ref(&ctx), array_data.result(&ctx));
+        assert_eq!(array_get_u.type_idx(&ctx), array_idx);
+        assert_eq!(array_set.r#ref(&ctx), array_new.result(&ctx));
+        assert_eq!(array_set.value(&ctx), array_get.result(&ctx));
+        assert_eq!(array_set.type_idx(&ctx), array_idx);
+        assert_eq!(array_copy.dst(&ctx), array_new.result(&ctx));
+        assert_eq!(array_copy.src(&ctx), array_default.result(&ctx));
+        assert_eq!(array_copy.dst_type_idx(&ctx), array_idx);
+        assert_eq!(array_copy.src_type_idx(&ctx), array_idx);
+
+        let ref_null = ops
+            .iter()
+            .find_map(|&op| wasm::RefNull::from_op(&ctx, op).ok())
+            .unwrap();
+        let ref_cast = ops
+            .iter()
+            .find_map(|&op| wasm::RefCast::from_op(&ctx, op).ok())
+            .unwrap();
+        let ref_test = ops
+            .iter()
+            .find_map(|&op| wasm::RefTest::from_op(&ctx, op).ok())
+            .unwrap();
+        assert_eq!(ref_null.type_idx(&ctx), Some(FIRST_USER_TYPE_IDX));
+        assert_eq!(ref_cast.r#ref(&ctx), ref_null.result(&ctx));
+        assert_eq!(ref_cast.type_idx(&ctx), Some(FIRST_USER_TYPE_IDX));
+        assert_eq!(ref_test.r#ref(&ctx), ref_cast.result(&ctx));
+        assert_eq!(ref_test.type_idx(&ctx), Some(FIRST_USER_TYPE_IDX));
     }
 }
