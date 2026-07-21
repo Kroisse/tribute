@@ -245,24 +245,48 @@ fn gen_attr_accessors(crate_path: &TokenStream, attrs: &[AttrDef]) -> TokenStrea
 }
 
 fn gen_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    gen_map_attr_accessor(crate_path, attr, quote!(ctx.op(self.0).attributes))
+}
+
+fn gen_map_attr_accessor(
+    crate_path: &TokenStream,
+    attr: &AttrDef,
+    attrs: TokenStream,
+) -> TokenStream {
     let name = &attr.raw_ident;
     let name_str = &attr.name;
     let rust_ty = attr_rust_type(crate_path, attr.ty);
-    let from_attr = attr_from_attr(crate_path, attr.ty);
 
+    if let Some(lookup) = typed_attr_lookup(attr.ty, &attrs, name_str) {
+        return if attr.optional {
+            quote! {
+                pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
+                    #lookup
+                }
+            }
+        } else {
+            quote! {
+                pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
+                    #lookup.expect(concat!("missing attribute: ", #name_str))
+                }
+            }
+        };
+    }
+
+    let from_attr = attr_from_attr(crate_path, attr.ty);
     if attr.optional {
         quote! {
             pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
-                ctx.op(self.0).attributes
-                    .get(&#crate_path::Symbol::new(#name_str))
+                #attrs
+                    .get(#name_str)
                     .map(|attr| #from_attr)
             }
         }
     } else {
         quote! {
             pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
-                let attr = ctx.op(self.0).attributes
-                    .get(&#crate_path::Symbol::new(#name_str))
+                let attr = #attrs
+                    .get(#name_str)
                     .expect(concat!("missing attribute: ", #name_str));
                 #from_attr
             }
@@ -570,29 +594,7 @@ fn gen_type_param_accessors(
 }
 
 fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
-    let name = &attr.raw_ident;
-    let name_str = &attr.name;
-    let rust_ty = attr_rust_type(crate_path, attr.ty);
-    let from_attr = attr_from_attr(crate_path, attr.ty);
-
-    if attr.optional {
-        quote! {
-            pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
-                ctx.types.get(self.0).attrs
-                    .get(&#crate_path::Symbol::new(#name_str))
-                    .map(|attr| #from_attr)
-            }
-        }
-    } else {
-        quote! {
-            pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
-                let attr = ctx.types.get(self.0).attrs
-                    .get(&#crate_path::Symbol::new(#name_str))
-                    .expect(concat!("missing attribute: ", #name_str));
-                #from_attr
-            }
-        }
-    }
+    gen_map_attr_accessor(crate_path, attr, quote!(ctx.types.get(self.0).attrs))
 }
 
 fn gen_type_constructor(
@@ -711,6 +713,38 @@ fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> Tok
             quote!(#crate_path::Attribute::Symbol(#val))
         }
         AttrType::Bytes => quote!(#crate_path::Attribute::Bytes(#val)),
+    }
+}
+
+fn typed_attr_lookup(ty: AttrType, attrs: &TokenStream, name: &str) -> Option<TokenStream> {
+    match ty {
+        AttrType::Bool => Some(quote!(#attrs.get_bool(#name))),
+        AttrType::I32 => Some(quote!(
+            #attrs
+                .get_i32(#name)
+                .expect(concat!("attribute out of range: ", #name))
+        )),
+        AttrType::I64 => Some(quote!(
+            #attrs
+                .get_i64(#name)
+                .expect(concat!("attribute out of range: ", #name))
+        )),
+        AttrType::U32 => Some(quote!(
+            #attrs
+                .get_u32(#name)
+                .expect(concat!("attribute out of range: ", #name))
+        )),
+        AttrType::U64 => Some(quote!(
+            #attrs
+                .get_u64(#name)
+                .expect(concat!("attribute out of range: ", #name))
+        )),
+        AttrType::Type => Some(quote!(#attrs.get_type(#name))),
+        AttrType::String => Some(quote!(
+            #attrs.get_str(#name).map(::std::borrow::ToOwned::to_owned)
+        )),
+        AttrType::Symbol | AttrType::QualifiedName => Some(quote!(#attrs.get_symbol(#name))),
+        AttrType::Any | AttrType::F32 | AttrType::F64 | AttrType::Bytes => None,
     }
 }
 

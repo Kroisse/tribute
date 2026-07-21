@@ -139,10 +139,7 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
 
 /// Return the source-level ability name attached to an ability reference type.
 pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
-    match ctx.types.get(ability_ref).attrs.get("name") {
-        Some(Attribute::Symbol(s)) => Some(*s),
-        _ => None,
-    }
+    ctx.types.get(ability_ref).attrs.get_symbol("name")
 }
 
 /// Build an `arith.const` for the stable runtime ability ID.
@@ -356,10 +353,7 @@ pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
-    matches!(
-        data.attrs.get("name"),
-        Some(Attribute::Symbol(s)) if *s == Symbol::new("_Marker")
-    )
+    data.attrs.get_symbol("name") == Some(Symbol::new("_Marker"))
 }
 
 /// Check if a type is the evidence ADT type (`core.array(Marker)`).
@@ -391,10 +385,7 @@ mod tests {
         assert_eq!(data.name, Symbol::new("struct"));
 
         // Should have name "_Marker"
-        assert_eq!(
-            data.attrs.get("name"),
-            Some(&Attribute::Symbol(Symbol::new("_Marker")))
-        );
+        assert_eq!(data.attrs.get_symbol("name"), Some(Symbol::new("_Marker")));
 
         // Should have the canonical field layout.
         let fields = data.attrs.get("fields").unwrap();

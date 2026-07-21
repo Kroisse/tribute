@@ -63,8 +63,8 @@ fn find_string_enum_type(ctx: &IrContext) -> Option<TypeRef> {
         if td.dialect != Symbol::new("adt") {
             continue;
         }
-        if let Some(Attribute::Symbol(name)) = td.attrs.get("name") {
-            if *name != Symbol::new("String") {
+        if let Some(name) = td.attrs.get_symbol("name") {
+            if name != Symbol::new("String") {
                 continue;
             }
         } else {
@@ -132,8 +132,8 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(Attribute::String(s)) = data.attributes.get("value") {
-                    let bytes = s.clone().into_bytes();
+                if let Some(s) = data.attributes.get_str("value") {
+                    let bytes = s.as_bytes().to_vec();
                     self.intern(bytes);
                     self.has_string_consts = true;
                 }

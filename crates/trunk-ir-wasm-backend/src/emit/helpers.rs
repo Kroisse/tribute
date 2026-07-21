@@ -59,10 +59,9 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
-    match data.attrs.get("name") {
-        Some(Attribute::Symbol(name)) => name.with_str(|s| s == expected_name),
-        _ => false,
-    }
+    data.attrs
+        .get_symbol("name")
+        .is_some_and(|name| name == expected_name)
 }
 
 /// Check if a type is the Step type (for trampoline-based effect system).
@@ -113,10 +112,7 @@ pub(crate) fn type_to_valtype(
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
     } else if is_bytes_array_ref(ctx, ty) {
-        let nullable = matches!(
-            ctx.types.get(ty).attrs.get("nullable"),
-            Some(Attribute::Bool(true))
-        );
+        let nullable = ctx.types.get(ty).attrs.get_bool("nullable") == Some(true);
         Ok(ValType::Ref(RefType {
             nullable,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),

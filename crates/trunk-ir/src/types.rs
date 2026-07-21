@@ -316,6 +316,10 @@ impl AttributeMap {
         self.get_integer(key, "u32", u32::try_from)
     }
 
+    pub fn get_u8(&self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
+        self.get_integer(key, "u8", u8::try_from)
+    }
+
     pub fn get_str(&self, key: impl AttributeKey) -> Option<&str> {
         self.get(key).and_then(Attribute::as_str)
     }
@@ -640,9 +644,10 @@ mod tests {
     }
 
     #[test]
-    fn attribute_map_typed_getters_distinguish_absence_kind_and_range() {
+    fn attribute_map_typed_getters_handle_absence_and_integer_range() {
         let mut attrs = AttributeMap::new();
         attrs.insert(Symbol::new("count"), Attribute::Int(i64::MAX as i128));
+        attrs.insert(Symbol::new("byte"), Attribute::Int(u8::MAX as i128));
         attrs.insert(Symbol::new("enabled"), Attribute::Bool(true));
         attrs.insert(Symbol::new("name"), Attribute::String("tribute".to_owned()));
         attrs.insert(
@@ -652,6 +657,7 @@ mod tests {
 
         assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
         assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));
+        assert_eq!(attrs.get_u8("byte"), Ok(Some(u8::MAX)));
         assert_eq!(attrs.get_bool("enabled"), Some(true));
         assert_eq!(attrs.get_str("name"), Some("tribute"));
         assert_eq!(attrs.get_i32("missing"), Ok(None));
@@ -660,6 +666,13 @@ mod tests {
             Err(IntegerOutOfRange {
                 value: i64::MAX as i128,
                 target: "i32",
+            })
+        );
+        assert_eq!(
+            attrs.get_u8("count"),
+            Err(IntegerOutOfRange {
+                value: i64::MAX as i128,
+                target: "u8",
             })
         );
         assert_eq!(attrs.get_u32("enabled"), Ok(None));

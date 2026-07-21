@@ -62,11 +62,7 @@ const CLOSURE_STRUCT_NAME_STR: &str = "_closure";
 fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     data.attrs
-        .get("name")
-        .and_then(|a| match a {
-            Attribute::Symbol(s) => Some(*s),
-            _ => None,
-        })
+        .get_symbol("name")
         .is_some_and(|name| name == Symbol::new(CLOSURE_STRUCT_NAME_STR))
 }
 
@@ -126,13 +122,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
-        let func_type_attr = data.attributes.get("type").and_then(|a| {
-            if let Attribute::Type(t) = a {
-                Some(*t)
-            } else {
-                None
-            }
-        });
+        let func_type_attr = data.attributes.get_type("type");
 
         let mut new_attrs = data.attributes.clone();
         if let Some(func_ty) = func_type_attr {
@@ -142,16 +132,15 @@ impl RewritePattern for FuncFuncPattern {
                 // - Layout A: params = [ret, arg1, arg2, ...] (translate_signature format)
                 // - Layout B: params = [arg1, arg2, ...], attrs.result = ret
                 // We read both and output in Layout A for translate_signature.
-                let (arg_params, ret_ty) =
-                    if let Some(Attribute::Type(r)) = type_data.attrs.get("result") {
-                        // Layout B: return type in attrs
-                        (&type_data.params[..], Some(*r))
-                    } else if !type_data.params.is_empty() {
-                        // Layout A: params[0] = return type
-                        (&type_data.params[1..], Some(type_data.params[0]))
-                    } else {
-                        (&type_data.params[..], None)
-                    };
+                let (arg_params, ret_ty) = if let Some(r) = type_data.attrs.get_type("result") {
+                    // Layout B: return type in attrs
+                    (&type_data.params[..], Some(r))
+                } else if !type_data.params.is_empty() {
+                    // Layout A: params[0] = return type
+                    (&type_data.params[1..], Some(type_data.params[0]))
+                } else {
+                    (&type_data.params[..], None)
+                };
 
                 // Convert params and return type
                 let new_params: Vec<TypeRef> = arg_params

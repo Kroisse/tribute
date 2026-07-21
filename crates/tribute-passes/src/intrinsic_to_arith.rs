@@ -17,7 +17,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, Location};
+use trunk_ir::types::Location;
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
@@ -237,10 +237,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // Check if this function has abi = "intrinsic"
         let attrs = &ctx.op(op).attributes;
-        let is_intrinsic = matches!(
-            attrs.get("abi"),
-            Some(Attribute::String(s)) if s == "intrinsic"
-        );
+        let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
         if !is_intrinsic {
             return false;
         }

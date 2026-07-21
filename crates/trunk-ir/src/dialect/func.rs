@@ -44,10 +44,7 @@ fn print_func(
     // Extract sym_name before mutable operations
     let sym_name = {
         let data = h.ctx().op(op);
-        data.attributes.get("sym_name").and_then(|a| match a {
-            crate::Attribute::Symbol(s) => Some(*s),
-            _ => None,
-        })
+        data.attributes.get_symbol("sym_name")
     };
 
     write!(h, "{indent_str}func.func")?;
@@ -85,8 +82,8 @@ fn print_func(
     // Extract type decomposition: return type from core.func type attribute
     let type_info = {
         let data = h.ctx().op(op);
-        if let Some(crate::Attribute::Type(func_ty)) = data.attributes.get("type") {
-            let ty_data = h.ctx().types.get(*func_ty);
+        if let Some(func_ty) = data.attributes.get_type("type") {
+            let ty_data = h.ctx().types.get(func_ty);
             let is_core_func = ty_data.dialect == crate::Symbol::new("core")
                 && ty_data.name == crate::Symbol::new("func");
             if is_core_func && !ty_data.params.is_empty() {

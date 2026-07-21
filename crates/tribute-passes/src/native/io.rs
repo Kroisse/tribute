@@ -51,7 +51,7 @@ fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
     ctx.types.iter().find_map(|(ty, data)| {
         (data.dialect == adt
             && data.name == enum_name
-            && data.attrs.get(name_attr) == Some(&Attribute::Symbol(expected)))
+            && data.attrs.get_symbol(name_attr) == Some(expected))
         .then_some(ty)
     })
 }

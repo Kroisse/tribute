@@ -93,28 +93,28 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
 
     // Check if this is a variant instance type (adt type with "base_enum" attr)
     if data.dialect == Symbol::new("adt")
-        && let Some(Attribute::Type(base_enum)) = data.attrs.get("base_enum")
+        && let Some(base_enum) = data.attrs.get_type("base_enum")
     {
-        let base_data = ctx.types.get(*base_enum);
-        if let Some(Attribute::Symbol(name_sym)) = base_data.attrs.get("name") {
-            return Some(*name_sym);
+        let base_data = ctx.types.get(base_enum);
+        if let Some(name_sym) = base_data.attrs.get_symbol("name") {
+            return Some(name_sym);
         }
     }
 
     // Check if this is an adt.enum type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("enum")
-        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get("name")
+        && let Some(name_sym) = data.attrs.get_symbol("name")
     {
-        return Some(*name_sym);
+        return Some(name_sym);
     }
 
     // Check if this is an adt.struct type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("struct")
-        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get("name")
+        && let Some(name_sym) = data.attrs.get_symbol("name")
     {
-        return Some(*name_sym);
+        return Some(name_sym);
     }
 
     None
@@ -128,9 +128,9 @@ fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
 
     // Normalize variant instance types to their base enum
     if data.dialect == Symbol::new("adt")
-        && let Some(Attribute::Type(base_enum)) = data.attrs.get("base_enum")
+        && let Some(base_enum) = data.attrs.get_type("base_enum")
     {
-        return *base_enum;
+        return base_enum;
     }
 
     // Note: tribute_rt types (int, nat, bool, float, any, intref) should be

@@ -75,9 +75,9 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(Attribute::String(s)) = data.attributes.get("value") {
+                if let Some(s) = data.attributes.get_str("value") {
                     self.has_string_consts = true;
-                    self.collect_content(s.clone().into_bytes());
+                    self.collect_content(s.as_bytes().to_vec());
                 }
             } else if data.name == Symbol::new("bytes_const")
                 && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
@@ -94,10 +94,7 @@ fn find_string_enum_type(ctx: &IrContext) -> Option<trunk_ir::TypeRef> {
         if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
             return None;
         }
-        if !matches!(
-            data.attrs.get("name"),
-            Some(Attribute::Symbol(name)) if *name == Symbol::new("String")
-        ) {
+        if data.attrs.get_symbol("name") != Some(Symbol::new("String")) {
             return None;
         }
         let variants = get_enum_variants(ctx, ty_ref)?;

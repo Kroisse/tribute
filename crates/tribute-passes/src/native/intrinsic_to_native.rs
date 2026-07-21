@@ -19,7 +19,7 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, LegalityDecision, Module, PatternApplicator,
     PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::TypeDataBuilder;
 
 /// Lower bytes intrinsic calls to native mem operations.
 ///
@@ -51,10 +51,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
         .dynamic_op("func", "func", move |ctx, op| {
             if let Ok(func_op) = func::Func::from_op(ctx, op) {
                 let attrs = &ctx.op(op).attributes;
-                let is_intrinsic = matches!(
-                    attrs.get("abi"),
-                    Some(Attribute::String(s)) if s == "intrinsic"
-                );
+                let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
                 if is_intrinsic && func_intrinsic_names.contains(&func_op.sym_name(ctx)) {
                     return LegalityDecision::Illegal;
                 }
@@ -157,10 +154,7 @@ impl RewritePattern for BytesIntrinsicFuncDeclPattern {
         };
 
         let attrs = &ctx.op(op).attributes;
-        let is_intrinsic = matches!(
-            attrs.get("abi"),
-            Some(Attribute::String(s)) if s == "intrinsic"
-        );
+        let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
         if !is_intrinsic {
             return false;
         }

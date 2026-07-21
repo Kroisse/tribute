@@ -107,13 +107,7 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
             continue;
         }
 
-        let sym_name = data.attributes.get("sym_name").and_then(|a| {
-            if let Attribute::Symbol(s) = a {
-                Some(*s)
-            } else {
-                None
-            }
-        });
+        let sym_name = data.attributes.get_symbol("sym_name");
 
         if sym_name == Some(Symbol::new(evidence_abi::LOOKUP)) {
             has_lookup = true;

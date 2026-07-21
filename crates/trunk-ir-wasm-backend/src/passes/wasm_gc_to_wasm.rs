@@ -10,7 +10,6 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::Attribute;
 
 use crate::gc_types::{
     BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, CONTINUATION_IDX,
@@ -20,10 +19,7 @@ use crate::gc_types::{
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     let data = ctx.types.get(ty);
     data.dialect == Symbol::new("adt")
-        && matches!(
-            data.attrs.get("name"),
-            Some(Attribute::Symbol(name)) if *name == Symbol::new(expected)
-        )
+        && data.attrs.get_symbol("name") == Some(Symbol::new(expected))
 }
 
 fn is_bytes_array(ctx: &IrContext, ty: TypeRef) -> bool {

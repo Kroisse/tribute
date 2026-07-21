@@ -888,9 +888,9 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(Attribute::Symbol(name)) = data.attributes.get("sym_name") {
+    if let Some(name) = data.attributes.get_symbol("sym_name") {
         f.write_char(' ')?;
-        write_symbol(f, *name)?;
+        write_symbol(f, name)?;
     }
 
     let regions = &data.regions;

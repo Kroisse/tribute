@@ -203,11 +203,8 @@ fn validate_functions_in_region(
                 // This is a func.func or wasm.func
                 let fn_name = data
                     .attributes
-                    .get("sym_name")
-                    .and_then(|a| match a {
-                        super::types::Attribute::Symbol(s) => Some(s.to_string()),
-                        _ => None,
-                    })
+                    .get_symbol("sym_name")
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
                 // Check operands with visibility-based scoping.
@@ -353,7 +350,7 @@ fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
         return;
     }
 
-    let Some(super::types::Attribute::Symbol(predicate)) = data.attributes.get("predicate") else {
+    let Some(predicate) = data.attributes.get_symbol("predicate") else {
         errors.push(operation_verifier_error(
             ctx,
             op,
@@ -362,7 +359,7 @@ fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
         return;
     };
 
-    if !is_allowed_cmpf_predicate(*predicate) {
+    if !is_allowed_cmpf_predicate(predicate) {
         errors.push(operation_verifier_error(
             ctx,
             op,
@@ -525,14 +522,11 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             }
 
-            let Some(&super::types::Attribute::Symbol(sym_name)) =
-                data.attributes.get(sym_name_key)
-            else {
+            let Some(sym_name) = data.attributes.get_symbol(sym_name_key) else {
                 continue;
             };
 
-            let Some(&super::types::Attribute::Type(func_ty)) = data.attributes.get(type_key)
-            else {
+            let Some(func_ty) = data.attributes.get_type(type_key) else {
                 continue;
             };
 
@@ -574,8 +568,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(&super::types::Attribute::Symbol(callee_sym)) = data.attributes.get(callee_key)
-        else {
+        let Some(callee_sym) = data.attributes.get_symbol(callee_key) else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
@@ -627,11 +620,8 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
             let fn_name = data
                 .attributes
-                .get(sym_name_key)
-                .and_then(|a| match a {
-                    super::types::Attribute::Symbol(s) => Some(s.to_string()),
-                    _ => None,
-                })
+                .get_symbol(sym_name_key)
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
             for &func_region in &data.regions {

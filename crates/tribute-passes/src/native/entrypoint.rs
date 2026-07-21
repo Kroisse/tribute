@@ -151,7 +151,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old_sym: Symbol, new_sym:
     let callee_key = Symbol::new("callee");
     let func_ref_key = Symbol::new("func_ref");
 
-    if let Some(Attribute::Symbol(sym)) = ctx.op(op).attributes.get(callee_key).cloned()
+    if let Some(sym) = ctx.op(op).attributes.get_symbol(callee_key)
         && sym == old_sym
     {
         ctx.op_mut(op)
@@ -160,7 +160,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old_sym: Symbol, new_sym:
     }
 
     // Rewrite func_ref attribute
-    if let Some(Attribute::Symbol(sym)) = ctx.op(op).attributes.get(func_ref_key).cloned()
+    if let Some(sym) = ctx.op(op).attributes.get_symbol(func_ref_key)
         && sym == old_sym
     {
         ctx.op_mut(op)
@@ -632,16 +632,15 @@ mod tests {
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get("callee")
-                    == Some(&Attribute::Symbol(Symbol::new(evidence_abi::EMPTY)))
+                ctx.op(*op).attributes.get_symbol("callee")
+                    == Some(Symbol::new(evidence_abi::EMPTY))
             })
             .expect("entrypoint should create empty evidence");
         let user_main_call = calls
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get("callee")
-                    == Some(&Attribute::Symbol(Symbol::new("_tribute_main")))
+                ctx.op(*op).attributes.get_symbol("callee") == Some(Symbol::new("_tribute_main"))
             })
             .expect("entrypoint should call renamed user main");
 

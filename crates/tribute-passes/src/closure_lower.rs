@@ -56,10 +56,7 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
-    matches!(
-        data.attrs.get("name"),
-        Some(Attribute::Symbol(s)) if *s == Symbol::new("_closure")
-    )
+    data.attrs.get_symbol("name") == Some(Symbol::new("_closure"))
 }
 
 // ============================================================================
