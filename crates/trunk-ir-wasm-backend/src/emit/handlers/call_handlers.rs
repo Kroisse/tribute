@@ -222,7 +222,7 @@ pub(crate) fn handle_call_indirect(
     // call_indirect with i32 table index
     // IR operand order: [table_idx, arg1, arg2, ...]
     // WebAssembly stack order: [arg1, arg2, ..., table_idx]
-    let table = match attrs.get(&Symbol::new("table")) {
+    let table = match attrs.get("table") {
         Some(_) => attr_u32(attrs, Symbol::new("table"))?,
         None => 0,
     };

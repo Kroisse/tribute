@@ -21,7 +21,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::TypeDataBuilder;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
@@ -143,14 +143,8 @@ fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
     if data.name != Symbol::new("i32_const") {
         return None;
     }
-    let Attribute::Int(ptr) = data.attributes.get(&Symbol::new("value"))? else {
-        return None;
-    };
-    let Attribute::Int(len) = data.attributes.get(&Symbol::new("literal_len"))? else {
-        return None;
-    };
-    let ptr_u32 = u32::try_from(*ptr).ok()?;
-    let len_u32 = u32::try_from(*len).ok()?;
+    let ptr_u32 = data.attributes.get_u32("value").ok()??;
+    let len_u32 = data.attributes.get_u32("literal_len").ok()??;
     Some((ptr_u32, len_u32))
 }
 

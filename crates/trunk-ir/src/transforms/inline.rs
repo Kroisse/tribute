@@ -191,7 +191,6 @@ fn splice_callee_body_before(
 use super::call_graph::{CallGraph, recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
-use crate::types::Attribute;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -258,11 +257,7 @@ fn should_inline(
     }
     // Skip extern/ABI functions: they are externally callable and the body
     // may be empty or have calling-convention constraints.
-    if ctx
-        .op(callee_op)
-        .attributes
-        .contains_key(&Symbol::new("abi"))
-    {
+    if ctx.op(callee_op).attributes.contains_key("abi") {
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.
@@ -416,9 +411,8 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let callee = match ctx.op(op).attributes.get(&Symbol::new("callee")) {
-            Some(Attribute::Symbol(s)) => *s,
-            _ => return false,
+        let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+            return false;
         };
 
         if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee) {
@@ -464,8 +458,6 @@ mod mechanics {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -505,7 +497,7 @@ mod mechanics {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -835,8 +827,6 @@ mod pass {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -875,7 +865,7 @@ mod pass {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -923,9 +913,7 @@ mod pass {
         let body = ctx.op(func_op).regions[0];
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && let Some(crate::types::Attribute::Symbol(s)) =
-                    ctx.op(op).attributes.get(&Symbol::new("callee"))
-                && *s == target
+                && ctx.op(op).attributes.get_symbol("callee") == Some(target)
             {
                 count += 1;
             }
@@ -997,11 +985,11 @@ mod pass {
             let ret = func::r#return(ctx, loc, [c.result(ctx)]);
             ctx.push_op(entry, ret.op_ref());
         });
-        let fn_ty_helper = ctx.op(helper).attributes.get(&Symbol::new("type")).cloned();
-        let helper_fn_ty = match fn_ty_helper {
-            Some(Attribute::Type(t)) => t,
-            _ => panic!("expected type attr"),
-        };
+        let helper_fn_ty = ctx
+            .op(helper)
+            .attributes
+            .get_type("type")
+            .expect("expected type attr");
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::constant(ctx, loc, helper_fn_ty, Symbol::new("helper"));

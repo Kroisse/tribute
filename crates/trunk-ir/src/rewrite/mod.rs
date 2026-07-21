@@ -70,13 +70,7 @@ impl Module {
 
     /// Get the module name (from `sym_name` attribute).
     pub fn name(self, ctx: &IrContext) -> Option<crate::symbol::Symbol> {
-        ctx.op(self.0)
-            .attributes
-            .get(&crate::symbol::Symbol::new("sym_name"))
-            .and_then(|a| match a {
-                super::types::Attribute::Symbol(s) => Some(*s),
-                _ => None,
-            })
+        ctx.op(self.0).attributes.get_symbol("sym_name")
     }
 
     /// Get the first block of the module body.

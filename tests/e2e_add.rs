@@ -414,18 +414,15 @@ fn main() { }
 
         let has_lifted = m.ops(&ctx).iter().any(|&op_ref| {
             let op_data = ctx.op(op_ref);
-            if op_data.dialect == func_dialect && op_data.name == func_name {
-                if let Some(trunk_ir::Attribute::Symbol(name)) =
-                    op_data.attributes.get(&Symbol::new("sym_name"))
-                {
-                    name.last_segment()
-                        .with_str(|s: &str| s.starts_with("__clam_"))
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+            op_data.dialect == func_dialect
+                && op_data.name == func_name
+                && op_data
+                    .attributes
+                    .get_symbol("sym_name")
+                    .is_some_and(|name| {
+                        name.last_segment()
+                            .with_str(|s: &str| s.starts_with("__clam_"))
+                    })
         });
 
         assert!(

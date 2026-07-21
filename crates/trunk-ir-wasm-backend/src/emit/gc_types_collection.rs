@@ -13,7 +13,7 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeData};
+use trunk_ir::types::TypeData;
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
@@ -22,7 +22,7 @@ use crate::gc_types::{
 };
 use crate::{CompilationError, CompilationResult};
 
-use super::helpers;
+use super::helpers::{self, intern_named_adt_struct};
 
 /// Result type for GC type collection.
 pub(crate) type GcTypesResult = (Vec<GcTypeDef>, HashMap<TypeRef, u32>);
@@ -93,28 +93,28 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
 
     // Check if this is a variant instance type (adt type with "base_enum" attr)
     if data.dialect == Symbol::new("adt")
-        && let Some(Attribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
+        && let Some(base_enum) = data.attrs.get_type("base_enum")
     {
-        let base_data = ctx.types.get(*base_enum);
-        if let Some(Attribute::Symbol(name_sym)) = base_data.attrs.get(&Symbol::new("name")) {
-            return Some(*name_sym);
+        let base_data = ctx.types.get(base_enum);
+        if let Some(name_sym) = base_data.attrs.get_symbol("name") {
+            return Some(name_sym);
         }
     }
 
     // Check if this is an adt.enum type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("enum")
-        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
+        && let Some(name_sym) = data.attrs.get_symbol("name")
     {
-        return Some(*name_sym);
+        return Some(name_sym);
     }
 
     // Check if this is an adt.struct type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("struct")
-        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
+        && let Some(name_sym) = data.attrs.get_symbol("name")
     {
-        return Some(*name_sym);
+        return Some(name_sym);
     }
 
     None
@@ -128,9 +128,9 @@ fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
 
     // Normalize variant instance types to their base enum
     if data.dialect == Symbol::new("adt")
-        && let Some(Attribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
+        && let Some(base_enum) = data.attrs.get_type("base_enum")
     {
-        return *base_enum;
+        return base_enum;
     }
 
     // Note: tribute_rt types (int, nat, bool, float, any, intref) should be
@@ -256,18 +256,6 @@ fn type_to_field_type(
     })
 }
 
-/// Create an adt.struct TypeRef with a given name attribute.
-fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = std::collections::BTreeMap::new();
-    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.types.intern(TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: Default::default(),
-        attrs,
-    })
-}
-
 /// Create a wasm.arrayref TypeRef.
 fn intern_wasm_arrayref(ctx: &mut IrContext) -> TypeRef {
     ctx.types.intern(TypeData {
@@ -315,14 +303,11 @@ pub(crate) fn collect_gc_types(
     type_idx_by_type.insert(marker_ty, MARKER_IDX);
     // Evidence ADT type (core.array(Marker)) — use a core.array type with marker param
     let evidence_ty = {
-        let mut attrs = std::collections::BTreeMap::new();
-        // No additional attrs needed, params carry the element type
-        let _ = &mut attrs;
         ctx.types.intern(TypeData {
             dialect: Symbol::new("core"),
             name: Symbol::new("array"),
             params: trunk_ir::smallvec::smallvec![marker_ty],
-            attrs,
+            attrs: Default::default(),
         })
     };
     type_idx_by_type.insert(evidence_ty, EVIDENCE_IDX);

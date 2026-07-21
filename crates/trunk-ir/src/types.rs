@@ -1,10 +1,10 @@
 //! Type interning and path interning for arena-based IR.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
 use cranelift_entity::PrimaryMap;
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 use super::refs::{PathRef, TypeRef};
 use crate::location::Span;
@@ -52,6 +52,67 @@ pub enum Attribute {
     Location(Location),
 }
 
+/// An integer attribute that cannot be represented by the requested type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IntegerOutOfRange {
+    pub value: i128,
+    pub target: &'static str,
+}
+
+impl fmt::Display for IntegerOutOfRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "integer attribute {} is out of range for {}",
+            self.value, self.target
+        )
+    }
+}
+
+impl std::error::Error for IntegerOutOfRange {}
+
+/// Text stored either directly or as an interned symbol attribute.
+#[derive(Clone, Copy, Debug)]
+pub enum AttributeText<'a> {
+    String(&'a str),
+    Symbol(Symbol),
+}
+
+impl AttributeText<'_> {
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        match self {
+            AttributeText::String(text) => f(text),
+            AttributeText::Symbol(symbol) => symbol.with_str(f),
+        }
+    }
+}
+
+impl PartialEq for AttributeText<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.with_str(|text| other.with_str(|other| text == other))
+    }
+}
+
+impl Eq for AttributeText<'_> {}
+
+impl PartialEq<str> for AttributeText<'_> {
+    fn eq(&self, other: &str) -> bool {
+        self.with_str(|text| text == other)
+    }
+}
+
+impl PartialEq<&str> for AttributeText<'_> {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
+impl fmt::Display for AttributeText<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.with_str(|text| f.write_str(text))
+    }
+}
+
 impl Attribute {
     /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
     pub fn as_symbol(&self) -> Option<Symbol> {
@@ -70,7 +131,7 @@ impl Attribute {
     }
 
     /// Extract the inner integer if this is `Attribute::Int`.
-    pub fn as_int(&self) -> Option<i128> {
+    pub fn as_i128(&self) -> Option<i128> {
         match self {
             Attribute::Int(v) => Some(*v),
             _ => None,
@@ -179,6 +240,208 @@ impl From<Location> for Attribute {
     }
 }
 
+/// A deterministic map of IR attributes with ergonomic symbol and string lookup.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AttributeMap(BTreeMap<Symbol, Attribute>);
+
+pub type AttributeIter<'a> = std::collections::btree_map::Iter<'a, Symbol, Attribute>;
+pub type AttributeIterMut<'a> = std::collections::btree_map::IterMut<'a, Symbol, Attribute>;
+pub type AttributeKeys<'a> = std::collections::btree_map::Keys<'a, Symbol, Attribute>;
+pub type AttributeValues<'a> = std::collections::btree_map::Values<'a, Symbol, Attribute>;
+pub type AttributeValuesMut<'a> = std::collections::btree_map::ValuesMut<'a, Symbol, Attribute>;
+pub type AttributeIntoIter = std::collections::btree_map::IntoIter<Symbol, Attribute>;
+
+/// A key accepted by [`AttributeMap::get`].
+pub trait AttributeKey {
+    fn lookup_symbol(self) -> Option<Symbol>;
+}
+
+impl AttributeKey for Symbol {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Some(self)
+    }
+}
+
+impl AttributeKey for &Symbol {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Some(*self)
+    }
+}
+
+impl AttributeKey for &str {
+    fn lookup_symbol(self) -> Option<Symbol> {
+        Symbol::lookup(self)
+    }
+}
+
+impl AttributeMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the attribute associated with a symbol or already-interned string.
+    ///
+    /// A missing string key is not added to the global symbol interner.
+    pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
+        let symbol = key.lookup_symbol()?;
+        self.0.get(&symbol)
+    }
+
+    pub fn get_mut(&mut self, key: impl AttributeKey) -> Option<&mut Attribute> {
+        let symbol = key.lookup_symbol()?;
+        self.0.get_mut(&symbol)
+    }
+
+    pub fn get_bool(&self, key: impl AttributeKey) -> Option<bool> {
+        self.get(key).and_then(Attribute::as_bool)
+    }
+
+    pub fn get_i128(&self, key: impl AttributeKey) -> Option<i128> {
+        self.get(key).and_then(Attribute::as_i128)
+    }
+
+    pub fn get_i64(&self, key: impl AttributeKey) -> Result<Option<i64>, IntegerOutOfRange> {
+        self.get_integer(key, "i64", i64::try_from)
+    }
+
+    pub fn get_i32(&self, key: impl AttributeKey) -> Result<Option<i32>, IntegerOutOfRange> {
+        self.get_integer(key, "i32", i32::try_from)
+    }
+
+    pub fn get_u64(&self, key: impl AttributeKey) -> Result<Option<u64>, IntegerOutOfRange> {
+        self.get_integer(key, "u64", u64::try_from)
+    }
+
+    pub fn get_u32(&self, key: impl AttributeKey) -> Result<Option<u32>, IntegerOutOfRange> {
+        self.get_integer(key, "u32", u32::try_from)
+    }
+
+    pub fn get_u8(&self, key: impl AttributeKey) -> Result<Option<u8>, IntegerOutOfRange> {
+        self.get_integer(key, "u8", u8::try_from)
+    }
+
+    pub fn get_str(&self, key: impl AttributeKey) -> Option<&str> {
+        self.get(key).and_then(Attribute::as_str)
+    }
+
+    pub fn get_symbol(&self, key: impl AttributeKey) -> Option<Symbol> {
+        self.get(key).and_then(Attribute::as_symbol)
+    }
+
+    pub fn get_type(&self, key: impl AttributeKey) -> Option<TypeRef> {
+        self.get(key).and_then(Attribute::as_type)
+    }
+
+    pub fn get_text(&self, key: impl AttributeKey) -> Option<AttributeText<'_>> {
+        match self.get(key)? {
+            Attribute::String(text) => Some(AttributeText::String(text)),
+            Attribute::Symbol(symbol) => Some(AttributeText::Symbol(*symbol)),
+            _ => None,
+        }
+    }
+
+    fn get_integer<T>(
+        &self,
+        key: impl AttributeKey,
+        target: &'static str,
+        convert: impl FnOnce(i128) -> Result<T, std::num::TryFromIntError>,
+    ) -> Result<Option<T>, IntegerOutOfRange> {
+        let Some(value) = self.get_i128(key) else {
+            return Ok(None);
+        };
+        convert(value)
+            .map(Some)
+            .map_err(|_| IntegerOutOfRange { value, target })
+    }
+
+    pub fn contains_key(&self, key: impl AttributeKey) -> bool {
+        let Some(symbol) = key.lookup_symbol() else {
+            return false;
+        };
+        self.0.contains_key(&symbol)
+    }
+
+    pub fn insert(&mut self, key: Symbol, value: Attribute) -> Option<Attribute> {
+        self.0.insert(key, value)
+    }
+
+    pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
+        let symbol = key.lookup_symbol()?;
+        self.0.remove(&symbol)
+    }
+
+    pub fn iter(&self) -> AttributeIter<'_> {
+        self.0.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> AttributeIterMut<'_> {
+        self.0.iter_mut()
+    }
+
+    pub fn keys(&self) -> AttributeKeys<'_> {
+        self.0.keys()
+    }
+
+    pub fn values(&self) -> AttributeValues<'_> {
+        self.0.values()
+    }
+
+    pub fn values_mut(&mut self) -> AttributeValuesMut<'_> {
+        self.0.values_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl FromIterator<(Symbol, Attribute)> for AttributeMap {
+    fn from_iter<T: IntoIterator<Item = (Symbol, Attribute)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Extend<(Symbol, Attribute)> for AttributeMap {
+    fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
+        self.0.extend(iter);
+    }
+}
+
+impl IntoIterator for AttributeMap {
+    type Item = (Symbol, Attribute);
+    type IntoIter = AttributeIntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a AttributeMap {
+    type Item = (&'a Symbol, &'a Attribute);
+    type IntoIter = AttributeIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut AttributeMap {
+    type Item = (&'a Symbol, &'a mut Attribute);
+    type IntoIter = AttributeIterMut<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 // ============================================================================
 // TypeData
 // ============================================================================
@@ -189,7 +452,7 @@ pub struct TypeData {
     pub dialect: Symbol,
     pub name: Symbol,
     pub params: SmallVec<[TypeRef; 4]>,
-    pub attrs: BTreeMap<Symbol, Attribute>,
+    pub attrs: AttributeMap,
 }
 
 /// Builder for constructing `TypeData` with a fluent API.
@@ -199,7 +462,7 @@ pub struct TypeDataBuilder {
     dialect: Symbol,
     name: Symbol,
     params: SmallVec<[TypeRef; 4]>,
-    attrs: BTreeMap<Symbol, Attribute>,
+    attrs: AttributeMap,
 }
 
 impl TypeDataBuilder {
@@ -208,7 +471,7 @@ impl TypeDataBuilder {
             dialect,
             name,
             params: SmallVec::new(),
-            attrs: BTreeMap::new(),
+            attrs: AttributeMap::new(),
         }
     }
 
@@ -353,6 +616,74 @@ mod tests {
     use super::*;
     use crate::IrContext;
     use crate::Symbol;
+
+    #[test]
+    fn attribute_map_accepts_string_and_symbol_keys_without_interning_misses() {
+        fn get_by_symbol<'a>(attrs: &'a AttributeMap, key: &Symbol) -> Option<&'a Attribute> {
+            attrs.get(key)
+        }
+
+        let mut attrs = AttributeMap::new();
+        let answer = Symbol::new("answer");
+        attrs.insert(answer, Attribute::Int(42));
+
+        assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
+        assert_eq!(attrs.get(answer), Some(&Attribute::Int(42)));
+        assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
+        assert!(attrs.contains_key("answer"));
+        assert_eq!(attrs.keys().copied().collect::<Vec<_>>(), vec![answer]);
+
+        let missing = "__trunk_ir_attribute_map_missing_key__";
+        assert_eq!(Symbol::lookup(missing), None);
+        assert_eq!(attrs.get(missing), None);
+        assert!(!attrs.contains_key(missing));
+        assert_eq!(Symbol::lookup(missing), None);
+
+        assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
+        assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn attribute_map_typed_getters_handle_absence_and_integer_range() {
+        let mut attrs = AttributeMap::new();
+        attrs.insert(Symbol::new("count"), Attribute::Int(i64::MAX as i128));
+        attrs.insert(Symbol::new("byte"), Attribute::Int(u8::MAX as i128));
+        attrs.insert(Symbol::new("enabled"), Attribute::Bool(true));
+        attrs.insert(Symbol::new("name"), Attribute::String("tribute".to_owned()));
+        attrs.insert(
+            Symbol::new("symbol_name"),
+            Attribute::Symbol(Symbol::new("tribute")),
+        );
+
+        assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
+        assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));
+        assert_eq!(attrs.get_u8("byte"), Ok(Some(u8::MAX)));
+        assert_eq!(attrs.get_bool("enabled"), Some(true));
+        assert_eq!(attrs.get_str("name"), Some("tribute"));
+        assert_eq!(attrs.get_i32("missing"), Ok(None));
+        assert_eq!(
+            attrs.get_i32("count"),
+            Err(IntegerOutOfRange {
+                value: i64::MAX as i128,
+                target: "i32",
+            })
+        );
+        assert_eq!(
+            attrs.get_u8("count"),
+            Err(IntegerOutOfRange {
+                value: i64::MAX as i128,
+                target: "u8",
+            })
+        );
+        assert_eq!(attrs.get_u32("enabled"), Ok(None));
+
+        let string_text = attrs.get_text("name").expect("string text");
+        let symbol_text = attrs.get_text("symbol_name").expect("symbol text");
+        assert_eq!(string_text, "tribute");
+        assert_eq!(symbol_text, "tribute");
+        assert_eq!(string_text, symbol_text);
+        assert_eq!(attrs.get_text("enabled"), None);
+    }
 
     #[test]
     fn type_interner_dedup() {

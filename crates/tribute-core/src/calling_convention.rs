@@ -67,14 +67,11 @@ pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: Callin
 
 /// Read explicitly attached calling-convention metadata.
 pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConvention> {
-    let Attribute::Int(code) = ctx
+    let code = ctx
         .op(op)
         .attributes
-        .get(&Symbol::new(CALLING_CONVENTION_ATTR))?
-    else {
-        return None;
-    };
-    let code = u8::try_from(*code).ok()?;
+        .get_u8(CALLING_CONVENTION_ATTR)
+        .ok()??;
     code.try_into().ok()
 }
 

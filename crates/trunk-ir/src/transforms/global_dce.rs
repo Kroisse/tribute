@@ -183,7 +183,7 @@ impl GlobalDcePass {
 
                     // Treat abi functions as entry points so their callees
                     // are also considered reachable.
-                    if ctx.op(op).attributes.contains_key(&self.syms.abi) {
+                    if ctx.op(op).attributes.contains_key(self.syms.abi) {
                         self.reachability_roots.insert(func_name);
                     }
 

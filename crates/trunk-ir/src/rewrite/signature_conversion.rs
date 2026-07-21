@@ -211,8 +211,6 @@ mod tests {
     use crate::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use crate::types::{Attribute, TypeDataBuilder};
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, crate::types::Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -272,7 +270,7 @@ mod tests {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -301,7 +299,7 @@ mod tests {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -431,7 +429,7 @@ mod tests {
         assert_eq!(td.params[1], i64_ty, "first param should be i64");
         assert_eq!(td.params[2], i64_ty, "second param should be i64");
         assert_eq!(
-            ctx.op(ops[0]).attributes.get(&Symbol::new("custom")),
+            ctx.op(ops[0]).attributes.get("custom"),
             Some(&Attribute::Int(7)),
             "signature conversion should preserve custom metadata"
         );

@@ -3,12 +3,12 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
 use trunk_ir::refs::{TypeRef, ValueRef};
-use trunk_ir::types::Attribute;
+use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
@@ -28,6 +28,18 @@ pub(crate) fn is_type(
 ) -> bool {
     let data = ctx.types.get(ty);
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+}
+
+/// Intern an `adt.struct` type with the given name attribute.
+pub(crate) fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    let mut attrs = AttributeMap::new();
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
+    ctx.types.intern(trunk_ir::types::TypeData {
+        dialect: Symbol::new("adt"),
+        name: Symbol::new("struct"),
+        params: Default::default(),
+        attrs,
+    })
 }
 
 // ============================================================================
@@ -59,10 +71,9 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
-    match data.attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(name)) => name.with_str(|s| s == expected_name),
-        _ => false,
-    }
+    data.attrs
+        .get_symbol("name")
+        .is_some_and(|name| name == expected_name)
 }
 
 /// Check if a type is the Step type (for trampoline-based effect system).
@@ -113,10 +124,7 @@ pub(crate) fn type_to_valtype(
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
     } else if is_bytes_array_ref(ctx, ty) {
-        let nullable = matches!(
-            ctx.types.get(ty).attrs.get(&Symbol::new("nullable")),
-            Some(Attribute::Bool(true))
-        );
+        let nullable = ctx.types.get(ty).attrs.get_bool("nullable") == Some(true);
         Ok(ValType::Ref(RefType {
             nullable,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
@@ -234,10 +242,10 @@ pub(crate) fn result_types(
 /// Extract a heap type from operation attributes.
 pub(crate) fn attr_heap_type(
     ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
+    attrs: &AttributeMap,
     key: Symbol,
 ) -> CompilationResult<HeapType> {
-    match attrs.get(&key) {
+    match attrs.get(key) {
         Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
@@ -319,8 +327,8 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
+pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u32> {
+    match attrs.get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",

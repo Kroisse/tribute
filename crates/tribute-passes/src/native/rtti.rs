@@ -24,7 +24,7 @@
 //! Runs before `adt_to_clif` (Phase 1.9) so that `adt_to_clif` can use the
 //! `RttiMap` to store correct `rtti_idx` values in allocation headers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::TypeDataBuilder;
@@ -241,7 +241,7 @@ fn generate_release_function_for_struct(
         location: loc,
         args: vec![BlockArgData {
             ty: ptr_ty,
-            attrs: BTreeMap::new(),
+            attrs: Default::default(),
         }],
         ops: smallvec![],
         parent_region: None,
@@ -431,7 +431,7 @@ fn generate_release_function_for_enum(
         location: loc,
         args: vec![BlockArgData {
             ty: ptr_ty,
-            attrs: BTreeMap::new(),
+            attrs: Default::default(),
         }],
         ops: smallvec![],
         parent_region: None,
@@ -668,7 +668,6 @@ fn generate_release_function_for_enum(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::func;
@@ -703,7 +702,7 @@ mod tests {
             .iter()
             .map(|&ty| BlockArgData {
                 ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             })
             .collect();
 
@@ -846,15 +845,15 @@ mod tests {
             args: vec![
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 },
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 },
                 BlockArgData {
                     ty: ptr_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 },
             ],
             ops: smallvec![],

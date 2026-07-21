@@ -63,15 +63,11 @@ fn find_string_enum_type(ctx: &IrContext) -> Option<TypeRef> {
         if td.dialect != Symbol::new("adt") {
             continue;
         }
-        if let Some(Attribute::Symbol(name)) = td.attrs.get(&Symbol::new("name")) {
-            if *name != Symbol::new("String") {
-                continue;
-            }
-        } else {
+        if td.attrs.get_symbol("name") != Some(Symbol::new("String")) {
             continue;
         }
         // Check it has "variants" attribute with Leaf and Branch
-        if let Some(Attribute::List(variants)) = td.attrs.get(&Symbol::new("variants")) {
+        if let Some(Attribute::List(variants)) = td.attrs.get("variants") {
             let has_leaf = variants.iter().any(|v| {
                 if let Attribute::List(items) = v {
                     items.first().is_some_and(
@@ -132,13 +128,13 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
-                    let bytes = s.clone().into_bytes();
+                if let Some(s) = data.attributes.get_str("value") {
+                    let bytes = s.as_bytes().to_vec();
                     self.intern(bytes);
                     self.has_string_consts = true;
                 }
             } else if data.name == Symbol::new("bytes_const")
-                && let Some(Attribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
+                && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
             {
                 let bytes: Vec<u8> = b.to_vec();
                 self.intern(bytes);

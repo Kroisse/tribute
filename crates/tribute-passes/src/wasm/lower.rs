@@ -244,8 +244,8 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == func::DIALECT_NAME() && data.name == Symbol::new("func") {
-                if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
-                    let fn_data = ctx.types.get(*fn_ty);
+                if let Some(fn_ty) = data.attributes.get_type("type") {
+                    let fn_data = ctx.types.get(fn_ty);
                     let params: Vec<_> = fn_data
                         .params
                         .iter()
@@ -256,16 +256,16 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .collect();
                     let sym_name = data
                         .attributes
-                        .get(&Symbol::new("sym_name"))
-                        .map(|a| format!("{a:?}"))
+                        .get_text("sym_name")
+                        .map(|text| text.to_string())
                         .unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
                 && data.name == Symbol::new("func")
-                && let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
+                && let Some(fn_ty) = data.attributes.get_type("type")
             {
-                let fn_data = ctx.types.get(*fn_ty);
+                let fn_data = ctx.types.get(fn_ty);
                 let params: Vec<_> = fn_data
                     .params
                     .iter()
@@ -276,8 +276,8 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .collect();
                 let sym_name = data
                     .attributes
-                    .get(&Symbol::new("sym_name"))
-                    .map(|a| format!("{a:?}"))
+                    .get_text("sym_name")
+                    .map(|text| text.to_string())
                     .unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
@@ -442,11 +442,8 @@ impl<'a> WasmLowerer<'a> {
                         self.memory_plan.has_memory = true;
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name == Symbol::new("export_func")
-                        && let Some(Attribute::String(name)) =
-                            data.attributes.get(&Symbol::new("name"))
-                    {
-                        if name == "main" {
+                    } else if data.name == Symbol::new("export_func") {
+                        if data.attributes.get_str("name") == Some("main") {
                             self.main_exports.main_exported = true;
                         }
                     } else if data.name == Symbol::new("func") {
@@ -472,8 +469,7 @@ impl<'a> WasmLowerer<'a> {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(Attribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
-        else {
+        let Some(sym_name) = data.attributes.get_symbol("sym_name") else {
             return;
         };
 
@@ -485,8 +481,8 @@ impl<'a> WasmLowerer<'a> {
         self.main_exports.saw_main = true;
         self.main_exports.main_convention = get_calling_convention(ctx, op).unwrap_or_default();
 
-        if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
-            let fn_data = ctx.types.get(*fn_ty);
+        if let Some(fn_ty) = data.attributes.get_type("type") {
+            let fn_data = ctx.types.get(fn_ty);
             // In arena core.func type, params[0] is the return type
             if let Some(&result_ty) = fn_data.params.first() {
                 self.main_exports.main_result_type = Some(result_ty);
@@ -813,11 +809,7 @@ impl<'a> WasmLowerer<'a> {
 /// Check if a type is the Step ADT type.
 fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    if let Some(Attribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
-        *name == Symbol::new("_Step")
-    } else {
-        false
-    }
+    data.attrs.get_symbol("name") == Some(Symbol::new("_Step"))
 }
 
 #[cfg(test)]
@@ -893,8 +885,7 @@ mod tests {
             .copied()
             .find(|op| {
                 ctx.op(*op).name == Symbol::new("call")
-                    && ctx.op(*op).attributes.get(&Symbol::new("callee"))
-                        == Some(&Attribute::Symbol(Symbol::new("main")))
+                    && ctx.op(*op).attributes.get_symbol("callee") == Some(Symbol::new("main"))
             })
             .expect("_start should call main");
 
@@ -1139,9 +1130,7 @@ mod tests {
         assert_eq!(lowerer.main_exports.main_result_type, Some(nil_ty));
         assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
 
-        ctx.op_mut(main.op_ref())
-            .attributes
-            .remove(&Symbol::new("sym_name"));
+        ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
         lowerer.main_exports.saw_main = false;
         lowerer.scan_wasm_func(&ctx, main.op_ref());
         assert!(!lowerer.main_exports.saw_main);

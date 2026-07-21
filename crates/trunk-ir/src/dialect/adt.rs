@@ -3,13 +3,7 @@
 // === Type alias hint registration ===
 inventory::submit!(crate::op_interface::TypeAliasHint {
     dialect: "adt",
-    suggest: |ctx, ty| {
-        ctx.types
-            .get(ty)
-            .attrs
-            .get(&crate::Symbol::new("name"))
-            .and_then(crate::Attribute::as_symbol)
-    },
+    suggest: |ctx, ty| { ctx.types.get(ty).attrs.get_symbol("name") },
 });
 
 // === Pure operation registrations ===

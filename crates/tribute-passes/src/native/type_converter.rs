@@ -385,16 +385,14 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
             return true;
         }
         // Check for struct or enum types (have "fields" or "variants" attrs)
-        if data.attrs.contains_key(&Symbol::new("fields")) {
+        if data.attrs.contains_key("fields") {
             return true;
         }
-        if data.attrs.contains_key(&Symbol::new("variants")) {
+        if data.attrs.contains_key("variants") {
             return true;
         }
         // Check for variant instance (has is_variant=true)
-        if let Some(trunk_ir::types::Attribute::Bool(true)) =
-            data.attrs.get(&Symbol::new("is_variant"))
-        {
+        if data.attrs.get_bool("is_variant") == Some(true) {
             return true;
         }
     }
@@ -436,12 +434,9 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     // struct, enum, typeref, variant instance
     data.name == Symbol::new("typeref")
-        || data.attrs.contains_key(&Symbol::new("fields"))
-        || data.attrs.contains_key(&Symbol::new("variants"))
-        || matches!(
-            data.attrs.get(&Symbol::new("is_variant")),
-            Some(trunk_ir::types::Attribute::Bool(true))
-        )
+        || data.attrs.contains_key("fields")
+        || data.attrs.contains_key("variants")
+        || data.attrs.get_bool("is_variant") == Some(true)
 }
 
 /// Helper: Check if a type is closure.closure.

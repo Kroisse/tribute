@@ -239,14 +239,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
 
     let base_name = if is_typeref {
         // Get the name attribute from the typeref type
-        base_data
-            .attrs
-            .get(&Symbol::new("name"))
-            .and_then(|a| match a {
-                Attribute::Symbol(s) => Some(*s),
-                _ => None,
-            })
-            .unwrap_or(base_data.name)
+        base_data.attrs.get_symbol("name").unwrap_or(base_data.name)
     } else {
         base_data.name
     };
@@ -374,13 +367,7 @@ impl RewritePattern for VariantGetPattern {
             })
             .unwrap_or_else(|| variant_get.result_ty(ctx));
         let operand_ty = ctx.value_ty(ref_val);
-        let variant_type = if matches!(
-            ctx.types
-                .get(operand_ty)
-                .attrs
-                .get(&Symbol::new("is_variant")),
-            Some(Attribute::Bool(true))
-        ) {
+        let variant_type = if ctx.types.get(operand_ty).attrs.get_bool("is_variant") == Some(true) {
             operand_ty
         } else {
             make_variant_type(ctx, variant_get.r#type(ctx), variant_get.tag(ctx))
@@ -688,21 +675,19 @@ mod tests {
             .copied()
             .find(|&op| {
                 let data = ctx.op(op);
-                let Some(Attribute::Type(ty)) = data.attributes.get(&Symbol::new("type")) else {
+                let Some(ty) = data.attributes.get_type("type") else {
                     return false;
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
                     && data.name == "struct_get"
-                    && matches!(
-                        ctx.types.get(*ty).attrs.get(&Symbol::new("is_variant")),
-                        Some(Attribute::Bool(true))
-                    )
+                    && ctx.types.get(ty).attrs.get_bool("is_variant") == Some(true)
             })
             .expect("lowered variant_get");
-        let Attribute::Type(variant_ty) = ctx.op(variant_get).attributes[&Symbol::new("type")]
-        else {
-            unreachable!("struct_get type must be a Type attribute");
-        };
+        let variant_ty = ctx
+            .op(variant_get)
+            .attributes
+            .get_type("type")
+            .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
     }
 }

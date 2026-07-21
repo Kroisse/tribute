@@ -705,7 +705,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             if !operands.is_empty() {
                 let base_val = operands[0];
                 if let Some(&(ev_val, ability_id_val)) = evidence_lookup_results.get(&base_val) {
-                    let field_attr = ctx.op(op).attributes.get(&Symbol::new("field"));
+                    let field_attr = ctx.op(op).attributes.get("field");
                     let field_idx = match field_attr {
                         Some(Attribute::Int(bits)) => *bits,
                         other => {

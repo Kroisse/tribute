@@ -35,7 +35,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::closure;
@@ -484,8 +484,8 @@ fn make_adt_struct_type(
 }
 
 /// Create a `bind_name` attribute map for a block argument.
-fn make_bind_name_attrs(name: &str) -> std::collections::BTreeMap<Symbol, Attribute> {
-    let mut attrs = std::collections::BTreeMap::new();
+fn make_bind_name_attrs(name: &str) -> AttributeMap {
+    let mut attrs = AttributeMap::new();
     attrs.insert(
         Symbol::new("bind_name"),
         Attribute::Symbol(Symbol::from_dynamic(name)),

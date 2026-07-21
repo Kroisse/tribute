@@ -87,5 +87,9 @@ pub use context::{
 pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::Module;
-pub use types::{Attribute, Location, PathInterner, TypeData, TypeDataBuilder, TypeInterner};
+pub use types::{
+    Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
+    AttributeMap, AttributeText, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location,
+    PathInterner, TypeData, TypeDataBuilder, TypeInterner,
+};
 pub use walk::WalkAction;

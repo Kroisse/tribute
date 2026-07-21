@@ -204,7 +204,7 @@ pub(crate) fn extract_data_def(
     let offset = if passive { 0 } else { data_op.offset(ctx) };
     // bytes is typed as `any` in the dialect, so we access the raw attribute
     let op_data = ctx.op(data_op.op_ref());
-    let bytes = match op_data.attributes.get(&Symbol::new("bytes")) {
+    let bytes = match op_data.attributes.get("bytes") {
         Some(Attribute::Bytes(value)) => value.to_vec(),
         _ => {
             return Err(CompilationError::invalid_attribute(
@@ -289,7 +289,7 @@ pub(crate) fn extract_global_def(
     })?;
     let mutable = global_op.mutable(ctx);
     let op_data = ctx.op(global_op.op_ref());
-    let init = match op_data.attributes.get(&Symbol::new("init")) {
+    let init = match op_data.attributes.get("init") {
         Some(Attribute::Int(v)) => i64::try_from(*v).map_err(|_| {
             CompilationError::invalid_attribute(format!("global init value {} out of i64 range", v))
         })?,

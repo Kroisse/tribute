@@ -866,10 +866,7 @@ fn build_tr_dispatch_chain<'db>(
 
     // Compute expected op_idx
     let ability_data = ir.types.get(ability_ref_ty);
-    let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(s)) => Some(*s),
-        _ => None,
-    };
+    let ability_name = ability_data.attrs.get_symbol("name");
     let expected_idx = compute_op_idx(ability_name, Some(op_name));
 
     // Build handler arm body region (no k_val — fn handler doesn't use resume)
@@ -1049,10 +1046,7 @@ fn build_handler_dispatch_chain<'db>(
 
     // Compute expected op_idx
     let ability_data = ir.types.get(ability_ref_ty);
-    let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-        Some(Attribute::Symbol(s)) => Some(*s),
-        _ => None,
-    };
+    let ability_name = ability_data.attrs.get_symbol("name");
     let expected_idx = compute_op_idx(ability_name, Some(op_name));
 
     // Build handler arm body region

@@ -375,7 +375,7 @@ fn emit_module_impl(
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let op_data = ctx.op(func_op);
-        let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
+        let has_abi = op_data.attributes.contains_key("abi");
         let linkage = if name_sym == "main" {
             Linkage::Export
         } else if has_abi {
@@ -437,7 +437,7 @@ fn emit_module_impl(
 
     for &func_op in &all_func_ops {
         let op_data = ctx.op(func_op);
-        let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
+        let has_abi = op_data.attributes.contains_key("abi");
         if has_abi {
             continue;
         }

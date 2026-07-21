@@ -190,10 +190,7 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type has the `is_variant` attribute set to true.
 fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    matches!(
-        ctx.types.get(ty).attrs.get(&Symbol::new("is_variant")),
-        Some(Attribute::Bool(true))
-    )
+    ctx.types.get(ty).attrs.get_bool("is_variant") == Some(true)
 }
 
 /// Check if a type is a struct-like reference type.

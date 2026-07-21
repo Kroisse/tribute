@@ -5,7 +5,7 @@
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
@@ -39,7 +39,7 @@ pub struct OperationData {
     pub name: Symbol,
     pub operands: EntityList<ValueRef>,
     pub results: EntityList<TypeRef>,
-    pub attributes: BTreeMap<Symbol, Attribute>,
+    pub attributes: AttributeMap,
     pub regions: SmallVec<[RegionRef; 4]>,
     pub successors: SmallVec<[BlockRef; 4]>,
     pub parent_block: Option<BlockRef>,
@@ -59,7 +59,7 @@ pub struct ValueData {
 #[derive(Clone, Debug)]
 pub struct BlockArgData {
     pub ty: TypeRef,
-    pub attrs: BTreeMap<Symbol, Attribute>,
+    pub attrs: AttributeMap,
 }
 
 /// Data for a basic block.
@@ -871,7 +871,7 @@ impl OperationData {
             name,
             operands: EntityList::new(),
             results: EntityList::new(),
-            attributes: BTreeMap::new(),
+            attributes: AttributeMap::new(),
             regions: SmallVec::new(),
             successors: SmallVec::new(),
             parent_block: None,
@@ -889,7 +889,7 @@ pub struct OperationDataBuilder {
     name: Symbol,
     operands: Vec<ValueRef>,
     results: Vec<TypeRef>,
-    attributes: BTreeMap<Symbol, Attribute>,
+    attributes: AttributeMap,
     regions: SmallVec<[RegionRef; 4]>,
     successors: SmallVec<[BlockRef; 4]>,
 }
@@ -902,7 +902,7 @@ impl OperationDataBuilder {
             name,
             operands: Vec::new(),
             results: Vec::new(),
-            attributes: BTreeMap::new(),
+            attributes: AttributeMap::new(),
             regions: SmallVec::new(),
             successors: SmallVec::new(),
         }
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(ctx.op(op).name, Symbol::new("const"));
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
         assert_eq!(
-            ctx.op(op).attributes.get(&Symbol::new("value")),
+            ctx.op(op).attributes.get("value"),
             Some(&Attribute::Int(42))
         );
     }
@@ -1044,11 +1044,11 @@ mod tests {
             args: vec![
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
             ],
             ops: SmallVec::new(),
@@ -1255,11 +1255,11 @@ mod tests {
             args: vec![
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
             ],
             ops: SmallVec::new(),
@@ -1274,7 +1274,7 @@ mod tests {
             block,
             BlockArgData {
                 ty: f64_ty,
-                attrs: BTreeMap::new(),
+                attrs: AttributeMap::new(),
             },
         );
 
@@ -1317,7 +1317,7 @@ mod tests {
             block,
             BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: AttributeMap::new(),
             },
         );
 
@@ -1369,11 +1369,11 @@ mod tests {
             args: vec![
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
                 BlockArgData {
                     ty: i32_ty,
-                    attrs: BTreeMap::new(),
+                    attrs: AttributeMap::new(),
                 },
             ],
             ops: SmallVec::new(),
@@ -1697,12 +1697,7 @@ mod tests {
         let cloned_region = ctx.clone_region(body_region, &mut mapping);
 
         // Build a new func.func with the cloned region
-        let func_ty = ctx
-            .op(func_op)
-            .attributes
-            .get(&Symbol::new("type"))
-            .cloned()
-            .unwrap();
+        let func_ty = ctx.op(func_op).attributes.get("type").cloned().unwrap();
         let new_func = OperationDataBuilder::new(
             ctx.op(func_op).location,
             Symbol::new("func"),
