@@ -1196,6 +1196,8 @@ mod tests {
     fn module_lowerer_ignores_modules_without_a_body() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
+        check_all_wasm_dialect(&ctx, module);
+        debug_func_params(&ctx, module, "test");
         let const_analysis = ConstAnalysis {
             allocations: vec![],
             string_enum_ty: None,
@@ -1218,6 +1220,22 @@ mod tests {
         lowerer.lower_module(&mut ctx, module);
 
         assert!(module.body(&ctx).is_none());
+    }
+
+    #[test]
+    fn wasm_dialect_check_visits_function_bodies() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %value = arith.const {value = 1} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        check_all_wasm_dialect(&ctx, module);
     }
 
     #[test]
