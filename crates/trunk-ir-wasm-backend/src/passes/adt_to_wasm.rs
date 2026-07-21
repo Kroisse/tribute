@@ -373,7 +373,18 @@ impl RewritePattern for VariantGetPattern {
                 data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
             })
             .unwrap_or_else(|| variant_get.result_ty(ctx));
-        let variant_type = make_variant_type(ctx, variant_get.r#type(ctx), variant_get.tag(ctx));
+        let operand_ty = ctx.value_ty(ref_val);
+        let variant_type = if matches!(
+            ctx.types
+                .get(operand_ty)
+                .attrs
+                .get(&Symbol::new("is_variant")),
+            Some(Attribute::Bool(true))
+        ) {
+            operand_ty
+        } else {
+            make_variant_type(ctx, variant_get.r#type(ctx), variant_get.tag(ctx))
+        };
 
         // Infer type from the operand (the cast result has the variant-specific type)
         // field attribute is already u32 and will be used directly
@@ -618,7 +629,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct() {fields = [[@value, core.i32]], name = @S}
-  !E = adt.typeref() {name = @E}
+  !E = adt.typeref(core.i32) {name = @E}
+  !EUnresolved = adt.typeref() {name = @E}
   !A = core.array(core.i32)
 
   wasm.func @main() -> core.nil {
@@ -631,7 +643,7 @@ mod tests {
     %variant = adt.variant_new %one {type = !E, tag = @Some} : !E
     %is_some = adt.variant_is %variant {type = !E, tag = @Some} : core.i32
     %cast = adt.variant_cast %variant {type = !E, tag = @Some} : !E
-    %payload = adt.variant_get %cast {type = !E, tag = @Some, field = 0} : core.i32
+    %payload = adt.variant_get %cast {type = !EUnresolved, tag = @Some, field = 0} : core.i32
 
     %empty = adt.array_new {type = !A} : !A
     %default = adt.array_new %one {type = !A} : !A
@@ -669,5 +681,28 @@ mod tests {
                 .count(),
             13
         );
+        let variant_get = ctx
+            .block(block)
+            .ops
+            .iter()
+            .copied()
+            .find(|&op| {
+                let data = ctx.op(op);
+                let Some(Attribute::Type(ty)) = data.attributes.get(&Symbol::new("type")) else {
+                    return false;
+                };
+                data.dialect == wasm_gc_dialect::DIALECT_NAME()
+                    && data.name == "struct_get"
+                    && matches!(
+                        ctx.types.get(*ty).attrs.get(&Symbol::new("is_variant")),
+                        Some(Attribute::Bool(true))
+                    )
+            })
+            .expect("lowered variant_get");
+        let Attribute::Type(variant_ty) = ctx.op(variant_get).attributes[&Symbol::new("type")]
+        else {
+            unreachable!("struct_get type must be a Type attribute");
+        };
+        assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
     }
 }
