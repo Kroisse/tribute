@@ -191,7 +191,7 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Check if a type has the `is_variant` attribute set to true.
 fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
     matches!(
-        ctx.types.get(ty).attrs.get(&Symbol::new("is_variant")),
+        ctx.types.get(ty).attrs.get("is_variant"),
         Some(Attribute::Bool(true))
     )
 }

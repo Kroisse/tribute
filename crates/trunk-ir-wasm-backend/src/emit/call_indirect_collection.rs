@@ -3,7 +3,7 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations, ref_func declarations, and related type inference.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use tracing::debug;
 use trunk_ir::IrContext;
@@ -14,7 +14,7 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
-use trunk_ir::types::{Attribute, TypeData};
+use trunk_ir::types::{Attribute, AttributeMap, TypeData};
 
 use crate::errors::CompilationResult;
 
@@ -45,7 +45,7 @@ fn intern_simple_wasm_type(ctx: &mut IrContext, name: &str) -> TypeRef {
 
 /// Intern an adt.struct type with the given name attribute.
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = BTreeMap::new();
+    let mut attrs = AttributeMap::new();
     attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(TypeData {
         dialect: Symbol::new("adt"),

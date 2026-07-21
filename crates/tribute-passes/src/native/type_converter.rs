@@ -392,9 +392,7 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
             return true;
         }
         // Check for variant instance (has is_variant=true)
-        if let Some(trunk_ir::types::Attribute::Bool(true)) =
-            data.attrs.get(&Symbol::new("is_variant"))
-        {
+        if let Some(trunk_ir::types::Attribute::Bool(true)) = data.attrs.get("is_variant") {
             return true;
         }
     }
@@ -439,7 +437,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
         || data.attrs.contains_key(&Symbol::new("fields"))
         || data.attrs.contains_key(&Symbol::new("variants"))
         || matches!(
-            data.attrs.get(&Symbol::new("is_variant")),
+            data.attrs.get("is_variant"),
             Some(trunk_ir::types::Attribute::Bool(true))
         )
 }

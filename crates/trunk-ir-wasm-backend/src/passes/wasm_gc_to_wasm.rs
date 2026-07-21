@@ -21,7 +21,7 @@ fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     let data = ctx.types.get(ty);
     data.dialect == Symbol::new("adt")
         && matches!(
-            data.attrs.get(&Symbol::new("name")),
+            data.attrs.get("name"),
             Some(Attribute::Symbol(name)) if *name == Symbol::new(expected)
         )
 }

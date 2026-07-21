@@ -29,10 +29,8 @@
 //!   %2 = op_after(%1)
 //! ```
 
-use std::cmp::Reverse;
-use std::collections::BTreeMap;
-
 use smallvec::SmallVec;
+use std::cmp::Reverse;
 
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, core, func, scf};
@@ -177,7 +175,7 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
             merge_block,
             BlockArgData {
                 ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         );
         // RAUW: replace all uses of scf.if result with merge block arg
@@ -246,7 +244,7 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
             exit_block,
             BlockArgData {
                 ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         );
         let loop_result = ctx.op_results(scf_op)[0];
@@ -318,7 +316,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
             merge_block,
             BlockArgData {
                 ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         );
         let results = ctx.op_results(scf_op);
@@ -899,7 +897,7 @@ mod tests {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             }],
             ops: smallvec![],
             parent_region: None,

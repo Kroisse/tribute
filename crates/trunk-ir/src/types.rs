@@ -1,10 +1,10 @@
 //! Type interning and path interning for arena-based IR.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::{Deref, DerefMut};
 
 use cranelift_entity::PrimaryMap;
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 use super::refs::{PathRef, TypeRef};
 use crate::location::Span;
@@ -179,6 +179,107 @@ impl From<Location> for Attribute {
     }
 }
 
+/// A deterministic map of IR attributes with ergonomic symbol and string lookup.
+///
+/// Existing `BTreeMap` mutation and iteration APIs remain available through
+/// [`Deref`] and [`DerefMut`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct AttributeMap(BTreeMap<Symbol, Attribute>);
+
+/// A key accepted by [`AttributeMap::get`].
+pub enum AttributeKey<'a> {
+    Symbol(Symbol),
+    Text(&'a str),
+}
+
+impl From<Symbol> for AttributeKey<'_> {
+    fn from(value: Symbol) -> Self {
+        Self::Symbol(value)
+    }
+}
+
+impl From<&Symbol> for AttributeKey<'_> {
+    fn from(value: &Symbol) -> Self {
+        Self::Symbol(*value)
+    }
+}
+
+impl<'a> From<&'a str> for AttributeKey<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl AttributeMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the attribute associated with a symbol or already-interned string.
+    ///
+    /// A missing string key is not added to the global symbol interner.
+    pub fn get<'a>(&self, key: impl Into<AttributeKey<'a>>) -> Option<&Attribute> {
+        let symbol = match key.into() {
+            AttributeKey::Symbol(symbol) => symbol,
+            AttributeKey::Text(text) => Symbol::lookup(text)?,
+        };
+        self.0.get(&symbol)
+    }
+}
+
+impl Deref for AttributeMap {
+    type Target = BTreeMap<Symbol, Attribute>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for AttributeMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl FromIterator<(Symbol, Attribute)> for AttributeMap {
+    fn from_iter<T: IntoIterator<Item = (Symbol, Attribute)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Extend<(Symbol, Attribute)> for AttributeMap {
+    fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
+        self.0.extend(iter);
+    }
+}
+
+impl IntoIterator for AttributeMap {
+    type Item = (Symbol, Attribute);
+    type IntoIter = std::collections::btree_map::IntoIter<Symbol, Attribute>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a AttributeMap {
+    type Item = (&'a Symbol, &'a Attribute);
+    type IntoIter = std::collections::btree_map::Iter<'a, Symbol, Attribute>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut AttributeMap {
+    type Item = (&'a Symbol, &'a mut Attribute);
+    type IntoIter = std::collections::btree_map::IterMut<'a, Symbol, Attribute>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 // ============================================================================
 // TypeData
 // ============================================================================
@@ -189,7 +290,7 @@ pub struct TypeData {
     pub dialect: Symbol,
     pub name: Symbol,
     pub params: SmallVec<[TypeRef; 4]>,
-    pub attrs: BTreeMap<Symbol, Attribute>,
+    pub attrs: AttributeMap,
 }
 
 /// Builder for constructing `TypeData` with a fluent API.
@@ -199,7 +300,7 @@ pub struct TypeDataBuilder {
     dialect: Symbol,
     name: Symbol,
     params: SmallVec<[TypeRef; 4]>,
-    attrs: BTreeMap<Symbol, Attribute>,
+    attrs: AttributeMap,
 }
 
 impl TypeDataBuilder {
@@ -208,7 +309,7 @@ impl TypeDataBuilder {
             dialect,
             name,
             params: SmallVec::new(),
-            attrs: BTreeMap::new(),
+            attrs: AttributeMap::new(),
         }
     }
 
@@ -353,6 +454,30 @@ mod tests {
     use super::*;
     use crate::IrContext;
     use crate::Symbol;
+
+    #[test]
+    fn attribute_map_accepts_string_and_symbol_keys_without_interning_misses() {
+        fn get_by_symbol<'a>(attrs: &'a AttributeMap, key: &Symbol) -> Option<&'a Attribute> {
+            attrs.get(key)
+        }
+
+        let mut attrs = AttributeMap::new();
+        let answer = Symbol::new("answer");
+        attrs.insert(answer, Attribute::Int(42));
+
+        assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
+        assert_eq!(attrs.get(answer), Some(&Attribute::Int(42)));
+        assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
+        assert_eq!(attrs.keys().copied().collect::<Vec<_>>(), vec![answer]);
+
+        let missing = "__trunk_ir_attribute_map_missing_key__";
+        assert_eq!(Symbol::lookup(missing), None);
+        assert_eq!(attrs.get(missing), None);
+        assert_eq!(Symbol::lookup(missing), None);
+
+        assert_eq!(attrs.remove(&answer), Some(Attribute::Int(42)));
+        assert!(attrs.is_empty());
+    }
 
     #[test]
     fn type_interner_dedup() {

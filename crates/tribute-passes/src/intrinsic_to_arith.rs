@@ -238,7 +238,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         // Check if this function has abi = "intrinsic"
         let attrs = &ctx.op(op).attributes;
         let is_intrinsic = matches!(
-            attrs.get(&Symbol::new("abi")),
+            attrs.get("abi"),
             Some(Attribute::String(s)) if s == "intrinsic"
         );
         if !is_intrinsic {

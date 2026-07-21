@@ -404,7 +404,7 @@ mod tests {
         let lowered = module.ops(&ctx)[0];
         assert!(wasm_dialect::Func::from_op(&ctx, lowered).is_ok());
         assert_eq!(
-            ctx.op(lowered).attributes.get(&Symbol::new("custom")),
+            ctx.op(lowered).attributes.get("custom"),
             Some(&Attribute::Int(7))
         );
     }

@@ -146,8 +146,6 @@ mod tests {
     use crate::symbol::Symbol;
     use crate::*;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -406,14 +404,14 @@ mod tests {
             block,
             BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         );
         let v1 = ctx.add_block_arg(
             block,
             BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         );
 

@@ -241,7 +241,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
         // Get the name attribute from the typeref type
         base_data
             .attrs
-            .get(&Symbol::new("name"))
+            .get("name")
             .and_then(|a| match a {
                 Attribute::Symbol(s) => Some(*s),
                 _ => None,
@@ -375,10 +375,7 @@ impl RewritePattern for VariantGetPattern {
             .unwrap_or_else(|| variant_get.result_ty(ctx));
         let operand_ty = ctx.value_ty(ref_val);
         let variant_type = if matches!(
-            ctx.types
-                .get(operand_ty)
-                .attrs
-                .get(&Symbol::new("is_variant")),
+            ctx.types.get(operand_ty).attrs.get("is_variant"),
             Some(Attribute::Bool(true))
         ) {
             operand_ty
@@ -688,13 +685,13 @@ mod tests {
             .copied()
             .find(|&op| {
                 let data = ctx.op(op);
-                let Some(Attribute::Type(ty)) = data.attributes.get(&Symbol::new("type")) else {
+                let Some(Attribute::Type(ty)) = data.attributes.get("type") else {
                     return false;
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
                     && data.name == "struct_get"
                     && matches!(
-                        ctx.types.get(*ty).attrs.get(&Symbol::new("is_variant")),
+                        ctx.types.get(*ty).attrs.get("is_variant"),
                         Some(Attribute::Bool(true))
                     )
             })

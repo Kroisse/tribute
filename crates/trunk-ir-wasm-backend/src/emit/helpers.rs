@@ -3,12 +3,12 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
 use trunk_ir::refs::{TypeRef, ValueRef};
-use trunk_ir::types::Attribute;
+use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
@@ -59,7 +59,7 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
-    match data.attrs.get(&Symbol::new("name")) {
+    match data.attrs.get("name") {
         Some(Attribute::Symbol(name)) => name.with_str(|s| s == expected_name),
         _ => false,
     }
@@ -114,7 +114,7 @@ pub(crate) fn type_to_valtype(
         }))
     } else if is_bytes_array_ref(ctx, ty) {
         let nullable = matches!(
-            ctx.types.get(ty).attrs.get(&Symbol::new("nullable")),
+            ctx.types.get(ty).attrs.get("nullable"),
             Some(Attribute::Bool(true))
         );
         Ok(ValType::Ref(RefType {
@@ -234,10 +234,10 @@ pub(crate) fn result_types(
 /// Extract a heap type from operation attributes.
 pub(crate) fn attr_heap_type(
     ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
+    attrs: &AttributeMap,
     key: Symbol,
 ) -> CompilationResult<HeapType> {
-    match attrs.get(&key) {
+    match attrs.get(key) {
         Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
@@ -319,8 +319,8 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
+pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u32> {
+    match attrs.get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",

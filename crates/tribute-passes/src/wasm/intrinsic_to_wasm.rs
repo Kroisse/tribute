@@ -143,10 +143,10 @@ fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
     if data.name != Symbol::new("i32_const") {
         return None;
     }
-    let Attribute::Int(ptr) = data.attributes.get(&Symbol::new("value"))? else {
+    let Attribute::Int(ptr) = data.attributes.get("value")? else {
         return None;
     };
-    let Attribute::Int(len) = data.attributes.get(&Symbol::new("literal_len"))? else {
+    let Attribute::Int(len) = data.attributes.get("literal_len")? else {
         return None;
     };
     let ptr_u32 = u32::try_from(*ptr).ok()?;

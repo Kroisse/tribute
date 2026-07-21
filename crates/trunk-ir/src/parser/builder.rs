@@ -10,7 +10,7 @@
 //! 2. **IR build**: `ArenaIrBuilder` converts `Raw*` → arena `OpRef`,
 //!    `BlockRef`, `RegionRef`, etc.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use smallvec::smallvec;
 use winnow::prelude::*;
@@ -82,7 +82,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     .iter()
                     .map(|p| self.build_type(p))
                     .collect::<Result<_, _>>()?;
-                let attrs: BTreeMap<Symbol, Attribute> = attrs
+                let attrs: AttributeMap = attrs
                     .iter()
                     .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
                     .collect::<Result<_, ParseError>>()?;
@@ -218,7 +218,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     .and_then(|rest| rest.parse::<usize>().ok())
                     .is_some_and(|n| n == j);
 
-                let mut attrs = BTreeMap::new();
+                let mut attrs = AttributeMap::new();
                 if !is_default_name {
                     attrs.insert(
                         Symbol::new("bind_name"),
@@ -361,7 +361,7 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<_, _>>()?;
 
         // Build attributes from explicit attr dict
-        let mut attributes: BTreeMap<Symbol, Attribute> = raw
+        let mut attributes: AttributeMap = raw
             .attributes
             .iter()
             .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))

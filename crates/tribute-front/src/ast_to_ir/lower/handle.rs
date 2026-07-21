@@ -866,7 +866,7 @@ fn build_tr_dispatch_chain<'db>(
 
     // Compute expected op_idx
     let ability_data = ir.types.get(ability_ref_ty);
-    let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
+    let ability_name = match ability_data.attrs.get("name") {
         Some(Attribute::Symbol(s)) => Some(*s),
         _ => None,
     };
@@ -1049,7 +1049,7 @@ fn build_handler_dispatch_chain<'db>(
 
     // Compute expected op_idx
     let ability_data = ir.types.get(ability_ref_ty);
-    let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
+    let ability_name = match ability_data.attrs.get("name") {
         Some(Attribute::Symbol(s)) => Some(*s),
         _ => None,
     };

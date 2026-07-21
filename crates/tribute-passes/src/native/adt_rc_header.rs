@@ -340,7 +340,6 @@ impl RewritePattern for VariantNewPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::func;
@@ -378,7 +377,7 @@ mod tests {
             .iter()
             .map(|&ty| BlockArgData {
                 ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             })
             .collect();
 

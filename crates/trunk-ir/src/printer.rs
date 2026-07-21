@@ -888,7 +888,7 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(Attribute::Symbol(name)) = data.attributes.get(&crate::Symbol::new("sym_name")) {
+    if let Some(Attribute::Symbol(name)) = data.attributes.get("sym_name") {
         f.write_char(' ')?;
         write_symbol(f, *name)?;
     }

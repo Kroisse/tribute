@@ -1,7 +1,5 @@
 //! Lower target-independent output to WASI preview1.
 
-use std::collections::BTreeMap;
-
 use tribute_ir::dialect::tribute_io;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -492,6 +490,6 @@ fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 fn block_arg(ty: TypeRef) -> BlockArgData {
     BlockArgData {
         ty,
-        attrs: BTreeMap::new(),
+        attrs: Default::default(),
     }
 }

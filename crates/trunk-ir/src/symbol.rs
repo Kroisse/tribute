@@ -70,6 +70,11 @@ impl Symbol {
         Self::get_or_else(text, |rodeo| rodeo.get_or_intern(text))
     }
 
+    /// Look up an already-interned string without interning it when absent.
+    pub fn lookup(text: &str) -> Option<Self> {
+        INTERNER.read_recursive().get(text).map(Self)
+    }
+
     fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Rodeo) -> Spur) -> Self {
         let mut lock = INTERNER.upgradable_read();
         Symbol(if let Some(spur) = lock.get(text) {
@@ -169,6 +174,21 @@ impl PartialEq<Symbol> for &str {
 impl std::fmt::Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.with_str(|s| write!(f, "{}", s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_does_not_intern_missing_text() {
+        let text = "__trunk_ir_symbol_lookup_missing_text__";
+        assert_eq!(Symbol::lookup(text), None);
+        assert_eq!(Symbol::lookup(text), None);
+
+        let symbol = Symbol::from_dynamic(text);
+        assert_eq!(Symbol::lookup(text), Some(symbol));
     }
 }
 

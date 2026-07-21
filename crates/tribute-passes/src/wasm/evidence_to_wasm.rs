@@ -20,8 +20,6 @@
 //! binary search (O(log n)) since the evidence array is maintained in sorted order
 //! by ability_id.
 
-use std::collections::BTreeMap;
-
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
@@ -109,7 +107,7 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
             continue;
         }
 
-        let sym_name = data.attributes.get(&Symbol::new("sym_name")).and_then(|a| {
+        let sym_name = data.attributes.get("sym_name").and_then(|a| {
             if let Attribute::Symbol(s) = a {
                 Some(*s)
             } else {
@@ -617,11 +615,11 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
         args: vec![
             BlockArgData {
                 ty: evidence_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
             BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         ],
         ops: smallvec![],
@@ -892,11 +890,11 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         args: vec![
             BlockArgData {
                 ty: evidence_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
             BlockArgData {
                 ty: marker_sig_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             },
         ],
         ops: smallvec![],

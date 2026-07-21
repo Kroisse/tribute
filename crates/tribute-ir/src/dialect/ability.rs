@@ -139,7 +139,7 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
 
 /// Return the source-level ability name attached to an ability reference type.
 pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
-    match ctx.types.get(ability_ref).attrs.get(&Symbol::new("name")) {
+    match ctx.types.get(ability_ref).attrs.get("name") {
         Some(Attribute::Symbol(s)) => Some(*s),
         _ => None,
     }
@@ -357,7 +357,7 @@ pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
         return false;
     }
     matches!(
-        data.attrs.get(&Symbol::new("name")),
+        data.attrs.get("name"),
         Some(Attribute::Symbol(s)) if *s == Symbol::new("_Marker")
     )
 }
@@ -392,12 +392,12 @@ mod tests {
 
         // Should have name "_Marker"
         assert_eq!(
-            data.attrs.get(&Symbol::new("name")),
+            data.attrs.get("name"),
             Some(&Attribute::Symbol(Symbol::new("_Marker")))
         );
 
         // Should have the canonical field layout.
-        let fields = data.attrs.get(&Symbol::new("fields")).unwrap();
+        let fields = data.attrs.get("fields").unwrap();
         match fields {
             Attribute::List(list) => {
                 assert_eq!(list.len(), MARKER_FIELD_COUNT);

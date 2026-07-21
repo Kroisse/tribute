@@ -57,8 +57,7 @@ fn basic_database_usage() {
     for (i, op_ref) in ops.iter().enumerate() {
         let op_data = ctx.op(*op_ref);
         if op_data.dialect == Symbol::new("func") && op_data.name == Symbol::new("func") {
-            if let Some(Attribute::Symbol(name)) = op_data.attributes.get(&Symbol::new("sym_name"))
-            {
+            if let Some(Attribute::Symbol(name)) = op_data.attributes.get("sym_name") {
                 println!("  Operation {}: func.func \"{}\"", i + 1, name);
             }
         } else {

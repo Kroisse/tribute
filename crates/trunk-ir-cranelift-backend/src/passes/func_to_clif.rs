@@ -62,7 +62,7 @@ const CLOSURE_STRUCT_NAME_STR: &str = "_closure";
 fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     data.attrs
-        .get(&Symbol::new("name"))
+        .get("name")
         .and_then(|a| match a {
             Attribute::Symbol(s) => Some(*s),
             _ => None,
@@ -126,7 +126,7 @@ impl RewritePattern for FuncFuncPattern {
 
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
-        let func_type_attr = data.attributes.get(&Symbol::new("type")).and_then(|a| {
+        let func_type_attr = data.attributes.get("type").and_then(|a| {
             if let Attribute::Type(t) = a {
                 Some(*t)
             } else {
@@ -143,7 +143,7 @@ impl RewritePattern for FuncFuncPattern {
                 // - Layout B: params = [arg1, arg2, ...], attrs.result = ret
                 // We read both and output in Layout A for translate_signature.
                 let (arg_params, ret_ty) =
-                    if let Some(Attribute::Type(r)) = type_data.attrs.get(&Symbol::new("result")) {
+                    if let Some(Attribute::Type(r)) = type_data.attrs.get("result") {
                         // Layout B: return type in attrs
                         (&type_data.params[..], Some(*r))
                     } else if !type_data.params.is_empty() {

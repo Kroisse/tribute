@@ -7,7 +7,7 @@ inventory::submit!(crate::op_interface::TypeAliasHint {
         ctx.types
             .get(ty)
             .attrs
-            .get(&crate::Symbol::new("name"))
+            .get("name")
             .and_then(crate::Attribute::as_symbol)
     },
 });

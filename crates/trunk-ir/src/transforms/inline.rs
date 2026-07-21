@@ -416,7 +416,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let callee = match ctx.op(op).attributes.get(&Symbol::new("callee")) {
+        let callee = match ctx.op(op).attributes.get("callee") {
             Some(Attribute::Symbol(s)) => *s,
             _ => return false,
         };
@@ -464,8 +464,6 @@ mod mechanics {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -505,7 +503,7 @@ mod mechanics {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -835,8 +833,6 @@ mod pass {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
@@ -875,7 +871,7 @@ mod pass {
                 .iter()
                 .map(|&ty| BlockArgData {
                     ty,
-                    attrs: BTreeMap::new(),
+                    attrs: Default::default(),
                 })
                 .collect(),
             ops: smallvec![],
@@ -924,7 +920,7 @@ mod pass {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
                 && let Some(crate::types::Attribute::Symbol(s)) =
-                    ctx.op(op).attributes.get(&Symbol::new("callee"))
+                    ctx.op(op).attributes.get("callee")
                 && *s == target
             {
                 count += 1;
@@ -997,7 +993,7 @@ mod pass {
             let ret = func::r#return(ctx, loc, [c.result(ctx)]);
             ctx.push_op(entry, ret.op_ref());
         });
-        let fn_ty_helper = ctx.op(helper).attributes.get(&Symbol::new("type")).cloned();
+        let fn_ty_helper = ctx.op(helper).attributes.get("type").cloned();
         let helper_fn_ty = match fn_ty_helper {
             Some(Attribute::Type(t)) => t,
             _ => panic!("expected type attr"),

@@ -52,7 +52,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
             if let Ok(func_op) = func::Func::from_op(ctx, op) {
                 let attrs = &ctx.op(op).attributes;
                 let is_intrinsic = matches!(
-                    attrs.get(&Symbol::new("abi")),
+                    attrs.get("abi"),
                     Some(Attribute::String(s)) if s == "intrinsic"
                 );
                 if is_intrinsic && func_intrinsic_names.contains(&func_op.sym_name(ctx)) {
@@ -158,7 +158,7 @@ impl RewritePattern for BytesIntrinsicFuncDeclPattern {
 
         let attrs = &ctx.op(op).attributes;
         let is_intrinsic = matches!(
-            attrs.get(&Symbol::new("abi")),
+            attrs.get("abi"),
             Some(Attribute::String(s)) if s == "intrinsic"
         );
         if !is_intrinsic {

@@ -120,7 +120,7 @@ pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Ty
         return None;
     }
 
-    let fields_attr = data.attrs.get(&Symbol::new("fields"))?;
+    let fields_attr = data.attrs.get("fields")?;
     let Attribute::List(fields) = fields_attr else {
         return None;
     };
@@ -162,7 +162,7 @@ pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Ve
         return None;
     }
 
-    let variants_attr = data.attrs.get(&Symbol::new("variants"))?;
+    let variants_attr = data.attrs.get("variants")?;
     let Attribute::List(variants) = variants_attr else {
         return None;
     };

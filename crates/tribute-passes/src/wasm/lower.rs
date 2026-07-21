@@ -244,7 +244,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == func::DIALECT_NAME() && data.name == Symbol::new("func") {
-                if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
+                if let Some(Attribute::Type(fn_ty)) = data.attributes.get("type") {
                     let fn_data = ctx.types.get(*fn_ty);
                     let params: Vec<_> = fn_data
                         .params
@@ -256,14 +256,14 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .collect();
                     let sym_name = data
                         .attributes
-                        .get(&Symbol::new("sym_name"))
+                        .get("sym_name")
                         .map(|a| format!("{a:?}"))
                         .unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
                 && data.name == Symbol::new("func")
-                && let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
+                && let Some(Attribute::Type(fn_ty)) = data.attributes.get("type")
             {
                 let fn_data = ctx.types.get(*fn_ty);
                 let params: Vec<_> = fn_data
@@ -276,7 +276,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .collect();
                 let sym_name = data
                     .attributes
-                    .get(&Symbol::new("sym_name"))
+                    .get("sym_name")
                     .map(|a| format!("{a:?}"))
                     .unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
@@ -443,8 +443,7 @@ impl<'a> WasmLowerer<'a> {
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
                     } else if data.name == Symbol::new("export_func")
-                        && let Some(Attribute::String(name)) =
-                            data.attributes.get(&Symbol::new("name"))
+                        && let Some(Attribute::String(name)) = data.attributes.get("name")
                     {
                         if name == "main" {
                             self.main_exports.main_exported = true;
@@ -472,8 +471,7 @@ impl<'a> WasmLowerer<'a> {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(Attribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
-        else {
+        let Some(Attribute::Symbol(sym_name)) = data.attributes.get("sym_name") else {
             return;
         };
 
@@ -485,7 +483,7 @@ impl<'a> WasmLowerer<'a> {
         self.main_exports.saw_main = true;
         self.main_exports.main_convention = get_calling_convention(ctx, op).unwrap_or_default();
 
-        if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
+        if let Some(Attribute::Type(fn_ty)) = data.attributes.get("type") {
             let fn_data = ctx.types.get(*fn_ty);
             // In arena core.func type, params[0] is the return type
             if let Some(&result_ty) = fn_data.params.first() {
@@ -813,7 +811,7 @@ impl<'a> WasmLowerer<'a> {
 /// Check if a type is the Step ADT type.
 fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    if let Some(Attribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
+    if let Some(Attribute::Symbol(name)) = data.attrs.get("name") {
         *name == Symbol::new("_Step")
     } else {
         false
@@ -893,7 +891,7 @@ mod tests {
             .copied()
             .find(|op| {
                 ctx.op(*op).name == Symbol::new("call")
-                    && ctx.op(*op).attributes.get(&Symbol::new("callee"))
+                    && ctx.op(*op).attributes.get("callee")
                         == Some(&Attribute::Symbol(Symbol::new("main")))
             })
             .expect("_start should call main");

@@ -26,7 +26,6 @@ pub mod rtti;
 pub mod tribute_rt_to_clif;
 pub mod type_converter;
 
-use std::collections::BTreeMap;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
@@ -52,7 +51,7 @@ pub(crate) fn build_extern_func(
         .iter()
         .map(|&ty| BlockArgData {
             ty,
-            attrs: BTreeMap::new(),
+            attrs: Default::default(),
         })
         .collect();
 

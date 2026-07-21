@@ -113,7 +113,7 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data.attributes.get(&Symbol::new("sym_name")) {
+            match data.attributes.get("sym_name") {
                 Some(super::types::Attribute::Symbol(s)) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -203,7 +203,7 @@ fn validate_functions_in_region(
                 // This is a func.func or wasm.func
                 let fn_name = data
                     .attributes
-                    .get(&Symbol::new("sym_name"))
+                    .get("sym_name")
                     .and_then(|a| match a {
                         super::types::Attribute::Symbol(s) => Some(s.to_string()),
                         _ => None,
@@ -353,9 +353,7 @@ fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
         return;
     }
 
-    let Some(super::types::Attribute::Symbol(predicate)) =
-        data.attributes.get(&Symbol::new("predicate"))
-    else {
+    let Some(super::types::Attribute::Symbol(predicate)) = data.attributes.get("predicate") else {
         errors.push(operation_verifier_error(
             ctx,
             op,
@@ -528,12 +526,12 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
             }
 
             let Some(&super::types::Attribute::Symbol(sym_name)) =
-                data.attributes.get(&sym_name_key)
+                data.attributes.get(sym_name_key)
             else {
                 continue;
             };
 
-            let Some(&super::types::Attribute::Type(func_ty)) = data.attributes.get(&type_key)
+            let Some(&super::types::Attribute::Type(func_ty)) = data.attributes.get(type_key)
             else {
                 continue;
             };
@@ -576,7 +574,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(&super::types::Attribute::Symbol(callee_sym)) = data.attributes.get(&callee_key)
+        let Some(&super::types::Attribute::Symbol(callee_sym)) = data.attributes.get(callee_key)
         else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
@@ -629,7 +627,7 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
             let fn_name = data
                 .attributes
-                .get(&sym_name_key)
+                .get(sym_name_key)
                 .and_then(|a| match a {
                     super::types::Attribute::Symbol(s) => Some(s.to_string()),
                     _ => None,
@@ -688,8 +686,6 @@ mod tests {
     use crate::types::{Attribute, Location};
     use crate::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
-
     fn test_location(ctx: &mut IrContext) -> Location {
         let path = ctx.paths.intern("test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
@@ -951,7 +947,7 @@ mod tests {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             }],
             ops: smallvec![],
             parent_region: None,
@@ -1021,7 +1017,7 @@ mod tests {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: BTreeMap::new(),
+                attrs: Default::default(),
             }],
             ops: smallvec![],
             parent_region: None,

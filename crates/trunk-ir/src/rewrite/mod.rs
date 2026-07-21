@@ -72,7 +72,7 @@ impl Module {
     pub fn name(self, ctx: &IrContext) -> Option<crate::symbol::Symbol> {
         ctx.op(self.0)
             .attributes
-            .get(&crate::symbol::Symbol::new("sym_name"))
+            .get("sym_name")
             .and_then(|a| match a {
                 super::types::Attribute::Symbol(s) => Some(*s),
                 _ => None,

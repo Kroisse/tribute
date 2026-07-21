@@ -1212,7 +1212,7 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
 
 /// Intern a named adt.struct type (e.g., _Step, _Continuation).
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = std::collections::BTreeMap::new();
+    let mut attrs = trunk_ir::AttributeMap::new();
     attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(trunk_ir::types::TypeData {
         dialect: Symbol::new("adt"),
