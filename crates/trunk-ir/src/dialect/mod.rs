@@ -11,6 +11,7 @@ pub mod func;
 pub mod mem;
 pub mod scf;
 pub mod wasm;
+pub mod wasm_gc;
 
 #[cfg(test)]
 mod tests {

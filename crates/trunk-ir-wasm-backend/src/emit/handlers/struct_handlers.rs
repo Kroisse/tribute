@@ -41,7 +41,6 @@ pub(crate) fn handle_struct_new(
     let result_type = ctx.op_result_types(op).first().copied();
 
     // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
-    // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
     let type_idx = if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
         Some(u32::try_from(*idx).map_err(|_| {
             CompilationError::invalid_attribute(format!(

@@ -554,7 +554,7 @@ pub(crate) fn collect_gc_types(
 
             let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
 
-            // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
+            // First check for an explicit type_idx attribute.
             let type_idx = if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
                 let idx = u32::try_from(*idx).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
@@ -645,7 +645,7 @@ pub(crate) fn collect_gc_types(
         } else if wasm_dialect::StructGet::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
 
-            // Honor explicit type_idx attribute first (set by wasm_gc_type_assign pass),
+            // Honor an explicit type_idx attribute first,
             // matching the behavior of struct_new and ref_cast.
             let explicit_type_idx = get_type_idx(
                 ctx,
@@ -966,7 +966,7 @@ pub(crate) fn collect_gc_types(
             let inferred_type = result_types.first().copied();
 
             // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
-            // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
+            // First check for an explicit type_idx attribute.
             if wasm_dialect::RefCast::matches(ctx, op)
                 && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && is_structref(ctx, *target_ty)

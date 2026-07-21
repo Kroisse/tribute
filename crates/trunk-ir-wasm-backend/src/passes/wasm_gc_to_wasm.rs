@@ -1,0 +1,427 @@
+//! Resolve typed `wasm_gc` operations to indexed `wasm` instructions.
+
+use std::collections::HashMap;
+
+use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::{wasm, wasm_gc};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
+use trunk_ir::types::Attribute;
+
+use crate::gc_types::{
+    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, CONTINUATION_IDX,
+    EVIDENCE_IDX, FIRST_USER_TYPE_IDX, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
+};
+
+fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("adt")
+        && matches!(
+            data.attrs.get(&Symbol::new("name")),
+            Some(Attribute::Symbol(name)) if *name == Symbol::new(expected)
+        )
+}
+
+fn is_bytes_array(ctx: &IrContext, ty: TypeRef) -> bool {
+    let reference = ctx.types.get(ty);
+    if reference.dialect != Symbol::new("core")
+        || reference.name != Symbol::new("ref")
+        || reference.params.len() != 1
+    {
+        return false;
+    }
+    let array = ctx.types.get(reference.params[0]);
+    array.dialect == Symbol::new("core")
+        && array.name == Symbol::new("array")
+        && array.params.len() == 1
+        && {
+            let element = ctx.types.get(array.params[0]);
+            element.dialect == Symbol::new("core") && element.name == Symbol::new("i8")
+        }
+}
+
+fn is_evidence_array(ctx: &IrContext, ty: TypeRef) -> bool {
+    let array = ctx.types.get(ty);
+    array.dialect == Symbol::new("core")
+        && array.name == Symbol::new("array")
+        && array.params.len() == 1
+        && named_adt(ctx, array.params[0], "_Marker")
+}
+
+fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+    let data = ctx.types.get(ty);
+    if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
+        Some(BYTES_STRUCT_IDX)
+    } else if is_bytes_array(ctx, ty) {
+        Some(BYTES_ARRAY_IDX)
+    } else if named_adt(ctx, ty, "_BoxedF64") {
+        Some(BOXED_F64_IDX)
+    } else if named_adt(ctx, ty, "_Step") {
+        Some(STEP_IDX)
+    } else if named_adt(ctx, ty, "_closure") {
+        Some(CLOSURE_STRUCT_IDX)
+    } else if named_adt(ctx, ty, "_Marker") {
+        Some(MARKER_IDX)
+    } else if is_evidence_array(ctx, ty) {
+        Some(EVIDENCE_IDX)
+    } else if named_adt(ctx, ty, "_Continuation") {
+        Some(CONTINUATION_IDX)
+    } else if named_adt(ctx, ty, "_ResumeWrapper") {
+        Some(RESUME_WRAPPER_IDX)
+    } else {
+        None
+    }
+}
+
+fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("wasm")
+        && [
+            "anyref",
+            "eqref",
+            "i31ref",
+            "structref",
+            "arrayref",
+            "funcref",
+            "externref",
+        ]
+        .into_iter()
+        .any(|name| data.name == Symbol::new(name))
+}
+
+fn collect_typed_ops(ctx: &IrContext, region: RegionRef, types: &mut Vec<TypeRef>) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            let mut push = |ty| {
+                if !types.contains(&ty) && !is_abstract_heap_type(ctx, ty) {
+                    types.push(ty);
+                }
+            };
+            if let Ok(op) = wasm_gc::StructNew::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::StructGet::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::StructSet::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayNew::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayNewData::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayGet::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayGetS::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayGetU::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArraySet::from_op(ctx, op) {
+                push(op.r#type(ctx));
+            } else if let Ok(op) = wasm_gc::ArrayCopy::from_op(ctx, op) {
+                push(op.dst_type(ctx));
+                push(op.src_type(ctx));
+            } else if let Ok(op) = wasm_gc::RefNull::from_op(ctx, op) {
+                push(op.target_type(ctx));
+            } else if let Ok(op) = wasm_gc::RefCast::from_op(ctx, op) {
+                push(op.target_type(ctx));
+            } else if let Ok(op) = wasm_gc::RefTest::from_op(ctx, op) {
+                push(op.target_type(ctx));
+            }
+            for &nested in &ctx.op(op).regions {
+                collect_typed_ops(ctx, nested, types);
+            }
+        }
+    }
+}
+
+struct LowerTypedGcPattern {
+    indices: HashMap<TypeRef, u32>,
+}
+
+impl LowerTypedGcPattern {
+    fn index(&self, ty: TypeRef) -> Option<u32> {
+        self.indices.get(&ty).copied()
+    }
+}
+
+impl RewritePattern for LowerTypedGcPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let loc = ctx.op(op).location;
+        if let Ok(old) = wasm_gc::StructNew::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::struct_new(ctx, loc, old.fields(ctx).to_vec(), old.result_ty(ctx), idx);
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::StructGet::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::struct_get(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.result_ty(ctx),
+                idx,
+                old.field_idx(ctx),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::StructSet::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::struct_set(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.value(ctx),
+                idx,
+                old.field_idx(ctx),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayNew::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_new(
+                ctx,
+                loc,
+                old.size(ctx),
+                old.init(ctx),
+                old.result_ty(ctx),
+                idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_new_default(ctx, loc, old.size(ctx), old.result_ty(ctx), idx);
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayNewData::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_new_data(
+                ctx,
+                loc,
+                old.offset(ctx),
+                old.size(ctx),
+                old.result_ty(ctx),
+                idx,
+                old.data_idx(ctx),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayGet::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_get(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.index(ctx),
+                old.result_ty(ctx),
+                idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayGetS::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_get_s(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.index(ctx),
+                old.result_ty(ctx),
+                idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayGetU::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_get_u(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.index(ctx),
+                old.result_ty(ctx),
+                idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArraySet::from_op(ctx, op) {
+            let Some(idx) = self.index(old.r#type(ctx)) else {
+                return false;
+            };
+            let new = wasm::array_set(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.index(ctx),
+                old.value(ctx),
+                idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::ArrayCopy::from_op(ctx, op) {
+            let (Some(dst_idx), Some(src_idx)) =
+                (self.index(old.dst_type(ctx)), self.index(old.src_type(ctx)))
+            else {
+                return false;
+            };
+            let new = wasm::array_copy(
+                ctx,
+                loc,
+                old.dst(ctx),
+                old.dst_offset(ctx),
+                old.src(ctx),
+                old.src_offset(ctx),
+                old.len(ctx),
+                dst_idx,
+                src_idx,
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
+            let target = old.target_type(ctx);
+            let new = wasm::ref_null(
+                ctx,
+                loc,
+                old.result_ty(ctx),
+                ctx.types.get(target).name,
+                self.index(target),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::RefCast::from_op(ctx, op) {
+            let target = old.target_type(ctx);
+            let new = wasm::ref_cast(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.result_ty(ctx),
+                target,
+                self.index(target),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else if let Ok(old) = wasm_gc::RefTest::from_op(ctx, op) {
+            let target = old.target_type(ctx);
+            let new = wasm::ref_test(
+                ctx,
+                loc,
+                old.r#ref(ctx),
+                old.result_ty(ctx),
+                target,
+                self.index(target),
+            );
+            rewriter.replace_op(new.op_ref());
+        } else {
+            return false;
+        }
+        true
+    }
+}
+
+/// Assign module-local GC type indices and fully lower typed GC operations.
+pub fn lower(ctx: &mut IrContext, module: Module) {
+    let mut types = Vec::new();
+    if let Some(body) = module.body(ctx) {
+        collect_typed_ops(ctx, body, &mut types);
+    }
+
+    let mut next = FIRST_USER_TYPE_IDX;
+    let mut indices = HashMap::new();
+    for ty in types {
+        let idx = builtin_type_idx(ctx, ty).unwrap_or_else(|| {
+            let idx = next;
+            next += 1;
+            idx
+        });
+        indices.insert(ty, idx);
+    }
+
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(LowerTypedGcPattern { indices })
+        .apply_partial(ctx, module);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn nominal_types_with_equal_layout_receive_distinct_indices() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !A = adt.struct() {fields = [[@value, core.i32]], name = @A}
+  !B = adt.struct() {fields = [[@value, core.i32]], name = @B}
+
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %a = wasm_gc.struct_new %zero {type = !A} : !A
+    %b = wasm_gc.struct_new %zero {type = !B} : !B
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module);
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let indices: Vec<u32> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
+            .map(|op| op.type_idx(&ctx))
+            .collect();
+        assert_eq!(indices, vec![FIRST_USER_TYPE_IDX, FIRST_USER_TYPE_IDX + 1]);
+        assert!(
+            ctx.block(block)
+                .ops
+                .iter()
+                .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+        );
+    }
+
+    #[test]
+    fn builtin_semantic_type_receives_reserved_index() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %bytes = wasm_gc.struct_new %zero {type = core.bytes} : core.bytes
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module);
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let op = ctx
+            .block(block)
+            .ops
+            .iter()
+            .find_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
+            .expect("typed struct.new should be lowered");
+        assert_eq!(op.type_idx(&ctx), BYTES_STRUCT_IDX);
+    }
+}
