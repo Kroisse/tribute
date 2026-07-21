@@ -63,11 +63,7 @@ fn find_string_enum_type(ctx: &IrContext) -> Option<TypeRef> {
         if td.dialect != Symbol::new("adt") {
             continue;
         }
-        if let Some(name) = td.attrs.get_symbol("name") {
-            if name != Symbol::new("String") {
-                continue;
-            }
-        } else {
+        if td.attrs.get_symbol("name") != Some(Symbol::new("String")) {
             continue;
         }
         // Check it has "variants" attribute with Leaf and Branch

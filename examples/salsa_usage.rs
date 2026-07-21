@@ -6,7 +6,6 @@
 use salsa::Setter;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use trunk_ir::Attribute;
 use trunk_ir::Symbol;
 
 fn main() {
@@ -57,7 +56,7 @@ fn basic_database_usage() {
     for (i, op_ref) in ops.iter().enumerate() {
         let op_data = ctx.op(*op_ref);
         if op_data.dialect == Symbol::new("func") && op_data.name == Symbol::new("func") {
-            if let Some(Attribute::Symbol(name)) = op_data.attributes.get("sym_name") {
+            if let Some(name) = op_data.attributes.get_symbol("sym_name") {
                 println!("  Operation {}: func.func \"{}\"", i + 1, name);
             }
         } else {

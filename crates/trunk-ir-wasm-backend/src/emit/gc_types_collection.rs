@@ -13,7 +13,7 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeData};
+use trunk_ir::types::TypeData;
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
@@ -22,7 +22,7 @@ use crate::gc_types::{
 };
 use crate::{CompilationError, CompilationResult};
 
-use super::helpers;
+use super::helpers::{self, intern_named_adt_struct};
 
 /// Result type for GC type collection.
 pub(crate) type GcTypesResult = (Vec<GcTypeDef>, HashMap<TypeRef, u32>);
@@ -253,18 +253,6 @@ fn type_to_field_type(
     Ok(FieldType {
         element_type: StorageType::Val(val_type),
         mutable: true,
-    })
-}
-
-/// Create an adt.struct TypeRef with a given name attribute.
-fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = trunk_ir::AttributeMap::new();
-    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.types.intern(TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: Default::default(),
-        attrs,
     })
 }
 

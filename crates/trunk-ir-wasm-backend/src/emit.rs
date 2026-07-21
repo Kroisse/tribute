@@ -42,7 +42,6 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::types::Attribute;
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -1207,17 +1206,5 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
         name: Symbol::new(name),
         params: Default::default(),
         attrs: Default::default(),
-    })
-}
-
-/// Intern a named adt.struct type (e.g., _Step, _Continuation).
-fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = trunk_ir::AttributeMap::new();
-    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.types.intern(trunk_ir::types::TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: Default::default(),
-        attrs,
     })
 }

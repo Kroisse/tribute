@@ -113,8 +113,8 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data.attributes.get("sym_name") {
-                Some(super::types::Attribute::Symbol(s)) => {
+            match data.attributes.get_symbol("sym_name") {
+                Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
                 _ => format!("result #{} of {}", idx, full_name),

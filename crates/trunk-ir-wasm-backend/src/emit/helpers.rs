@@ -30,6 +30,18 @@ pub(crate) fn is_type(
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
+/// Intern an `adt.struct` type with the given name attribute.
+pub(crate) fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    let mut attrs = AttributeMap::new();
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
+    ctx.types.intern(trunk_ir::types::TypeData {
+        dialect: Symbol::new("adt"),
+        name: Symbol::new("struct"),
+        params: Default::default(),
+        attrs,
+    })
+}
+
 // ============================================================================
 // Value type helpers
 // ============================================================================

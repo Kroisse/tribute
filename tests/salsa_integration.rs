@@ -19,9 +19,8 @@ fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
         if op_data.dialect == func_dialect && op_data.name == func_name {
             op_data
                 .attributes
-                .get(sym_name_key)
-                .map(|attr| matches!(attr, trunk_ir::types::Attribute::Symbol(s) if *s == name))
-                .unwrap_or(false)
+                .get_symbol(sym_name_key)
+                .is_some_and(|symbol| symbol == name)
         } else {
             false
         }

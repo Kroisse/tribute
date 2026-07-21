@@ -95,9 +95,11 @@ fn function_param_names(ctx: &IrContext, module: &Module, target: &str) -> Vec<S
     ctx.block(entry)
         .args
         .iter()
-        .map(|arg| match arg.attrs.get("bind_name") {
-            Some(trunk_ir::Attribute::Symbol(name)) => name.to_string(),
-            _ => "_".to_owned(),
+        .map(|arg| {
+            arg.attrs
+                .get_symbol("bind_name")
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| "_".to_owned())
         })
         .collect()
 }
