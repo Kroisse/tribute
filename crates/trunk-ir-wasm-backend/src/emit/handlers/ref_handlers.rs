@@ -8,7 +8,7 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
-use wasm_encoder::{Function, HeapType, Instruction};
+use wasm_encoder::{Function, HeapType, Instruction, ValType};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -59,7 +59,7 @@ pub(crate) fn handle_ref_cast(
     ctx: &IrContext,
     op: OpRef,
     emit_ctx: &FunctionEmitContext,
-    _module_info: &ModuleInfo,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let operands = ctx.op_operands(op);
@@ -73,11 +73,27 @@ pub(crate) fn handle_ref_cast(
         attr_heap_type(ctx, &ctx.op(op).attributes, ATTR_TARGET_TYPE())?
     };
 
+    let result_is_non_null = ctx
+        .op_result_types(op)
+        .first()
+        .and_then(|&ty| {
+            super::super::helpers::type_to_valtype(ctx, ty, &module_info.type_idx_by_type).ok()
+        })
+        .is_some_and(|ty| matches!(ty, ValType::Ref(ref_ty) if !ref_ty.nullable));
     tracing::debug!(
-        "ref_cast: emitting RefCastNullable with heap_type={:?}",
+        "ref_cast: emitting {} with heap_type={:?}",
+        if result_is_non_null {
+            "RefCastNonNull"
+        } else {
+            "RefCastNullable"
+        },
         heap_type
     );
-    function.instruction(&Instruction::RefCastNullable(heap_type));
+    if result_is_non_null {
+        function.instruction(&Instruction::RefCastNonNull(heap_type));
+    } else {
+        function.instruction(&Instruction::RefCastNullable(heap_type));
+    }
     set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }

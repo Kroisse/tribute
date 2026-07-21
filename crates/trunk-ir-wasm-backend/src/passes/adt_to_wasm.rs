@@ -53,6 +53,20 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
+/// Prefer a substituted operand type only when it still carries ADT identity.
+/// Erased representations such as `anyref` cannot identify the enum whose
+/// variant is being tested or cast.
+fn resolved_enum_type(ctx: &IrContext, operand_ty: TypeRef, attr_ty: TypeRef) -> TypeRef {
+    let operand = ctx.types.get(operand_ty);
+    if operand.dialect == Symbol::new("adt")
+        && (operand.name == Symbol::new("enum") || operand.name == Symbol::new("typeref"))
+    {
+        operand_ty
+    } else {
+        attr_ty
+    }
+}
+
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
@@ -273,15 +287,9 @@ impl RewritePattern for VariantIsPattern {
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
-        // Get the enum type - prefer operand type over attribute type
-        // (attribute may have unsubstituted type.var, operand has concrete type)
+        // Prefer a substituted operand type only while it retains ADT identity.
         let operand_ty = ctx.value_ty(ref_val);
-        let enum_type = if operand_ty != result_ty {
-            // Use operand type if it's different from result (i.e., it's the real enum type)
-            operand_ty
-        } else {
-            variant_is.r#type(ctx)
-        };
+        let enum_type = resolved_enum_type(ctx, operand_ty, variant_is.r#type(ctx));
 
         // Create variant-specific type for the ref.test
         let variant_type = make_variant_type(ctx, enum_type, tag);
@@ -313,15 +321,10 @@ impl RewritePattern for VariantCastPattern {
         let tag = variant_cast.tag(ctx);
         let ref_val = variant_cast.r#ref(ctx);
 
-        // Get the enum type - prefer operand type over attribute type
-        // (attribute may have unsubstituted type.var, operand has concrete type)
+        // Prefer a substituted operand type only while it retains ADT identity.
         let operand_ty = ctx.value_ty(ref_val);
         let attr_type = variant_cast.r#type(ctx);
-        let enum_type = if operand_ty != attr_type {
-            operand_ty
-        } else {
-            attr_type
-        };
+        let enum_type = resolved_enum_type(ctx, operand_ty, attr_type);
 
         // Create variant-specific type for the ref.cast
         let variant_type = make_variant_type(ctx, enum_type, tag);
@@ -361,6 +364,9 @@ impl RewritePattern for VariantGetPattern {
                     .find(|(tag, _)| *tag == variant_get.tag(ctx))
             })
             .and_then(|(_, fields)| fields.get(field_idx as usize).copied());
+        // String::Leaf has the canonical core.bytes layout even though frontend
+        // pattern extraction is temporarily erased to anyref. Keep other fields
+        // on the normal type-converter path.
         let result_ty = declared_field_ty
             .filter(|ty| {
                 let data = ctx.types.get(*ty);

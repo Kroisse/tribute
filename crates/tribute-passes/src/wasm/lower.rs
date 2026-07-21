@@ -137,7 +137,14 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
     debug_func_params(ctx, module, "after tribute_rt_to_wasm");
 
-    // Convert ALL adt ops to wasm (including those from tribute_rt_to_wasm)
+    // Lower constants before adt_to_wasm so string constants can become the
+    // ordinary prelude String::Leaf variant.
+    {
+        let _span = tracing::info_span!("const_to_wasm").entered();
+        super::const_to_wasm::lower(ctx, module, &const_analysis);
+    }
+
+    // Convert ALL adt ops to wasm (including String::Leaf from const lowering).
     {
         let _span = tracing::info_span!("adt_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
@@ -157,12 +164,6 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
         } else {
             super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
         }
-    }
-
-    // Const analysis and lowering (string/bytes constants to data segments)
-    {
-        let _span = tracing::info_span!("const_to_wasm").entered();
-        super::const_to_wasm::lower(ctx, module, &const_analysis);
     }
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
@@ -572,20 +573,8 @@ impl<'a> WasmLowerer<'a> {
 
     /// Append data segment ops at the end of the module block.
     fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
-        // Emit active data segments for string constants (linear memory)
-        for (content, offset, _len) in self.const_analysis.string_allocations.iter() {
-            let op = wasm_dialect::data(
-                ctx,
-                location,
-                *offset,
-                Attribute::Bytes(content.as_slice().into()),
-                false,
-            );
-            ctx.push_op(module_block, op.op_ref());
-        }
-
-        // Emit passive data segments for bytes constants (for array.new_data)
-        for (content, _data_idx, _len) in self.const_analysis.bytes_allocations.iter() {
+        // String and Bytes constants share passive data segments.
+        for (content, _data_idx, _len) in self.const_analysis.allocations.iter() {
             let op = wasm_dialect::data(
                 ctx,
                 location,
@@ -854,9 +843,8 @@ mod tests {
         let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
         let nil_ty = intern_type(&mut ctx, "core", "nil");
         let const_analysis = ConstAnalysis {
-            string_allocations: vec![],
-            bytes_allocations: vec![],
-            string_total_size: 0,
+            allocations: vec![],
+            string_enum_ty: None,
         };
         let intrinsic_analysis = IntrinsicAnalysis {
             needs_fd_write: false,
@@ -912,9 +900,8 @@ mod tests {
 }"#,
         );
         let const_analysis = ConstAnalysis {
-            string_allocations: vec![(b"text".to_vec(), 0, 4)],
-            bytes_allocations: vec![(vec![1, 2], 0, 2)],
-            string_total_size: 4,
+            allocations: vec![(b"text".to_vec(), 0, 4), (vec![1, 2], 1, 2)],
+            string_enum_ty: None,
         };
         let intrinsic_analysis = IntrinsicAnalysis {
             needs_fd_write: true,
