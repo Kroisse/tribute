@@ -587,3 +587,87 @@ impl RewritePattern for RefCastPattern {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn resolved_enum_type_rejects_erased_operands() {
+        let mut ctx = IrContext::new();
+        let enum_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
+        let typeref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref")).build());
+        let erased_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+
+        assert_eq!(resolved_enum_type(&ctx, enum_ty, typeref_ty), enum_ty);
+        assert_eq!(resolved_enum_type(&ctx, typeref_ty, enum_ty), typeref_ty);
+        assert_eq!(resolved_enum_type(&ctx, erased_ty, enum_ty), enum_ty);
+    }
+
+    #[test]
+    fn lowers_struct_variant_array_and_reference_operations() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct() {fields = [[@value, core.i32]], name = @S}
+  !E = adt.typeref() {name = @E}
+  !A = core.array(core.i32)
+
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %one = wasm.i32_const {value = 1} : core.i32
+    %struct = adt.struct_new %zero {type = !S} : !S
+    %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
+    adt.struct_set %struct, %field {type = !S, field = 0}
+
+    %variant = adt.variant_new %one {type = !E, tag = @Some} : !E
+    %is_some = adt.variant_is %variant {type = !E, tag = @Some} : core.i32
+    %cast = adt.variant_cast %variant {type = !E, tag = @Some} : !E
+    %payload = adt.variant_get %cast {type = !E, tag = @Some, field = 0} : core.i32
+
+    %empty = adt.array_new {type = !A} : !A
+    %default = adt.array_new %one {type = !A} : !A
+    %array = adt.array_new %one, %zero {type = !A} : !A
+    %invalid = adt.array_new %one, %zero, %one {type = !A} : !A
+    %element = adt.array_get %array, %zero : core.i32
+    adt.array_set %array, %zero, %element
+    %length = adt.array_len %default : core.i32
+
+    %null = adt.ref_null {type = !S} : !S
+    %is_null = adt.ref_is_null %null : core.i32
+    %ref = adt.ref_cast %null {type = !S} : !S
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let remaining_adt_ops = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter(|&&op| ctx.op(op).dialect == adt::DIALECT_NAME())
+            .count();
+        assert_eq!(remaining_adt_ops, 2, "only malformed arrays should remain");
+        assert_eq!(
+            ctx.block(block)
+                .ops
+                .iter()
+                .filter(|&&op| ctx.op(op).dialect == wasm_gc_dialect::DIALECT_NAME())
+                .count(),
+            13
+        );
+    }
+}

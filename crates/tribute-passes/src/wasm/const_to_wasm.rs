@@ -292,3 +292,96 @@ impl RewritePattern for BytesConstPattern {
         "BytesConstPattern"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    fn string_module(ctx: &mut IrContext, values: &[&str]) -> Module {
+        let constants = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                format!(
+                    "    %value{index} = adt.string_const {{value = \"{value}\"}} : tribute_rt.anyref"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse_test_module(
+            ctx,
+            &format!(
+                "core.module @test {{\n  wasm.func @main() -> core.nil {{\n{constants}\n    wasm.return\n  }}\n}}"
+            ),
+        )
+    }
+
+    fn string_const_count(ctx: &IrContext, module: Module) -> usize {
+        let func = module.ops(ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        ctx.block(block)
+            .ops
+            .iter()
+            .filter(|&&op| adt::StringConst::from_op(ctx, op).is_ok())
+            .count()
+    }
+
+    #[test]
+    fn analysis_deduplicates_and_looks_up_passive_data() {
+        let mut ctx = IrContext::new();
+        let module = string_module(&mut ctx, &["hello", "hello"]);
+
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(analysis.allocations, vec![(b"hello".to_vec(), 0, 5)]);
+        assert_eq!(analysis.data_info_for(b"hello"), Some((0, 5)));
+        assert_eq!(analysis.data_info_for(b"missing"), None);
+    }
+
+    #[test]
+    fn string_lowering_preserves_constants_when_analysis_is_incomplete() {
+        let mut missing_data_ctx = IrContext::new();
+        let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
+        let placeholder_ty = missing_data_ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
+        lower(
+            &mut missing_data_ctx,
+            missing_data_module,
+            &ConstAnalysis {
+                allocations: Vec::new(),
+                string_enum_ty: Some(placeholder_ty),
+            },
+        );
+        assert_eq!(
+            string_const_count(&missing_data_ctx, missing_data_module),
+            1
+        );
+
+        let mut missing_type_ctx = IrContext::new();
+        let missing_type_module = string_module(&mut missing_type_ctx, &["hello"]);
+        lower(
+            &mut missing_type_ctx,
+            missing_type_module,
+            &ConstAnalysis {
+                allocations: vec![(b"hello".to_vec(), 0, 5)],
+                string_enum_ty: None,
+            },
+        );
+        assert_eq!(
+            string_const_count(&missing_type_ctx, missing_type_module),
+            1
+        );
+
+        assert_eq!(
+            StringConstPattern::new(Vec::new(), None).name(),
+            "StringConstPattern"
+        );
+        assert_eq!(
+            BytesConstPattern::new(Vec::new()).name(),
+            "BytesConstPattern"
+        );
+    }
+}
