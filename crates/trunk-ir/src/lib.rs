@@ -89,7 +89,7 @@ pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef}
 pub use rewrite::Module;
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
-    AttributeMap, AttributeValues, AttributeValuesMut, Location, PathInterner, TypeData,
-    TypeDataBuilder, TypeInterner,
+    AttributeMap, AttributeText, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location,
+    PathInterner, TypeData, TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;

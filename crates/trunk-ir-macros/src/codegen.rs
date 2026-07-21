@@ -725,25 +725,29 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         },
         AttrType::I32 => quote! {
             match attr {
-                #crate_path::Attribute::Int(v) => *v as i32,
+                #crate_path::Attribute::Int(v) => i32::try_from(*v)
+                    .expect("Int attribute is out of range for i32"),
                 _ => panic!("expected Int attribute"),
             }
         },
         AttrType::I64 => quote! {
             match attr {
-                #crate_path::Attribute::Int(v) => *v as i64,
+                #crate_path::Attribute::Int(v) => i64::try_from(*v)
+                    .expect("Int attribute is out of range for i64"),
                 _ => panic!("expected Int attribute"),
             }
         },
         AttrType::U32 => quote! {
             match attr {
-                #crate_path::Attribute::Int(v) => *v as u32,
+                #crate_path::Attribute::Int(v) => u32::try_from(*v)
+                    .expect("Int attribute is out of range for u32"),
                 _ => panic!("expected Int attribute"),
             }
         },
         AttrType::U64 => quote! {
             match attr {
-                #crate_path::Attribute::Int(v) => *v as u64,
+                #crate_path::Attribute::Int(v) => u64::try_from(*v)
+                    .expect("Int attribute is out of range for u64"),
                 _ => panic!("expected Int attribute"),
             }
         },
