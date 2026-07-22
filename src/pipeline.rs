@@ -133,6 +133,7 @@ impl OptimizationOptions {
 pub struct NativeOptimizationOptions {
     pub paired_rc_elimination: PairedRcEliminationPolicy,
     pub borrowed_parameters: BorrowedParameterPolicy,
+    pub temporary_borrows: TemporaryBorrowPolicy,
 }
 
 impl NativeOptimizationOptions {
@@ -140,6 +141,7 @@ impl NativeOptimizationOptions {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
         }
     }
 
@@ -147,6 +149,7 @@ impl NativeOptimizationOptions {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
         }
     }
 }
@@ -163,6 +166,13 @@ pub enum PairedRcEliminationPolicy {
 pub enum BorrowedParameterPolicy {
     Preserve,
     ElideProvenBorrowed,
+}
+
+/// Policy for eliding ownership of proven field-derived native temporaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum TemporaryBorrowPolicy {
+    Preserve,
+    ElideProvenFieldBorrows,
 }
 
 impl Default for OptimizationOptions {
@@ -185,6 +195,8 @@ pub enum NativePipelineStage {
     AfterRcInsertion,
     /// After borrowed-parameter-aware insertion, before paired elimination.
     AfterBorrowedParameterOptimization,
+    /// After temporary field-borrow-aware insertion, before paired elimination.
+    AfterTemporaryBorrowOptimization,
     /// After optional local RC optimization, before cast resolution and lowering.
     AfterRcOptimization,
 }
@@ -1033,10 +1045,30 @@ fn prepare_module_to_native(
                 tribute_passes::native::rc_insertion::BorrowedParameterPolicy::ElideProvenBorrowed
             }
         };
-        tribute_passes::native::rc_insertion::insert_rc_with_policy(
+        let temporary_borrows = if matches!(
+            stop_after,
+            Some(
+                NativePipelineStage::AfterRcInsertion
+                    | NativePipelineStage::AfterBorrowedParameterOptimization
+            )
+        ) {
+            TemporaryBorrowPolicy::Preserve
+        } else {
+            optimizations.temporary_borrows
+        };
+        let temporary_borrows = match temporary_borrows {
+            TemporaryBorrowPolicy::Preserve => {
+                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::Preserve
+            }
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
+                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::ElideProvenFieldBorrows
+            }
+        };
+        tribute_passes::native::rc_insertion::insert_rc_with_policies(
             ctx,
             module,
             borrowed_parameters,
+            temporary_borrows,
         );
     }
 
@@ -1045,6 +1077,10 @@ fn prepare_module_to_native(
     }
 
     if stop_after == Some(NativePipelineStage::AfterBorrowedParameterOptimization) {
+        return Ok(None);
+    }
+
+    if stop_after == Some(NativePipelineStage::AfterTemporaryBorrowOptimization) {
         return Ok(None);
     }
 

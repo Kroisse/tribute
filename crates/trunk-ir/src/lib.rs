@@ -29,6 +29,7 @@ pub mod ops;
 
 // === IR core structures ===
 pub mod context;
+pub mod dominance;
 pub mod refs;
 pub mod types;
 
