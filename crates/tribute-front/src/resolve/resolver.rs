@@ -742,10 +742,24 @@ impl<'db> Resolver<'db> {
                 let resolved_type = type_name.map(|t| self.resolve_name(&t));
                 let fields = fields
                     .into_iter()
-                    .map(|f| FieldPattern {
-                        id: f.id,
-                        name: f.name,
-                        pattern: f.pattern.map(|p| self.resolve_pattern_with_bindings(p)),
+                    .map(|f| {
+                        let pattern = if let Some(pattern) = f.pattern {
+                            self.resolve_pattern_with_bindings(pattern)
+                        } else {
+                            let local_id = self.bind_local(f.name);
+                            Pattern::new(
+                                f.id,
+                                PatternKind::Bind {
+                                    name: f.name,
+                                    local_id: Some(local_id),
+                                },
+                            )
+                        };
+                        FieldPattern {
+                            id: f.id,
+                            name: f.name,
+                            pattern: Some(pattern),
+                        }
                     })
                     .collect();
                 PatternKind::Record {

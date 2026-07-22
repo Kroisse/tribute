@@ -2,16 +2,23 @@ use salsa_test_macros::salsa_test;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::SourceCst;
 
-fn type_errors(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+fn phase_errors(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    phase: CompilationPhase,
+) -> Vec<String> {
     let _ = tribute_front::query::typed_module(db, source);
     tribute_front::query::typed_module::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .filter(|diagnostic| {
-            diagnostic.inner.severity == DiagnosticSeverity::Error
-                && diagnostic.phase == CompilationPhase::TypeChecking
+            diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase
         })
         .map(|diagnostic| diagnostic.inner.message.clone())
         .collect()
+}
+
+fn type_errors(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+    phase_errors(db, source, CompilationPhase::TypeChecking)
 }
 
 #[salsa_test]
@@ -157,5 +164,41 @@ fn restricted() -> Nil {
             .any(|error| error.contains("expected `Nat`, found `Bool`")
                 || error.contains("expected `Bool`, found `Nat`")),
         "expected monomorphic destructuring error, got: {errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn record_shorthand_binding_stays_free_in_later_scheme(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Holder(a) { value: a }
+
+extern "intrinsic" fn take_nat(value: Nat) ->{} Nil
+extern "intrinsic" fn take_bool(value: Bool) ->{} Nil
+
+fn restricted(holder: Holder(a)) -> Nil {
+    let Holder { value } = holder
+    let copy = value
+    take_nat(copy)
+    take_bool(copy)
+}
+"#,
+    );
+
+    let resolution_errors = phase_errors(db, source, CompilationPhase::NameResolution);
+    assert!(
+        resolution_errors.is_empty(),
+        "record shorthand should resolve as a local binding: {resolution_errors:#?}"
+    );
+
+    let errors = type_errors(db, source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Bool`")
+                || error.contains("expected `Bool`, found `Nat`")),
+        "expected captured shorthand type to remain monomorphic, got: {errors:#?}"
     );
 }
