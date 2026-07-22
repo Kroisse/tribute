@@ -32,6 +32,44 @@ fn pair() -> #(Nat, Bool) {
 }
 
 #[salsa_test]
+fn variant_destructuring_preserves_polymorphism(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum Wrapped(a) {
+    Wrapped(a),
+}
+
+fn pair() -> #(Nat, Bool) {
+    let Wrapped(identity) = Wrapped(fn(value) value)
+    #(identity(1), identity(true))
+}
+"#,
+    );
+
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+}
+
+#[salsa_test]
+fn as_pattern_alias_preserves_polymorphism(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pair() -> #(Nat, Bool) {
+    let _ as identity = fn(value) value
+    #(identity(1), identity(true))
+}
+"#,
+    );
+
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+}
+
+#[salsa_test]
 fn latent_function_effect_does_not_trigger_value_restriction(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
@@ -84,5 +122,40 @@ fn restricted() -> Nil {
             .any(|error| error.contains("expected `Nat`, found `Bool`")
                 || error.contains("expected `Bool`, found `Nat`")),
         "expected monomorphic value restriction error, got: {errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn effectful_destructuring_is_not_generalized(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Source(s) {
+    op get() -> s
+}
+
+enum Wrapped(a) {
+    Wrapped(a),
+}
+
+extern "intrinsic" fn take_nat(value: Nat) ->{} Nil
+extern "intrinsic" fn take_bool(value: Bool) ->{} Nil
+
+fn restricted() -> Nil {
+    let Wrapped(value) = Wrapped(Source::get())
+    take_nat(value)
+    take_bool(value)
+}
+"#,
+    );
+
+    let errors = type_errors(db, source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Bool`")
+                || error.contains("expected `Bool`, found `Nat`")),
+        "expected monomorphic destructuring error, got: {errors:#?}"
     );
 }
