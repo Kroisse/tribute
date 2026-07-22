@@ -8,7 +8,7 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::{
     BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
-    PairedRcEliminationPolicy, compile_to_native_binary, link_native_binary,
+    PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary, link_native_binary,
 };
 use tribute_front::SourceCst;
 use tribute_front::ast_to_ir::{AstToIrOptions, DoneContinuationPolicy};
@@ -72,9 +72,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
         source_name,
         source_code,
         false,
-        DoneContinuationPolicy::PerCompilationUnit,
-        PairedRcEliminationPolicy::Enabled,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
+        NativeTestOptimizations::production(),
         NativeStdin::Null,
     )
 }
@@ -90,9 +88,10 @@ pub fn compile_and_run_native_with_done_continuation_dedup(
         source_name,
         source_code,
         false,
-        policy,
-        PairedRcEliminationPolicy::Enabled,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
+        NativeTestOptimizations {
+            done_continuation: policy,
+            ..NativeTestOptimizations::production()
+        },
         NativeStdin::Null,
     )
 }
@@ -108,9 +107,12 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
         source_name,
         source_code,
         false,
-        DoneContinuationPolicy::PerCompilationUnit,
-        policy,
-        BorrowedParameterPolicy::Preserve,
+        NativeTestOptimizations {
+            paired_rc_elimination: policy,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            ..NativeTestOptimizations::production()
+        },
         NativeStdin::Null,
     )
 }
@@ -127,9 +129,34 @@ pub fn compile_and_run_native_with_borrowed_parameters(
         source_name,
         source_code,
         sanitize_address,
-        DoneContinuationPolicy::PerCompilationUnit,
-        PairedRcEliminationPolicy::Disabled,
-        policy,
+        NativeTestOptimizations {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: policy,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+            ..NativeTestOptimizations::production()
+        },
+        NativeStdin::Null,
+    )
+}
+
+/// Compile and run with explicit temporary field-borrow selection.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_temporary_borrows(
+    source_name: &str,
+    source_code: &str,
+    policy: TemporaryBorrowPolicy,
+    sanitize_address: bool,
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        NativeTestOptimizations {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: policy,
+            ..NativeTestOptimizations::production()
+        },
         NativeStdin::Null,
     )
 }
@@ -145,9 +172,7 @@ pub fn compile_and_run_native_with_stdin(
         source_name,
         source_code,
         false,
-        DoneContinuationPolicy::PerCompilationUnit,
-        PairedRcEliminationPolicy::Enabled,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
+        NativeTestOptimizations::production(),
         NativeStdin::Bytes(stdin),
     )
 }
@@ -160,9 +185,7 @@ pub fn compile_and_run_native_with_closed_stdin(source_name: &str, source_code: 
         source_name,
         source_code,
         false,
-        DoneContinuationPolicy::PerCompilationUnit,
-        PairedRcEliminationPolicy::Enabled,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
+        NativeTestOptimizations::production(),
         NativeStdin::Closed,
     )
 }
@@ -208,9 +231,7 @@ pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Outp
         source_name,
         source_code,
         true,
-        DoneContinuationPolicy::PerCompilationUnit,
-        PairedRcEliminationPolicy::Enabled,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
+        NativeTestOptimizations::production(),
         NativeStdin::Null,
     )
 }
@@ -222,13 +243,30 @@ enum NativeStdin<'a> {
     Closed,
 }
 
+#[derive(Clone, Copy)]
+struct NativeTestOptimizations {
+    done_continuation: DoneContinuationPolicy,
+    paired_rc_elimination: PairedRcEliminationPolicy,
+    borrowed_parameters: BorrowedParameterPolicy,
+    temporary_borrows: TemporaryBorrowPolicy,
+}
+
+impl NativeTestOptimizations {
+    const fn production() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
+            paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
+            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        }
+    }
+}
+
 fn compile_and_run_native_impl(
     source_name: &str,
     source_code: &str,
     sanitize_address: bool,
-    done_continuation: DoneContinuationPolicy,
-    paired_rc_elimination: PairedRcEliminationPolicy,
-    borrowed_parameters: BorrowedParameterPolicy,
+    test_optimizations: NativeTestOptimizations,
     stdin: NativeStdin<'_>,
 ) -> Output {
     use tribute::database::parse_with_thread_local;
@@ -240,10 +278,13 @@ fn compile_and_run_native_impl(
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
         let optimizations = OptimizationOptions {
-            ast_to_ir: AstToIrOptions { done_continuation },
+            ast_to_ir: AstToIrOptions {
+                done_continuation: test_optimizations.done_continuation,
+            },
             native: NativeOptimizationOptions {
-                paired_rc_elimination,
-                borrowed_parameters,
+                paired_rc_elimination: test_optimizations.paired_rc_elimination,
+                borrowed_parameters: test_optimizations.borrowed_parameters,
+                temporary_borrows: test_optimizations.temporary_borrows,
             },
         };
         let object_bytes =

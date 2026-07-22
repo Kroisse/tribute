@@ -39,6 +39,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
+use trunk_ir::dominance::DominatorTree;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
@@ -52,6 +53,13 @@ pub enum BorrowedParameterPolicy {
     Preserve,
     /// Omit parameter RC only when all uses are proven non-escaping.
     ElideProvenBorrowed,
+}
+
+/// Policy for eliding ownership of proven field-derived temporaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TemporaryBorrowPolicy {
+    Preserve,
+    ElideProvenFieldBorrows,
 }
 
 /// Check if a type is `tribute_rt.anyref` (RC-managed reference type).
@@ -158,6 +166,18 @@ struct LivenessInfo {
     live_out: HashMap<BlockRef, HashSet<ValueRef>>,
 }
 
+#[derive(Default)]
+struct TemporaryBorrowInfo {
+    borrowed: HashSet<ValueRef>,
+    lifetime_dependencies: HashMap<ValueRef, ValueRef>,
+}
+
+struct RcBorrowInfo<'a> {
+    parameters: &'a HashSet<ValueRef>,
+    temporaries: &'a HashSet<ValueRef>,
+    lifetime_dependencies: &'a HashMap<ValueRef, ValueRef>,
+}
+
 /// Collect all pointer-typed values in the function body.
 fn collect_ptr_values(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
     let mut ptr_values = HashSet::new();
@@ -257,6 +277,7 @@ fn compute_use_def_sets(
     body: RegionRef,
     ptr_values: &HashSet<ValueRef>,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    lifetime_dependencies: &HashMap<ValueRef, ValueRef>,
 ) -> (
     HashMap<BlockRef, HashSet<ValueRef>>,
     HashMap<BlockRef, HashSet<ValueRef>>,
@@ -285,6 +306,11 @@ fn compute_use_def_sets(
                 {
                     uses.insert(aliased);
                 }
+                record_lifetime_dependencies(operand, lifetime_dependencies, |owner| {
+                    if !defs.contains(&owner) {
+                        uses.insert(owner);
+                    }
+                });
             }
             for &result_val in ctx.op_results(op) {
                 if is_anyref_type(ctx, ctx.value_ty(result_val))
@@ -309,8 +335,10 @@ fn compute_liveness(
     body: RegionRef,
     ptr_values: &HashSet<ValueRef>,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    lifetime_dependencies: &HashMap<ValueRef, ValueRef>,
 ) -> LivenessInfo {
-    let (use_sets, def_sets) = compute_use_def_sets(ctx, body, ptr_values, ptr_alias_map);
+    let (use_sets, def_sets) =
+        compute_use_def_sets(ctx, body, ptr_values, ptr_alias_map, lifetime_dependencies);
     let successor_map = build_successor_map(ctx, body);
     let block_refs: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
 
@@ -377,7 +405,12 @@ struct InsertionPlan {
 /// Insert reference counting operations for all `tribute_rt.anyref`-typed values,
 /// then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
 pub fn insert_rc(ctx: &mut IrContext, module: Module) {
-    insert_rc_with_policy(ctx, module, BorrowedParameterPolicy::Preserve);
+    insert_rc_with_policies(
+        ctx,
+        module,
+        BorrowedParameterPolicy::Preserve,
+        TemporaryBorrowPolicy::Preserve,
+    );
 }
 
 /// Insert reference counting operations with an explicit borrowed-parameter
@@ -386,6 +419,22 @@ pub fn insert_rc_with_policy(
     ctx: &mut IrContext,
     module: Module,
     borrowed_parameters: BorrowedParameterPolicy,
+) {
+    insert_rc_with_policies(
+        ctx,
+        module,
+        borrowed_parameters,
+        TemporaryBorrowPolicy::Preserve,
+    );
+}
+
+/// Insert reference counting operations with independently selectable borrow
+/// policies, then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
+pub fn insert_rc_with_policies(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    temporary_borrows: TemporaryBorrowPolicy,
 ) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
@@ -405,7 +454,7 @@ pub fn insert_rc_with_policy(
             } else {
                 BorrowedParameterPolicy::Preserve
             };
-            insert_rc_in_function(ctx, body, function_policy);
+            insert_rc_in_function(ctx, body, function_policy, temporary_borrows);
         }
     }
 
@@ -623,6 +672,7 @@ fn insert_rc_in_function(
     ctx: &mut IrContext,
     body: RegionRef,
     borrowed_parameter_policy: BorrowedParameterPolicy,
+    temporary_borrow_policy: TemporaryBorrowPolicy,
 ) {
     let mut ptr_values = collect_ptr_values(ctx, body);
 
@@ -631,13 +681,30 @@ fn insert_rc_in_function(
     }
 
     let ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
-    let liveness = compute_liveness(ctx, body, &ptr_values, &ptr_alias_map);
+    let temporary_borrows = match temporary_borrow_policy {
+        TemporaryBorrowPolicy::Preserve => TemporaryBorrowInfo::default(),
+        TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
+            analyze_temporary_borrows(ctx, body, &ptr_values, &ptr_alias_map)
+        }
+    };
+    let liveness = compute_liveness(
+        ctx,
+        body,
+        &ptr_values,
+        &ptr_alias_map,
+        &temporary_borrows.lifetime_dependencies,
+    );
     let borrowed_parameters = match borrowed_parameter_policy {
         BorrowedParameterPolicy::Preserve => HashSet::new(),
         BorrowedParameterPolicy::ElideProvenBorrowed => analyze_borrowed_parameters(ctx, body),
     };
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
+    let borrow_info = RcBorrowInfo {
+        parameters: &borrowed_parameters,
+        temporaries: &temporary_borrows.borrowed,
+        lifetime_dependencies: &temporary_borrows.lifetime_dependencies,
+    };
     for (block_idx, &block) in blocks.iter().enumerate() {
         insert_rc_in_block(
             ctx,
@@ -646,8 +713,255 @@ fn insert_rc_in_function(
             &ptr_values,
             &liveness,
             &ptr_alias_map,
-            &borrowed_parameters,
+            &borrow_info,
         );
+    }
+}
+
+fn analyze_temporary_borrows(
+    ctx: &IrContext,
+    body: RegionRef,
+    ptr_values: &HashSet<ValueRef>,
+    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+) -> TemporaryBorrowInfo {
+    let dominance = DominatorTree::compute(ctx, body);
+    if !dominance.is_valid() {
+        return TemporaryBorrowInfo::default();
+    }
+
+    let mut info = TemporaryBorrowInfo::default();
+    for &block in &ctx.region(body).blocks {
+        if !dominance.is_reachable(block) {
+            continue;
+        }
+        for &op in &ctx.block(block).ops {
+            if !clif::Load::matches(ctx, op) || ctx.op_results(op).len() != 1 {
+                continue;
+            }
+            let temporary = ctx.op_result(op, 0);
+            if !is_anyref_value(ctx, temporary) {
+                continue;
+            }
+            let Some(&address) = ctx.op_operands(op).first() else {
+                continue;
+            };
+            let Some(owner) = resolve_temporary_owner(
+                ctx,
+                address,
+                ptr_values,
+                ptr_alias_map,
+                &mut HashSet::new(),
+            ) else {
+                continue;
+            };
+            if let Some(aliases) =
+                temporary_is_proven_borrowed(ctx, body, op, temporary, owner, &dominance)
+            {
+                info.borrowed.insert(temporary);
+                info.lifetime_dependencies.insert(temporary, owner);
+                for alias in aliases {
+                    info.lifetime_dependencies.insert(alias, owner);
+                }
+            }
+        }
+    }
+    info
+}
+
+fn resolve_temporary_owner(
+    ctx: &IrContext,
+    value: ValueRef,
+    ptr_values: &HashSet<ValueRef>,
+    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    visited: &mut HashSet<ValueRef>,
+) -> Option<ValueRef> {
+    if !visited.insert(value) {
+        return None;
+    }
+    if ptr_values.contains(&value) {
+        return Some(value);
+    }
+    if let Some(&owner) = ptr_alias_map.get(&value) {
+        return resolve_temporary_owner(ctx, owner, ptr_values, ptr_alias_map, visited);
+    }
+    let ValueDef::OpResult(defining_op, _) = ctx.value_def(value) else {
+        return None;
+    };
+    if core::UnrealizedConversionCast::matches(ctx, defining_op)
+        || clif::Iadd::matches(ctx, defining_op)
+    {
+        let input = *ctx.op_operands(defining_op).first()?;
+        return resolve_temporary_owner(ctx, input, ptr_values, ptr_alias_map, visited);
+    }
+    None
+}
+
+fn temporary_is_proven_borrowed(
+    ctx: &IrContext,
+    body: RegionRef,
+    load: OpRef,
+    temporary: ValueRef,
+    owner: ValueRef,
+    dominance: &DominatorTree,
+) -> Option<Vec<ValueRef>> {
+    let load_block = ctx.op(load).parent_block?;
+    if !value_dominates_op(ctx, body, owner, load, dominance) {
+        return None;
+    }
+
+    let mut use_blocks = Vec::new();
+    let mut aliases = Vec::new();
+    let mut collector = TemporaryUseCollector {
+        ctx,
+        body,
+        load,
+        dominance,
+        visited: HashSet::new(),
+        use_blocks: &mut use_blocks,
+        aliases: &mut aliases,
+    };
+    if !collector.collect(temporary) {
+        return None;
+    }
+
+    for &user_block in &use_blocks {
+        if user_block != load_block && dominance.predecessors(user_block).len() > 1 {
+            return None;
+        }
+    }
+
+    for (index, &left) in use_blocks.iter().enumerate() {
+        for &right in &use_blocks[index + 1..] {
+            if !dominance.dominates(left, right) && !dominance.dominates(right, left) {
+                return None;
+            }
+        }
+    }
+
+    for &source in &ctx.region(body).blocks {
+        for &successor in dominance.successors(source) {
+            if dominance.dominates(successor, source)
+                && dominance.dominates(load_block, source)
+                && use_blocks
+                    .iter()
+                    .any(|&use_block| dominance.dominates(successor, use_block))
+            {
+                return None;
+            }
+        }
+    }
+
+    Some(aliases)
+}
+
+struct TemporaryUseCollector<'a> {
+    ctx: &'a IrContext,
+    body: RegionRef,
+    load: OpRef,
+    dominance: &'a DominatorTree,
+    visited: HashSet<ValueRef>,
+    use_blocks: &'a mut Vec<BlockRef>,
+    aliases: &'a mut Vec<ValueRef>,
+}
+
+impl TemporaryUseCollector<'_> {
+    fn collect(&mut self, value: ValueRef) -> bool {
+        if !self.visited.insert(value) {
+            return false;
+        }
+        for use_ in self.ctx.uses(value) {
+            let user = use_.user;
+            let Some(user_block) = self.ctx.op(user).parent_block else {
+                return false;
+            };
+            if self.ctx.block(user_block).parent_region != Some(self.body)
+                || !self.dominance.is_reachable(user_block)
+                || !op_dominates_op(self.ctx, self.load, user, self.dominance)
+            {
+                return false;
+            }
+            let operand_index = use_.operand_index as usize;
+            self.use_blocks.push(user_block);
+            if core::UnrealizedConversionCast::matches(self.ctx, user)
+                && operand_index == 0
+                && self.ctx.op_operands(user).len() == 1
+                && self.ctx.op_results(user).len() == 1
+            {
+                let alias = self.ctx.op_result(user, 0);
+                self.aliases.push(alias);
+                if !self.collect(alias) {
+                    return false;
+                }
+            } else if !is_proven_temporary_use(self.ctx, user, operand_index) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn value_dominates_op(
+    ctx: &IrContext,
+    body: RegionRef,
+    value: ValueRef,
+    op: OpRef,
+    dominance: &DominatorTree,
+) -> bool {
+    match ctx.value_def(value) {
+        ValueDef::BlockArg(block, _) => {
+            ctx.block(block).parent_region == Some(body)
+                && dominance.entry() == Some(block)
+                && dominance.dominates(block, ctx.op(op).parent_block.unwrap_or(block))
+        }
+        ValueDef::OpResult(defining_op, _) => op_dominates_op(ctx, defining_op, op, dominance),
+    }
+}
+
+fn op_dominates_op(
+    ctx: &IrContext,
+    defining_op: OpRef,
+    user: OpRef,
+    dominance: &DominatorTree,
+) -> bool {
+    let (Some(defining_block), Some(user_block)) =
+        (ctx.op(defining_op).parent_block, ctx.op(user).parent_block)
+    else {
+        return false;
+    };
+    if defining_block != user_block {
+        return dominance.dominates(defining_block, user_block);
+    }
+    let ops = &ctx.block(defining_block).ops;
+    let defining_index = ops.iter().position(|&op| op == defining_op);
+    let user_index = ops.iter().position(|&op| op == user);
+    defining_index
+        .zip(user_index)
+        .is_some_and(|(defining, use_)| defining < use_)
+}
+
+fn is_proven_temporary_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+    if clif::Load::matches(ctx, op) {
+        return operand_index == 0;
+    }
+    if clif::Store::matches(ctx, op) {
+        return operand_index == 1;
+    }
+    clif::Icmp::matches(ctx, op)
+}
+
+fn record_lifetime_dependencies(
+    value: ValueRef,
+    dependencies: &HashMap<ValueRef, ValueRef>,
+    mut record: impl FnMut(ValueRef),
+) {
+    let mut current = value;
+    let mut visited = HashSet::new();
+    while let Some(&owner) = dependencies.get(&current) {
+        if !visited.insert(owner) {
+            break;
+        }
+        record(owner);
+        current = owner;
     }
 }
 
@@ -726,7 +1040,7 @@ fn insert_rc_in_block(
     ptr_values: &HashSet<ValueRef>,
     liveness: &LivenessInfo,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
-    borrowed_parameters: &HashSet<ValueRef>,
+    borrow_info: &RcBorrowInfo<'_>,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let loc = ctx.block(block).location;
@@ -745,6 +1059,9 @@ fn insert_rc_in_block(
             if let Some(&aliased) = ptr_alias_map.get(&operand) {
                 last_use_in_block.insert(aliased, op_idx);
             }
+            record_lifetime_dependencies(operand, borrow_info.lifetime_dependencies, |owner| {
+                last_use_in_block.insert(owner, op_idx);
+            });
         }
     }
 
@@ -771,7 +1088,8 @@ fn insert_rc_in_block(
     if is_entry {
         let args: Vec<ValueRef> = ctx.block_args(block).to_vec();
         for arg_val in args {
-            if is_anyref_type(ctx, ctx.value_ty(arg_val)) && !borrowed_parameters.contains(&arg_val)
+            if is_anyref_type(ctx, ctx.value_ty(arg_val))
+                && !borrow_info.parameters.contains(&arg_val)
             {
                 let retain_op = tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
@@ -800,6 +1118,9 @@ fn insert_rc_in_block(
             let result_ty = ctx.op_result_types(op).first().copied();
             if result_ty.is_some_and(|ty| is_anyref_type(ctx, ty)) {
                 let load_result = ctx.op_result(op, 0);
+                if borrow_info.temporaries.contains(&load_result) {
+                    continue;
+                }
                 let op_loc = ctx.op(op).location;
                 let retain_op = tribute_rt::retain(ctx, op_loc, load_result, ptr_ty);
                 plan.after
@@ -816,7 +1137,10 @@ fn insert_rc_in_block(
     let mut dying_values: HashSet<ValueRef> = HashSet::new();
 
     for v in &live_in {
-        if !live_out.contains(v) && !returned_values.contains(v) && !borrowed_parameters.contains(v)
+        if !live_out.contains(v)
+            && !returned_values.contains(v)
+            && !borrow_info.parameters.contains(v)
+            && !borrow_info.temporaries.contains(v)
         {
             dying_values.insert(*v);
         }
@@ -825,7 +1149,8 @@ fn insert_rc_in_block(
         if !live_out.contains(v)
             && !returned_values.contains(v)
             && !is_alloc_intermediate(ctx, *v)
-            && !borrowed_parameters.contains(v)
+            && !borrow_info.parameters.contains(v)
+            && !borrow_info.temporaries.contains(v)
         {
             dying_values.insert(*v);
         }
@@ -939,6 +1264,14 @@ mod tests {
     }
 
     fn run_pass_with_policy(ir: &str, policy: BorrowedParameterPolicy) -> String {
+        run_pass_with_policies(ir, policy, TemporaryBorrowPolicy::Preserve)
+    }
+
+    fn run_pass_with_policies(
+        ir: &str,
+        parameter_policy: BorrowedParameterPolicy,
+        temporary_policy: TemporaryBorrowPolicy,
+    ) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let validation = validate_use_chains(&ctx, module);
@@ -946,7 +1279,7 @@ mod tests {
             validation.is_ok(),
             "input fixture must have valid SSA use chains: {validation}"
         );
-        insert_rc_with_policy(&mut ctx, module, policy);
+        insert_rc_with_policies(&mut ctx, module, parameter_policy, temporary_policy);
         let validation = validate_use_chains(&ctx, module);
         assert!(
             validation.is_ok(),
@@ -968,6 +1301,27 @@ mod tests {
 
     fn assert_focused_rc(output: &str, expected: &str) {
         assert_eq!(focused_rc_ops(output), expected, "full IR:\n{output}");
+    }
+
+    fn run_temporary_borrow_comparison(ir: &str) -> (String, String) {
+        let preserved = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::Preserve,
+        );
+        let elided = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        );
+        (preserved, elided)
+    }
+
+    fn rc_counts(output: &str) -> (usize, usize) {
+        (
+            output.matches("tribute_rt.retain").count(),
+            output.matches("tribute_rt.release").count(),
+        )
     }
 
     // =========================================================================
@@ -1015,6 +1369,20 @@ mod tests {
     %1 = clif.load %0 {offset = 0} : core.i32
     %2 = clif.load %0 {offset = 4} : core.i32
     clif.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_temporary_field_borrow() {
+        let (_, output) = run_temporary_borrow_comparison(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
   }
 }"#,
         );
@@ -1470,5 +1838,176 @@ mod tests {
                 "tribute_rt.release %0 {alloc_size = 0}"
             ),
         );
+    }
+
+    #[test]
+    fn temporary_borrow_in_dominated_subtree_elides_one_pair() {
+        let (preserved, elided) = run_temporary_borrow_comparison(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.i8) -> core.i32 {
+  ^entry:
+    clif.brif %1 [^borrow, ^exit]
+  ^borrow:
+    %2 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    clif.jump [^use]
+  ^use:
+    %3 = clif.load %2 {offset = 0} : core.i32
+    clif.return %3
+  ^exit:
+    %4 = clif.iconst {value = 0} : core.i32
+    clif.return %4
+  }
+}"#,
+        );
+        let (preserved_retains, preserved_releases) = rc_counts(&preserved);
+        let (elided_retains, elided_releases) = rc_counts(&elided);
+        assert_eq!(preserved_retains - elided_retains, 1, "{elided}");
+        assert_eq!(preserved_releases - elided_releases, 1, "{elided}");
+    }
+
+    #[test]
+    fn sibling_branch_uses_preserve_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.i8) -> core.i32 {
+  ^entry:
+    %2 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    clif.brif %1 [^left, ^right]
+  ^left:
+    %3 = clif.load %2 {offset = 0} : core.i32
+    clif.return %3
+  ^right:
+    %4 = clif.load %2 {offset = 4} : core.i32
+    clif.return %4
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn loop_carried_temporary_preserves_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+  ^entry:
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    clif.jump %1 [^loop]
+  ^loop(%2: tribute_rt.anyref):
+    %3 = clif.load %2 {offset = 0} : core.i32
+    clif.jump %2 [^loop]
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn nested_region_capture_preserves_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    func.func @capture() -> core.i32 {
+      %2 = clif.load %1 {offset = 0} : core.i32
+      func.return %2
+    }
+    clif.return
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn cast_alias_preserves_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = core.unrealized_conversion_cast %1 : core.ptr
+    %3 = clif.call %2 {callee = @opaque} : core.i32
+    clif.return %3
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn call_use_preserves_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = clif.call %1 {callee = @opaque} : core.nil
+    clif.return
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn stored_temporary_preserves_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
+    %2 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    clif.store %2, %1 {offset = 0}
+    clif.return
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn join_use_preserves_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.i8) -> core.i32 {
+  ^entry:
+    %2 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    clif.brif %1 [^left, ^right]
+  ^left:
+    clif.jump [^join]
+  ^right:
+    clif.jump [^join]
+  ^join:
+    %3 = clif.load %2 {offset = 0} : core.i32
+    clif.return %3
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+    }
+
+    #[test]
+    fn nested_field_borrows_have_independent_lifetimes() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.nil {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = clif.load %1 {offset = 8} : tribute_rt.anyref
+    %3 = clif.call %2 {callee = @opaque} : core.nil
+    clif.return
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        let (preserved_retains, preserved_releases) = rc_counts(&preserved);
+        let (elided_retains, elided_releases) = rc_counts(&elided);
+        assert_eq!(preserved_retains - elided_retains, 1, "{elided}");
+        assert_eq!(preserved_releases - elided_releases, 1, "{elided}");
+    }
+
+    #[test]
+    fn raw_allocation_address_preserves_temporary_ownership() {
+        let ir = r#"core.module @test {
+  clif.func @f() -> core.i32 {
+    %0 = clif.iconst {value = 24} : core.i64
+    %1 = clif.call %0 {callee = @__tribute_alloc} : core.ptr
+    %2 = clif.iconst {value = 8} : core.i64
+    %3 = clif.iadd %1, %2 : core.ptr
+    %4 = clif.load %3 {offset = 8} : tribute_rt.anyref
+    %5 = clif.load %4 {offset = 0} : core.i32
+    clif.return %5
+  }
+}"#;
+        let (preserved, elided) = run_temporary_borrow_comparison(ir);
+        assert_eq!(focused_rc_ops(&preserved), focused_rc_ops(&elided));
+        assert_eq!(rc_counts(&elided), (1, 1), "{elided}");
     }
 }
