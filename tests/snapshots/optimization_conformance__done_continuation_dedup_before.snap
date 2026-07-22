@@ -15,9 +15,9 @@ func.func @"done_continuation_dedup_snapshot::Result::__lambda_4"(%0: !t0, %1: t
 func.func @"done_continuation_dedup_snapshot::std::io::__lambda_5"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
 func.func @"done_continuation_dedup_snapshot::std::io::__lambda_6"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
 func.func @"done_continuation_dedup_snapshot::std::io::__lambda_7"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-%13 = closure.new %12 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_5"} : !t1
-%20 = closure.new %19 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_6"} : !t1
-%27 = closure.new %26 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_7"} : !t1
+%12 = closure.new %11 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_5"} : !t1
+%19 = closure.new %18 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_6"} : !t1
+%26 = closure.new %25 {func_ref = @"done_continuation_dedup_snapshot::std::io::__lambda_7"} : !t1
 func.func @"done_continuation_dedup_snapshot::__lambda_8"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
 func.func @"done_continuation_dedup_snapshot::__lambda_9"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
 func.func @"done_continuation_dedup_snapshot::__lambda_10"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
