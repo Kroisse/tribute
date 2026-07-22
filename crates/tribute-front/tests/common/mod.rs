@@ -107,7 +107,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         node_types: node_types_map,
         ability_conventions,
-        well_known_types: tribute_front::typeck::WellKnownTypes::empty(),
+        well_known_types: result.well_known_types,
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     print_module(&ir, module.op())
