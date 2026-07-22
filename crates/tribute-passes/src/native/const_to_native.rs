@@ -45,7 +45,7 @@ pub struct NativeConstAnalysis {
     content_to_symbol: HashMap<Vec<u8>, Symbol>,
     /// Whether the module contains any `adt.string_const` ops.
     has_string_consts: bool,
-    /// The String enum type (found by scanning IR types).
+    /// The exact prelude String enum type from module metadata.
     string_enum_ty: Option<TypeRef>,
 }
 
@@ -53,45 +53,6 @@ impl NativeConstAnalysis {
     pub fn is_empty(&self) -> bool {
         self.rodata.is_empty()
     }
-}
-
-/// Find the String enum type by scanning interned types.
-///
-/// Looks for an `adt.enum` type named "String" with variants "Leaf" and "Branch".
-fn find_string_enum_type(ctx: &IrContext) -> Option<TypeRef> {
-    for (ty_ref, td) in ctx.types.iter() {
-        if td.dialect != Symbol::new("adt") {
-            continue;
-        }
-        if td.attrs.get_symbol("name") != Some(Symbol::new("String")) {
-            continue;
-        }
-        // Check it has "variants" attribute with Leaf and Branch
-        if let Some(Attribute::List(variants)) = td.attrs.get("variants") {
-            let has_leaf = variants.iter().any(|v| {
-                if let Attribute::List(items) = v {
-                    items.first().is_some_and(
-                        |n| matches!(n, Attribute::Symbol(s) if *s == Symbol::new("Leaf")),
-                    )
-                } else {
-                    false
-                }
-            });
-            let has_branch = variants.iter().any(|v| {
-                if let Attribute::List(items) = v {
-                    items.first().is_some_and(
-                        |n| matches!(n, Attribute::Symbol(s) if *s == Symbol::new("Branch")),
-                    )
-                } else {
-                    false
-                }
-            });
-            if has_leaf && has_branch {
-                return Some(ty_ref);
-            }
-        }
-    }
-    None
 }
 
 /// Context for collecting const allocations during analysis.
@@ -169,11 +130,10 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
         });
     }
 
-    let string_enum_ty = if collector.has_string_consts {
-        find_string_enum_type(ctx)
-    } else {
-        None
-    };
+    let string_enum_ty = collector
+        .has_string_consts
+        .then(|| tribute_ir::metadata::WellKnownTypes::from_module(ctx, module.op()).string)
+        .flatten();
 
     NativeConstAnalysis {
         content_to_symbol: collector.seen,
@@ -459,5 +419,66 @@ impl RewritePattern for StringConstNativePattern {
 
     fn name(&self) -> &'static str {
         "StringConstNativePattern"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    fn type_alias(ctx: &IrContext, name: &str) -> TypeRef {
+        ctx.type_aliases()
+            .iter()
+            .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+            .unwrap_or_else(|| panic!("missing type alias !{name}"))
+    }
+
+    fn string_module(ctx: &mut IrContext) -> Module {
+        parse_test_module(
+            ctx,
+            r#"core.module @test {
+  !PreludeString = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !UserString = adt.enum() {name = @"user::String", variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  func.func @main() -> core.nil {
+    %string = adt.string_const {value = "hello"} : tribute_rt.anyref
+    func.return
+  }
+}"#,
+        )
+    }
+
+    #[test]
+    fn analysis_uses_exact_string_metadata_not_user_lookalike() {
+        let mut ctx = IrContext::new();
+        let module = string_module(&mut ctx);
+        let prelude_string = type_alias(&ctx, "PreludeString");
+        let user_string = type_alias(&ctx, "UserString");
+        tribute_ir::metadata::WellKnownTypes {
+            string: Some(prelude_string),
+        }
+        .attach(&mut ctx, module.op());
+
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(analysis.string_enum_ty, Some(prelude_string));
+        assert_ne!(analysis.string_enum_ty, Some(user_string));
+    }
+
+    #[test]
+    fn lowering_rejects_missing_string_metadata() {
+        let mut ctx = IrContext::new();
+        let module = string_module(&mut ctx);
+        let analysis = analyze_consts(&ctx, module);
+
+        let error = lower(&mut ctx, module, &analysis).expect_err("metadata is required");
+
+        assert_eq!(error.boundary(), "const-to-native");
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| { illegal.dialect == "adt" && illegal.name == "string_const" })
+        );
     }
 }

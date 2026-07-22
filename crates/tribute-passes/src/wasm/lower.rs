@@ -1206,6 +1206,15 @@ mod tests {
   }
 }"#,
         );
+        let string_ty = ctx
+            .type_aliases()
+            .iter()
+            .find_map(|(name, ty)| (*name == "String").then_some(*ty))
+            .expect("String alias");
+        tribute_ir::metadata::WellKnownTypes {
+            string: Some(string_ty),
+        }
+        .attach(&mut ctx, module.op());
 
         let error = lower_to_wasm(&mut ctx, module)
             .expect_err("non-reference string constant result must be rejected");

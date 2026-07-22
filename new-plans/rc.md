@@ -236,14 +236,41 @@ into control flow and atomic operations by RC lowering.
   For a proven borrowed parameter, RC insertion omits both the entry `retain`
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
-- **Temporary borrow analysis (planned):** Identify temporary values, including
-  field loads, that don't need RC ops
+- **Temporary field borrows:** RC insertion may omit ownership acquisition and
+  release for an `anyref` result of `clif.load` when the load is proven to be a
+  field-derived temporary borrow. The analysis runs on lowered Clif, where an
+  `adt.struct_get` is represented by `clif.load`; it does not match
+  `adt.struct_get` directly.
+
+  The load address must resolve directly to an RC-managed owner, optionally
+  through transparent unrealized pointer casts and address calculations. The
+  resolved owner must be an RC-managed value tracked by RC liveness; a raw
+  `core.ptr` derived from `__tribute_alloc` is not sufficient ownership proof.
+  The owner definition must dominate the field load, the field load must
+  dominate every use of its result, and every result use must remain in the
+  same function region. The only initially accepted uses are further field
+  loads through the temporary, pointer comparisons, and stores that use it
+  solely as the destination address. Unrealized pointer casts are transparent
+  only when every use of the cast result satisfies these same rules. Returning
+  or storing the temporary or an alias as a value, passing either to any call
+  or branch, forwarding either as a block argument, capture by a nested region,
+  or any unknown operation prevents elision.
+
+  The owner's lifetime must also be extended through every accepted use of the
+  temporary. RC liveness therefore treats those uses as uses of the owner before
+  insertion. A temporary is rejected when its uses occur in sibling dominator
+  subtrees, after a join not dominated by its load, on a loop-carried path, or
+  anywhere else that does not establish one dominated, non-escaping lifetime.
+  Nested field loads are considered independently and are eligible only when
+  each loaded owner's lifetime is proven by the same rules. Missing CFG edges,
+  unreachable blocks, malformed regions, or any analysis uncertainty preserve
+  the original retain/release operations.
 - **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
-The paired-elimination and borrowed-parameter policies are selected by the
-native pipeline options, not stored in an IR lowering context. Production
-enables proven optimizations; the baseline profile disables them for
-conformance comparisons.
+The paired-elimination, borrowed-parameter, and temporary-borrow policies are
+selected by the native pipeline options, not stored in an IR lowering context.
+Production enables proven optimizations; the baseline profile disables them
+for conformance comparisons.
 
 **Pipeline position:** Borrowed-parameter analysis runs as part of RC insertion,
 before parameter RC operations are created. Paired elimination runs immediately

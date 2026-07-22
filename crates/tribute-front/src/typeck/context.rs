@@ -145,6 +145,8 @@ pub struct ModuleTypeEnv<'db> {
     /// Populated from function declarations (first param = receiver)
     /// and struct field accessors.
     method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
+
+    well_known_types: super::WellKnownTypes<'db>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -173,6 +175,7 @@ impl<'db> ModuleTypeEnv<'db> {
             ability_defs,
             ability_conventions,
             method_index: HashMap::new(),
+            well_known_types: super::WellKnownTypes::empty(),
         }
     }
 
@@ -336,6 +339,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// This is called before type checking user code to make prelude's
     /// types available. The injected types contain only BoundVars (no UniVars).
     pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
+        self.well_known_types = exports.well_known_types(self.db);
         for (id, scheme) in exports.function_types(self.db) {
             self.function_types.insert(*id, *scheme);
         }
@@ -360,6 +364,10 @@ impl<'db> ModuleTypeEnv<'db> {
         for (ability, convention) in exports.ability_conventions(self.db) {
             self.ability_conventions.insert(*ability, *convention);
         }
+    }
+
+    pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
+        self.well_known_types
     }
 
     // =========================================================================

@@ -640,6 +640,46 @@ impl<'db> IrLoweringCtx<'db> {
         )
     }
 
+    /// Create an `adt.enum` type with a stable source declaration identity.
+    pub fn adt_enum_type_with_definition(
+        &self,
+        ir: &mut IrContext,
+        name: Symbol,
+        variants: &[(Symbol, Vec<TypeRef>)],
+        definition: crate::typeck::DefinitionIdentity,
+    ) -> TypeRef {
+        let variants_attr: Vec<Attribute> = variants
+            .iter()
+            .map(|(variant_name, field_types)| {
+                let field_attrs: Vec<Attribute> =
+                    field_types.iter().map(|ty| Attribute::Type(*ty)).collect();
+                Attribute::List(vec![
+                    Attribute::Symbol(*variant_name),
+                    Attribute::List(field_attrs),
+                ])
+            })
+            .collect();
+
+        ir.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(name))
+                .attr("variants", Attribute::List(variants_attr))
+                .attr(
+                    "tribute.definition.source",
+                    Attribute::Int(definition.source as i128),
+                )
+                .attr(
+                    "tribute.definition.start",
+                    Attribute::Int(definition.start as i128),
+                )
+                .attr(
+                    "tribute.definition.end",
+                    Attribute::Int(definition.end as i128),
+                )
+                .build(),
+        )
+    }
+
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: Symbol) -> TypeRef {
         ir.types.intern(

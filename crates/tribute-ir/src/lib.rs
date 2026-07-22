@@ -4,6 +4,7 @@
 //! built on top of the trunk-ir infrastructure.
 
 pub mod dialect;
+pub mod metadata;
 
 // Re-export common trunk-ir types for convenience
 pub use trunk_ir::{BlockId, ConversionError, IdVec, Span, Symbol, idvec};
