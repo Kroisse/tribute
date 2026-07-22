@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::fmt;
 
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -111,44 +110,6 @@ impl ConstCollector {
     }
 }
 
-/// Find the canonical prelude String enum type.
-fn find_string_enum_type(ctx: &IrContext) -> Option<trunk_ir::TypeRef> {
-    ctx.types.iter().find_map(|(ty_ref, data)| {
-        if data.dialect != "adt" || data.name != "enum" {
-            return None;
-        }
-        if data.attrs.get_symbol("name") != Some(Symbol::new("String")) {
-            return None;
-        }
-        // TODO(#790): Consume the canonical prelude String TypeRef carried from
-        // the frontend instead of identifying it by name and structural layout.
-        let variants = get_enum_variants(ctx, ty_ref)?;
-        let [(leaf_tag, leaf_fields), (branch_tag, branch_fields)] = variants.as_slice() else {
-            return None;
-        };
-        let [leaf_ty] = leaf_fields.as_slice() else {
-            return None;
-        };
-        let [left_ty, right_ty, length_ty] = branch_fields.as_slice() else {
-            return None;
-        };
-
-        let is_type = |ty, dialect, name| {
-            let field = ctx.types.get(ty);
-            field.dialect == dialect && field.name == name
-        };
-        let is_anyref = |ty| is_type(ty, "tribute_rt", "anyref") || is_type(ty, "wasm", "anyref");
-
-        (leaf_tag == "Leaf"
-            && branch_tag == "Branch"
-            && is_type(*leaf_ty, "core", "bytes")
-            && is_anyref(*left_ty)
-            && is_anyref(*right_ty)
-            && is_type(*length_ty, "core", "i32"))
-        .then_some(ty_ref)
-    })
-}
-
 /// Walk all operations in a region recursively.
 fn walk_ops_in_region(
     ctx: &IrContext,
@@ -180,7 +141,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
         allocations: collector.allocations,
         string_enum_ty: collector
             .has_string_consts
-            .then(|| find_string_enum_type(ctx))
+            .then(|| tribute_ir::metadata::WellKnownTypes::from_module(ctx, module.op()).string)
             .flatten(),
     }
 }
@@ -372,6 +333,20 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
 
+    fn type_alias(ctx: &IrContext, name: &str) -> trunk_ir::TypeRef {
+        ctx.type_aliases()
+            .iter()
+            .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+            .unwrap_or_else(|| panic!("missing type alias !{name}"))
+    }
+
+    fn attach_string_type(ctx: &mut IrContext, module: Module, string: trunk_ir::TypeRef) {
+        tribute_ir::metadata::WellKnownTypes {
+            string: Some(string),
+        }
+        .attach(ctx, module.op());
+    }
+
     fn string_module(ctx: &mut IrContext, values: &[&str]) -> Module {
         let constants = values
             .iter()
@@ -447,6 +422,8 @@ mod tests {
   }
 }"#,
         );
+        let string_ty = type_alias(&ctx, "String");
+        attach_string_type(&mut ctx, module, string_ty);
         let analysis = analyze_consts(&ctx, module);
 
         validate_for_wasm(&ctx, module, &analysis).expect("canonical String result type");
@@ -480,32 +457,55 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_malformed_string_layouts() {
-        for variants in [
-            "[[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, core.i32, core.i32]]]",
-            "[[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]], [@Extra, []]]",
-        ] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(
-                &mut ctx,
-                &format!(
-                    r#"core.module @test {{
-  !String = adt.enum() {{name = @String, variants = {variants}}}
-  wasm.func @main() -> core.nil {{
-    %string = adt.string_const {{value = "hello"}} : wasm.anyref
+    fn user_string_lookalike_cannot_substitute_for_metadata_identity() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !PreludeString = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  !UserString = adt.enum() {name = @"user::String", variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  wasm.func @main() -> core.nil {
+    %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
-  }}
-}}"#
-                ),
-            );
-            let analysis = analyze_consts(&ctx, module);
+  }
+}"#,
+        );
+        let prelude_string = type_alias(&ctx, "PreludeString");
+        let user_string = type_alias(&ctx, "UserString");
+        attach_string_type(&mut ctx, module, prelude_string);
 
-            assert_eq!(
-                validate_for_wasm(&ctx, module, &analysis),
-                Err(ConstValidationError::MissingCanonicalStringType),
-                "accepted malformed variants: {variants}"
-            );
-        }
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(analysis.string_enum_ty, Some(prelude_string));
+        assert_ne!(analysis.string_enum_ty, Some(user_string));
+    }
+
+    #[test]
+    fn textual_ir_round_trip_drops_metadata_and_fails_conservatively() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  wasm.func @main() -> core.nil {
+    %string = adt.string_const {value = "hello"} : wasm.anyref
+    wasm.return
+  }
+}"#,
+        );
+        let string_ty = type_alias(&ctx, "String");
+        attach_string_type(&mut ctx, module, string_ty);
+
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        let mut reparsed_ctx = IrContext::new();
+        let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
+        let analysis = analyze_consts(&reparsed_ctx, reparsed);
+
+        assert_eq!(analysis.string_enum_ty, None);
+        assert_eq!(
+            validate_for_wasm(&reparsed_ctx, reparsed, &analysis),
+            Err(ConstValidationError::MissingCanonicalStringType)
+        );
     }
 
     #[test]

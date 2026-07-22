@@ -285,6 +285,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         result.function_types,
         result.node_types,
         result.ability_conventions,
+        result.well_known_types,
         span_map,
     ))
 }
@@ -430,6 +431,7 @@ fn merge_and_lower_to_ir<'db>(
         function_types: merged_fn_types,
         node_types: merged_node_types,
         ability_conventions: merged_ability_conventions,
+        well_known_types: typed.well_known_types(db),
     }
     .lower_to_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
 
@@ -1289,6 +1291,7 @@ pub fn parse_and_lower_ast<'db>(
         result.function_types,
         result.node_types,
         result.ability_conventions,
+        result.well_known_types,
         span_map,
     ))
 }
@@ -1917,6 +1920,61 @@ fn main() ->{std::io::Io} Nil {
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[salsa_test]
+    fn well_known_string_metadata_uses_prelude_declaration_identity(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "lookalike.trb",
+            r#"
+enum String {
+    Leaf(Bytes),
+    Branch(String, String, Nat),
+}
+
+fn main() -> String { "hello" }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let canonical = typed
+            .well_known_types(db)
+            .string
+            .expect("prelude String identity");
+        let (ctx, module) =
+            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
+            .string
+            .expect("String IR metadata");
+        let string_data = ctx.types.get(string_ty);
+
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.source"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.source as i128
+            ))
+        );
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.start"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.start as i128
+            ))
+        );
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.end"),
+            Some(&trunk_ir::Attribute::Int(canonical.definition.end as i128))
+        );
+
+        let user_lookalike = ctx.types.iter().find_map(|(ty, data)| {
+            (ty != string_ty
+                && data.dialect == "adt"
+                && data.name == "enum"
+                && data.attrs.get_symbol("name") == Some(trunk_ir::Symbol::new("String")))
+            .then_some(ty)
+        });
+        assert!(
+            user_lookalike.is_some(),
+            "compatible user String must remain distinct from prelude String"
+        );
     }
 
     #[salsa_test]

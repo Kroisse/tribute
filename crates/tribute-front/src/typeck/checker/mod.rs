@@ -32,8 +32,10 @@ use crate::ast::{
     Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
 };
 
-use super::PreludeExports;
 use super::context::ModuleTypeEnv;
+use super::{
+    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
+};
 use crate::ast::CallingConvention;
 
 /// Result of module type checking.
@@ -46,6 +48,8 @@ pub struct ModuleCheckResult<'db> {
     pub node_types: Vec<(NodeId, Type<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
+    /// Prelude-defined semantic type identities.
+    pub well_known_types: WellKnownTypes<'db>,
 }
 
 /// Type checking mode.
@@ -77,6 +81,27 @@ pub struct TypeChecker<'db> {
 }
 
 impl<'db> TypeChecker<'db> {
+    fn prelude_well_known_type(
+        &self,
+        module: &Module<ResolvedRef<'db>>,
+        key: impl WellKnownTypeKey,
+    ) -> Option<WellKnownType<'db>> {
+        let name = key.name();
+        let declaration = module.decls.iter().find_map(|decl| match decl {
+            Decl::Struct(decl) if decl.name == name => Some(decl.id),
+            Decl::Enum(decl) if decl.name == name => Some(decl.id),
+            _ => None,
+        })?;
+        let ty = self.env.lookup_type_def(name)?.body(self.db());
+        Some(WellKnownType {
+            ty,
+            definition: DefinitionIdentity::new(
+                declaration,
+                self.span_map.get_or_default(declaration),
+            ),
+        })
+    }
+
     /// Create a new type checker with the given span map.
     pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
@@ -145,7 +170,6 @@ impl<'db> TypeChecker<'db> {
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
         self.collect_declarations(&module);
-
         // Phase 2: Type check each declaration with per-function inference
         // Each function gets its own FunctionInferenceContext with isolated constraints
         let decls: Vec<Decl<TypedRef<'db>>> = module
@@ -160,6 +184,7 @@ impl<'db> TypeChecker<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
         let ability_conventions = self.env.export_ability_conventions();
+        let well_known_types = self.env.well_known_types();
 
         // Convert node_types HashMap to Vec for Salsa compatibility
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
@@ -175,6 +200,7 @@ impl<'db> TypeChecker<'db> {
             function_types,
             node_types,
             ability_conventions,
+            well_known_types,
         }
     }
 
@@ -189,6 +215,7 @@ impl<'db> TypeChecker<'db> {
         // Phase 1: Collect type definitions and function signatures
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
+        let string_type = self.prelude_well_known_type(&module, StringType);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
@@ -207,6 +234,9 @@ impl<'db> TypeChecker<'db> {
         let enum_variants = self.env.export_enum_variants();
         let method_index = self.env.export_method_index();
         let ability_conventions = self.env.export_ability_conventions();
+        let well_known_types = WellKnownTypes {
+            string: string_type,
+        };
 
         PreludeExports::new(
             self.db(),
@@ -217,6 +247,7 @@ impl<'db> TypeChecker<'db> {
             enum_variants,
             method_index,
             ability_conventions,
+            well_known_types,
         )
     }
 
