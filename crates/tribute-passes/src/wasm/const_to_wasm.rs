@@ -114,23 +114,38 @@ impl ConstCollector {
 /// Find the canonical prelude String enum type.
 fn find_string_enum_type(ctx: &IrContext) -> Option<trunk_ir::TypeRef> {
     ctx.types.iter().find_map(|(ty_ref, data)| {
-        if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
+        if data.dialect != "adt" || data.name != "enum" {
             return None;
         }
         if data.attrs.get_symbol("name") != Some(Symbol::new("String")) {
             return None;
         }
+        // TODO(#790): Consume the canonical prelude String TypeRef carried from
+        // the frontend instead of identifying it by name and structural layout.
         let variants = get_enum_variants(ctx, ty_ref)?;
-        let has_bytes_leaf = variants.iter().any(|(tag, fields)| {
-            *tag == Symbol::new("Leaf") && fields.len() == 1 && {
-                let field = ctx.types.get(fields[0]);
-                field.dialect == Symbol::new("core") && field.name == Symbol::new("bytes")
-            }
-        });
-        let has_branch = variants
-            .iter()
-            .any(|(tag, fields)| *tag == Symbol::new("Branch") && fields.len() == 3);
-        (has_bytes_leaf && has_branch).then_some(ty_ref)
+        let [(leaf_tag, leaf_fields), (branch_tag, branch_fields)] = variants.as_slice() else {
+            return None;
+        };
+        let [leaf_ty] = leaf_fields.as_slice() else {
+            return None;
+        };
+        let [left_ty, right_ty, length_ty] = branch_fields.as_slice() else {
+            return None;
+        };
+
+        let is_type = |ty, dialect, name| {
+            let field = ctx.types.get(ty);
+            field.dialect == dialect && field.name == name
+        };
+        let is_anyref = |ty| is_type(ty, "tribute_rt", "anyref") || is_type(ty, "wasm", "anyref");
+
+        (leaf_tag == "Leaf"
+            && branch_tag == "Branch"
+            && is_type(*leaf_ty, "core", "bytes")
+            && is_anyref(*left_ty)
+            && is_anyref(*right_ty)
+            && is_type(*length_ty, "core", "i32"))
+        .then_some(ty_ref)
     })
 }
 
@@ -442,6 +457,55 @@ mod tests {
         assert!(output.contains("wasm.bytes_from_data"), "{output}");
         assert!(output.contains("adt.variant_new"), "{output}");
         assert!(output.contains("tag = @Leaf"), "{output}");
+    }
+
+    #[test]
+    fn validation_rejects_string_constants_without_the_canonical_type() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %string = adt.string_const {value = "hello"} : wasm.anyref
+    wasm.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(
+            validate_for_wasm(&ctx, module, &analysis),
+            Err(ConstValidationError::MissingCanonicalStringType)
+        );
+    }
+
+    #[test]
+    fn validation_rejects_malformed_string_layouts() {
+        for variants in [
+            "[[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, core.i32, core.i32]]]",
+            "[[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]], [@Extra, []]]",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !String = adt.enum() {{name = @String, variants = {variants}}}
+  wasm.func @main() -> core.nil {{
+    %string = adt.string_const {{value = "hello"}} : wasm.anyref
+    wasm.return
+  }}
+}}"#
+                ),
+            );
+            let analysis = analyze_consts(&ctx, module);
+
+            assert_eq!(
+                validate_for_wasm(&ctx, module, &analysis),
+                Err(ConstValidationError::MissingCanonicalStringType),
+                "accepted malformed variants: {variants}"
+            );
+        }
     }
 
     #[test]
