@@ -226,9 +226,10 @@ into control flow and atomic operations by RC lowering.
   nested region, and every unknown operation are escapes. Closure, ability
   handler, and continuation capture therefore preserve owned-parameter RC.
   Analysis failure preserves the existing owned-parameter RC.
-  Calls are escape barriers even when the callee is direct: this pass does not
-  yet consume trusted ownership summaries, so it cannot prove that a forwarded
-  argument remains borrowed.
+  Calls remain escape barriers unless the call is direct and its callee has a
+  trusted ownership summary proving the corresponding parameter borrowed.
+  Indirect, external, unresolved, or otherwise unknown calls are always escape
+  barriers.
   The callee must also have the ordinary synchronous caller-lifetime guarantee:
   C ABI entry points, direct tail-call targets, and functions whose address
   escapes are ineligible because their caller may not retain an owning frame
@@ -250,6 +251,53 @@ before parameter RC operations are created. Paired elimination runs immediately
 after RC insertion. Both decisions occur before unrealized cast resolution and
 RC lowering, which keeps alias handling conservative and makes the inserted and
 optimized RC boundaries directly observable in tests.
+
+#### Trusted ownership summaries across `func_to_clif`
+
+Borrowed forwarding uses explicit pre-lowering metadata rather than rebuilding
+a call graph after `func` operations have been erased. Immediately before
+`func_to_clif`, the native pipeline computes a module-local summary for every
+defined function and stores it on `func.func` as the versioned
+`tribute.rc.parameter_ownership_v1` attribute. `func_to_clif` preserves this
+attribute unchanged on the corresponding `clif.func`; RC insertion is its only
+consumer. The producer also returns an opaque in-memory trust token containing
+the expected summaries. RC insertion requires that token and cross-checks every
+attribute against it, so textual metadata alone is never trusted.
+
+The attribute is a list with exactly one entry per function parameter. Each
+entry is the symbol `borrowed` or `owned`. A summary is trusted only when all of
+the following hold:
+
+- it was recomputed by the current native pipeline invocation, not merely found
+  on input IR;
+- its version, shape, and parameter count are exact;
+- its function symbol resolves uniquely to a module-local definition; and
+- the summarized parameter is still `tribute_rt.anyref` at RC insertion.
+
+Missing, malformed, stale, duplicate, or inconsistent metadata is ignored as a
+whole for that function. Ignored summaries mean every parameter is owned. This
+fail-closed rule also applies if lowering drops or changes the metadata.
+
+Summary computation is a monotone fixed point over the direct-call graph.
+Every `anyref` parameter starts `borrowed` and is demoted permanently to `owned`
+when a use escapes. Loads, pointer comparisons, destination-address stores, and
+transparent unrealized casts are local borrowed uses. Forwarding to parameter
+`i` of a uniquely resolved direct callee is borrowed only when that callee's
+entry `i` is borrowed. Return/tail calls, storing as a value, nested-region
+capture, indirect calls, external calls, unresolved calls, and unknown
+operations demote the parameter.
+
+Strongly connected components are solved to a fixed point, but recursive SCCs
+are not trusted for borrowed forwarding: all parameters participating in a
+direct or mutual recursive cycle are owned. This avoids circular proofs whose
+only evidence is the cycle itself. Acyclic direct-call chains can therefore
+propagate borrowed parameters transitively while recursion stays conservative.
+
+RC insertion consumes only summaries produced and validated by the current
+pipeline run. Its local use analysis still treats every call without a trusted
+borrowed callee entry as an unknown-call barrier. Ownership summaries do not
+cover temporary field borrows or dominator-based lifetime extension; those are
+separate work tracked by #637.
 
 ### 3. RC Lowering Pass (PR 4)
 

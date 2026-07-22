@@ -45,6 +45,8 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
+use super::ownership_summary::{ParameterOwnership, TrustedOwnershipSummaries};
+
 /// Policy for eliding RC ownership of proven borrowed function parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BorrowedParameterPolicy {
@@ -387,10 +389,31 @@ pub fn insert_rc_with_policy(
     module: Module,
     borrowed_parameters: BorrowedParameterPolicy,
 ) {
+    insert_rc_impl(ctx, module, borrowed_parameters, None);
+}
+
+pub fn insert_rc_with_trusted_summaries(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    trusted_summaries: &TrustedOwnershipSummaries,
+) {
+    insert_rc_impl(ctx, module, borrowed_parameters, Some(trusted_summaries));
+}
+
+fn insert_rc_impl(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    trusted_summaries: Option<&TrustedOwnershipSummaries>,
+) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let trusted_summaries = trusted_summaries
+        .map(|summaries| summaries.validated_for_clif(ctx, &module_ops))
+        .unwrap_or_default();
     let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
@@ -405,7 +428,7 @@ pub fn insert_rc_with_policy(
             } else {
                 BorrowedParameterPolicy::Preserve
             };
-            insert_rc_in_function(ctx, body, function_policy);
+            insert_rc_in_function(ctx, sym, body, function_policy, &trusted_summaries);
         }
     }
 
@@ -621,8 +644,10 @@ fn rewrite_type_anyref(
 /// Insert RC in a function body.
 fn insert_rc_in_function(
     ctx: &mut IrContext,
+    function: Symbol,
     body: RegionRef,
     borrowed_parameter_policy: BorrowedParameterPolicy,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
 ) {
     let mut ptr_values = collect_ptr_values(ctx, body);
 
@@ -634,7 +659,9 @@ fn insert_rc_in_function(
     let liveness = compute_liveness(ctx, body, &ptr_values, &ptr_alias_map);
     let borrowed_parameters = match borrowed_parameter_policy {
         BorrowedParameterPolicy::Preserve => HashSet::new(),
-        BorrowedParameterPolicy::ElideProvenBorrowed => analyze_borrowed_parameters(ctx, body),
+        BorrowedParameterPolicy::ElideProvenBorrowed => {
+            analyze_borrowed_parameters(ctx, function, body, trusted_summaries)
+        }
     };
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
@@ -653,27 +680,45 @@ fn insert_rc_in_function(
 
 /// Return entry parameters whose complete use set is proven not to escape the
 /// dynamic extent of the function call.
-fn analyze_borrowed_parameters(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
+fn analyze_borrowed_parameters(
+    ctx: &IrContext,
+    function: Symbol,
+    body: RegionRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
+) -> HashSet<ValueRef> {
     let Some(&entry) = ctx.region(body).blocks.first() else {
+        return HashSet::new();
+    };
+
+    let Some(function_summary) = trusted_summaries.get(&function) else {
         return HashSet::new();
     };
 
     ctx.block_args(entry)
         .iter()
         .copied()
+        .enumerate()
+        .filter(|(index, _)| function_summary.get(*index) == Some(&ParameterOwnership::Borrowed))
+        .map(|(_, parameter)| parameter)
         .filter(|&parameter| is_anyref_value(ctx, parameter))
-        .filter(|&parameter| parameter_is_proven_borrowed(ctx, body, parameter))
+        .filter(|&parameter| parameter_is_proven_borrowed(ctx, body, parameter, trusted_summaries))
         .collect()
 }
 
-fn parameter_is_proven_borrowed(ctx: &IrContext, body: RegionRef, parameter: ValueRef) -> bool {
-    value_is_proven_borrowed(ctx, body, parameter, &mut HashSet::new())
+fn parameter_is_proven_borrowed(
+    ctx: &IrContext,
+    body: RegionRef,
+    parameter: ValueRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
+) -> bool {
+    value_is_proven_borrowed(ctx, body, parameter, trusted_summaries, &mut HashSet::new())
 }
 
 fn value_is_proven_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
     visited: &mut HashSet<ValueRef>,
 ) -> bool {
     if !visited.insert(value) {
@@ -690,6 +735,12 @@ fn value_is_proven_borrowed(
         }
 
         let operand_index = use_.operand_index as usize;
+        if let Ok(call) = clif::Call::from_op(ctx, op) {
+            return trusted_summaries
+                .get(&call.callee(ctx))
+                .and_then(|summary| summary.get(operand_index))
+                == Some(&ParameterOwnership::Borrowed);
+        }
         if is_proven_borrowed_parameter_use(ctx, op, operand_index) {
             return true;
         }
@@ -698,7 +749,13 @@ fn value_is_proven_borrowed(
             && operand_index == 0
             && ctx.op_operands(op).len() == 1
             && ctx.op_results(op).len() == 1
-            && value_is_proven_borrowed(ctx, body, ctx.op_results(op)[0], visited)
+            && value_is_proven_borrowed(
+                ctx,
+                body,
+                ctx.op_results(op)[0],
+                trusted_summaries,
+                visited,
+            )
     })
 }
 
@@ -946,7 +1003,13 @@ mod tests {
             validation.is_ok(),
             "input fixture must have valid SSA use chains: {validation}"
         );
-        insert_rc_with_policy(&mut ctx, module, policy);
+        if policy == BorrowedParameterPolicy::ElideProvenBorrowed {
+            let trusted =
+                TrustedOwnershipSummaries::attach_locally_borrowed_for_tests(&mut ctx, module);
+            insert_rc_with_trusted_summaries(&mut ctx, module, policy, &trusted);
+        } else {
+            insert_rc_with_policy(&mut ctx, module, policy);
+        }
         let validation = validate_use_chains(&ctx, module);
         assert!(
             validation.is_ok(),

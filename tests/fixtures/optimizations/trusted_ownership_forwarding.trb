@@ -1,0 +1,25 @@
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+enum BoxedNat {
+    Boxed(Nat)
+    Wrapped(BoxedNat)
+}
+
+fn read_leaf(boxed: BoxedNat) -> Nat {
+    case boxed {
+        Boxed(value) -> value
+        Wrapped(_) -> 0
+    }
+}
+
+fn read_middle(boxed: BoxedNat) -> Nat {
+    read_leaf(boxed) + read_leaf(boxed)
+}
+
+fn read_root(boxed: BoxedNat) -> Nat {
+    read_middle(boxed) + read_middle(boxed)
+}
+
+fn main() {
+    __tribute_print_nat(read_root(Boxed(10)))
+}

@@ -966,9 +966,15 @@ fn prepare_module_to_native(
     }
 
     // Phase 1 - Lower func dialect to clif dialect
+    let ownership_summaries;
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
+        ownership_summaries = tribute_passes::native::ownership_summary::compute_and_attach(
+            ctx,
+            module,
+            &type_converter,
+        );
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
@@ -1033,10 +1039,11 @@ fn prepare_module_to_native(
                 tribute_passes::native::rc_insertion::BorrowedParameterPolicy::ElideProvenBorrowed
             }
         };
-        tribute_passes::native::rc_insertion::insert_rc_with_policy(
+        tribute_passes::native::rc_insertion::insert_rc_with_trusted_summaries(
             ctx,
             module,
             borrowed_parameters,
+            &ownership_summaries,
         );
     }
 

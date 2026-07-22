@@ -1,0 +1,9 @@
+---
+source: crates/tribute-passes/src/native/ownership_summary.rs
+expression: summaries
+---
+func.func @left(%0: tribute_rt.anyref) -> core.nil attributes {tribute.rc.parameter_ownership_v1 = [@owned]} {
+func.func @right(%0: tribute_rt.anyref) -> core.nil attributes {tribute.rc.parameter_ownership_v1 = [@owned]} {
+func.func @unknown(%0: tribute_rt.anyref) -> core.nil attributes {tribute.rc.parameter_ownership_v1 = [@owned]} {
+func.func @indirect(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil attributes {tribute.rc.parameter_ownership_v1 = [@owned, @owned]} {
+func.func @external(%0: tribute_rt.anyref) -> core.nil attributes {abi = "C", tribute.rc.parameter_ownership_v1 = [@owned]} {
