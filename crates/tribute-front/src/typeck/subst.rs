@@ -213,6 +213,7 @@ pub fn instantiate_scheme_for_solver<'db>(
     scheme: TypeScheme<'db>,
     solver: &mut super::solver::TypeSolver<'db>,
 ) -> Type<'db> {
+    solver.reserve_effect_vars_in_type(scheme.body(db));
     let subst: Vec<Type<'db>> = scheme
         .type_params(db)
         .iter()
@@ -231,7 +232,7 @@ pub fn instantiate_scheme_for_solver<'db>(
 }
 
 /// Freshen quantified effect-row variables throughout a type.
-pub fn freshen_effect_vars<'db>(
+pub(super) fn freshen_effect_vars<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     quantified_rows: &[EffectVar],
@@ -437,7 +438,7 @@ mod tests {
 
     #[salsa_test]
     fn solver_instantiation_freshens_quantified_effect_rows(db: &dyn salsa::Database) {
-        let quantified_row = EffectVar { id: 42 };
+        let quantified_row = EffectVar { id: 5000 };
         let function_ty = Type::new(
             db,
             TypeKind::Func {
@@ -479,6 +480,7 @@ mod tests {
         assert_eq!(second_tails[0], second_tails[1]);
         assert_ne!(first_tails[0], second_tails[0]);
         assert_ne!(first_tails[0], quantified_row);
+        assert!(first_tails[0].id > quantified_row.id);
     }
 
     #[salsa_test]
