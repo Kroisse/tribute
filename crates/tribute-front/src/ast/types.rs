@@ -253,19 +253,22 @@ pub struct TypeScheme<'db> {
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
     #[returns(ref)]
     pub type_params: Vec<TypeParam>,
+    /// Effect-row variables quantified by this scheme.
+    #[returns(ref)]
+    pub effect_params: Vec<EffectVar>,
     /// The body type with BoundVar references to type_params.
     pub body: Type<'db>,
 }
 
 impl<'db> TypeScheme<'db> {
-    /// Create a monomorphic scheme (no type parameters).
+    /// Create a monomorphic scheme (no quantified variables).
     pub fn mono(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
-        Self::new(db, Vec::new(), ty)
+        Self::new(db, Vec::new(), Vec::new(), ty)
     }
 
-    /// Check if this scheme has no type parameters (is monomorphic).
+    /// Check if this scheme has no quantified variables (is monomorphic).
     pub fn is_mono(&self, db: &'db dyn salsa::Database) -> bool {
-        self.type_params(db).is_empty()
+        self.type_params(db).is_empty() && self.effect_params(db).is_empty()
     }
 
     /// Get the number of type parameters.
@@ -387,6 +390,68 @@ impl fmt::Display for Effect<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct EffectVar {
     pub id: u64,
+}
+
+/// Collect effect-row variables occurring in a type, preserving first appearance.
+pub fn collect_effect_vars<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Vec<EffectVar> {
+    fn collect_row<'db>(
+        db: &'db dyn salsa::Database,
+        row: EffectRow<'db>,
+        vars: &mut Vec<EffectVar>,
+    ) {
+        for effect in row.effects(db) {
+            for arg in &effect.args {
+                collect_type(db, *arg, vars);
+            }
+        }
+        if let Some(var) = row.rest(db)
+            && !vars.contains(&var)
+        {
+            vars.push(var);
+        }
+    }
+
+    fn collect_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, vars: &mut Vec<EffectVar>) {
+        match ty.kind(db) {
+            TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
+                for arg in args {
+                    collect_type(db, *arg, vars);
+                }
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+                ..
+            } => {
+                for param in params {
+                    collect_type(db, *param, vars);
+                }
+                collect_type(db, *result, vars);
+                collect_row(db, *effect, vars);
+            }
+            TypeKind::App { ctor, args } => {
+                collect_type(db, *ctor, vars);
+                for arg in args {
+                    collect_type(db, *arg, vars);
+                }
+            }
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                collect_type(db, *arg, vars);
+                collect_type(db, *result, vars);
+                collect_row(db, *effect, vars);
+            }
+            _ => {}
+        }
+    }
+
+    let mut vars = Vec::new();
+    collect_type(db, ty, &mut vars);
+    vars
 }
 
 // =========================================================================

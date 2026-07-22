@@ -9,7 +9,8 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityDecl, AbilityId, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module,
-    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
+    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, collect_effect_vars,
+    is_type_variable,
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo, MethodEntry};
 
@@ -129,7 +130,8 @@ impl<'db> TypeChecker<'db> {
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let scheme = TypeScheme::new(self.db(), type_params, func_ty);
+        let effect_params = collect_effect_vars(self.db(), func_ty);
+        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty);
 
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(func.name);
@@ -181,7 +183,8 @@ impl<'db> TypeChecker<'db> {
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let scheme = TypeScheme::new(self.db(), type_params, func_ty);
+        let effect_params = collect_effect_vars(self.db(), func_ty);
+        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty);
 
         // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(func.name);
@@ -218,7 +221,7 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let struct_ty = self.env.named_type(qualified_name, args);
 
-        let scheme = TypeScheme::new(self.db(), type_params.clone(), struct_ty);
+        let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
         self.env.register_type_def(qualified_name, scheme);
 
         // Register struct constructor
@@ -238,7 +241,8 @@ impl<'db> TypeChecker<'db> {
             self.env.func_type(field_types, struct_ty, effect)
         };
 
-        let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
+        let effect_params = collect_effect_vars(self.db(), ctor_ty);
+        let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
         let ctor_id = CtorId::new(self.db(), qualified_name);
         self.env.register_constructor(ctor_id, ctor_scheme);
 
@@ -272,7 +276,7 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let enum_ty = self.env.named_type(qualified_name, args);
 
-        let scheme = TypeScheme::new(self.db(), type_params.clone(), enum_ty);
+        let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
         self.env.register_type_def(qualified_name, scheme);
 
         // Register enum variant names for exhaustiveness checking
@@ -304,7 +308,9 @@ impl<'db> TypeChecker<'db> {
                 self.env.func_type(field_types, enum_ty, effect)
             };
 
-            let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
+            let effect_params = collect_effect_vars(self.db(), ctor_ty);
+            let ctor_scheme =
+                TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
             let ctor_id = CtorId::new(
                 self.db(),
                 crate::qualified_symbol(&mut self.current_prefix().to_owned(), variant.name),

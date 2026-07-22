@@ -12,11 +12,12 @@ use trunk_ir::Symbol;
 use crate::ast::{
     AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
     HandlerKind, LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind,
-    TypedRef,
+    TypeScheme, TypedRef, collect_effect_vars,
 };
 
 use super::super::constraint::ConstraintOriginKind;
 use super::super::func_context::FunctionInferenceContext;
+use super::super::solver::TypeSolver;
 use super::super::subst;
 use super::{Mode, TypeChecker};
 
@@ -1250,6 +1251,8 @@ impl<'db> TypeChecker<'db> {
             Stmt::Let {
                 pattern, value, ty, ..
             } => {
+                let outer_effect = ctx.current_effect();
+                ctx.set_current_effect(EffectRow::pure(self.db()));
                 let value_ty = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     let inferred = self.infer_expr_type_with_ctx(ctx, value);
@@ -1258,10 +1261,14 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     self.infer_expr_type_with_ctx(ctx, value)
                 };
+                let evaluation_effect = ctx.current_effect();
+                ctx.set_current_effect(outer_effect);
+                ctx.merge_effect(evaluation_effect);
                 // Constrain pattern type to match value type
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
                 ctx.constrain_eq(pattern_ty, value_ty);
-                self.bind_pattern_vars_with_ctx(ctx, pattern, value_ty);
+                let scheme = self.generalize_let_binding(ctx, value_ty, evaluation_effect);
+                self.bind_pattern_scheme_with_ctx(ctx, pattern, scheme);
             }
             Stmt::Expr { expr, .. } => {
                 // Just infer the type for side effects (constraints)
@@ -1283,6 +1290,8 @@ impl<'db> TypeChecker<'db> {
                 value,
                 ty,
             } => {
+                let outer_effect = ctx.current_effect();
+                ctx.set_current_effect(EffectRow::pure(self.db()));
                 let value = if let Some(ann) = &ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     self.check_expr_with_ctx(ctx, value, Mode::Check(expected))
@@ -1292,12 +1301,16 @@ impl<'db> TypeChecker<'db> {
                 let value_ty = ctx
                     .get_node_type(value.id)
                     .unwrap_or_else(|| ctx.fresh_type_var());
+                let evaluation_effect = ctx.current_effect();
+                ctx.set_current_effect(outer_effect);
+                ctx.merge_effect(evaluation_effect);
 
                 // Constrain pattern type to match value type
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &pattern);
                 ctx.constrain_eq(pattern_ty, value_ty);
 
-                self.bind_pattern_vars_with_ctx(ctx, &pattern, value_ty);
+                let scheme = self.generalize_let_binding(ctx, value_ty, evaluation_effect);
+                self.bind_pattern_scheme_with_ctx(ctx, &pattern, scheme);
                 let pattern = self.convert_pattern_with_ctx(ctx, pattern);
 
                 Stmt::Let {
@@ -1317,6 +1330,96 @@ impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Pattern handling
     // =========================================================================
+
+    fn generalize_let_binding(
+        &self,
+        ctx: &FunctionInferenceContext<'_, 'db>,
+        value_ty: Type<'db>,
+        evaluation_effect: EffectRow<'db>,
+    ) -> TypeScheme<'db> {
+        let mut solver = TypeSolver::new(self.db());
+        if solver.solve(ctx.constraints_snapshot()).is_err() {
+            return TypeScheme::mono(self.db(), value_ty);
+        }
+
+        let type_subst = solver.type_subst();
+        let row_subst = solver.row_subst();
+        if !row_subst
+            .apply(self.db(), evaluation_effect)
+            .is_pure(self.db())
+        {
+            return TypeScheme::mono(self.db(), value_ty);
+        }
+
+        let mut environment_type_vars = Vec::new();
+        let mut environment_effect_vars = Vec::new();
+        for scheme in ctx.visible_local_schemes() {
+            let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
+            type_subst.collect_univars_from_type(
+                self.db(),
+                body,
+                row_subst,
+                &mut environment_type_vars,
+            );
+            for var in collect_effect_vars(self.db(), body) {
+                if !environment_effect_vars.contains(&var) {
+                    environment_effect_vars.push(var);
+                }
+            }
+        }
+
+        let resolved = type_subst.apply_with_rows(self.db(), value_ty, row_subst);
+        let (generalized, type_params) =
+            type_subst.generalize_excluding(self.db(), resolved, row_subst, &environment_type_vars);
+        let effect_params: Vec<_> = collect_effect_vars(self.db(), generalized)
+            .into_iter()
+            .filter(|var| !environment_effect_vars.contains(var))
+            .collect();
+        TypeScheme::new(self.db(), type_params, effect_params, generalized)
+    }
+
+    fn bind_pattern_scheme_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern: &Pattern<ResolvedRef<'db>>,
+        scheme: TypeScheme<'db>,
+    ) {
+        match &*pattern.kind {
+            PatternKind::Bind { name, local_id } => {
+                if let Some(id) = local_id {
+                    ctx.bind_local_scheme(*id, scheme);
+                }
+                ctx.bind_local_scheme_by_name(*name, scheme);
+            }
+            PatternKind::Tuple(patterns) => {
+                if let TypeKind::Tuple(elements) = scheme.body(self.db()).kind(self.db()) {
+                    for (pattern, element) in patterns.iter().zip(elements) {
+                        let element_scheme = TypeScheme::new(
+                            self.db(),
+                            scheme.type_params(self.db()).clone(),
+                            scheme.effect_params(self.db()).clone(),
+                            *element,
+                        );
+                        self.bind_pattern_scheme_with_ctx(ctx, pattern, element_scheme);
+                    }
+                } else {
+                    self.bind_pattern_vars_with_ctx(ctx, pattern, scheme.body(self.db()));
+                }
+            }
+            PatternKind::As {
+                pattern: inner,
+                name,
+                local_id,
+            } => {
+                if let Some(id) = local_id {
+                    ctx.bind_local_scheme(*id, scheme);
+                }
+                ctx.bind_local_scheme_by_name(*name, scheme);
+                self.bind_pattern_scheme_with_ctx(ctx, inner, scheme);
+            }
+            _ => self.bind_pattern_vars_with_ctx(ctx, pattern, scheme.body(self.db())),
+        }
+    }
 
     /// Infer the type that a pattern matches against.
     fn infer_pattern_type_with_ctx(

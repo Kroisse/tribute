@@ -58,11 +58,11 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Types of local variables (by LocalId), organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
-    local_scopes: Vec<HashMap<LocalId, Type<'db>>>,
+    local_scopes: Vec<HashMap<LocalId, TypeScheme<'db>>>,
 
     /// Types of local variables by name, organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
-    name_scopes: Vec<HashMap<Symbol, Type<'db>>>,
+    name_scopes: Vec<HashMap<Symbol, TypeScheme<'db>>>,
 
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
@@ -223,18 +223,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Bind a local variable to a type in the current scope.
     pub fn bind_local(&mut self, local: LocalId, ty: Type<'db>) {
+        self.bind_local_scheme(local, TypeScheme::mono(self.db, ty));
+    }
+
+    /// Bind a local variable to a type scheme in the current scope.
+    pub fn bind_local_scheme(&mut self, local: LocalId, scheme: TypeScheme<'db>) {
         if let Some(scope) = self.local_scopes.last_mut() {
-            scope.insert(local, ty);
+            scope.insert(local, scheme);
         }
     }
 
     /// Look up the type of a local variable.
     ///
     /// Searches from innermost to outermost scope.
-    pub fn lookup_local(&self, local: LocalId) -> Option<Type<'db>> {
+    pub fn lookup_local(&mut self, local: LocalId) -> Option<Type<'db>> {
         for scope in self.local_scopes.iter().rev() {
-            if let Some(ty) = scope.get(&local) {
-                return Some(*ty);
+            if let Some(scheme) = scope.get(&local).copied() {
+                return Some(self.instantiate_scheme(scheme));
             }
         }
         None
@@ -242,18 +247,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Bind a local variable by name in the current scope.
     pub fn bind_local_by_name(&mut self, name: Symbol, ty: Type<'db>) {
+        self.bind_local_scheme_by_name(name, TypeScheme::mono(self.db, ty));
+    }
+
+    /// Bind a local variable by name to a type scheme in the current scope.
+    pub fn bind_local_scheme_by_name(&mut self, name: Symbol, scheme: TypeScheme<'db>) {
         if let Some(scope) = self.name_scopes.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, scheme);
         }
     }
 
     /// Look up a local variable by name.
     ///
     /// Searches from innermost to outermost scope.
-    pub fn lookup_local_by_name(&self, name: Symbol) -> Option<Type<'db>> {
+    pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
         for scope in self.name_scopes.iter().rev() {
-            if let Some(ty) = scope.get(&name) {
-                return Some(*ty);
+            if let Some(scheme) = scope.get(&name).copied() {
+                return Some(self.instantiate_scheme(scheme));
             }
         }
         None
@@ -340,8 +350,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Instantiate a type scheme with fresh type variables.
     ///
     /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`, and each
-    /// free effect-row variable with a fresh row variable. Repeated occurrences
-    /// of the same row variable remain shared within one instantiation.
+    /// quantified effect-row variable with a fresh row variable. Repeated
+    /// occurrences of the same row variable remain shared within one instantiation.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         let params = scheme.type_params(self.db);
         let instantiated = if params.is_empty() {
@@ -355,46 +365,52 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
         };
 
+        let quantified_rows = scheme.effect_params(self.db);
         let mut row_vars = HashMap::new();
-        self.freshen_effect_vars_in_type(instantiated, &mut row_vars)
+        self.freshen_effect_vars_in_type(instantiated, quantified_rows, &mut row_vars)
     }
 
     fn freshen_effect_vars_in_type(
         &mut self,
         ty: Type<'db>,
+        quantified_rows: &[EffectVar],
         row_vars: &mut HashMap<u64, EffectVar>,
     ) -> Type<'db> {
-        let freshen_row =
-            |ctx: &mut Self, row: EffectRow<'db>, row_vars: &mut HashMap<u64, EffectVar>| {
-                let effects: Vec<Effect<'db>> = row
-                    .effects(ctx.db)
-                    .iter()
-                    .map(|effect| Effect {
-                        ability_id: effect.ability_id,
-                        args: effect
-                            .args
-                            .iter()
-                            .map(|arg| ctx.freshen_effect_vars_in_type(*arg, row_vars))
-                            .collect(),
-                    })
-                    .collect();
-                let rest = row.rest(ctx.db).map(|var| {
-                    if let Some(fresh) = row_vars.get(&var.id) {
-                        *fresh
-                    } else {
-                        let fresh = ctx.fresh_row_var();
-                        row_vars.insert(var.id, fresh);
-                        fresh
-                    }
-                });
-                EffectRow::new(ctx.db, effects, rest)
-            };
+        let freshen_row = |ctx: &mut Self,
+                           row: EffectRow<'db>,
+                           row_vars: &mut HashMap<u64, EffectVar>| {
+            let effects: Vec<Effect<'db>> = row
+                .effects(ctx.db)
+                .iter()
+                .map(|effect| Effect {
+                    ability_id: effect.ability_id,
+                    args: effect
+                        .args
+                        .iter()
+                        .map(|arg| ctx.freshen_effect_vars_in_type(*arg, quantified_rows, row_vars))
+                        .collect(),
+                })
+                .collect();
+            let rest = row.rest(ctx.db).map(|var| {
+                if !quantified_rows.contains(&var) {
+                    return var;
+                }
+                if let Some(fresh) = row_vars.get(&var.id) {
+                    *fresh
+                } else {
+                    let fresh = ctx.fresh_row_var();
+                    row_vars.insert(var.id, fresh);
+                    fresh
+                }
+            });
+            EffectRow::new(ctx.db, effects, rest)
+        };
 
         match ty.kind(self.db) {
             TypeKind::Named { name, args } => {
                 let args = args
                     .iter()
-                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, quantified_rows, row_vars))
                     .collect();
                 Type::new(self.db, TypeKind::Named { name: *name, args })
             }
@@ -406,9 +422,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             } => {
                 let params = params
                     .iter()
-                    .map(|param| self.freshen_effect_vars_in_type(*param, row_vars))
+                    .map(|param| {
+                        self.freshen_effect_vars_in_type(*param, quantified_rows, row_vars)
+                    })
                     .collect();
-                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let result = self.freshen_effect_vars_in_type(*result, quantified_rows, row_vars);
                 let effect = freshen_row(self, *effect, row_vars);
                 Type::new(
                     self.db,
@@ -423,15 +441,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             TypeKind::Tuple(elements) => {
                 let elements = elements
                     .iter()
-                    .map(|element| self.freshen_effect_vars_in_type(*element, row_vars))
+                    .map(|element| {
+                        self.freshen_effect_vars_in_type(*element, quantified_rows, row_vars)
+                    })
                     .collect();
                 Type::new(self.db, TypeKind::Tuple(elements))
             }
             TypeKind::App { ctor, args } => {
-                let ctor = self.freshen_effect_vars_in_type(*ctor, row_vars);
+                let ctor = self.freshen_effect_vars_in_type(*ctor, quantified_rows, row_vars);
                 let args = args
                     .iter()
-                    .map(|arg| self.freshen_effect_vars_in_type(*arg, row_vars))
+                    .map(|arg| self.freshen_effect_vars_in_type(*arg, quantified_rows, row_vars))
                     .collect();
                 Type::new(self.db, TypeKind::App { ctor, args })
             }
@@ -440,8 +460,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 result,
                 effect,
             } => {
-                let arg = self.freshen_effect_vars_in_type(*arg, row_vars);
-                let result = self.freshen_effect_vars_in_type(*result, row_vars);
+                let arg = self.freshen_effect_vars_in_type(*arg, quantified_rows, row_vars);
+                let result = self.freshen_effect_vars_in_type(*result, quantified_rows, row_vars);
                 let effect = freshen_row(self, *effect, row_vars);
                 Type::new(
                     self.db,
@@ -535,6 +555,19 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
         std::mem::take(&mut self.constraints)
+    }
+
+    /// Clone constraints generated so far for prefix solving at a let binding.
+    pub fn constraints_snapshot(&self) -> ConstraintSet<'db> {
+        self.constraints.clone()
+    }
+
+    /// Return all schemes visible in the local environment.
+    pub fn visible_local_schemes(&self) -> Vec<TypeScheme<'db>> {
+        self.local_scopes
+            .iter()
+            .flat_map(|scope| scope.values().copied())
+            .collect()
     }
 
     // =========================================================================
@@ -838,7 +871,7 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], vec![], func_ty);
         env.register_function(func_id, scheme);
 
         // Create a FunctionInferenceContext and instantiate the function
@@ -928,7 +961,7 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(db, vec![], outer);
+        let scheme = TypeScheme::new(db, vec![], vec![EffectVar { id: 0 }], outer);
 
         let first = ctx.instantiate_scheme(scheme);
         let second = ctx.instantiate_scheme(scheme);
@@ -938,6 +971,49 @@ mod tests {
         assert_eq!(first_outer.rest(db), first_callback.rest(db));
         assert_eq!(second_outer.rest(db), second_callback.rest(db));
         assert_ne!(first_outer.rest(db), second_outer.rest(db));
+    }
+
+    #[salsa_test]
+    fn test_local_scheme_lookup_freshens_type_and_effect_vars(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+        let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let row_var = EffectVar { id: 42 };
+        let body = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound],
+                result: bound,
+                effect: EffectRow::open(db, row_var),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], vec![row_var], body);
+        let local_id = LocalId::new(1);
+        ctx.bind_local_scheme(local_id, scheme);
+
+        let first = ctx.lookup_local(local_id).unwrap();
+        let second = ctx.lookup_local(local_id).unwrap();
+        let TypeKind::Func {
+            params: first_params,
+            effect: first_effect,
+            ..
+        } = first.kind(db)
+        else {
+            panic!("expected function type");
+        };
+        let TypeKind::Func {
+            params: second_params,
+            effect: second_effect,
+            ..
+        } = second.kind(db)
+        else {
+            panic!("expected function type");
+        };
+
+        assert_ne!(first_params[0], second_params[0]);
+        assert_ne!(first_effect.rest(db), second_effect.rest(db));
     }
 
     #[salsa_test]
@@ -970,7 +1046,7 @@ mod tests {
                 args: vec![continuation],
             },
         );
-        let scheme = TypeScheme::new(db, vec![], app);
+        let scheme = TypeScheme::new(db, vec![], vec![EffectVar { id: 0 }], app);
 
         let instantiated = ctx.instantiate_scheme(scheme);
         let TypeKind::App { ctor, args } = instantiated.kind(db) else {
@@ -1049,7 +1125,7 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], vec![], func_ty);
         env.register_constructor(ctor_id, scheme);
 
         // Create a FunctionInferenceContext and instantiate the constructor

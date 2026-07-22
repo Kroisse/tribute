@@ -284,6 +284,28 @@ impl<'db> TypeSubst<'db> {
         (generalized, type_params)
     }
 
+    /// Generalize unresolved variables except those free in the environment.
+    pub fn generalize_excluding(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        excluded: &[UniVarId<'db>],
+    ) -> (Type<'db>, Vec<TypeParam>) {
+        let mut univars = Vec::new();
+        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+        univars.retain(|id| !excluded.contains(id));
+
+        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index as u32))
+            .collect();
+        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+        let type_params = univars.iter().map(|_| TypeParam::anonymous()).collect();
+        (generalized, type_params)
+    }
+
     /// Generalize a type and return the UniVar → BoundVar index mapping.
     ///
     /// This is used when you need to apply the same generalization mapping

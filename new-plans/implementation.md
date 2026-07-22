@@ -758,9 +758,16 @@ them concrete and generalizes remaining polymorphic variables into stable
 `BoundVar` indices. Generalization covers the function signature, checked body,
 and post-solve deferred UFCS callee types so later TDNR and monomorphization do
 not see raw solver variables in typed references. Each type-scheme
-instantiation freshens both bound type variables and free effect-row variables,
+instantiation freshens both bound type variables and quantified effect-row variables,
 while preserving repeated references to the same row variable within that
 single instantiation.
+
+Local scopes store `TypeScheme` bindings. At each `let`, the checker solves the
+constraint prefix through that binding and separately tracks the effect of
+evaluating the right-hand side. A closed-pure evaluation generalizes type and
+effect-row variables not free in the surrounding local environment; an
+effectful evaluation stores a monomorphic scheme. Latent effects inside a
+lambda's function type do not make evaluation of the lambda effectful.
 
 Constraints produced from calls, lambdas, and handler boundaries retain their
 source origin through solving. User-facing failures render effect rows in

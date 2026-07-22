@@ -13,6 +13,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Pattern,
     PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
+    collect_effect_vars,
 };
 
 use super::super::constraint::{ConstraintOriginKind, ConstraintSet};
@@ -292,7 +293,8 @@ impl<'db> TypeChecker<'db> {
             .map(|_| crate::ast::TypeParam::anonymous())
             .collect();
 
-        let new_scheme = TypeScheme::new(self.db(), type_params, generalized);
+        let effect_params = collect_effect_vars(self.db(), generalized);
+        let new_scheme = TypeScheme::new(self.db(), type_params, effect_params, generalized);
         // Update the function's type scheme with the generalized version
         self.env.register_function(func_id, new_scheme);
 
