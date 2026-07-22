@@ -3,7 +3,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::Attribute;
 
-const STRING_TYPE_ATTR: &str = "tribute.well_known.string";
+const STRING_TYPE_ATTR: &str = "tribute.type.string";
 
 /// Tribute semantic type identities attached to a root IR module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

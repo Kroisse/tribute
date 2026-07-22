@@ -99,7 +99,7 @@ native uses function pointers plus heap environments.
 literal operations.
 
 The root `core.module` carries Tribute-specific well-known type identities as
-`TypeRef` attributes. In particular, `tribute.well_known.string` is the exact
+`TypeRef` attributes. In particular, `tribute.type.string` is the exact
 `adt.enum` type produced from the prelude `String` declaration. String-literal
 lowering must consume this identity directly; it must not rediscover `String`
 by type name, variant names, or field layout. This metadata is semantic compiler
@@ -110,7 +110,7 @@ identity, not its name, when materializing this `TypeRef`.
 The current specialized textual printer for `core.module` does not serialize
 arbitrary module attributes. Consequently, parsing printed IR conservatively
 drops well-known type metadata. A backend may still process byte constants, but
-must reject `adt.string_const` when `tribute.well_known.string` is absent rather
+must reject `adt.string_const` when `tribute.type.string` is absent rather
 than scanning types for a plausible replacement. A future textual format may
 make these attributes round-trip explicitly.
 

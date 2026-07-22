@@ -56,7 +56,7 @@ graph TD
 ## Lowering 경로
 
 String constant lowering reads the exact prelude `String` `TypeRef` from the
-root module's `tribute.well_known.string` metadata. It does not search interned
+root module's `tribute.type.string` metadata. It does not search interned
 ADT types by `String`, `Leaf`/`Branch`, or representation layout. Missing
 metadata is a lowering error whenever `adt.string_const` is present; this keeps
 hand-written or text-round-tripped IR from silently selecting a user lookalike.

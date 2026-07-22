@@ -650,7 +650,7 @@ Prelude가 정의하는 well-known type은 type checking 결과의 별도 metada
 보존한다. 최소 metadata 집합인 `WellKnownTypes`는 prelude `String`의 semantic
 type과 stable declaration identity를 `TypedModule` 경계까지 전달하고,
 AST-to-IR lowering은 declaration identity를 직접 비교해 이를 정확한
-TrunkIR `TypeRef`로 변환해 root module의 `tribute.well_known.string` attribute에
+TrunkIR `TypeRef`로 변환해 root module의 `tribute.type.string` attribute에
 기록한다. Native/Wasm constant lowering은 이 attribute만 사용하며 이름이나
 layout scan으로 복구하지 않는다. Textual IR에서 attribute가 유실된 경우
 string constant lowering은 보수적으로 실패한다.
