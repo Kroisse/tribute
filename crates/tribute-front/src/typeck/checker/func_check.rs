@@ -16,7 +16,6 @@ use crate::ast::{
 };
 
 use super::super::constraint::{ConstraintOriginKind, ConstraintSet};
-use super::super::effect_row::find_conflicting_effects;
 use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{LocatedSolveError, RowSubst, TypeSolver, TypeSubst};
 use super::{Mode, TypeChecker};
@@ -233,17 +232,26 @@ impl<'db> TypeChecker<'db> {
             && let Some(declared) = declared_effect
         {
             let resolved_declared = row_subst.apply(self.db(), declared);
-            if let Some((_, effects)) = find_conflicting_effects(self.db(), resolved_declared) {
-                Diagnostic::new(
+            if let Some(duplicate) = self
+                .effect_annotation_origins
+                .get(&func_id)
+                .and_then(|origins| origins.find_duplicate(self.db(), resolved_declared))
+            {
+                Diagnostic::builder(
                     format!(
                         "function '{}' declares duplicate effect: {}",
                         func.name,
-                        effects.iter().format(", "),
+                        duplicate.effects.iter().format(", "),
                     ),
-                    self.get_span(func.id),
+                    self.get_span(duplicate.duplicate_annotation_id),
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
+                .label(
+                    self.get_span(duplicate.first_annotation_id),
+                    "first matching effect annotation is here",
+                )
+                .build()
                 .accumulate(self.db());
             }
 

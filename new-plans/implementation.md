@@ -770,6 +770,12 @@ contract as secondary context. A frontend error stops the pipeline before AST
 to IR conversion and shared lowering so invalid source does not produce
 cascading diagnostics containing internal IR operation identities.
 
+Effect-annotation conversion also preserves the source origin of each concrete
+effect separately from the semantic `EffectRow`. Duplicate annotations are
+diagnosed at the repeated annotation after solving, with the first matching
+annotation attached as secondary context; parameterized and qualified effects
+keep the origin recorded at their shared annotation-to-row conversion point.
+
 ### 점진적 개선 방향: Fine-Grained Queries
 
 현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로

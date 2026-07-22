@@ -103,10 +103,10 @@ impl<'db> TypeChecker<'db> {
             });
 
         // Build effect row from annotations (effects don't have BoundVars for now)
-        let effect = match &func.effects {
+        let (effect, effect_origins) = match &func.effects {
             Some(anns) => {
                 // For effects, we use a closed row during collection
-                crate::ast::abilities_to_effect_row(
+                let conversion = crate::ast::abilities_to_effect_row_with_origins(
                     self.db(),
                     anns,
                     self.current_prefix(),
@@ -114,11 +114,12 @@ impl<'db> TypeChecker<'db> {
                         self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
                     },
                     || EffectVar { id: 0 }, // Placeholder, will be replaced during function check
-                )
+                );
+                (conversion.row, Some(conversion.origins))
             }
             // Omitting the annotation is effect-polymorphic (`->{e}`), not
             // an assertion that the row is closed and empty.
-            None => EffectRow::open(self.db(), EffectVar { id: 0 }),
+            None => (EffectRow::open(self.db(), EffectVar { id: 0 }), None),
         };
 
         let func_ty = self.env.func_type(param_types, return_ty, effect);
@@ -132,6 +133,9 @@ impl<'db> TypeChecker<'db> {
 
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(func.name);
+        if let Some(origins) = effect_origins {
+            self.effect_annotation_origins.insert(func_id, origins);
+        }
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters

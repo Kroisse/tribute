@@ -72,6 +72,8 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
+    /// Source origins for concrete effects in each collected function signature.
+    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -82,6 +84,7 @@ impl<'db> TypeChecker<'db> {
             prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
+            effect_annotation_origins: HashMap::new(),
         }
     }
 
