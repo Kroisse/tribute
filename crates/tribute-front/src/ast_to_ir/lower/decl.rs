@@ -17,14 +17,51 @@ use super::super::TypedModule;
 use super::super::context::IrLoweringCtx;
 use super::{FuncSignature, IrBuilder, convert_annotation_to_ir_type, expr, qualified_type_name};
 
+struct PendingWellKnownType {
+    definition: crate::typeck::DefinitionIdentity,
+    ir_type: Option<TypeRef>,
+}
+
+struct WellKnownTypePrescan {
+    string: Option<PendingWellKnownType>,
+}
+
+impl WellKnownTypePrescan {
+    fn new(types: crate::typeck::WellKnownTypes<'_>) -> Self {
+        Self {
+            string: types.string.map(|ty| PendingWellKnownType {
+                definition: ty.definition,
+                ir_type: None,
+            }),
+        }
+    }
+
+    fn is_string(&self, definition: crate::typeck::DefinitionIdentity) -> bool {
+        self.string
+            .as_ref()
+            .is_some_and(|string| string.definition == definition)
+    }
+
+    fn record_string(&mut self, ir_type: TypeRef) {
+        if let Some(string) = &mut self.string {
+            string.ir_type = Some(ir_type);
+        }
+    }
+
+    fn finish(self) -> tribute_ir::metadata::WellKnownTypes {
+        tribute_ir::metadata::WellKnownTypes {
+            string: self.string.and_then(|string| string.ir_type),
+        }
+    }
+}
+
 /// Pre-scan declarations to register struct field orders.
 fn prescan_struct_fields<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     decls: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
-    well_known_string_definition: Option<crate::typeck::DefinitionIdentity>,
-    well_known_string_type: &mut Option<TypeRef>,
+    well_known_types: &mut WellKnownTypePrescan,
 ) {
     for decl in decls {
         match decl {
@@ -71,27 +108,20 @@ fn prescan_struct_fields<'db>(
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
                 let definition =
                     crate::typeck::DefinitionIdentity::new(e.id, ctx.location(e.id).span);
-                let enum_ir_type = if well_known_string_definition == Some(definition) {
+                let enum_ir_type = if well_known_types.is_string(definition) {
                     ctx.adt_enum_type_with_definition(ir, qualified, &ir_variants, definition)
                 } else {
                     ctx.adt_enum_type(ir, qualified, &ir_variants)
                 };
                 ctx.register_type(qualified, enum_ir_type);
-                if well_known_string_definition == Some(definition) {
-                    *well_known_string_type = Some(enum_ir_type);
+                if well_known_types.is_string(definition) {
+                    well_known_types.record_string(enum_ir_type);
                 }
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let saved = crate::push_prefix(prefix, m.name);
-                    prescan_struct_fields(
-                        ctx,
-                        ir,
-                        body,
-                        prefix,
-                        well_known_string_definition,
-                        well_known_string_type,
-                    );
+                    prescan_struct_fields(ctx, ir, body, prefix, well_known_types);
                     prefix.truncate(saved);
                 }
             }
@@ -182,20 +212,16 @@ impl<'db> TypedModule<'db> {
         prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
 
         // Pre-scan: register all struct field orders before lowering any declarations.
-        let well_known_string_definition = well_known_types.string.map(|ty| ty.definition);
-        let mut well_known_string_type = None;
+        let mut well_known_types = WellKnownTypePrescan::new(well_known_types);
         prescan_struct_fields(
             &mut ctx,
             ir,
             &ast.decls,
             &mut String::new(),
-            well_known_string_definition,
-            &mut well_known_string_type,
+            &mut well_known_types,
         );
 
-        let well_known_types = tribute_ir::metadata::WellKnownTypes {
-            string: well_known_string_type,
-        };
+        let well_known_types = well_known_types.finish();
 
         // Create the module block (top-down: create block first, push ops into it)
         let module_block = ir.create_block(BlockData {

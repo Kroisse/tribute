@@ -72,6 +72,21 @@ pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
 }
 
+/// A typed key for extracting a semantic type from the prelude.
+pub trait WellKnownTypeKey: Copy {
+    fn name(self) -> Symbol;
+}
+
+/// Key for the prelude-defined `String` type.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StringType;
+
+impl WellKnownTypeKey for StringType {
+    fn name(self) -> Symbol {
+        Symbol::new("String")
+    }
+}
+
 impl WellKnownTypes<'_> {
     pub const fn empty() -> Self {
         Self { string: None }

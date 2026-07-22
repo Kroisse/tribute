@@ -33,7 +33,9 @@ use crate::ast::{
 };
 
 use super::context::ModuleTypeEnv;
-use super::{DefinitionIdentity, PreludeExports, WellKnownType, WellKnownTypes};
+use super::{
+    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
+};
 use crate::ast::CallingConvention;
 
 /// Result of module type checking.
@@ -79,6 +81,27 @@ pub struct TypeChecker<'db> {
 }
 
 impl<'db> TypeChecker<'db> {
+    fn prelude_well_known_type(
+        &self,
+        module: &Module<ResolvedRef<'db>>,
+        key: impl WellKnownTypeKey,
+    ) -> Option<WellKnownType<'db>> {
+        let name = key.name();
+        let declaration = module.decls.iter().find_map(|decl| match decl {
+            Decl::Struct(decl) if decl.name == name => Some(decl.id),
+            Decl::Enum(decl) if decl.name == name => Some(decl.id),
+            _ => None,
+        })?;
+        let ty = self.env.lookup_type_def(name)?.body(self.db());
+        Some(WellKnownType {
+            ty,
+            definition: DefinitionIdentity::new(
+                declaration,
+                self.span_map.get_or_default(declaration),
+            ),
+        })
+    }
+
     /// Create a new type checker with the given span map.
     pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
@@ -192,10 +215,7 @@ impl<'db> TypeChecker<'db> {
         // Phase 1: Collect type definitions and function signatures
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
-        let string_declaration = module.decls.iter().find_map(|decl| match decl {
-            Decl::Enum(decl) if decl.name == "String" => Some(decl.id),
-            _ => None,
-        });
+        let string_type = self.prelude_well_known_type(&module, StringType);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
@@ -215,17 +235,7 @@ impl<'db> TypeChecker<'db> {
         let method_index = self.env.export_method_index();
         let ability_conventions = self.env.export_ability_conventions();
         let well_known_types = WellKnownTypes {
-            string: string_declaration.and_then(|declaration| {
-                self.env
-                    .lookup_type_def(Symbol::new("String"))
-                    .map(|scheme| WellKnownType {
-                        ty: scheme.body(self.db()),
-                        definition: DefinitionIdentity::new(
-                            declaration,
-                            self.span_map.get_or_default(declaration),
-                        ),
-                    })
-            }),
+            string: string_type,
         };
 
         PreludeExports::new(
