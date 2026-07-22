@@ -7,6 +7,7 @@
 //! The analysis produces a plain struct (no Salsa tracking).
 
 use std::collections::HashMap;
+use std::fmt;
 
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::get_enum_variants;
@@ -20,6 +21,28 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::Attribute;
 use trunk_ir::types::TypeDataBuilder;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConstValidationError {
+    MissingCanonicalStringType,
+    InvalidStringResultType { actual: String },
+}
+
+impl fmt::Display for ConstValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingCanonicalStringType => {
+                f.write_str("adt.string_const requires the canonical prelude String type")
+            }
+            Self::InvalidStringResultType { actual } => write!(
+                f,
+                "adt.string_const must produce wasm.anyref before canonical String lowering, found {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConstValidationError {}
 
 /// Result of constant analysis.
 pub struct ConstAnalysis {
@@ -145,6 +168,45 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
             .then(|| find_string_enum_type(ctx))
             .flatten(),
     }
+}
+
+/// Validate the representation expected at the Wasm constant-lowering boundary.
+///
+/// This runs after primitive type normalization, so source-level
+/// `tribute_rt.anyref` results must already be represented as `wasm.anyref`.
+pub fn validate_for_wasm(
+    ctx: &IrContext,
+    module: Module,
+    analysis: &ConstAnalysis,
+) -> Result<(), ConstValidationError> {
+    let Some(body) = module.body(ctx) else {
+        return Ok(());
+    };
+
+    let mut result = Ok(());
+    walk_ops_in_region(ctx, body, &mut |ctx, op| {
+        if result.is_err() || adt::StringConst::from_op(ctx, op).is_err() {
+            return;
+        }
+        if analysis.string_enum_ty.is_none() {
+            result = Err(ConstValidationError::MissingCanonicalStringType);
+            return;
+        }
+
+        let Some(&result_ty) = ctx.op_result_types(op).first() else {
+            result = Err(ConstValidationError::InvalidStringResultType {
+                actual: "<missing>".to_owned(),
+            });
+            return;
+        };
+        let ty = ctx.types.get(result_ty);
+        if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != Symbol::new("anyref") {
+            result = Err(ConstValidationError::InvalidStringResultType {
+                actual: format!("{}.{}", ty.dialect, ty.name),
+            });
+        }
+    });
+    result
 }
 
 /// Lower const operations using pre-computed analysis.
@@ -335,6 +397,51 @@ mod tests {
         assert_eq!(analysis.allocations, vec![(b"hello".to_vec(), 0, 5)]);
         assert_eq!(analysis.data_info_for(b"hello"), Some((0, 5)));
         assert_eq!(analysis.data_info_for(b"missing"), None);
+    }
+
+    #[test]
+    fn analysis_shares_passive_data_between_string_and_bytes_literals() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %string = adt.string_const {value = "shared"} : tribute_rt.anyref
+    %bytes = adt.bytes_const {value = b"shared"} : core.bytes
+    wasm.return
+  }
+}"#,
+        );
+
+        let analysis = analyze_consts(&ctx, module);
+
+        assert_eq!(analysis.allocations, vec![(b"shared".to_vec(), 0, 6)]);
+        assert_eq!(analysis.data_info_for(b"shared"), Some((0, 6)));
+    }
+
+    #[test]
+    fn string_lowering_builds_a_canonical_leaf() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  wasm.func @main() -> core.nil {
+    %string = adt.string_const {value = "hello"} : wasm.anyref
+    wasm.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        validate_for_wasm(&ctx, module, &analysis).expect("canonical String result type");
+        lower(&mut ctx, module, &analysis);
+
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!output.contains("adt.string_const"), "{output}");
+        assert!(output.contains("wasm.bytes_from_data"), "{output}");
+        assert!(output.contains("adt.variant_new"), "{output}");
+        assert!(output.contains("tag = @Leaf"), "{output}");
     }
 
     #[test]
