@@ -175,11 +175,15 @@ fn record_shorthand_binding_stays_free_in_later_scheme(db: &salsa::DatabaseImpl)
         r#"
 struct Holder(a) { value: a }
 
+ability Source(s) {
+    op get() -> s
+}
+
 extern "intrinsic" fn take_nat(value: Nat) ->{} Nil
 extern "intrinsic" fn take_bool(value: Bool) ->{} Nil
 
-fn restricted(holder: Holder(a)) -> Nil {
-    let Holder { value } = holder
+fn restricted() -> Nil {
+    let Holder { value } = Holder(Source::get())
     let copy = value
     take_nat(copy)
     take_bool(copy)
