@@ -1,0 +1,29 @@
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+enum Inner {
+    Value(Nat)
+    Empty
+}
+
+enum Outer {
+    Wrapped(Inner)
+    Missing
+}
+
+fn read_nested(outer: Outer) -> Nat {
+    case outer {
+        Wrapped(inner) -> case inner {
+            Value(value) -> value
+            Empty -> 0
+        }
+        Missing -> 0
+    }
+}
+
+fn main() {
+    let inner = Value(10)
+    let outer = Wrapped(inner)
+    let first = read_nested(outer)
+    let second = read_nested(outer)
+    __tribute_print_nat(first + second)
+}

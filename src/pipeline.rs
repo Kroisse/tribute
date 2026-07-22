@@ -133,6 +133,7 @@ impl OptimizationOptions {
 pub struct NativeOptimizationOptions {
     pub paired_rc_elimination: PairedRcEliminationPolicy,
     pub borrowed_parameters: BorrowedParameterPolicy,
+    pub temporary_borrows: TemporaryBorrowPolicy,
 }
 
 impl NativeOptimizationOptions {
@@ -140,6 +141,7 @@ impl NativeOptimizationOptions {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
         }
     }
 
@@ -147,6 +149,7 @@ impl NativeOptimizationOptions {
         Self {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
         }
     }
 }
@@ -163,6 +166,13 @@ pub enum PairedRcEliminationPolicy {
 pub enum BorrowedParameterPolicy {
     Preserve,
     ElideProvenBorrowed,
+}
+
+/// Policy for eliding ownership of proven field-derived native temporaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum TemporaryBorrowPolicy {
+    Preserve,
+    ElideProvenFieldBorrows,
 }
 
 impl Default for OptimizationOptions {
@@ -185,6 +195,8 @@ pub enum NativePipelineStage {
     AfterRcInsertion,
     /// After borrowed-parameter-aware insertion, before paired elimination.
     AfterBorrowedParameterOptimization,
+    /// After temporary field-borrow-aware insertion, before paired elimination.
+    AfterTemporaryBorrowOptimization,
     /// After optional local RC optimization, before cast resolution and lowering.
     AfterRcOptimization,
 }
@@ -273,6 +285,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         result.function_types,
         result.node_types,
         result.ability_conventions,
+        result.well_known_types,
         span_map,
     ))
 }
@@ -418,6 +431,7 @@ fn merge_and_lower_to_ir<'db>(
         function_types: merged_fn_types,
         node_types: merged_node_types,
         ability_conventions: merged_ability_conventions,
+        well_known_types: typed.well_known_types(db),
     }
     .lower_to_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
 
@@ -1039,10 +1053,30 @@ fn prepare_module_to_native(
                 tribute_passes::native::rc_insertion::BorrowedParameterPolicy::ElideProvenBorrowed
             }
         };
-        tribute_passes::native::rc_insertion::insert_rc_with_trusted_summaries(
+        let temporary_borrows = if matches!(
+            stop_after,
+            Some(
+                NativePipelineStage::AfterRcInsertion
+                    | NativePipelineStage::AfterBorrowedParameterOptimization
+            )
+        ) {
+            TemporaryBorrowPolicy::Preserve
+        } else {
+            optimizations.temporary_borrows
+        };
+        let temporary_borrows = match temporary_borrows {
+            TemporaryBorrowPolicy::Preserve => {
+                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::Preserve
+            }
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
+                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::ElideProvenFieldBorrows
+            }
+        };
+        tribute_passes::native::rc_insertion::insert_rc_with_policies_and_trusted_summaries(
             ctx,
             module,
             borrowed_parameters,
+            temporary_borrows,
             &ownership_summaries,
         );
     }
@@ -1052,6 +1086,10 @@ fn prepare_module_to_native(
     }
 
     if stop_after == Some(NativePipelineStage::AfterBorrowedParameterOptimization) {
+        return Ok(None);
+    }
+
+    if stop_after == Some(NativePipelineStage::AfterTemporaryBorrowOptimization) {
         return Ok(None);
     }
 
@@ -1260,6 +1298,7 @@ pub fn parse_and_lower_ast<'db>(
         result.function_types,
         result.node_types,
         result.ability_conventions,
+        result.well_known_types,
         span_map,
     ))
 }
@@ -1888,6 +1927,61 @@ fn main() ->{std::io::Io} Nil {
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[salsa_test]
+    fn well_known_string_metadata_uses_prelude_declaration_identity(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "lookalike.trb",
+            r#"
+enum String {
+    Leaf(Bytes),
+    Branch(String, String, Nat),
+}
+
+fn main() -> String { "hello" }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let canonical = typed
+            .well_known_types(db)
+            .string
+            .expect("prelude String identity");
+        let (ctx, module) =
+            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
+            .string
+            .expect("String IR metadata");
+        let string_data = ctx.types.get(string_ty);
+
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.source"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.source as i128
+            ))
+        );
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.start"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.start as i128
+            ))
+        );
+        assert_eq!(
+            string_data.attrs.get("tribute.definition.end"),
+            Some(&trunk_ir::Attribute::Int(canonical.definition.end as i128))
+        );
+
+        let user_lookalike = ctx.types.iter().find_map(|(ty, data)| {
+            (ty != string_ty
+                && data.dialect == "adt"
+                && data.name == "enum"
+                && data.attrs.get_symbol("name") == Some(trunk_ir::Symbol::new("String")))
+            .then_some(ty)
+        });
+        assert!(
+            user_lookalike.is_some(),
+            "compatible user String must remain distinct from prelude String"
+        );
     }
 
     #[salsa_test]

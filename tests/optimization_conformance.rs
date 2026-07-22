@@ -6,12 +6,13 @@ use common::{
     compile_and_run_native_with_borrowed_parameters,
     compile_and_run_native_with_done_continuation_dedup,
     compile_and_run_native_with_paired_rc_elimination,
+    compile_and_run_native_with_temporary_borrows,
 };
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{
     BorrowedParameterPolicy, NativeOptimizationOptions, NativePipelineStage, OptimizationOptions,
-    PairedRcEliminationPolicy, SharedPipelineStage, dump_native_ir_at_stage,
+    PairedRcEliminationPolicy, SharedPipelineStage, TemporaryBorrowPolicy, dump_native_ir_at_stage,
     dump_shared_ir_at_stage,
 };
 use tribute_front::SourceCst;
@@ -24,6 +25,8 @@ const PAIRED_RC_ELIMINATION: &str =
 const BORROWED_PARAMETERS: &str = include_str!("fixtures/optimizations/borrowed_parameters.trb");
 const TRUSTED_OWNERSHIP_FORWARDING: &str =
     include_str!("fixtures/optimizations/trusted_ownership_forwarding.trb");
+const TEMPORARY_FIELD_BORROWS: &str =
+    include_str!("fixtures/optimizations/temporary_field_borrows.trb");
 
 fn native_optimization_options(
     paired_rc_elimination: PairedRcEliminationPolicy,
@@ -33,6 +36,18 @@ fn native_optimization_options(
         native: NativeOptimizationOptions {
             paired_rc_elimination,
             borrowed_parameters,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+        },
+        ..OptimizationOptions::production()
+    }
+}
+
+fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> OptimizationOptions {
+    OptimizationOptions {
+        native: NativeOptimizationOptions {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows,
         },
         ..OptimizationOptions::production()
     }
@@ -200,6 +215,39 @@ fn trusted_ownership_forwarding_preserves_native_execution() {
     }
 }
 
+#[test]
+fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
+    for sanitize_address in [false, true] {
+        let preserved = compile_and_run_native_with_temporary_borrows(
+            "temporary_field_borrows_preserved.trb",
+            TEMPORARY_FIELD_BORROWS,
+            TemporaryBorrowPolicy::Preserve,
+            sanitize_address,
+        );
+        let elided = compile_and_run_native_with_temporary_borrows(
+            "temporary_field_borrows_elided.trb",
+            TEMPORARY_FIELD_BORROWS,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+            sanitize_address,
+        );
+        assert!(
+            preserved.status.success(),
+            "preserved pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&preserved.stderr)
+        );
+        assert!(
+            elided.status.success(),
+            "elided pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&elided.stderr)
+        );
+        let preserved_stdout = String::from_utf8_lossy(&preserved.stdout);
+        let elided_stdout = String::from_utf8_lossy(&elided.stdout);
+        assert_eq!(preserved_stdout.trim(), "20");
+        assert_eq!(elided_stdout.trim(), "20");
+        assert_eq!(preserved.stdout, elided.stdout);
+    }
+}
+
 #[salsa_test]
 fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -244,7 +292,6 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
         }
     );
 }
-
 #[salsa_test]
 fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -341,6 +388,50 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
 
     assert_snapshot!("borrowed_parameters_before", before);
     assert_snapshot!("borrowed_parameters_after", after);
+}
+
+#[salsa_test]
+fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "temporary_field_borrows_snapshot.trb",
+        TEMPORARY_FIELD_BORROWS,
+    );
+    let before = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        temporary_borrow_options(TemporaryBorrowPolicy::Preserve),
+    )
+    .expect("preserved temporary RC insertion IR should be available");
+    let after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterTemporaryBorrowOptimization,
+        temporary_borrow_options(TemporaryBorrowPolicy::ElideProvenFieldBorrows),
+    )
+    .expect("temporary-borrow IR should be available");
+    let preserved_after = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterTemporaryBorrowOptimization,
+        temporary_borrow_options(TemporaryBorrowPolicy::Preserve),
+    )
+    .expect("preserved temporary-borrow stage IR should be available");
+    let before = focused_rc_ops(&before);
+    let after = focused_rc_ops(&after);
+    let preserved_after = focused_rc_ops(&preserved_after);
+    assert_eq!(before, preserved_after);
+    let before_retain = before.matches("tribute_rt.retain").count();
+    let before_release = before.matches("tribute_rt.release").count();
+    let after_retain = after.matches("tribute_rt.retain").count();
+    let after_release = after.matches("tribute_rt.release").count();
+    assert!(before_retain > after_retain, "before RC ops:\n{before}");
+    assert!(before_release > after_release, "before RC ops:\n{before}");
+    assert_eq!(before_retain - after_retain, before_release - after_release);
+
+    assert_snapshot!("temporary_field_borrows_before", before);
+    assert_snapshot!("temporary_field_borrows_after", after);
 }
 
 #[salsa_test]
