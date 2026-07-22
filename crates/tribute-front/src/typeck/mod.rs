@@ -41,6 +41,43 @@ use crate::ast::{
     TypeScheme, TypedRef,
 };
 
+/// Semantic identities supplied by the prelude and required downstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct DefinitionIdentity {
+    pub source: u64,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl DefinitionIdentity {
+    pub fn new(declaration: NodeId, span: trunk_ir::Span) -> Self {
+        Self {
+            source: declaration.source(),
+            start: span.start,
+            end: span.end,
+        }
+    }
+}
+
+/// Semantic identities supplied by the prelude and required downstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct WellKnownType<'db> {
+    pub ty: Type<'db>,
+    pub definition: DefinitionIdentity,
+}
+
+/// Semantic identities supplied by the prelude and required downstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct WellKnownTypes<'db> {
+    pub string: Option<WellKnownType<'db>>,
+}
+
+impl WellKnownTypes<'_> {
+    pub const fn empty() -> Self {
+        Self { string: None }
+    }
+}
+
 /// Salsa-tracked struct holding the complete type checking output.
 ///
 /// Bundles the typed AST module with function type schemes so that
@@ -65,6 +102,8 @@ pub struct TypeCheckOutput<'db> {
     /// Ability-level calling-convention requirements.
     #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
+    /// Prelude-defined semantic type identities.
+    pub well_known_types: WellKnownTypes<'db>,
     /// Source span information for AST nodes.
     pub span_map: SpanMap,
 }
@@ -105,6 +144,8 @@ pub struct PreludeExports<'db> {
     /// Ability-level calling-convention requirements exported by the prelude.
     #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
+    /// Prelude-defined semantic type identities.
+    pub well_known_types: WellKnownTypes<'db>,
 }
 
 /// Type check a module.
@@ -124,6 +165,7 @@ pub fn typecheck_module<'db>(
         result.function_types,
         result.node_types,
         result.ability_conventions,
+        result.well_known_types,
         span_map,
     )
 }

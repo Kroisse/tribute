@@ -86,6 +86,7 @@ pub struct TypedModule<'db> {
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    pub well_known_types: crate::typeck::WellKnownTypes<'db>,
 }
 
 impl<'db> TypedModule<'db> {

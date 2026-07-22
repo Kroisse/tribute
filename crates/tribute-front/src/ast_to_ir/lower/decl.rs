@@ -23,6 +23,8 @@ fn prescan_struct_fields<'db>(
     ir: &mut IrContext,
     decls: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
+    well_known_string_definition: Option<crate::typeck::DefinitionIdentity>,
+    well_known_string_type: &mut Option<TypeRef>,
 ) {
     for decl in decls {
         match decl {
@@ -67,13 +69,29 @@ fn prescan_struct_fields<'db>(
                     })
                     .collect();
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
-                let enum_ir_type = ctx.adt_enum_type(ir, qualified, &ir_variants);
+                let definition =
+                    crate::typeck::DefinitionIdentity::new(e.id, ctx.location(e.id).span);
+                let enum_ir_type = if well_known_string_definition == Some(definition) {
+                    ctx.adt_enum_type_with_definition(ir, qualified, &ir_variants, definition)
+                } else {
+                    ctx.adt_enum_type(ir, qualified, &ir_variants)
+                };
                 ctx.register_type(qualified, enum_ir_type);
+                if well_known_string_definition == Some(definition) {
+                    *well_known_string_type = Some(enum_ir_type);
+                }
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let saved = crate::push_prefix(prefix, m.name);
-                    prescan_struct_fields(ctx, ir, body, prefix);
+                    prescan_struct_fields(
+                        ctx,
+                        ir,
+                        body,
+                        prefix,
+                        well_known_string_definition,
+                        well_known_string_type,
+                    );
                     prefix.truncate(saved);
                 }
             }
@@ -143,6 +161,7 @@ impl<'db> TypedModule<'db> {
             function_types,
             node_types,
             ability_conventions,
+            well_known_types,
         } = self;
         let module_location = span_map.get_or_default(ast.id);
         let location = Location::new(path, module_location);
@@ -163,7 +182,20 @@ impl<'db> TypedModule<'db> {
         prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
 
         // Pre-scan: register all struct field orders before lowering any declarations.
-        prescan_struct_fields(&mut ctx, ir, &ast.decls, &mut String::new());
+        let well_known_string_definition = well_known_types.string.map(|ty| ty.definition);
+        let mut well_known_string_type = None;
+        prescan_struct_fields(
+            &mut ctx,
+            ir,
+            &ast.decls,
+            &mut String::new(),
+            well_known_string_definition,
+            &mut well_known_string_type,
+        );
+
+        let well_known_types = tribute_ir::metadata::WellKnownTypes {
+            string: well_known_string_type,
+        };
 
         // Create the module block (top-down: create block first, push ops into it)
         let module_block = ir.create_block(BlockData {
@@ -187,6 +219,7 @@ impl<'db> TypedModule<'db> {
         });
 
         let module_op = core::module(ir, location, module_name, module_region);
+        well_known_types.attach(ir, module_op.op_ref());
         IrModule::new(ir, module_op.op_ref()).expect("valid core.module operation")
     }
 }
