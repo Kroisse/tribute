@@ -1354,6 +1354,13 @@ mod tests {
         run_pass_with_policies(ir, policy, TemporaryBorrowPolicy::Preserve)
     }
 
+    fn run_pass_with_legacy_policy(ir: &str, policy: BorrowedParameterPolicy) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        insert_rc_with_policy(&mut ctx, module, policy);
+        print_module(&ctx, module.op())
+    }
+
     fn run_pass_with_policies(
         ir: &str,
         parameter_policy: BorrowedParameterPolicy,
@@ -1421,6 +1428,45 @@ mod tests {
             output.matches("tribute_rt.retain").count(),
             output.matches("tribute_rt.release").count(),
         )
+    }
+
+    #[test]
+    fn parameter_and_temporary_borrow_policies_compose_independently() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#;
+
+        let preserved = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::Preserve,
+        );
+        let parameter_only = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::Preserve,
+        );
+        let temporary_only = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        );
+        let composed = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        );
+        let legacy = run_pass_with_legacy_policy(ir, BorrowedParameterPolicy::ElideProvenBorrowed);
+
+        assert_eq!(rc_counts(&preserved), (2, 2));
+        assert_eq!(rc_counts(&parameter_only), (1, 1));
+        assert_eq!(rc_counts(&temporary_only), (1, 1));
+        assert_eq!(rc_counts(&composed), (0, 0));
+        assert_eq!(rc_counts(&legacy), (2, 2));
     }
 
     // =========================================================================
