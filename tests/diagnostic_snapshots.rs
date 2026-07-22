@@ -270,11 +270,7 @@ fn diag_duplicate_effect_in_annotation(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-ability State(s) {
-    op get() -> s
-}
-
-fn test() ->{State(Int), State(Int)} Nil {
+fn test() ->{abilities::Throw(Int), abilities::Throw(Int)} Nil {
     Nil
 }
 "#,

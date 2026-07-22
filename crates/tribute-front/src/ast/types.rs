@@ -393,6 +393,68 @@ pub struct EffectVar {
 // Shared annotation → EffectRow conversion
 // =========================================================================
 
+/// Source origins for the concrete effects produced from an annotation list.
+///
+/// The IDs have the same order as the concrete effects in the converted row.
+/// Row-variable annotations are intentionally omitted. Keeping this metadata
+/// outside [`EffectRow`] preserves the row's semantic identity.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EffectAnnotationOrigins {
+    concrete: Vec<NodeId>,
+}
+
+impl EffectAnnotationOrigins {
+    /// Find the first duplicate in a resolved effect row and recover both
+    /// annotation origins associated with it.
+    pub fn find_duplicate<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        row: EffectRow<'db>,
+    ) -> Option<DuplicateEffectAnnotations<'db>> {
+        use std::collections::HashMap;
+
+        let effects = row.effects(db);
+        // Solving an open row may append inferred effects after the concrete
+        // annotations. Only the prefix produced by the source conversion has
+        // annotation origins and can represent duplicate annotations.
+        let annotated_effects = &effects[..effects.len().min(self.concrete.len())];
+
+        let mut first_origins = HashMap::<Effect<'db>, NodeId>::new();
+        for (effect, &annotation_id) in annotated_effects.iter().zip(&self.concrete) {
+            if let Some(&first_annotation_id) = first_origins.get(effect) {
+                let duplicates = annotated_effects
+                    .iter()
+                    .filter(|candidate| *candidate == effect)
+                    .cloned()
+                    .collect();
+                return Some(DuplicateEffectAnnotations {
+                    effects: duplicates,
+                    first_annotation_id,
+                    duplicate_annotation_id: annotation_id,
+                });
+            }
+            first_origins.insert(effect.clone(), annotation_id);
+        }
+
+        None
+    }
+}
+
+/// A duplicate effect together with its first and repeated source annotations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DuplicateEffectAnnotations<'db> {
+    pub effects: Vec<Effect<'db>>,
+    pub first_annotation_id: NodeId,
+    pub duplicate_annotation_id: NodeId,
+}
+
+/// Result of source-aware effect-annotation conversion.
+#[derive(Clone, Debug)]
+pub struct EffectRowConversion<'db> {
+    pub row: EffectRow<'db>,
+    pub origins: EffectAnnotationOrigins,
+}
+
 /// Check whether a symbol name looks like a type variable (starts with lowercase).
 pub fn is_type_variable(name: &Symbol) -> bool {
     name.with_str(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
@@ -483,7 +545,22 @@ pub fn abilities_to_effect_row<'db>(
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
     fresh_row_var: impl FnOnce() -> EffectVar,
 ) -> EffectRow<'db> {
+    abilities_to_effect_row_with_origins(db, abilities, prefix, convert_type, fresh_row_var).row
+}
+
+/// Convert ability annotations while preserving each concrete effect's origin.
+///
+/// Consumers that only need semantic effect identity should continue to use
+/// [`abilities_to_effect_row`].
+pub fn abilities_to_effect_row_with_origins<'db>(
+    db: &'db dyn salsa::Database,
+    abilities: &[TypeAnnotation],
+    prefix: &str,
+    convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
+    fresh_row_var: impl FnOnce() -> EffectVar,
+) -> EffectRowConversion<'db> {
     let mut effects = Vec::new();
+    let mut concrete_origins = Vec::new();
     let mut has_row_var = false;
 
     for ann in abilities {
@@ -497,6 +574,7 @@ pub fn abilities_to_effect_row<'db>(
             _ => {
                 if let Some(effect) = annotation_to_effect(db, ann, prefix, convert_type) {
                     effects.push(effect);
+                    concrete_origins.push(ann.id);
                 }
             }
         }
@@ -508,7 +586,12 @@ pub fn abilities_to_effect_row<'db>(
         None
     };
 
-    EffectRow::new(db, effects, rest)
+    EffectRowConversion {
+        row: EffectRow::new(db, effects, rest),
+        origins: EffectAnnotationOrigins {
+            concrete: concrete_origins,
+        },
+    }
 }
 
 /// Type annotation as written in source code.
