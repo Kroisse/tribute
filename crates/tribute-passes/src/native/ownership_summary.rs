@@ -254,10 +254,21 @@ fn collect_escaping_function_symbols(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        visit_region_ops(ctx, function.body(ctx), &mut |nested| {
-            let symbol = if let Ok(constant) = func::Constant::from_op(ctx, nested) {
+        collect_escaping_function_symbols_in_region(ctx, function.body(ctx), functions, ineligible);
+    }
+}
+
+fn collect_escaping_function_symbols_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    functions: &HashMap<Symbol, OpRef>,
+    ineligible: &mut HashSet<Symbol>,
+) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            let symbol = if let Ok(constant) = func::Constant::from_op(ctx, op) {
                 Some(constant.func_ref(ctx))
-            } else if let Ok(tail_call) = func::TailCall::from_op(ctx, nested) {
+            } else if let Ok(tail_call) = func::TailCall::from_op(ctx, op) {
                 Some(tail_call.callee(ctx))
             } else {
                 None
@@ -267,7 +278,70 @@ fn collect_escaping_function_symbols(
             {
                 ineligible.insert(symbol);
             }
-        });
+
+            if let Ok(nested_function) = func::Func::from_op(ctx, op) {
+                collect_escaping_function_symbols_in_region(
+                    ctx,
+                    nested_function.body(ctx),
+                    functions,
+                    ineligible,
+                );
+            } else {
+                for &nested in &ctx.op(op).regions {
+                    collect_escaping_function_symbols_in_region(ctx, nested, functions, ineligible);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BorrowedUseKind {
+    LoadAddress,
+    StoreAddress { address_operand: usize },
+    Comparison,
+    TransparentAlias,
+    DirectCall,
+    Escaping,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BorrowedUse {
+    Safe,
+    TransparentAlias(ValueRef),
+    DirectCall,
+    Escaping,
+}
+
+pub(super) fn classify_borrowed_use(
+    ctx: &IrContext,
+    body: RegionRef,
+    op: OpRef,
+    operand_index: usize,
+    kind: BorrowedUseKind,
+) -> BorrowedUse {
+    let Some(parent_block) = ctx.op(op).parent_block else {
+        return BorrowedUse::Escaping;
+    };
+    if ctx.block(parent_block).parent_region != Some(body) {
+        return BorrowedUse::Escaping;
+    }
+
+    match kind {
+        BorrowedUseKind::LoadAddress if operand_index == 0 => BorrowedUse::Safe,
+        BorrowedUseKind::StoreAddress { address_operand } if operand_index == address_operand => {
+            BorrowedUse::Safe
+        }
+        BorrowedUseKind::Comparison => BorrowedUse::Safe,
+        BorrowedUseKind::TransparentAlias
+            if operand_index == 0
+                && ctx.op_operands(op).len() == 1
+                && ctx.op_results(op).len() == 1 =>
+        {
+            BorrowedUse::TransparentAlias(ctx.op_results(op)[0])
+        }
+        BorrowedUseKind::DirectCall => BorrowedUse::DirectCall,
+        _ => BorrowedUse::Escaping,
     }
 }
 
@@ -283,67 +357,56 @@ fn value_is_borrowed(
     }
     ctx.uses(value).iter().all(|use_| {
         let op = use_.user;
-        let Some(parent_block) = ctx.op(op).parent_block else {
-            return false;
-        };
-        if ctx.block(parent_block).parent_region != Some(body) {
-            return false;
-        }
         let operand_index = use_.operand_index as usize;
-        if let Ok(call) = func::Call::from_op(ctx, op) {
-            return summaries
-                .get(&call.callee(ctx))
-                .and_then(|summary| summary.get(operand_index))
-                == Some(&ParameterOwnership::Borrowed);
+        match classify_borrowed_use(ctx, body, op, operand_index, borrowed_use_kind(ctx, op)) {
+            BorrowedUse::Safe => true,
+            BorrowedUse::TransparentAlias(alias) => {
+                value_is_borrowed(ctx, body, alias, summaries, visited)
+            }
+            BorrowedUse::DirectCall => {
+                let call = func::Call::from_op(ctx, op).expect("classified func.call");
+                summaries
+                    .get(&call.callee(ctx))
+                    .and_then(|summary| summary.get(operand_index))
+                    == Some(&ParameterOwnership::Borrowed)
+            }
+            BorrowedUse::Escaping => false,
         }
-        if is_transparent_alias(ctx, op, operand_index) {
-            return ctx.op_results(op).len() == 1
-                && value_is_borrowed(ctx, body, ctx.op_results(op)[0], summaries, visited);
-        }
-        is_local_borrowed_use(ctx, op, operand_index)
     })
 }
 
-fn is_transparent_alias(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
-    operand_index == 0
-        && (core::UnrealizedConversionCast::matches(ctx, op)
-            || adt::VariantCast::matches(ctx, op)
-            || adt::RefCast::matches(ctx, op))
-}
-
-fn is_local_borrowed_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+fn borrowed_use_kind(ctx: &IrContext, op: OpRef) -> BorrowedUseKind {
+    if func::Call::matches(ctx, op) {
+        return BorrowedUseKind::DirectCall;
+    }
     if mem::Load::matches(ctx, op) || clif::Load::matches(ctx, op) {
-        return operand_index == 0;
+        return BorrowedUseKind::LoadAddress;
     }
     if mem::Store::matches(ctx, op) {
-        return operand_index == 0;
+        return BorrowedUseKind::StoreAddress { address_operand: 0 };
     }
     if clif::Store::matches(ctx, op) {
-        return operand_index == 1;
+        return BorrowedUseKind::StoreAddress { address_operand: 1 };
     }
     if arith::Cmpi::matches(ctx, op) || clif::Icmp::matches(ctx, op) {
-        return true;
+        return BorrowedUseKind::Comparison;
     }
-    operand_index == 0
-        && (adt::StructGet::matches(ctx, op)
-            || adt::VariantIs::matches(ctx, op)
-            || adt::VariantGet::matches(ctx, op)
-            || adt::ArrayGet::matches(ctx, op)
-            || adt::ArrayLen::matches(ctx, op)
-            || adt::RefIsNull::matches(ctx, op))
-}
-
-fn visit_region_ops(ctx: &IrContext, region: RegionRef, visitor: &mut impl FnMut(OpRef)) {
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops {
-            visitor(op);
-            if !func::Func::matches(ctx, op) {
-                for &nested in &ctx.op(op).regions {
-                    visit_region_ops(ctx, nested, visitor);
-                }
-            }
-        }
+    if core::UnrealizedConversionCast::matches(ctx, op)
+        || adt::VariantCast::matches(ctx, op)
+        || adt::RefCast::matches(ctx, op)
+    {
+        return BorrowedUseKind::TransparentAlias;
     }
+    if adt::StructGet::matches(ctx, op)
+        || adt::VariantIs::matches(ctx, op)
+        || adt::VariantGet::matches(ctx, op)
+        || adt::ArrayGet::matches(ctx, op)
+        || adt::ArrayLen::matches(ctx, op)
+        || adt::RefIsNull::matches(ctx, op)
+    {
+        return BorrowedUseKind::LoadAddress;
+    }
+    BorrowedUseKind::Escaping
 }
 
 #[cfg(test)]
@@ -386,6 +449,40 @@ mod tests {
 }"#,
         );
         assert_snapshot!("trusted_direct_chain_summaries", summaries);
+    }
+
+    #[test]
+    fn nested_function_references_make_targets_ineligible() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @constant_target(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = mem.load %0 {offset = 0} : core.i32
+    func.return %1
+  }
+  func.func @tail_target(%0: tribute_rt.anyref) -> core.nil {
+    func.return
+  }
+  func.func @outer() -> core.nil {
+    func.func @nested() -> core.nil {
+      %0 = func.constant {func_ref = @constant_target} : core.ptr
+      func.tail_call {callee = @tail_target}
+    }
+    func.return
+  }
+}"#,
+        );
+        let summaries = compute_and_attach(&mut ctx, module, &TypeConverter::new());
+
+        assert_eq!(
+            summaries.summaries.get(&Symbol::new("constant_target")),
+            Some(&vec![ParameterOwnership::Owned])
+        );
+        assert_eq!(
+            summaries.summaries.get(&Symbol::new("tail_target")),
+            Some(&vec![ParameterOwnership::Owned])
+        );
     }
 
     #[test]

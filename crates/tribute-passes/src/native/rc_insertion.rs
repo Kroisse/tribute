@@ -46,7 +46,10 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
-use super::ownership_summary::{ParameterOwnership, TrustedOwnershipSummaries};
+use super::ownership_summary::{
+    BorrowedUse, BorrowedUseKind, ParameterOwnership, TrustedOwnershipSummaries,
+    classify_borrowed_use,
+};
 
 /// Policy for eliding RC ownership of proven borrowed function parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -447,6 +450,10 @@ pub fn insert_rc_with_trusted_summaries(
 
 /// Insert reference counting operations with independently selectable borrow
 /// policies, then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
+///
+/// Without trusted ownership summaries, `ElideProvenBorrowed` falls back to
+/// preserving parameter ownership; this entrypoint does not perform local-only
+/// borrowed-parameter elision.
 pub fn insert_rc_with_policies(
     ctx: &mut IrContext,
     module: Module,
@@ -1071,52 +1078,41 @@ fn value_is_proven_borrowed(
 
     ctx.uses(value).iter().all(|use_| {
         let op = use_.user;
-        let Some(parent_block) = ctx.op(op).parent_block else {
-            return false;
-        };
-        if ctx.block(parent_block).parent_region != Some(body) {
-            return false;
-        }
-
         let operand_index = use_.operand_index as usize;
-        if let Ok(call) = clif::Call::from_op(ctx, op) {
-            return trusted_summaries
-                .get(&call.callee(ctx))
-                .and_then(|summary| summary.get(operand_index))
-                == Some(&ParameterOwnership::Borrowed);
+        match classify_borrowed_use(ctx, body, op, operand_index, borrowed_use_kind(ctx, op)) {
+            BorrowedUse::Safe => true,
+            BorrowedUse::TransparentAlias(alias) => {
+                value_is_proven_borrowed(ctx, body, alias, trusted_summaries, visited)
+            }
+            BorrowedUse::DirectCall => {
+                let call = clif::Call::from_op(ctx, op).expect("classified clif.call");
+                trusted_summaries
+                    .get(&call.callee(ctx))
+                    .and_then(|summary| summary.get(operand_index))
+                    == Some(&ParameterOwnership::Borrowed)
+            }
+            BorrowedUse::Escaping => false,
         }
-        if is_proven_borrowed_parameter_use(ctx, op, operand_index) {
-            return true;
-        }
-
-        core::UnrealizedConversionCast::matches(ctx, op)
-            && operand_index == 0
-            && ctx.op_operands(op).len() == 1
-            && ctx.op_results(op).len() == 1
-            && value_is_proven_borrowed(
-                ctx,
-                body,
-                ctx.op_results(op)[0],
-                trusted_summaries,
-                visited,
-            )
     })
 }
 
-fn is_proven_borrowed_parameter_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+fn borrowed_use_kind(ctx: &IrContext, op: OpRef) -> BorrowedUseKind {
+    if clif::Call::matches(ctx, op) {
+        return BorrowedUseKind::DirectCall;
+    }
     if clif::Load::matches(ctx, op) {
-        return operand_index == 0;
+        return BorrowedUseKind::LoadAddress;
     }
-
-    // `clif.store(value, addr)`: using the parameter as the address borrows it;
-    // storing the parameter as the value publishes an owned alias.
     if clif::Store::matches(ctx, op) {
-        return operand_index == 1;
+        return BorrowedUseKind::StoreAddress { address_operand: 1 };
     }
-
-    // Pointer equality/ordering observes the value without extending its
-    // lifetime. All other operations remain escape barriers by default.
-    clif::Icmp::matches(ctx, op)
+    if clif::Icmp::matches(ctx, op) {
+        return BorrowedUseKind::Comparison;
+    }
+    if core::UnrealizedConversionCast::matches(ctx, op) {
+        return BorrowedUseKind::TransparentAlias;
+    }
+    BorrowedUseKind::Escaping
 }
 
 /// Insert RC ops in a single block.
