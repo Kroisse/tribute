@@ -5,6 +5,7 @@
 //! extracted inside the matched region.
 
 use trunk_ir::Symbol;
+use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, func, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
@@ -516,13 +517,21 @@ pub(super) fn bind_pattern_fields<'db>(
             let cast_val = cast_op.result(ir);
 
             // Extract each field and recursively bind
-            let any_ty = ctx.anyref_type(ir);
+            let variant_fields = get_enum_variants(ir, enum_ty)
+                .expect("variant pattern must lower from an ADT enum type")
+                .into_iter()
+                .find_map(|(tag, fields)| (tag == variant_name).then_some(fields))
+                .expect("resolved constructor must exist in enum metadata");
             for (i, field_pat) in fields.iter().enumerate() {
+                let field_ty = variant_fields
+                    .get(i)
+                    .copied()
+                    .expect("type checking must reject out-of-range variant pattern fields");
                 let field_op = adt::variant_get(
                     ir,
                     location,
                     cast_val,
-                    any_ty,
+                    field_ty,
                     enum_ty,
                     variant_name,
                     i as u32,

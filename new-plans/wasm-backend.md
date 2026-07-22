@@ -109,8 +109,10 @@ the optional newline there, and invokes `fd_write` with compiler-owned iovec and
 interrupted writes. See [io.md](io.md#wasm-runtime-boundary) for lifetime and
 failure rules.
 
-The old `__print_line` literal analysis is a compatibility path to remove. New
-source programs must reach Wasm output only through `tribute_io.write`.
+Wasm output uses only `tribute_io.write`. The former `__print_line` literal
+analysis and its `i32` pointer plus `literal_len` representation are not part of
+the backend boundary; string literals remain canonical `String` values until
+the standard-library I/O wrapper explicitly converts them to `Bytes`.
 
 ---
 

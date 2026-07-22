@@ -25,7 +25,6 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::const_to_wasm::ConstAnalysis;
-use super::intrinsic_to_wasm::IntrinsicAnalysis;
 use super::io::IoAnalysis;
 use super::type_converter::{self, wasm_type_converter};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, STEP_IDX, STEP_TAG_DONE};
@@ -36,6 +35,7 @@ const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 pub enum WasmLowerError {
     Conversion(ConversionError),
     Pass(PassError),
+    Const(super::const_to_wasm::ConstValidationError),
 }
 
 impl fmt::Display for WasmLowerError {
@@ -43,6 +43,7 @@ impl fmt::Display for WasmLowerError {
         match self {
             Self::Conversion(error) => error.fmt(f),
             Self::Pass(error) => error.fmt(f),
+            Self::Const(error) => error.fmt(f),
         }
     }
 }
@@ -52,6 +53,7 @@ impl std::error::Error for WasmLowerError {
         match self {
             Self::Conversion(error) => Some(error),
             Self::Pass(error) => Some(error),
+            Self::Const(error) => Some(error),
         }
     }
 }
@@ -65,6 +67,12 @@ impl From<ConversionError> for WasmLowerError {
 impl From<PassError> for WasmLowerError {
     fn from(error: PassError) -> Self {
         Self::Pass(error)
+    }
+}
+
+impl From<super::const_to_wasm::ConstValidationError> for WasmLowerError {
+    fn from(error: super::const_to_wasm::ConstValidationError) -> Self {
+        Self::Const(error)
     }
 }
 
@@ -141,6 +149,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     // ordinary prelude String::Leaf variant.
     {
         let _span = tracing::info_span!("const_to_wasm").entered();
+        super::const_to_wasm::validate_for_wasm(ctx, module, &const_analysis)?;
         super::const_to_wasm::lower(ctx, module, &const_analysis);
     }
 
@@ -166,21 +175,15 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
         }
     }
 
-    // Intrinsic analysis and lowering (print_line -> fd_write)
-    let intrinsic_analysis = super::intrinsic_to_wasm::analyze_intrinsics(
-        ctx,
-        module,
-        const_analysis.total_size() + io_analysis.total_size,
-    );
     {
         let _span = tracing::info_span!("intrinsic_to_wasm").entered();
-        super::intrinsic_to_wasm::lower(ctx, module, &intrinsic_analysis);
+        super::intrinsic_to_wasm::lower(ctx, module);
     }
 
     // Phase 2: Module-level operations via WasmLowerer (in-place)
     {
         let _span = tracing::info_span!("wasm_lowerer").entered();
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.lower_module(ctx, module);
     }
 
@@ -385,22 +388,16 @@ impl ArenaMemoryPlan {
 struct WasmLowerer<'a> {
     const_analysis: &'a ConstAnalysis,
     io_analysis: &'a IoAnalysis,
-    intrinsic_analysis: &'a IntrinsicAnalysis,
     memory_plan: ArenaMemoryPlan,
     main_exports: MainExports,
     has_continuations: bool,
 }
 
 impl<'a> WasmLowerer<'a> {
-    fn new(
-        const_analysis: &'a ConstAnalysis,
-        io_analysis: &'a IoAnalysis,
-        intrinsic_analysis: &'a IntrinsicAnalysis,
-    ) -> Self {
+    fn new(const_analysis: &'a ConstAnalysis, io_analysis: &'a IoAnalysis) -> Self {
         Self {
             const_analysis,
             io_analysis,
-            intrinsic_analysis,
             memory_plan: ArenaMemoryPlan::new(),
             main_exports: MainExports::new(),
             has_continuations: true,
@@ -501,8 +498,7 @@ impl<'a> WasmLowerer<'a> {
     ) {
         let mut preamble_ops: Vec<OpRef> = Vec::new();
 
-        // Emit fd_write only when an explicit intrinsic needs it.
-        if self.io_analysis.needs_fd_write || self.intrinsic_analysis.needs_fd_write {
+        if self.io_analysis.needs_fd_write {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
             let op = wasm_dialect::import_func(
@@ -519,13 +515,12 @@ impl<'a> WasmLowerer<'a> {
         // Check if memory is needed
         let const_size = self.const_analysis.total_size();
         let io_size = self.io_analysis.total_size;
-        let intrinsic_size = self.intrinsic_analysis.total_size;
-        if const_size > 0 || io_size > 0 || intrinsic_size > 0 {
+        if const_size > 0 || io_size > 0 {
             self.memory_plan.needs_memory = true;
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            let total_data_size = const_size + io_size + intrinsic_size;
+            let total_data_size = const_size + io_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
             let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
             preamble_ops.push(op.op_ref());
@@ -577,33 +572,6 @@ impl<'a> WasmLowerer<'a> {
                 0,
                 Attribute::Bytes(content.as_slice().into()),
                 true,
-            );
-            ctx.push_op(module_block, op.op_ref());
-        }
-
-        // Emit data segments from intrinsic analysis (iovec structures)
-        for (ptr, len, offset) in self.intrinsic_analysis.iovec_allocations.iter() {
-            let mut iovec_bytes = Vec::with_capacity(8);
-            iovec_bytes.extend_from_slice(&ptr.to_le_bytes());
-            iovec_bytes.extend_from_slice(&len.to_le_bytes());
-            let op = wasm_dialect::data(
-                ctx,
-                location,
-                *offset,
-                Attribute::Bytes(iovec_bytes.as_slice().into()),
-                false,
-            );
-            ctx.push_op(module_block, op.op_ref());
-        }
-
-        // Emit nwritten buffer if needed
-        if let Some(nwritten_offset) = self.intrinsic_analysis.nwritten_offset {
-            let op = wasm_dialect::data(
-                ctx,
-                location,
-                nwritten_offset,
-                Attribute::Bytes(smallvec![0, 0, 0, 0]),
-                false,
             );
             ctx.push_op(module_block, op.op_ref());
         }
@@ -852,12 +820,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -865,7 +827,7 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.main_exports.saw_main = true;
         lowerer.main_exports.main_result_type = Some(nil_ty);
         lowerer.main_exports.main_param_types = vec![evidence_ty];
@@ -901,12 +863,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -914,7 +870,7 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.main_exports.saw_main = true;
         lowerer.main_exports.main_result_type = Some(step_ty);
 
@@ -953,12 +909,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -966,14 +916,14 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.main_exports.main_convention = CallingConvention::Cps;
 
         lowerer.build_main_args(&mut ctx, body_block, location, i32_ty);
     }
 
     #[test]
-    fn module_lowerer_emits_explicit_intrinsic_and_data_requirements() {
+    fn module_lowerer_emits_io_and_passive_data_requirements() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -988,20 +938,14 @@ mod tests {
             allocations: vec![(b"text".to_vec(), 0, 4), (vec![1, 2], 1, 2)],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
+        let io_analysis = IoAnalysis {
             needs_fd_write: true,
-            iovec_allocations: vec![(0, 4, 8)],
-            nwritten_offset: Some(16),
+            iovec_offset: 4,
+            nwritten_offset: 12,
+            scratch_offset: 16,
             total_size: 20,
         };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 4,
-            nwritten_offset: 4,
-            scratch_offset: 4,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         let module_block = module.first_block(&ctx).expect("module body block");
         let placeholder = ctx.block(module_block).ops[0];
 
@@ -1058,7 +1002,7 @@ mod tests {
         assert!(output.contains("wasm.import_func"), "{output}");
         assert!(output.contains("wasm.memory"), "{output}");
         assert!(output.contains("wasm.export_memory"), "{output}");
-        assert_eq!(output.matches("wasm.data").count(), 4, "{output}");
+        assert_eq!(output.matches("wasm.data").count(), 2, "{output}");
 
         let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .expect("lowered module requirements should emit");
@@ -1107,12 +1051,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -1120,7 +1058,7 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.scan_module_ops(&ctx, module.body(&ctx).expect("module body"));
 
         assert!(lowerer.memory_plan.has_memory);
@@ -1144,12 +1082,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -1157,7 +1089,7 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
 
         lowerer.lower_module(&mut ctx, module);
 
@@ -1191,12 +1123,6 @@ mod tests {
             allocations: vec![],
             string_enum_ty: None,
         };
-        let intrinsic_analysis = IntrinsicAnalysis {
-            needs_fd_write: false,
-            iovec_allocations: vec![],
-            nwritten_offset: None,
-            total_size: 0,
-        };
         let io_analysis = IoAnalysis {
             needs_fd_write: false,
             iovec_offset: 0,
@@ -1204,7 +1130,7 @@ mod tests {
             scratch_offset: 0,
             total_size: 0,
         };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis, &intrinsic_analysis);
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
 
         lowerer.lower_module(&mut ctx, module);
 
@@ -1265,6 +1191,31 @@ mod tests {
 
         verify_wasm_backend_ready(&mut ctx, module)
             .expect("partial wasm backend boundary should allow unknown later-stage ops");
+    }
+
+    #[test]
+    fn lower_to_wasm_rejects_non_reference_string_constant_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  func.func @main() -> core.nil {
+    %string = adt.string_const {value = "wrong"} : core.i32
+    func.return
+  }
+}"#,
+        );
+
+        let error = lower_to_wasm(&mut ctx, module)
+            .expect_err("non-reference string constant result must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("adt.string_const must produce wasm.anyref"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -182,6 +182,10 @@ fn main() ->{std::io::Io} Nil {
     std::io::print_line("안녕")
     let dynamic = b"dynamic bytes"
     std::io::print_line(String::from_bytes(dynamic))
+    let shared = b"shared"
+    std::io::print_line("shared")
+    std::io::print_line(String::from_bytes(shared <> b" bytes"))
+    std::io::print_line("rope " <> "branch")
     std::io::print_line("after")
 }
 "#,
@@ -201,7 +205,7 @@ fn main() ->{std::io::Io} Nil {
     );
     assert_eq!(
         output.stdout,
-        "before\n\n안녕\ndynamic bytes\nafter\n".as_bytes()
+        "before\n\n안녕\ndynamic bytes\nshared\nshared bytes\nrope branch\nafter\n".as_bytes()
     );
 }
 

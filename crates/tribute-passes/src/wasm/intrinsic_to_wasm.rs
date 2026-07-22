@@ -1,26 +1,18 @@
 //! Lower intrinsic calls to WASM operations.
 //!
 //! This pass transforms high-level intrinsic calls to low-level WASM instructions:
-//! - `__print_line` -> WASI `fd_write` call
 //! - `__bytes_len`, `__bytes_get_or_panic`, etc. -> WasmGC struct/array operations
-//!
-//! Two-phase approach for WASI intrinsics:
-//! 1. Analysis: Collect all intrinsic calls and allocate runtime data segments
-//! 2. Transform: Replace intrinsic calls with WASM instruction sequences
-
-use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
-use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
+use trunk_ir::refs::{OpRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::TypeDataBuilder;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -92,153 +84,9 @@ fn extract_bytes_fields(
     (fields, ops)
 }
 
-/// Result of intrinsic analysis - tracks WASI needs and data segment allocations.
-pub struct IntrinsicAnalysis {
-    /// Whether fd_write import is needed.
-    pub needs_fd_write: bool,
-    /// Iovec allocations: (ptr, len) -> offset in data segment.
-    pub iovec_allocations: Vec<(u32, u32, u32)>,
-    /// Offset of nwritten buffer (if any intrinsics need it).
-    pub nwritten_offset: Option<u32>,
-    /// Total size of runtime data segments.
-    pub total_size: u32,
-}
-
-impl IntrinsicAnalysis {
-    /// Look up iovec offset for given (ptr, len) pair.
-    pub fn iovec_offset(&self, ptr: u32, len: u32) -> Option<u32> {
-        self.iovec_allocations
-            .iter()
-            .find(|(p, l, _)| *p == ptr && *l == len)
-            .map(|(_, _, offset)| *offset)
-    }
-}
-
-/// Walk all operations in a region recursively.
-fn walk_ops_in_region(
-    ctx: &IrContext,
-    region: RegionRef,
-    callback: &mut impl FnMut(&IrContext, OpRef),
-) {
-    for &block in ctx.region(region).blocks.iter() {
-        for &op in ctx.block(block).ops.iter() {
-            callback(ctx, op);
-            for &nested in ctx.op(op).regions.iter() {
-                walk_ops_in_region(ctx, nested, callback);
-            }
-        }
-    }
-}
-
-/// Get literal pointer and length from a value's defining operation.
-fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
-    let def = ctx.value_def(value);
-    let trunk_ir::ValueDef::OpResult(op, _) = def else {
-        return None;
-    };
-    let data = ctx.op(op);
-    if data.dialect != wasm_dialect::DIALECT_NAME() {
-        return None;
-    }
-    if data.name != Symbol::new("i32_const") {
-        return None;
-    }
-    let ptr_u32 = data.attributes.get_u32("value").ok()??;
-    let len_u32 = data.attributes.get_u32("literal_len").ok()??;
-    Some((ptr_u32, len_u32))
-}
-
-/// Analyze a module to collect intrinsic calls and allocate runtime data segments.
-pub fn analyze_intrinsics(ctx: &IrContext, module: Module, base_offset: u32) -> IntrinsicAnalysis {
-    let mut needs_fd_write = false;
-    let mut iovec_map: HashMap<(u32, u32), u32> = HashMap::new();
-    let mut iovec_allocations: Vec<(u32, u32, u32)> = Vec::new();
-    let mut next_offset = base_offset;
-
-    // Align to 4-byte boundary
-    fn align_to(value: u32, align: u32) -> u32 {
-        if align == 0 {
-            return value;
-        }
-        value.div_ceil(align) * align
-    }
-
-    // Visit operations to find __print_line calls with literal args
-    fn visit_op(
-        ctx: &IrContext,
-        op: OpRef,
-        needs_fd_write: &mut bool,
-        iovec_map: &mut HashMap<(u32, u32), u32>,
-        iovec_allocations: &mut Vec<(u32, u32, u32)>,
-        next_offset: &mut u32,
-    ) {
-        // Check for wasm.call to __print_line
-        if let Ok(call) = wasm_dialect::Call::from_op(ctx, op) {
-            let callee = call.callee(ctx);
-            if callee.last_segment() == Symbol::new("__print_line") {
-                let operands = ctx.op_operands(op);
-                if let Some(&arg) = operands.first()
-                    && let Some((ptr, len)) = get_literal_info(ctx, arg)
-                {
-                    *needs_fd_write = true;
-
-                    // Allocate iovec if not already done
-                    iovec_map.entry((ptr, len)).or_insert_with(|| {
-                        let offset = align_to(*next_offset, 4);
-                        iovec_allocations.push((ptr, len, offset));
-                        *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-                        offset
-                    });
-                }
-            }
-        }
-    }
-
-    // Walk all operations in module body
-    if let Some(body) = module.body(ctx) {
-        walk_ops_in_region(ctx, body, &mut |ctx, op| {
-            visit_op(
-                ctx,
-                op,
-                &mut needs_fd_write,
-                &mut iovec_map,
-                &mut iovec_allocations,
-                &mut next_offset,
-            );
-        });
-    }
-
-    // Allocate nwritten buffer if needed
-    let nwritten_offset = if needs_fd_write {
-        let offset = align_to(next_offset, 4);
-        next_offset = offset + 4;
-        Some(offset)
-    } else {
-        None
-    };
-
-    IntrinsicAnalysis {
-        needs_fd_write,
-        iovec_allocations,
-        nwritten_offset,
-        total_size: next_offset - base_offset,
-    }
-}
-
-/// Lower intrinsic calls using pre-computed analysis.
-pub fn lower(ctx: &mut IrContext, module: Module, analysis: &IntrinsicAnalysis) {
-    let mut applicator = PatternApplicator::new(TypeConverter::new());
-
-    // Add __print_line pattern if needed
-    if analysis.needs_fd_write {
-        let iovec_allocations = analysis.iovec_allocations.clone();
-        let nwritten_offset = analysis.nwritten_offset;
-        applicator =
-            applicator.add_pattern(PrintLinePattern::new(iovec_allocations, nwritten_offset));
-    }
-
-    // Always add Bytes intrinsic patterns
-    applicator = applicator
+/// Lower target-independent Bytes intrinsic calls.
+pub fn lower(ctx: &mut IrContext, module: Module) {
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern)
         .add_pattern(BytesGetOrPanicPattern)
         .add_pattern(BytesConcatPattern);
@@ -246,190 +94,17 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &IntrinsicAnalysis) 
     applicator.apply_partial(ctx, module);
 }
 
-/// Pattern for `wasm.call(__print_line)` -> `fd_write` sequence
-struct PrintLinePattern {
-    iovec_allocations: Vec<(u32, u32, u32)>,
-    nwritten_offset: Option<u32>,
-}
-
-impl PrintLinePattern {
-    fn new(iovec_allocations: Vec<(u32, u32, u32)>, nwritten_offset: Option<u32>) -> Self {
-        Self {
-            iovec_allocations,
-            nwritten_offset,
-        }
-    }
-
-    fn lookup_iovec(&self, ptr: u32, len: u32) -> Option<u32> {
-        self.iovec_allocations
-            .iter()
-            .find(|(p, l, _)| *p == ptr && *l == len)
-            .map(|(_, _, offset)| *offset)
-    }
-}
-
-impl RewritePattern for PrintLinePattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        // Check if this is wasm.call to __print_line
-        let Ok(call_op) = wasm_dialect::Call::from_op(ctx, op) else {
-            return false;
-        };
-
-        if call_op.callee(ctx).last_segment() != Symbol::new("__print_line") {
-            return false;
-        }
-
-        // Get the string literal argument
-        let operands = ctx.op_operands(op).to_vec();
-        let Some(arg) = operands.first().copied() else {
-            return false;
-        };
-        let Some((ptr, len)) = get_literal_info(ctx, arg) else {
-            return false;
-        };
-
-        // Look up allocated offsets
-        let Some(iovec_offset) = self.lookup_iovec(ptr, len) else {
-            return false;
-        };
-        let Some(nwritten_offset) = self.nwritten_offset else {
-            return false;
-        };
-
-        let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-
-        // Generate fd_write call sequence:
-        // fd_const = wasm.i32_const(1)  // stdout
-        // iovec_const = wasm.i32_const(iovec_offset)
-        // iovec_len_const = wasm.i32_const(1)  // one iovec entry
-        // nwritten_const = wasm.i32_const(nwritten_offset)
-        // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
-        // wasm.drop(result)
-
-        let fd_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // stdout
-        let iovec_const = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_offset as i32);
-        let ptr_const = wasm_dialect::i32_const(ctx, location, i32_ty, ptr as i32);
-        let len_const = wasm_dialect::i32_const(ctx, location, i32_ty, len as i32);
-        let store_ptr = wasm_dialect::i32_store(
-            ctx,
-            location,
-            iovec_const.result(ctx),
-            ptr_const.result(ctx),
-            0,
-            2,
-            0,
-        );
-        let store_len = wasm_dialect::i32_store(
-            ctx,
-            location,
-            iovec_const.result(ctx),
-            len_const.result(ctx),
-            4,
-            2,
-            0,
-        );
-        let iovec_len_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // one iovec entry
-        let nwritten_const = wasm_dialect::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
-
-        let call = wasm_dialect::call(
-            ctx,
-            location,
-            vec![
-                fd_const.result(ctx),
-                iovec_const.result(ctx),
-                iovec_len_const.result(ctx),
-                nwritten_const.result(ctx),
-            ],
-            vec![i32_ty],
-            Symbol::new("fd_write"),
-        );
-
-        let drop_op = wasm_dialect::drop(ctx, location, call.results(ctx)[0]);
-
-        // Emit all operations
-        let result_types = ctx.op_result_types(op).to_vec();
-        let nil_ty = core::nil(ctx).as_type_ref();
-        if result_types.is_empty() {
-            // Void: emit operations and drop the fd_write result.
-            rewriter.insert_op(fd_const.op_ref());
-            rewriter.insert_op(iovec_const.op_ref());
-            rewriter.insert_op(ptr_const.op_ref());
-            rewriter.insert_op(len_const.op_ref());
-            rewriter.insert_op(store_ptr.op_ref());
-            rewriter.insert_op(store_len.op_ref());
-            rewriter.insert_op(iovec_len_const.op_ref());
-            rewriter.insert_op(nwritten_const.op_ref());
-            rewriter.insert_op(call.op_ref());
-            rewriter.replace_op(drop_op.op_ref());
-        } else if result_types.len() == 1 && result_types[0] == nil_ty {
-            // Keep the IR-level nil result while emitting no Wasm value.
-            let block = ctx.create_block(BlockData {
-                location,
-                args: vec![],
-                ops: smallvec![],
-                parent_region: None,
-            });
-            for op in [
-                fd_const.op_ref(),
-                iovec_const.op_ref(),
-                ptr_const.op_ref(),
-                len_const.op_ref(),
-                store_ptr.op_ref(),
-                store_len.op_ref(),
-                iovec_len_const.op_ref(),
-                nwritten_const.op_ref(),
-                call.op_ref(),
-                drop_op.op_ref(),
-            ] {
-                ctx.push_op(block, op);
-            }
-            let region = ctx.create_region(RegionData {
-                location,
-                blocks: smallvec![block],
-                parent_op: None,
-            });
-            let block_op = wasm_dialect::block(ctx, location, nil_ty, region);
-            rewriter.replace_op(block_op.op_ref());
-        } else {
-            // Non-void: emit operations, call result becomes the replacement value
-            rewriter.insert_op(fd_const.op_ref());
-            rewriter.insert_op(iovec_const.op_ref());
-            rewriter.insert_op(ptr_const.op_ref());
-            rewriter.insert_op(len_const.op_ref());
-            rewriter.insert_op(store_ptr.op_ref());
-            rewriter.insert_op(store_len.op_ref());
-            rewriter.insert_op(iovec_len_const.op_ref());
-            rewriter.insert_op(nwritten_const.op_ref());
-            rewriter.replace_op(call.op_ref());
-        }
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "PrintLinePattern"
-    }
-}
-
 // =============================================================================
 // Bytes intrinsic patterns
 // =============================================================================
 
-/// Check if operation is a wasm.call to a `__bytes_*` intrinsic.
-fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_name: &'static str) -> bool {
+/// Check whether an operation calls one of the target-lowered Bytes helpers.
+fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_names: &[&str]) -> bool {
     let Ok(call) = wasm_dialect::Call::from_op(ctx, op) else {
         return false;
     };
-    let callee = call.callee(ctx);
-    // Check if callee is "__bytes_xxx"
-    callee.last_segment() == Symbol::new(intrinsic_name)
+    let callee = call.callee(ctx).last_segment();
+    intrinsic_names.iter().any(|name| callee == *name)
 }
 
 /// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2`
@@ -444,7 +119,7 @@ impl RewritePattern for BytesLenPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, "__bytes_len") {
+        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_len", "__tribute_bytes_len"]) {
             return false;
         }
 
@@ -489,7 +164,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, "__bytes_get_or_panic") {
+        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_get_or_panic"]) {
             return false;
         }
 
@@ -566,7 +241,7 @@ impl RewritePattern for BytesConcatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, "__bytes_concat") {
+        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_concat", "__tribute_bytes_concat"]) {
             return false;
         }
 
