@@ -3,7 +3,9 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
-use crate::ast::{Effect, EffectRow, Type, TypeKind, TypeScheme};
+use std::collections::HashMap;
+
+use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeScheme};
 
 /// Result of BoundVar substitution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,18 +218,200 @@ pub fn instantiate_scheme_for_solver<'db>(
         .iter()
         .map(|_| solver.fresh_type_var(db))
         .collect();
-    substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|index, max| {
-        panic!(
-            "BoundVar index out of range in post-solve instantiation: index={}, subst.len()={}",
-            index, max
-        )
+    let instantiated =
+        substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|index, max| {
+            panic!(
+                "BoundVar index out of range in post-solve instantiation: index={}, subst.len()={}",
+                index, max
+            )
+        });
+    freshen_effect_vars(db, instantiated, scheme.effect_params(db), || {
+        solver.fresh_row_var()
     })
+}
+
+/// Freshen quantified effect-row variables throughout a type.
+pub fn freshen_effect_vars<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    quantified_rows: &[EffectVar],
+    mut fresh_row_var: impl FnMut() -> EffectVar,
+) -> Type<'db> {
+    freshen_effect_vars_inner(
+        db,
+        ty,
+        quantified_rows,
+        &mut fresh_row_var,
+        &mut HashMap::new(),
+    )
+}
+
+fn freshen_effect_vars_inner<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    quantified_rows: &[EffectVar],
+    fresh_row_var: &mut impl FnMut() -> EffectVar,
+    row_vars: &mut HashMap<u64, EffectVar>,
+) -> Type<'db> {
+    let freshen_row =
+        |row: EffectRow<'db>, fresh_row_var: &mut _, row_vars: &mut HashMap<u64, EffectVar>| {
+            let effects: Vec<_> = row
+                .effects(db)
+                .iter()
+                .map(|effect| Effect {
+                    ability_id: effect.ability_id,
+                    args: effect
+                        .args
+                        .iter()
+                        .map(|arg| {
+                            freshen_effect_vars_inner(
+                                db,
+                                *arg,
+                                quantified_rows,
+                                fresh_row_var,
+                                row_vars,
+                            )
+                        })
+                        .collect(),
+                })
+                .collect();
+            let rest = row.rest(db).map(|var| {
+                if !quantified_rows.contains(&var) {
+                    return var;
+                }
+                *row_vars.entry(var.id).or_insert_with(&mut *fresh_row_var)
+            });
+            EffectRow::new(db, effects, rest)
+        };
+
+    match ty.kind(db) {
+        TypeKind::Named { name, args } => Type::new(
+            db,
+            TypeKind::Named {
+                name: *name,
+                args: args
+                    .iter()
+                    .map(|arg| {
+                        freshen_effect_vars_inner(
+                            db,
+                            *arg,
+                            quantified_rows,
+                            fresh_row_var,
+                            row_vars,
+                        )
+                    })
+                    .collect(),
+            },
+        ),
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            minimum_convention,
+        } => Type::new(
+            db,
+            TypeKind::Func {
+                params: params
+                    .iter()
+                    .map(|param| {
+                        freshen_effect_vars_inner(
+                            db,
+                            *param,
+                            quantified_rows,
+                            fresh_row_var,
+                            row_vars,
+                        )
+                    })
+                    .collect(),
+                result: freshen_effect_vars_inner(
+                    db,
+                    *result,
+                    quantified_rows,
+                    fresh_row_var,
+                    row_vars,
+                ),
+                effect: freshen_row(*effect, fresh_row_var, row_vars),
+                minimum_convention: *minimum_convention,
+            },
+        ),
+        TypeKind::Tuple(elements) => Type::new(
+            db,
+            TypeKind::Tuple(
+                elements
+                    .iter()
+                    .map(|element| {
+                        freshen_effect_vars_inner(
+                            db,
+                            *element,
+                            quantified_rows,
+                            fresh_row_var,
+                            row_vars,
+                        )
+                    })
+                    .collect(),
+            ),
+        ),
+        TypeKind::App { ctor, args } => Type::new(
+            db,
+            TypeKind::App {
+                ctor: freshen_effect_vars_inner(
+                    db,
+                    *ctor,
+                    quantified_rows,
+                    fresh_row_var,
+                    row_vars,
+                ),
+                args: args
+                    .iter()
+                    .map(|arg| {
+                        freshen_effect_vars_inner(
+                            db,
+                            *arg,
+                            quantified_rows,
+                            fresh_row_var,
+                            row_vars,
+                        )
+                    })
+                    .collect(),
+            },
+        ),
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => Type::new(
+            db,
+            TypeKind::Continuation {
+                arg: freshen_effect_vars_inner(db, *arg, quantified_rows, fresh_row_var, row_vars),
+                result: freshen_effect_vars_inner(
+                    db,
+                    *result,
+                    quantified_rows,
+                    fresh_row_var,
+                    row_vars,
+                ),
+                effect: freshen_row(*effect, fresh_row_var, row_vars),
+            },
+        ),
+        TypeKind::BoundVar { .. }
+        | TypeKind::UniVar { .. }
+        | TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::Never
+        | TypeKind::Error => ty,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, EffectRow};
+    use crate::ast::{AbilityId, CallingConvention, EffectRow};
+    use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
@@ -249,6 +433,52 @@ mod tests {
 
         let result = substitute_bound_vars(db, bound_var, &subst);
         assert_eq!(result, SubstResult::Ok(int_ty));
+    }
+
+    #[salsa_test]
+    fn solver_instantiation_freshens_quantified_effect_rows(db: &dyn salsa::Database) {
+        let quantified_row = EffectVar { id: 42 };
+        let function_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: Vec::new(),
+                result: Type::new(db, TypeKind::Nil),
+                effect: EffectRow::new(db, Vec::new(), Some(quantified_row)),
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let scheme = TypeScheme::new(
+            db,
+            Vec::new(),
+            vec![quantified_row],
+            Type::new(db, TypeKind::Tuple(vec![function_ty, function_ty])),
+        );
+        let mut solver = TypeSolver::new(db);
+
+        let first = instantiate_scheme_for_solver(db, scheme, &mut solver);
+        let second = instantiate_scheme_for_solver(db, scheme, &mut solver);
+
+        let row_tails = |ty: Type<'_>| {
+            let TypeKind::Tuple(elements) = ty.kind(db) else {
+                panic!("instantiated scheme should remain a tuple");
+            };
+            elements
+                .iter()
+                .map(|element| {
+                    let TypeKind::Func { effect, .. } = element.kind(db) else {
+                        panic!("tuple element should remain a function");
+                    };
+                    effect.rest(db).expect("effect row should remain open")
+                })
+                .collect::<Vec<_>>()
+        };
+        let first_tails = row_tails(first);
+        let second_tails = row_tails(second);
+
+        assert_eq!(first_tails[0], first_tails[1]);
+        assert_eq!(second_tails[0], second_tails[1]);
+        assert_ne!(first_tails[0], second_tails[0]);
+        assert_ne!(first_tails[0], quantified_row);
     }
 
     #[salsa_test]

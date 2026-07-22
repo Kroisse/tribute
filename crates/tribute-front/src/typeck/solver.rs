@@ -642,9 +642,8 @@ impl<'db> TypeSolver<'db> {
         Type::new(db, TypeKind::UniVar { id })
     }
 
-    /// Generate a fresh row variable.
-    #[allow(dead_code)]
-    fn fresh_row_var(&mut self) -> EffectVar {
+    /// Generate a fresh row variable for post-solve instantiation.
+    pub fn fresh_row_var(&mut self) -> EffectVar {
         let id = self.next_row_var;
         self.next_row_var += 1;
         EffectVar { id }
