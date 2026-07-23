@@ -998,7 +998,7 @@ mod tests {
         let path = ir.paths.intern("test.trb".to_owned());
         let name = Symbol::new("foo");
         let body = AstType::new(&db, TypeKind::Int);
-        let scheme = TypeScheme::new(&db, vec![], body);
+        let scheme = TypeScheme::new(&db, vec![], vec![], body);
 
         let mut ft = HashMap::new();
         ft.insert(name, scheme);

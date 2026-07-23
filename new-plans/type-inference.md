@@ -315,17 +315,42 @@ unify_row(ρ₁, ρ₂):
 
 ### Generalization
 
-Let binding에서 effect가 비어있을 때만 generalize:
+Let generalization distinguishes the effect of **evaluating the right-hand
+side now** from effects latent in a function value. After solving the
+constraints generated up to the binding, `let p = e` generalizes variables in
+the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
+Variables free in the surrounding environment are never generalized.
+
+This is an effect-based value restriction, not a restriction to a syntactic
+class of values. A lambda evaluates purely, so its type can be generalized even
+when calling the resulting function later performs effects:
 
 ```rust
-// OK: f의 effect가 {}이므로 generalize 가능
-let f = fn(x) x + 1
-// f : ∀a. fn(a) ->{} a  (a가 Num일 때)
+let id = fn(x) x
+// id : forall a, e. fn(a) ->{e} a
 
-// 주의: effect가 있으면 value restriction 적용
-let g = fn(x) { State::get(); x }
-// g : fn(a) ->{State(s)} a  (generalize 안 함)
+let read = fn() State::get()
+// evaluating the lambda is pure; State is a latent call effect
+// read : forall s, e. fn() ->{e, State(s)} s
+
+let current = State::get()
+// evaluating the RHS performs State, so current remains monomorphic
 ```
+
+For a destructuring pattern, each introduced name receives the corresponding
+component scheme under the same decision. Function parameters, handler
+continuations, and pattern bindings not introduced by `let` are monomorphic.
+
+A type scheme quantifies both type variables and effect-row variables:
+
+```text
+sigma ::= forall a1 ... an, e1 ... em. tau
+```
+
+Only variables not free in the surrounding environment are quantified. Every
+lookup instantiates every quantified type variable and row variable freshly;
+repeated occurrences of one quantified variable remain shared within that
+single instantiation. Variables in a monomorphic scheme are not freshened.
 
 ---
 

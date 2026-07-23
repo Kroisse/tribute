@@ -500,7 +500,7 @@ mod tests {
         body: Type<'db>,
     ) -> TypeScheme<'db> {
         let type_params: Vec<_> = (0..num_params).map(|_| TypeParam::anonymous()).collect();
-        TypeScheme::new(db, type_params, body)
+        TypeScheme::new(db, type_params, Vec::new(), body)
     }
 
     fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {

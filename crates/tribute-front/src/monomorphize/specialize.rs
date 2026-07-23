@@ -43,6 +43,7 @@ pub fn generate_specializations<'db>(
             let specialized_scheme = TypeScheme::new(
                 db,
                 vec![],
+                scheme.effect_params(db).clone(),
                 substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or_else(
                     |index, max| {
                         panic!(
@@ -899,7 +900,7 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(&db, vec![TypeParam::anonymous()], scheme_body);
+        let scheme = TypeScheme::new(&db, vec![TypeParam::anonymous()], vec![], scheme_body);
         let function_types = vec![(func_name, scheme)];
 
         let mut type_arg_sets = HashSet::new();

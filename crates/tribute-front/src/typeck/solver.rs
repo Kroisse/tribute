@@ -6,7 +6,10 @@ use std::collections::HashMap;
 
 use trunk_ir::smallvec::SmallVec;
 
-use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource};
+use crate::ast::{
+    Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
+    collect_effect_vars,
+};
 
 use super::constraint::{Constraint, ConstraintOrigin, ConstraintSet};
 
@@ -281,6 +284,28 @@ impl<'db> TypeSubst<'db> {
         // Build type params (anonymous — names not tracked through UniVar)
         let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
 
+        (generalized, type_params)
+    }
+
+    /// Generalize unresolved variables except those free in the environment.
+    pub fn generalize_excluding(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        excluded: &[UniVarId<'db>],
+    ) -> (Type<'db>, Vec<TypeParam>) {
+        let mut univars = Vec::new();
+        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+        univars.retain(|id| !excluded.contains(id));
+
+        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index as u32))
+            .collect();
+        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+        let type_params = univars.iter().map(|_| TypeParam::anonymous()).collect();
         (generalized, type_params)
     }
 
@@ -596,7 +621,7 @@ impl<'db> TypeSolver<'db> {
             db,
             type_subst: TypeSubst::new(),
             row_subst: RowSubst::new(),
-            next_row_var: 1000, // Start high to avoid collisions
+            next_row_var: 0,
         }
     }
 
@@ -620,12 +645,54 @@ impl<'db> TypeSolver<'db> {
         Type::new(db, TypeKind::UniVar { id })
     }
 
-    /// Generate a fresh row variable.
-    #[allow(dead_code)]
-    fn fresh_row_var(&mut self) -> EffectVar {
+    /// Generate a fresh row variable for post-solve instantiation.
+    pub(super) fn fresh_row_var(&mut self) -> EffectVar {
         let id = self.next_row_var;
         self.next_row_var += 1;
         EffectVar { id }
+    }
+
+    pub(super) fn reserve_effect_vars_in_type(&mut self, ty: Type<'db>) {
+        for var in collect_effect_vars(self.db, ty) {
+            self.reserve_effect_var(var);
+        }
+    }
+
+    fn reserve_effect_var(&mut self, var: EffectVar) {
+        let next = var
+            .id
+            .checked_add(1)
+            .expect("cannot allocate an effect variable after u64::MAX");
+        self.next_row_var = self.next_row_var.max(next);
+    }
+
+    fn reserve_effect_vars_in_row(&mut self, row: EffectRow<'db>) {
+        if let Some(var) = row.rest(self.db) {
+            self.reserve_effect_var(var);
+        }
+        for effect in row.effects(self.db) {
+            for arg in &effect.args {
+                self.reserve_effect_vars_in_type(*arg);
+            }
+        }
+    }
+
+    fn reserve_effect_vars_in_constraint(&mut self, constraint: &Constraint<'db>) {
+        match constraint {
+            Constraint::TypeEq(left, right) | Constraint::TypeEqAt(left, right, _) => {
+                self.reserve_effect_vars_in_type(*left);
+                self.reserve_effect_vars_in_type(*right);
+            }
+            Constraint::RowEq(left, right) | Constraint::RowEqAt(left, right, _) => {
+                self.reserve_effect_vars_in_row(*left);
+                self.reserve_effect_vars_in_row(*right);
+            }
+            Constraint::And(constraints) => {
+                for constraint in constraints {
+                    self.reserve_effect_vars_in_constraint(constraint);
+                }
+            }
+        }
     }
 
     /// Apply type substitution to effect arguments in a row.
@@ -652,6 +719,9 @@ impl<'db> TypeSolver<'db> {
         &mut self,
         constraints: ConstraintSet<'db>,
     ) -> Result<(), LocatedSolveError<'db>> {
+        for constraint in constraints.constraints() {
+            self.reserve_effect_vars_in_constraint(constraint);
+        }
         let constraints_vec = constraints.into_constraints();
         let mut first_error: Option<LocatedSolveError<'db>> = None;
         for constraint in constraints_vec.into_iter() {
@@ -1416,6 +1486,20 @@ mod tests {
         let source = UniVarSource::Anonymous(n);
         let id = UniVarId::new(db, source, 0);
         Type::new(db, TypeKind::UniVar { id })
+    }
+
+    #[test]
+    fn fresh_row_var_avoids_rows_already_present_in_constraints() {
+        let db = test_db();
+        let existing = EffectVar { id: 1000 };
+        let existing_row = EffectRow::open(&db, existing);
+        let mut constraints = ConstraintSet::new();
+        constraints.add_row_eq(existing_row, existing_row);
+        let mut solver = TypeSolver::new(&db);
+
+        solver.solve(constraints).expect("constraint should solve");
+
+        assert_eq!(solver.fresh_row_var(), EffectVar { id: 1001 });
     }
 
     #[test]
