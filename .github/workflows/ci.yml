@@ -73,8 +73,18 @@ jobs:
         run: cargo nextest run --workspace
 
   canonical-native:
-    name: Canonical native example
-    runs-on: [self-hosted, macOS]
+    name: Canonical native example (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            runner_json: '["self-hosted", "macOS"]'
+            cache: false
+          - platform: Ubuntu
+            runner_json: '"ubuntu-latest"'
+            cache: true
+    runs-on: ${{ fromJSON(matrix.runner_json) }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,7 +93,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache: false
+          cache: ${{ matrix.cache }}
 
       - name: Compile canonical native example
         run: |
