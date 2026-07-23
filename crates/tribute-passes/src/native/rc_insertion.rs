@@ -46,6 +46,11 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
+use super::ownership_summary::{
+    BorrowedUse, BorrowedUseKind, ParameterOwnership, TrustedOwnershipSummaries,
+    classify_borrowed_use,
+};
+
 /// Policy for eliding RC ownership of proven borrowed function parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BorrowedParameterPolicy {
@@ -428,18 +433,66 @@ pub fn insert_rc_with_policy(
     );
 }
 
+pub fn insert_rc_with_trusted_summaries(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    trusted_summaries: &TrustedOwnershipSummaries,
+) {
+    insert_rc_with_policies_and_trusted_summaries(
+        ctx,
+        module,
+        borrowed_parameters,
+        TemporaryBorrowPolicy::Preserve,
+        trusted_summaries,
+    );
+}
+
 /// Insert reference counting operations with independently selectable borrow
 /// policies, then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
+///
+/// Without trusted ownership summaries, `ElideProvenBorrowed` falls back to
+/// preserving parameter ownership; this entrypoint does not perform local-only
+/// borrowed-parameter elision.
 pub fn insert_rc_with_policies(
     ctx: &mut IrContext,
     module: Module,
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
 ) {
+    insert_rc_impl(ctx, module, borrowed_parameters, temporary_borrows, None);
+}
+
+pub fn insert_rc_with_policies_and_trusted_summaries(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    temporary_borrows: TemporaryBorrowPolicy,
+    trusted_summaries: &TrustedOwnershipSummaries,
+) {
+    insert_rc_impl(
+        ctx,
+        module,
+        borrowed_parameters,
+        temporary_borrows,
+        Some(trusted_summaries),
+    );
+}
+
+fn insert_rc_impl(
+    ctx: &mut IrContext,
+    module: Module,
+    borrowed_parameters: BorrowedParameterPolicy,
+    temporary_borrows: TemporaryBorrowPolicy,
+    trusted_summaries: Option<&TrustedOwnershipSummaries>,
+) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let trusted_summaries = trusted_summaries
+        .map(|summaries| summaries.validated_for_clif(ctx, &module_ops))
+        .unwrap_or_default();
     let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
@@ -454,7 +507,14 @@ pub fn insert_rc_with_policies(
             } else {
                 BorrowedParameterPolicy::Preserve
             };
-            insert_rc_in_function(ctx, body, function_policy, temporary_borrows);
+            insert_rc_in_function(
+                ctx,
+                sym,
+                body,
+                function_policy,
+                temporary_borrows,
+                &trusted_summaries,
+            );
         }
     }
 
@@ -670,9 +730,11 @@ fn rewrite_type_anyref(
 /// Insert RC in a function body.
 fn insert_rc_in_function(
     ctx: &mut IrContext,
+    function: Symbol,
     body: RegionRef,
     borrowed_parameter_policy: BorrowedParameterPolicy,
     temporary_borrow_policy: TemporaryBorrowPolicy,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
 ) {
     let mut ptr_values = collect_ptr_values(ctx, body);
 
@@ -696,7 +758,9 @@ fn insert_rc_in_function(
     );
     let borrowed_parameters = match borrowed_parameter_policy {
         BorrowedParameterPolicy::Preserve => HashSet::new(),
-        BorrowedParameterPolicy::ElideProvenBorrowed => analyze_borrowed_parameters(ctx, body),
+        BorrowedParameterPolicy::ElideProvenBorrowed => {
+            analyze_borrowed_parameters(ctx, function, body, trusted_summaries)
+        }
     };
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
@@ -967,27 +1031,45 @@ fn record_lifetime_dependencies(
 
 /// Return entry parameters whose complete use set is proven not to escape the
 /// dynamic extent of the function call.
-fn analyze_borrowed_parameters(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
+fn analyze_borrowed_parameters(
+    ctx: &IrContext,
+    function: Symbol,
+    body: RegionRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
+) -> HashSet<ValueRef> {
     let Some(&entry) = ctx.region(body).blocks.first() else {
+        return HashSet::new();
+    };
+
+    let Some(function_summary) = trusted_summaries.get(&function) else {
         return HashSet::new();
     };
 
     ctx.block_args(entry)
         .iter()
         .copied()
+        .enumerate()
+        .filter(|(index, _)| function_summary.get(*index) == Some(&ParameterOwnership::Borrowed))
+        .map(|(_, parameter)| parameter)
         .filter(|&parameter| is_anyref_value(ctx, parameter))
-        .filter(|&parameter| parameter_is_proven_borrowed(ctx, body, parameter))
+        .filter(|&parameter| parameter_is_proven_borrowed(ctx, body, parameter, trusted_summaries))
         .collect()
 }
 
-fn parameter_is_proven_borrowed(ctx: &IrContext, body: RegionRef, parameter: ValueRef) -> bool {
-    value_is_proven_borrowed(ctx, body, parameter, &mut HashSet::new())
+fn parameter_is_proven_borrowed(
+    ctx: &IrContext,
+    body: RegionRef,
+    parameter: ValueRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
+) -> bool {
+    value_is_proven_borrowed(ctx, body, parameter, trusted_summaries, &mut HashSet::new())
 }
 
 fn value_is_proven_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
+    trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
     visited: &mut HashSet<ValueRef>,
 ) -> bool {
     if !visited.insert(value) {
@@ -996,40 +1078,41 @@ fn value_is_proven_borrowed(
 
     ctx.uses(value).iter().all(|use_| {
         let op = use_.user;
-        let Some(parent_block) = ctx.op(op).parent_block else {
-            return false;
-        };
-        if ctx.block(parent_block).parent_region != Some(body) {
-            return false;
-        }
-
         let operand_index = use_.operand_index as usize;
-        if is_proven_borrowed_parameter_use(ctx, op, operand_index) {
-            return true;
+        match classify_borrowed_use(ctx, body, op, operand_index, borrowed_use_kind(ctx, op)) {
+            BorrowedUse::Safe => true,
+            BorrowedUse::TransparentAlias(alias) => {
+                value_is_proven_borrowed(ctx, body, alias, trusted_summaries, visited)
+            }
+            BorrowedUse::DirectCall => {
+                let call = clif::Call::from_op(ctx, op).expect("classified clif.call");
+                trusted_summaries
+                    .get(&call.callee(ctx))
+                    .and_then(|summary| summary.get(operand_index))
+                    == Some(&ParameterOwnership::Borrowed)
+            }
+            BorrowedUse::Escaping => false,
         }
-
-        core::UnrealizedConversionCast::matches(ctx, op)
-            && operand_index == 0
-            && ctx.op_operands(op).len() == 1
-            && ctx.op_results(op).len() == 1
-            && value_is_proven_borrowed(ctx, body, ctx.op_results(op)[0], visited)
     })
 }
 
-fn is_proven_borrowed_parameter_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+fn borrowed_use_kind(ctx: &IrContext, op: OpRef) -> BorrowedUseKind {
+    if clif::Call::matches(ctx, op) {
+        return BorrowedUseKind::DirectCall;
+    }
     if clif::Load::matches(ctx, op) {
-        return operand_index == 0;
+        return BorrowedUseKind::LoadAddress;
     }
-
-    // `clif.store(value, addr)`: using the parameter as the address borrows it;
-    // storing the parameter as the value publishes an owned alias.
     if clif::Store::matches(ctx, op) {
-        return operand_index == 1;
+        return BorrowedUseKind::StoreAddress { address_operand: 1 };
     }
-
-    // Pointer equality/ordering observes the value without extending its
-    // lifetime. All other operations remain escape barriers by default.
-    clif::Icmp::matches(ctx, op)
+    if clif::Icmp::matches(ctx, op) {
+        return BorrowedUseKind::Comparison;
+    }
+    if core::UnrealizedConversionCast::matches(ctx, op) {
+        return BorrowedUseKind::TransparentAlias;
+    }
+    BorrowedUseKind::Escaping
 }
 
 /// Insert RC ops in a single block.
@@ -1267,6 +1350,13 @@ mod tests {
         run_pass_with_policies(ir, policy, TemporaryBorrowPolicy::Preserve)
     }
 
+    fn run_pass_with_legacy_policy(ir: &str, policy: BorrowedParameterPolicy) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        insert_rc_with_policy(&mut ctx, module, policy);
+        print_module(&ctx, module.op())
+    }
+
     fn run_pass_with_policies(
         ir: &str,
         parameter_policy: BorrowedParameterPolicy,
@@ -1279,7 +1369,19 @@ mod tests {
             validation.is_ok(),
             "input fixture must have valid SSA use chains: {validation}"
         );
-        insert_rc_with_policies(&mut ctx, module, parameter_policy, temporary_policy);
+        if parameter_policy == BorrowedParameterPolicy::ElideProvenBorrowed {
+            let trusted =
+                TrustedOwnershipSummaries::attach_locally_borrowed_for_tests(&mut ctx, module);
+            insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                parameter_policy,
+                temporary_policy,
+                &trusted,
+            );
+        } else {
+            insert_rc_with_policies(&mut ctx, module, parameter_policy, temporary_policy);
+        }
         let validation = validate_use_chains(&ctx, module);
         assert!(
             validation.is_ok(),
@@ -1322,6 +1424,45 @@ mod tests {
             output.matches("tribute_rt.retain").count(),
             output.matches("tribute_rt.release").count(),
         )
+    }
+
+    #[test]
+    fn parameter_and_temporary_borrow_policies_compose_independently() {
+        let ir = r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    %2 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#;
+
+        let preserved = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::Preserve,
+        );
+        let parameter_only = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::Preserve,
+        );
+        let temporary_only = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::Preserve,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        );
+        let composed = run_pass_with_policies(
+            ir,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        );
+        let legacy = run_pass_with_legacy_policy(ir, BorrowedParameterPolicy::ElideProvenBorrowed);
+
+        assert_eq!(rc_counts(&preserved), (2, 2));
+        assert_eq!(rc_counts(&parameter_only), (1, 1));
+        assert_eq!(rc_counts(&temporary_only), (1, 1));
+        assert_eq!(rc_counts(&composed), (0, 0));
+        assert_eq!(rc_counts(&legacy), (2, 2));
     }
 
     // =========================================================================

@@ -23,6 +23,8 @@ const DONE_CONTINUATION_DEDUP_STATE: &str =
 const PAIRED_RC_ELIMINATION: &str =
     include_str!("fixtures/optimizations/paired_rc_elimination.trb");
 const BORROWED_PARAMETERS: &str = include_str!("fixtures/optimizations/borrowed_parameters.trb");
+const TRUSTED_OWNERSHIP_FORWARDING: &str =
+    include_str!("fixtures/optimizations/trusted_ownership_forwarding.trb");
 const TEMPORARY_FIELD_BORROWS: &str =
     include_str!("fixtures/optimizations/temporary_field_borrows.trb");
 
@@ -184,6 +186,36 @@ fn borrowed_parameters_preserve_native_execution() {
 }
 
 #[test]
+fn trusted_ownership_forwarding_preserves_native_execution() {
+    for sanitize_address in [false, true] {
+        let preserved = compile_and_run_native_with_borrowed_parameters(
+            "trusted_ownership_forwarding_preserved.trb",
+            TRUSTED_OWNERSHIP_FORWARDING,
+            BorrowedParameterPolicy::Preserve,
+            sanitize_address,
+        );
+        let elided = compile_and_run_native_with_borrowed_parameters(
+            "trusted_ownership_forwarding_elided.trb",
+            TRUSTED_OWNERSHIP_FORWARDING,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            sanitize_address,
+        );
+        assert!(
+            preserved.status.success(),
+            "preserved pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&preserved.stderr)
+        );
+        assert!(
+            elided.status.success(),
+            "elided pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&elided.stderr)
+        );
+        assert_eq!(preserved.stdout, elided.stdout);
+        assert_eq!(String::from_utf8_lossy(&elided.stdout).trim(), "40");
+    }
+}
+
+#[test]
 fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
     for sanitize_address in [false, true] {
         let preserved = compile_and_run_native_with_temporary_borrows(
@@ -198,7 +230,6 @@ fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
             TemporaryBorrowPolicy::ElideProvenFieldBorrows,
             sanitize_address,
         );
-
         assert!(
             preserved.status.success(),
             "preserved pipeline failed with sanitize_address={sanitize_address}: {}",
@@ -217,6 +248,50 @@ fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
     }
 }
 
+#[salsa_test]
+fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "trusted_ownership_forwarding_snapshot.trb",
+        TRUSTED_OWNERSHIP_FORWARDING,
+    );
+    let preserved = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::Preserve,
+        ),
+    )
+    .expect("preserved forwarding IR should be available");
+    let elided = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterBorrowedParameterOptimization,
+        native_optimization_options(
+            PairedRcEliminationPolicy::Disabled,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        ),
+    )
+    .expect("elided forwarding IR should be available");
+    let preserved = focused_rc_ops(&preserved);
+    let elided = focused_rc_ops(&elided);
+    assert!(
+        preserved.matches("tribute_rt.retain").count()
+            > elided.matches("tribute_rt.retain").count(),
+        "preserved:\n{preserved}\nelided:\n{elided}"
+    );
+    assert_snapshot!("trusted_ownership_forwarding_preserved", preserved);
+    assert_snapshot!(
+        "trusted_ownership_forwarding_elided",
+        if elided.is_empty() {
+            "<no RC ops>"
+        } else {
+            &elided
+        }
+    );
+}
 #[salsa_test]
 fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -309,22 +384,7 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let preserved_after = focused_rc_ops(&preserved_after);
 
     assert_eq!(before, preserved_after);
-    let before_retain = before.matches("tribute_rt.retain").count();
-    let before_release = before.matches("tribute_rt.release").count();
-    let after_retain = after.matches("tribute_rt.retain").count();
-    let after_release = after.matches("tribute_rt.release").count();
-    assert!(before_retain > after_retain, "before RC ops:\n{before}");
-    assert!(before_release > after_release, "before RC ops:\n{before}");
-    assert_eq!(before_retain - after_retain, 1);
-    assert_eq!(before_release - after_release, 2);
-    assert!(
-        after_retain > 0,
-        "escaping parameters must retain ownership"
-    );
-    assert!(
-        after_release > 0,
-        "escaping parameters must still be released"
-    );
+    assert_eq!(before, after, "recursive summaries must fail closed");
 
     assert_snapshot!("borrowed_parameters_before", before);
     assert_snapshot!("borrowed_parameters_after", after);

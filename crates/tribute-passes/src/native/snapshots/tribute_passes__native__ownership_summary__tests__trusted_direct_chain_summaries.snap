@@ -1,0 +1,7 @@
+---
+source: crates/tribute-passes/src/native/ownership_summary.rs
+expression: summaries
+---
+func.func @leaf(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.rc.parameter_ownership_v1 = [@borrowed]} {
+func.func @middle(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.rc.parameter_ownership_v1 = [@borrowed]} {
+func.func @root(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.rc.parameter_ownership_v1 = [@borrowed]} {

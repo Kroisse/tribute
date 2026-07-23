@@ -1,0 +1,5 @@
+---
+source: tests/optimization_conformance.rs
+expression: elided
+---
+<no RC ops>
