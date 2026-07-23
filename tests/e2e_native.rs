@@ -1054,34 +1054,25 @@ fn main() {
 }
 
 #[test]
-#[ignore = "segfaults — likely related to #617 (operator TDNR in case arms)"]
 fn test_native_bytes_get_safe() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "bytes_get_safe.trb",
         r#"
-fn main() {
+fn main() ->{std::io::Io} Nil {
     let bs = b"hi"
     let a = bs.get(0)
     let b = bs.get(2)
     case a {
-        Some(v) -> __tribute_print_nat(v)
-        None -> print("none")
+        Some(_) -> std::io::print_line("some")
+        None -> std::io::print_line("none")
     }
     case b {
-        Some(v) -> __tribute_print_nat(v)
-        None -> print("none")
+        Some(_) -> std::io::print_line("some")
+        None -> std::io::print_line("none")
     }
 }
 "#,
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "exit={:?}, stdout='{}', stderr='{}'",
-        output.status,
-        stdout,
-        stderr,
+        "some\nnone",
     );
 }
 

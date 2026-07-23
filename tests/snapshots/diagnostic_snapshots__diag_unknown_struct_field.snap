@@ -1,0 +1,11 @@
+---
+source: tests/diagnostic_snapshots.rs
+assertion_line: 163
+expression: diagnostics
+---
+- message: "unknown field `z` for struct `Point`"
+  span:
+    start: 59
+    end: 88
+  severity: Error
+  phase: Lowering

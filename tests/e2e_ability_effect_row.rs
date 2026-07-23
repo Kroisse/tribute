@@ -19,7 +19,6 @@ use common::assert_native_output;
 /// a `State` handler, `e` is instantiated to `{State(Nat)}`, so the callback
 /// can perform State operations.
 #[test]
-#[ignore = "row-polymorphic effectful callbacks crash at runtime (#502)"]
 fn test_effect_row_poly_higher_order_function() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -57,7 +56,6 @@ fn main() {
 /// `apply` accepts `fn() ->{e} Nat`. The callback uses both State and Reader,
 /// so `e` is instantiated to `{State(Nat), Reader(Nat)}`.
 #[test]
-#[ignore = "row-polymorphic effectful callbacks crash at runtime (#502)"]
 fn test_effect_row_poly_multiple_abilities() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -128,7 +126,6 @@ fn main() {
 /// `apply` is called twice: once where `e = {State(Nat)}` and once where
 /// `e = {Reader(Nat)}`. Each call site independently instantiates the row variable.
 #[test]
-#[ignore = "row-polymorphic effectful callbacks crash at runtime (#502)"]
 fn test_effect_row_poly_unification_across_call_sites() {
     let code = r#"ability State(s) {
     op get() -> s

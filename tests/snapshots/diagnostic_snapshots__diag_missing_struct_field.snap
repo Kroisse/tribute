@@ -1,0 +1,11 @@
+---
+source: tests/diagnostic_snapshots.rs
+assertion_line: 181
+expression: diagnostics
+---
+- message: "missing field: y"
+  span:
+    start: 59
+    end: 74
+  severity: Error
+  phase: Lowering

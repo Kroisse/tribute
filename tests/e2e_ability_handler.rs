@@ -361,10 +361,8 @@ fn main() {
 /// Test handling an ability declared inside a module.
 ///
 /// The handler arm uses a module-qualified path (MyMod::Counter::inc)
-/// to reference the operation. Currently module-qualified ability paths
-/// are not yet supported in name resolution (#530).
+/// to reference the operation.
 #[test]
-#[ignore = "module-qualified ability paths not yet supported in name resolution"]
 fn test_handler_ability_in_module() {
     let code = r#"mod MyMod {
     pub ability Counter {
@@ -481,7 +479,7 @@ fn main() {
 /// `pure_value()` returns 10 with no effects. The handler's result arm
 /// doubles it: result + result = 20.
 #[test]
-#[ignore = "MethodCall in do handler arm not desugared before IR lowering"]
+#[ignore = "TDNR reports unresolved method '+' in do handler arm (#617)"]
 fn test_handler_transforms_result() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -881,12 +879,7 @@ fn main() {
 ///
 /// Two functions share the same Throw(Nat) effect. The first succeeds,
 /// the second throws, and the handler catches the error.
-///
-/// Currently fails because CPS transformation applies the continuation
-/// to the error value for non-resumptive operations in sequential let
-/// bindings (produces 87 = 10 + 77 instead of 77).
 #[test]
-#[ignore = "CPS continuation applied to non-resumptive op result in sequential let bindings (#624)"]
 fn test_throw_multiple_operations() {
     let code = r#"fn no_throw() ->{abilities::Throw(Nat)} Nat {
     10
