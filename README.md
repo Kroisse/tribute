@@ -18,43 +18,22 @@ familiar syntax.
 ## Quick Example
 
 ```text
-struct User { name: String, age: Int }
+use abilities::Throw
+use std::io::{Io, print_line}
 
-fn greet(user: User) -> String {
-    "Hello, \{user.name}!"                // string interpolation
+fn fail() ->{Throw(String)} String {
+    Throw::throw("the failure was handled")
 }
 
-fn insa(user: User) -> String {
-    "안녕, " <> user.name <> "!"           // string concatenation
+fn recover() -> String {
+    handle fail() {
+        do value { value }
+        op Throw::throw(message) { "Recovered: " <> message }
+    }
 }
 
-// Abilities (algebraic effects)
-fn fetch_user(id: UserId) ->{Http, Async} User {
-    let response = Http::get("/users/\{id}")
-    response.await
-}
-
-// Function chaining powered by type-directed name resolution
-fn process(data: List(Int)) -> Int {
-    data
-        .filter(fn(x) x > 0)
-        .map(fn(x) x * 2)
-        .fold(0, fn(a, b) a + b)
-}
-
-// Equivalent to:
-fn process2(data: List(Int)) -> Int {
-    List::fold(
-        List::map(
-            List::filter(
-                data,
-                fn(x) x > 0
-            ),
-            fn(x) x * 2
-        ),
-        0,
-        fn(a, b) a + b
-    )
+fn main() ->{Io} Nil {
+    print_line(recover())
 }
 ```
 
@@ -79,28 +58,43 @@ npm install -g tree-sitter-cli
 cargo build
 
 # Run all tests
-cargo test
+cargo nextest run --workspace
 
-# Run the compiler on a .trb file
-cargo run --bin trbc -- <file.trb>
+# Compile one source file to a native executable
+cargo run -- compile lang-examples/native_effects.trb \
+  -o target/native-effects-example
 
-# If snapshot tests fail (insta)
-cargo insta review
+# Run the resulting executable
+./target/native-effects-example
 ```
+
+The `tribute` CLI compiles one source file at a time; file-module and package
+compilation are not implemented. There is no `run` subcommand. `compile`
+defaults to `--target native` and accepts these targets:
+
+- `native` writes a linked executable.
+- `wasm` writes a WasmGC module. Execute it with a compatible external runtime.
+- `none` validates the frontend and shared pipeline without writing an artifact.
+
+Use `-o` or `--output` to choose the artifact path. Without it, native removes
+the `.trb` extension and Wasm replaces it with `.wasm`.
+
+## Language Examples
+
+See [`lang-examples/README.md`](lang-examples/README.md) for exact native, Wasm,
+and invalid-example commands. It also classifies historical files as regression
+fixtures, design-only examples, or legacy samples.
 
 ## Development
 
 ```bash
-# Package-specific tests
-cargo test -p tribute-core
-cargo test -p tribute-passes
-cargo test -p tribute-trunk-ir
+# Focused package tests
+cargo nextest run -p tribute
+cargo nextest run -p tribute-passes
+
+# Review snapshot changes when a snapshot test fails
+cargo insta review
 ```
-
-## Language Examples
-
-See `lang-examples/` directory for sample `.trb` files demonstrating the
-language syntax.
 
 ## Design Documents
 
