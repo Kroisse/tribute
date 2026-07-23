@@ -1,0 +1,9 @@
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let kind = "dynamic"
+    let bytes = b" bytes"
+
+    print_line("String: " <> kind)
+    print_line(String::from_bytes(b"Bytes:" <> bytes))
+}

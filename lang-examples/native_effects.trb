@@ -1,0 +1,17 @@
+use abilities::Throw
+use std::io::{Io, print_line}
+
+fn fail() ->{Throw(String)} String {
+    Throw::throw("the failure was handled")
+}
+
+fn recover() -> String {
+    handle fail() {
+        do value { value }
+        op Throw::throw(message) { "Recovered: " <> message }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(recover())
+}
