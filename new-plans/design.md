@@ -6,6 +6,10 @@
 
 Tribute는 정적 타입과 algebraic effects를 갖춘 함수형 프로그래밍 언어이다.
 
+Current implementation and target support is tracked separately in
+[capabilities.md](capabilities.md). Design intent in this document is not a
+support claim.
+
 ### Design Goals
 
 - **친숙한 문법**: ML의 의미론 + C/Rust 스타일 문법 (중괄호, 세미콜론, fn 키워드 등)
