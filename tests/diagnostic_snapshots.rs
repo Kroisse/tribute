@@ -9,7 +9,8 @@ mod common;
 
 use salsa::Database;
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::compile_with_diagnostics;
+use tribute::Diagnostic;
+use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_front::SourceCst;
 
 // =============================================================================
@@ -131,8 +132,19 @@ fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
 // Lowering errors
 // =============================================================================
 
-/// Panics: accumulate() called outside tracked function during lowering.
-#[ignore = "lowering diagnostic accumulate panics outside tracked function"]
+#[salsa::tracked]
+fn collect_lowering_diagnostics(db: &dyn salsa::Database, source: SourceCst) {
+    let _ = compile_ast(db, source);
+}
+
+fn lowering_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
+    collect_lowering_diagnostics(db, source);
+    collect_lowering_diagnostics::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
 #[salsa_test]
 fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -142,17 +154,15 @@ fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn test() -> Point {
-    Point { x: 1, z: 2 }
+    Point { x: +1, y: +2, z: +3 }
 }
 "#,
     );
-    let result = compile_with_diagnostics(db, source);
-    assert!(!result.diagnostics.is_empty());
-    insta::assert_yaml_snapshot!(result.diagnostics);
+    let diagnostics = lowering_diagnostics(db, source);
+    assert!(!diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(diagnostics);
 }
 
-/// Panics: accumulate() called outside tracked function during lowering.
-#[ignore = "lowering diagnostic accumulate panics outside tracked function"]
 #[salsa_test]
 fn diag_missing_struct_field(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -162,13 +172,13 @@ fn diag_missing_struct_field(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn test() -> Point {
-    Point { x: 1 }
+    Point { x: +1 }
 }
 "#,
     );
-    let result = compile_with_diagnostics(db, source);
-    assert!(!result.diagnostics.is_empty());
-    insta::assert_yaml_snapshot!(result.diagnostics);
+    let diagnostics = lowering_diagnostics(db, source);
+    assert!(!diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(diagnostics);
 }
 
 // =============================================================================

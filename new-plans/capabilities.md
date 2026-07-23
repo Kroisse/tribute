@@ -6,7 +6,7 @@ documents describe intended semantics; they are not evidence that an
 implementation exists.
 
 The matrix was audited on 2026-07-23 at base commit
-`9aacc29991f8571fa8ac3bb45dde401a26521df3`. A later change must update the
+`f37d8bffa7bdfdb7297ccbba4999d9ecf2c0761a`. A later change must update the
 status and evidence together. A capability not listed here is
 **not-yet-verified**, not implicitly supported.
 
@@ -44,7 +44,7 @@ target column is intentionally no stronger than its own evidence.
 | Struct construction and field access | **compile-only** | **native-run** | **not-yet-verified** | Type and spread coverage is in [`record_field_type.rs`](../crates/tribute-front/tests/record_field_type.rs). Native construction/access executes in `test_native_struct` in [`e2e_native.rs`](../tests/e2e_native.rs). Spread has frontend evidence, but no focused target execution evidence. |
 | Enums, constructors, and variant patterns | **compile-only** | **native-run** | **not-yet-verified** | Frontend enum/case coverage is in [`case_type.rs`](../crates/tribute-front/tests/case_type.rs). Native enum patterns execute in `test_native_enum_case`, `test_native_enum_empty_variants`, and `test_native_enum_option_like` in [`e2e_native.rs`](../tests/e2e_native.rs). No focused Wasm enum test was found. |
 | `case` over literal and wildcard patterns | **compile-only** | **native-run** | **compile-only** | Frontend literal-pattern coverage is in [`case_type.rs`](../crates/tribute-front/tests/case_type.rs). `test_native_case_expression` executes natively in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm `case` emission is covered by `test_compile_case_expression` in [`wasm_compilation.rs`](../tests/wasm_compilation.rs); it is not executed. |
-| Tuple construction and patterns | **compile-only** | **native-run** | **not-yet-verified** | Frontend pattern coverage is in [`tuple_pattern.rs`](../crates/tribute-front/tests/tuple_pattern.rs). `test_native_tuple_create_and_match` executes the native path in [`e2e_native.rs`](../tests/e2e_native.rs). |
+| Tuple construction and patterns | **compile-only** | **native-run** | **not-yet-verified** | Frontend pattern coverage, including destructuring a tuple returned from a function, is in [`tuple_pattern.rs`](../crates/tribute-front/tests/tuple_pattern.rs). `test_native_tuple_create_and_match` executes the native path in [`e2e_native.rs`](../tests/e2e_native.rs). |
 | Closures, captures, and indirect calls | **compile-only** | **native-run** | **not-yet-verified** | Frontend/lowering coverage is in `test_lambda_as_argument` and related tests in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_native_closure` and `test_closure_execution_simple` execute captures and calls in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). |
 | Direct recursion | **compile-only** | **native-run** | **not-yet-verified** | `test_native_recursion` executes Fibonacci in [`e2e_native.rs`](../tests/e2e_native.rs). `test_calc_eval` adds recursive enum evaluation coverage in [`e2e_add.rs`](../tests/e2e_add.rs). |
 | UFCS and type-directed method resolution | **compile-only** | **native-run** | **not-yet-verified** | Resolution tests are in [`ufcs_method_call.rs`](../crates/tribute-front/tests/ufcs_method_call.rs). Native chaining and disambiguation execute in the `test_native_ufcs_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). |
@@ -56,10 +56,12 @@ target column is intentionally no stronger than its own evidence.
 | Capability | Shared/frontend | Native | WasmGC | Evidence and boundary |
 | --- | --- | --- | --- | --- |
 | Ability declarations, operation calls, and effect rows | **compile-only** | **native-run** | **compile-only** | Frontend checks are in [`e2e_ability_core.rs`](../tests/e2e_ability_core.rs) and [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs). Native execution is covered by the handler suites. Wasm only emits artifacts in `test_compile_tail_dispatch_ability` and `test_compile_cps_dispatch_ability` in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
+| Row-polymorphic effectful callbacks | **compile-only** | **native-run** | **not-yet-verified** | `test_effect_row_poly_higher_order_function`, `test_effect_row_poly_multiple_abilities`, and `test_effect_row_poly_unification_across_call_sites` execute native callbacks with one or more abilities and independently instantiate the row at different call sites in [`e2e_ability_effect_row.rs`](../tests/e2e_ability_effect_row.rs). No focused Wasm evidence was found. |
 | Tail-resumptive `fn` handlers | **compile-only** | **native-run** | **compile-only** | `test_fn_handler_arm` executes natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The Wasm `fn` test only calls `expect_wasm_compilation_success`. |
 | General `op` handlers and one-shot `resume` | **compile-only** | **native-run** | **compile-only** | `test_state_set_then_get` and the other State tests execute natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The Wasm CPS test only asserts emission. |
 | Dropped continuations and abort/throw handlers | **compile-only** | **native-run** | **not-yet-verified** | Native early-return, `Never`, Abort, and Throw execution tests are in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). |
 | Nested and multiple abilities | **compile-only** | **native-run** | **not-yet-verified** | Native composition, shadowing, and deep nesting execute in [`e2e_ability_nested.rs`](../tests/e2e_ability_nested.rs). No corresponding Wasm execution test was found. |
+| Module-qualified ability paths in inline modules | **compile-only** | **native-run** | **not-yet-verified** | `test_handler_ability_in_module` executes a module-qualified operation call and handler arm in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). File-module loading remains unsupported, and no focused Wasm evidence was found. |
 
 Wasm ability support must not be described as **wasm-run** until an emitted
 program using that exact handler form is executed and its observable result is
@@ -70,7 +72,7 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | Capability | Shared/frontend | Native | WasmGC | Evidence and boundary |
 | --- | --- | --- | --- | --- |
 | `String` literals, concatenation, `String::from_bytes`, and output | **compile-only** | **native-run** | **wasm-run** | Native String and dynamic output tests are in [`e2e_native.rs`](../tests/e2e_native.rs). `test_execute_string_literals_and_dynamic_bytes` compiles Tribute source, runs it with Wasmtime, and asserts literal, Unicode, empty, `String::from_bytes`, shared, and rope output in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
-| `Bytes` literals, concatenation, and `String::from_bytes` | **compile-only** | **native-run** | **wasm-run** | Native literal, concat, length, indexing, and slicing tests are in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm execution is limited to concatenation/output in `test_execute_dynamic_bytes_write_boundary` and to concatenation plus `String::from_bytes` in `test_execute_string_literals_and_dynamic_bytes`, which asserts the converted `dynamic bytes` and `shared bytes` output. Other Wasm `Bytes` APIs are **not-yet-verified**. |
+| `Bytes` literals, concatenation, and `String::from_bytes` | **compile-only** | **native-run** | **wasm-run** | Native literal, concat, length, indexing, and slicing tests are in [`e2e_native.rs`](../tests/e2e_native.rs); `test_native_bytes_get_safe` asserts both the in-range `Some` and out-of-range `None` paths. Wasm execution is limited to concatenation/output in `test_execute_dynamic_bytes_write_boundary` and to concatenation plus `String::from_bytes` in `test_execute_string_literals_and_dynamic_bytes`, which asserts the converted `dynamic bytes` and `shared bytes` output. Other Wasm `Bytes` APIs are **not-yet-verified**. |
 | `Nat` and `Int` arithmetic/comparison | **compile-only** | **native-run** | **compile-only** | Native execution is in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_arithmetic_expr` emits Wasm but does not run it. |
 | `Float` arithmetic, comparison, and NaN behavior | **compile-only** | **native-run** | **not-yet-verified** | The native suite, including `test_float_comparison_nan_semantics`, is in [`e2e_float.rs`](../tests/e2e_float.rs). No Wasm float execution or focused emission test was found. |
 | Tuple collection-like grouping | **compile-only** | **native-run** | **not-yet-verified** | See tuple construction and pattern evidence above. |
@@ -88,11 +90,11 @@ These compiler/tooling statuses are independent of a target runtime.
 
 | Capability | Status | Evidence and boundary |
 | --- | --- | --- |
-| Structured frontend diagnostics | **compile-only** | Parsing, name, type, effect, exhaustiveness, handler, and entrypoint snapshots are in [`diagnostic_snapshots.rs`](../tests/diagnostic_snapshots.rs). Two struct-field snapshots remain explicitly ignored there, so they are not support evidence. |
+| Structured frontend diagnostics | **compile-only** | Parsing, name, type, effect, exhaustiveness, handler, entrypoint, and unknown/missing struct-field snapshots are in [`diagnostic_snapshots.rs`](../tests/diagnostic_snapshots.rs). |
 | CLI diagnostic rendering | **compile-only** | Target and frontend diagnostics are sorted and rendered by [`diagnostics.rs`](../src/diagnostics.rs); the CLI routes each target through this path in [`main.rs`](../src/main.rs). |
 | LSP diagnostics, hover, completion, document symbols, signature help, definition, references, rename, and code actions | **compile-only** | In-process protocol tests for these requests are in [`lsp/server.rs`](../src/lsp/server.rs). Index-level tests are in [`type_index.rs`](../src/lsp/type_index.rs), [`definition_index.rs`](../src/lsp/definition_index.rs), and [`completion_index.rs`](../src/lsp/completion_index.rs). This is editor-protocol evidence, not target execution. |
 | One source file per CLI compile invocation | **compile-only** | `tribute compile` accepts exactly one `PathBuf`, reads only that file, and creates one `SourceCst` in [`cli.rs`](../src/cli.rs) and [`main.rs`](../src/main.rs). |
-| Inline `mod Name { ... }` modules | **native-run** | `test_native_ufcs_chained_multi_arg_user_defined` executes functions from inline `Pair` and `Triple` modules in [`e2e_native.rs`](../tests/e2e_native.rs). Frontend AST construction is in [`astgen/declarations.rs`](../crates/tribute-front/src/astgen/declarations.rs). Module-qualified ability paths are a separate unsupported case listed under skipped tests below. |
+| Inline `mod Name { ... }` modules | **native-run** | `test_native_ufcs_chained_multi_arg_user_defined` executes functions from inline `Pair` and `Triple` modules in [`e2e_native.rs`](../tests/e2e_native.rs), and `test_handler_ability_in_module` executes a module-qualified ability call and handler arm in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). Frontend AST construction is in [`astgen/declarations.rs`](../crates/tribute-front/src/astgen/declarations.rs). |
 | File module loading (`mod name` resolving another `.trb`) | **unsupported** | The AST records external modules as `body: None` in [`astgen/declarations.rs`](../crates/tribute-front/src/astgen/declarations.rs), but the single-file CLI has no loader or source graph. Files under `lang-examples/modules_file/` are examples, not passing compilation evidence. |
 | Package/project compilation and manifests | **unsupported** | The CLI accepts a source file rather than a package root or manifest in [`cli.rs`](../src/cli.rs). No package graph or manifest loader is present in the active pipeline. |
 | Separate compilation/linking of Tribute modules | **unsupported** | Native linking consumes one object generated from one `SourceCst` in [`main.rs`](../src/main.rs) and [`pipeline.rs`](../src/pipeline.rs); it does not link independently compiled Tribute modules. |
@@ -170,7 +172,7 @@ pipeline only.
 cargo nextest run --workspace
 ```
 
-Result: 1622 passed, 0 failed, 10 skipped.
+Result: 1631 passed, 0 failed, 1 skipped.
 
 ```shell
 npx markdownlint-cli2 "**/*.md"
@@ -193,27 +195,17 @@ Result: 39 Markdown files linted with 0 errors.
   skipped checks: their required implementation paths are absent, so they are
   **unsupported**.
 
-The full workspace run skipped 10 repository tests with these checked-in
-reasons:
+The full workspace run skips one repository test:
 
-- `diag_unknown_struct_field` and `diag_missing_struct_field`: lowering
-  diagnostics call Salsa accumulation outside a tracked function.
-- `test_effect_row_poly_higher_order_function`,
-  `test_effect_row_poly_multiple_abilities`, and
-  `test_effect_row_poly_unification_across_call_sites`: row-polymorphic
-  effectful callbacks crash at runtime
-  ([#502](https://github.com/Kroisse/tribute/issues/502)).
-- `test_handler_ability_in_module`: module-qualified ability paths are not
-  supported in name resolution.
-- `test_handler_transforms_result`: a method call in a `do` handler arm is not
-  desugared before IR lowering.
-- `test_throw_multiple_operations`: CPS applies the continuation to a
-  non-resumptive operation result in sequential `let` bindings
-  ([#624](https://github.com/Kroisse/tribute/issues/624)).
-- `test_native_bytes_get_safe` and
-  `test_tuple_let_destructure_from_function`: operator TDNR with pattern
-  bindings is unresolved
-  ([#617](https://github.com/Kroisse/tribute/issues/617)).
+- `test_handler_transforms_result`: TDNR reports
+  `` unresolved method `+` for this receiver type `` in the `do` handler arm.
+  This remains the open subset of
+  [#617](https://github.com/Kroisse/tribute/issues/617).
+
+The issue #802 re-audit returned nine previously ignored tests to the default
+suite: three row-polymorphic callback tests, module-qualified ability handling,
+sequential Throw operations, tuple destructuring from a function result, the
+two struct-field diagnostics, and safe `Bytes::get` `Some`/`None` behavior.
 
 ## Updating This Matrix
 
