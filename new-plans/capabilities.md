@@ -23,10 +23,9 @@ status and evidence together. A capability not listed here is
 Compilation is not execution. In particular, producing bytes with the Wasm
 magic number is only **compile-only**.
 
-The current [`README.md`](../README.md) predates this matrix and includes broad
-feature wording and `List` examples that exceed the evidence below. Issue #797
-owns README alignment; this documentation-only change does not edit it. Until
-that follow-up lands, this matrix is authoritative.
+README and example alignment is owned by issue #797. In checkouts where that
+alignment is not yet present, this matrix is authoritative over older README
+or example claims.
 
 ## Language and Frontend Matrix
 
@@ -94,10 +93,30 @@ These compiler/tooling statuses are independent of a target runtime.
 | Package/project compilation and manifests | **unsupported** | The CLI accepts a source file rather than a package root or manifest in [`cli.rs`](../src/cli.rs). No package graph or manifest loader is present in the active pipeline. |
 | Separate compilation/linking of Tribute modules | **unsupported** | Native linking consumes one object generated from one `SourceCst` in [`main.rs`](../src/main.rs) and [`pipeline.rs`](../src/pipeline.rs); it does not link independently compiled Tribute modules. |
 
-## Canonical M0 Runtime Set
+## Canonical M0 Artifacts and Runtime Set
 
-M0 CI should keep a small set of execution tests that crosses the important
-boundaries without treating every compile test as a runtime test:
+### User-Facing Canonical Artifacts
+
+Issue #797 owns these user-facing artifacts and their documentation. Their
+paths are written as code because they may be absent until that separate change
+is integrated:
+
+1. `lang-examples/native_effects.trb` is the canonical **native-run** example.
+   Its expected stdout is `Recovered: the failure was handled`.
+2. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
+   example. Wasmtime execution must assert its expected String/Bytes output.
+3. `lang-examples/invalid_unresolved_name.trb` is the canonical frontend
+   failure example. Its diagnostic must include
+   `` unresolved name `missing_value` ``.
+
+`lang-examples/README.md` is the companion catalog that records how to run
+these artifacts and their expected results.
+
+### Internal Regression Selection
+
+The user-facing artifacts above are the canonical examples. Separately, M0 CI
+should keep this broader internal regression selection to cross important
+compiler boundaries without treating every compile test as a runtime test:
 
 1. Native ADT/patterns: `test_native_enum_case`.
 2. Native closure capture: `test_native_closure`.
