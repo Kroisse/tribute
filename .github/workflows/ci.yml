@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -35,6 +36,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Test lint failure propagation
         run: .ci/test-lint.sh
@@ -55,6 +57,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -72,6 +75,129 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace
 
+  canonical-native:
+    name: Canonical native example (${{ matrix.platform }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            runner_json: '["self-hosted", "macOS"]'
+            cache: false
+          - platform: Ubuntu
+            runner_json: '"ubuntu-latest"'
+            cache: true
+    runs-on: ${{ fromJSON(matrix.runner_json) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: ${{ matrix.cache }}
+
+      - name: Compile canonical native example
+        run: |
+          cargo run --locked -- compile lang-examples/native_effects.trb \
+            -o target/native-effects-example
+
+      - name: Execute canonical native example
+        run: |
+          ./target/native-effects-example \
+            > target/native-effects-example.stdout
+
+      - name: Check canonical native output
+        run: |
+          diff -u \
+            tests/expected/native_effects.stdout \
+            target/native-effects-example.stdout
+
+  canonical-wasm:
+    name: Canonical WasmGC example
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Install wasmtime
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasmtime
+
+      - name: Compile canonical WasmGC example
+        run: |
+          cargo run --locked -- compile --target wasm \
+            lang-examples/wasm_dynamic_output.trb \
+            -o target/wasm-dynamic-output.wasm
+
+      - name: Execute canonical WasmGC example
+        run: |
+          wasmtime -Wgc=y,function-references=y \
+            target/wasm-dynamic-output.wasm \
+            > target/wasm-dynamic-output.stdout
+
+      - name: Check canonical WasmGC output
+        run: |
+          diff -u \
+            tests/expected/wasm_dynamic_output.stdout \
+            target/wasm-dynamic-output.stdout
+
+  canonical-diagnostic:
+    name: Canonical invalid example
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Require canonical invalid CLI failure
+        shell: bash
+        run: |
+          mkdir -p target
+
+          set +e
+          cargo run --locked -- compile --target none \
+            lang-examples/invalid_unresolved_name.trb \
+            > target/invalid-unresolved-name.stdout \
+            2> target/invalid-unresolved-name.stderr
+          cli_status=$?
+          set -e
+
+          if [[ "$cli_status" -ne 1 ]]; then
+            echo "expected exit status 1, got $cli_status" >&2
+            exit 1
+          fi
+
+      - name: Check canonical semantic diagnostic
+        run: cargo nextest run --locked -p tribute --test canonical_smoke
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -79,6 +205,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -106,6 +233,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Run markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v22
