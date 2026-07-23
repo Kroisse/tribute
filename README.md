@@ -15,6 +15,10 @@ familiar syntax.
   (`fn`, `{}`, `;`, `struct`/`enum`)
 - **Multiple Targets**: Cranelift (native) and WasmGC
 
+Current implementation support is narrower than the language design. See the
+[compiler capability matrix](new-plans/capabilities.md) for audited frontend,
+native, and WasmGC status. Compilation alone is not execution evidence.
+
 ## Quick Example
 
 ```text
@@ -98,9 +102,10 @@ cargo insta review
 
 ## Design Documents
 
-The `new-plans/` directory contains the authoritative design documents for the
-language and compiler. If code or tests conflict with these documents, the
-documents are considered correct.
+The `new-plans/` directory contains the authoritative language and compiler
+design. [`new-plans/capabilities.md`](new-plans/capabilities.md) separately
+records what the current implementation has demonstrated; design intent alone
+is not a support claim.
 
 ## About the Name
 

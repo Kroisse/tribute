@@ -2,7 +2,9 @@
 
 The canonical examples in this directory are checked against the current
 single-source-file CLI. They use public APIs and are the best starting point for
-running Tribute today.
+running Tribute today. The
+[compiler capability matrix](../new-plans/capabilities.md) is authoritative for
+the wider frontend and target status.
 
 ## Canonical runnable examples
 
@@ -47,9 +49,8 @@ Bytes: bytes
 ```
 
 This command requires a recent Wasmtime with WasmGC and function references.
-Wasm `read_line` is not supported. The Wasm backend compiles ability programs,
-but these examples do not claim ability execution support because that path
-lacks an execution test.
+Wasm `read_line` is unsupported. Existing Wasm `fn` and `op` ability tests are
+compile-only, so these examples do not claim Wasm ability execution support.
 
 ## Canonical invalid example
 
@@ -72,6 +73,14 @@ unresolved name `missing_value`
 The repository also contains historical samples and compiler fixtures. Their
 classification is explicit so they are not mistaken for supported runnable
 documentation.
+
+Current boundaries relevant to these files:
+
+- List expressions and general collection APIs are unsupported on all targets.
+- Inline modules have native execution evidence, but file-module loading,
+  package compilation, and separate Tribute-module linking are unsupported.
+- String/Bytes output through `std::io::print_line` is the only current
+  language-level Wasm execution claim.
 
 ### Regression fixture
 
