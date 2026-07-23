@@ -55,6 +55,19 @@ For Tree-sitter grammar development, install the Tree-sitter CLI:
 npm install -g tree-sitter-cli
 ```
 
+### Development prerequisites
+
+The commands below use these external tools:
+
+- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/) to run
+  the test suite
+- [cargo-insta](https://insta.rs/docs/cli/) to review snapshot changes
+- [Wasmtime](https://docs.wasmtime.dev/cli-install.html) to run Wasm examples
+
+The repository does not pin their CLI versions. CI installs the latest
+cargo-nextest and Wasmtime releases; use a Wasmtime release that accepts the
+`-Wgc=y,function-references=y` options shown in the example command.
+
 ## Building and Running
 
 ```bash

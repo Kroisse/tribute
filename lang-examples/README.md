@@ -48,8 +48,9 @@ String: dynamic
 Bytes: bytes
 ```
 
-This command requires a recent Wasmtime with WasmGC and function references.
-Wasm `read_line` is unsupported. Existing Wasm `fn` and `op` ability tests are
+Install a compatible Wasmtime release as described in the
+[development prerequisites](../README.md#development-prerequisites). Wasm
+`read_line` is unsupported. Existing Wasm `fn` and `op` ability tests are
 compile-only, so these examples do not claim Wasm ability execution support.
 
 ## Canonical invalid example
