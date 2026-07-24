@@ -15,13 +15,13 @@ use crate::ast::{
 };
 
 use super::collect::extract_type_args;
-use super::mangle::mangle_name;
+use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
 pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
 
-/// Type rewrite map: type name → set of (type_args, mangled_name) pairs.
-pub type TypeRewriteMap<'db> = HashMap<Symbol, Vec<(Vec<Type<'db>>, Symbol)>>;
+/// Type rewrite map: declaration identity → specialized argument/name pairs.
+pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
 
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
@@ -248,19 +248,19 @@ impl<'a, 'db> CallSiteRewriter<'a, 'db> {
 /// Build a type rewrite map from collected type instantiations.
 pub fn build_type_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
-    instantiations: &HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> TypeRewriteMap<'db> {
     let mut map = TypeRewriteMap::new();
-    for (name, type_arg_sets) in instantiations {
+    for (id, type_arg_sets) in instantiations {
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle_name(db, *name, type_args);
+                let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
                 (type_args.clone(), mangled)
             })
             .collect();
         entries.sort_by_key(|e| e.1);
-        map.insert(*name, entries);
+        map.insert(*id, entries);
     }
     map
 }
@@ -315,16 +315,17 @@ pub fn rewrite_type<'db>(
     map: &TypeRewriteMap<'db>,
 ) -> Type<'db> {
     match ty.kind(db) {
-        TypeKind::Named { name, args } if !args.is_empty() => {
+        TypeKind::Named { id, name, args } if !args.is_empty() => {
             // The rewrite map is keyed on the original (un-rewritten) args as
             // collected from the module, so look up using `args` directly —
             // not the recursively rewritten ones.
-            if let Some(entries) = map.get(name)
+            if let Some(entries) = map.get(id)
                 && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
             {
                 return Type::new(
                     db,
                     TypeKind::Named {
+                        id: id.with_qualified(db, *mangled),
                         name: *mangled,
                         args: vec![],
                     },
@@ -338,6 +339,7 @@ pub fn rewrite_type<'db>(
             Type::new(
                 db,
                 TypeKind::Named {
+                    id: *id,
                     name: *name,
                     args: rewritten_args,
                 },
@@ -440,7 +442,7 @@ fn rewrite_typed_ref_type<'db>(
         ResolvedRef::TypeDef { id } => {
             if let Some(mangled) = find_mangled_for_typedef(db, *id, tr.ty, map) {
                 ResolvedRef::TypeDef {
-                    id: TypeDefId::new(db, mangled),
+                    id: id.with_qualified(db, mangled),
                 }
             } else {
                 tr.resolved.clone()
@@ -464,8 +466,8 @@ fn find_mangled_for_ctor<'db>(
     };
     // Check if the result type is a Named type with args
     match result_ty.kind(db) {
-        TypeKind::Named { name, args } if !args.is_empty() => {
-            let entries = map.get(name)?;
+        TypeKind::Named { id, args, .. } if !args.is_empty() => {
+            let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
             Some(*mangled)
@@ -481,8 +483,8 @@ fn find_mangled_for_typedef<'db>(
     map: &TypeRewriteMap<'db>,
 ) -> Option<Symbol> {
     match ty.kind(db) {
-        TypeKind::Named { name, args } if !args.is_empty() => {
-            let entries = map.get(name)?;
+        TypeKind::Named { id, args, .. } if !args.is_empty() => {
+            let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
             Some(*mangled)
@@ -754,12 +756,13 @@ mod tests {
     }
 
     fn make_type_rewrite_map<'db>(
-        _db: &'db dyn salsa::Database,
+        db: &'db dyn salsa::Database,
         entries: Vec<(Symbol, Vec<Type<'db>>, Symbol)>,
     ) -> TypeRewriteMap<'db> {
         let mut map = TypeRewriteMap::new();
         for (name, args, mangled) in entries {
-            map.entry(name).or_default().push((args, mangled));
+            let id = TypeDefId::synthetic(db, name);
+            map.entry(id).or_default().push((args, mangled));
         }
         map
     }
@@ -771,6 +774,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -782,12 +786,37 @@ mod tests {
 
         let result = rewrite_type(&db, option_int, &map);
         match result.kind(&db) {
-            TypeKind::Named { name, args } => {
+            TypeKind::Named { name, args, .. } => {
                 assert_eq!(name.to_string(), "Option$Int");
                 assert!(args.is_empty());
             }
             other => panic!("expected Named, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_type_rewrite_map_keeps_same_spelled_source_types_distinct() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let a_id = TypeDefId::source(
+            &db,
+            Symbol::new("A::Thing"),
+            crate::ast::NodeId::from_raw(1),
+        );
+        let b_id = TypeDefId::source(
+            &db,
+            Symbol::new("B::Thing"),
+            crate::ast::NodeId::from_raw(2),
+        );
+        let mut instantiations = HashMap::new();
+        instantiations.insert(a_id, HashSet::from([vec![int]]));
+        instantiations.insert(b_id, HashSet::from([vec![int]]));
+
+        let map = build_type_rewrite_map(&db, &instantiations);
+
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&a_id][0].1.to_string(), "A::Thing$Int");
+        assert_eq!(map[&b_id][0].1.to_string(), "B::Thing$Int");
     }
 
     #[test]
@@ -804,6 +833,7 @@ mod tests {
         let text = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -819,6 +849,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -840,7 +871,7 @@ mod tests {
         let result = rewrite_type(&db, func_ty, &map);
         match result.kind(&db) {
             TypeKind::Func { params, .. } => match params[0].kind(&db) {
-                TypeKind::Named { name, args } => {
+                TypeKind::Named { name, args, .. } => {
                     assert_eq!(name.to_string(), "Option$Int");
                     assert!(args.is_empty());
                 }
@@ -857,6 +888,7 @@ mod tests {
         let unknown = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Unknown")),
                 name: Symbol::new("Unknown"),
                 args: vec![int],
             },
@@ -879,6 +911,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },
@@ -886,6 +919,7 @@ mod tests {
         let pair_option_int_bool = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Pair")),
                 name: Symbol::new("Pair"),
                 args: vec![option_int, bool_ty],
             },
@@ -904,7 +938,7 @@ mod tests {
 
         let result = rewrite_type(&db, pair_option_int_bool, &map);
         match result.kind(&db) {
-            TypeKind::Named { name, args } => {
+            TypeKind::Named { name, args, .. } => {
                 assert_eq!(name.to_string(), "Pair$Option$0$Int$1$Bool");
                 assert!(args.is_empty());
             }

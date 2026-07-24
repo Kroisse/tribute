@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeKind,
-    TypeParam, TypeScheme,
+    AbilityId, CallingConvention, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeDefId,
+    TypeKind, TypeParam, TypeScheme,
 };
 
 // =========================================================================
@@ -89,8 +89,9 @@ pub fn extract_type_name_from_type<'db>(
 
 /// Check if a method entry's receiver type matches an actual receiver type.
 ///
-/// Compares by type constructor name, allowing generic types to match
-/// (e.g., `Option(a)` matches `Option(Int)`).
+/// Compares nominal types by declaration identity, allowing their generic
+/// arguments to differ (e.g., `Option(a)` matches `Option(Int)`). Primitive
+/// receivers continue to match by their compiler-defined names.
 pub fn receiver_type_matches<'db>(
     db: &'db dyn salsa::Database,
     entry: &MethodEntry<'db>,
@@ -99,9 +100,22 @@ pub fn receiver_type_matches<'db>(
     let Some(declared) = entry.receiver_ty(db) else {
         return false;
     };
-    let declared_name = extract_type_name_from_type(db, declared);
-    let actual_name = extract_type_name_from_type(db, actual);
-    declared_name.is_some() && declared_name == actual_name
+    fn same_constructor<'db>(
+        db: &'db dyn salsa::Database,
+        declared: Type<'db>,
+        actual: Type<'db>,
+    ) -> bool {
+        match (declared.kind(db), actual.kind(db)) {
+            (TypeKind::App { ctor: left, .. }, _) => same_constructor(db, *left, actual),
+            (_, TypeKind::App { ctor: right, .. }) => same_constructor(db, declared, *right),
+            (TypeKind::Named { id: left, .. }, TypeKind::Named { id: right, .. }) => left == right,
+            (left, right) => {
+                left.primitive_name().is_some() && left.primitive_name() == right.primitive_name()
+            }
+        }
+    }
+
+    same_constructor(db, declared, actual)
 }
 
 /// Module-level type environment.
@@ -519,7 +533,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        Type::new(self.db, TypeKind::string())
+        self.named_type(Symbol::new("String"), vec![])
     }
 
     /// Create the Bytes type.
@@ -583,7 +597,23 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
-        Type::new(self.db, TypeKind::Named { name, args })
+        let id = self
+            .lookup_type_def(name)
+            .and_then(|scheme| match scheme.body(self.db).kind(self.db) {
+                TypeKind::Named { id, .. } => Some(*id),
+                _ => None,
+            })
+            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name));
+        self.named_type_with_id(id, name, args)
+    }
+
+    pub fn named_type_with_id(
+        &self,
+        id: TypeDefId<'db>,
+        name: Symbol,
+        args: Vec<Type<'db>>,
+    ) -> Type<'db> {
+        Type::new(self.db, TypeKind::Named { id, name, args })
     }
 }
 
@@ -813,6 +843,7 @@ mod tests {
             let receiver = Type::new(
                 db,
                 TypeKind::Named {
+                    id: crate::ast::TypeDefId::synthetic(db, Symbol::new(name)),
                     name: Symbol::new(name),
                     args: vec![],
                 },
@@ -863,6 +894,7 @@ mod tests {
         Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, Symbol::from_dynamic(name)),
                 name: Symbol::from_dynamic(name),
                 args: vec![],
             },
@@ -959,6 +991,42 @@ mod tests {
         let bar = named(&db, "Bar");
         let entry = method_entry(&db, "m", func(&db, &[foo], Type::new(&db, TypeKind::Int)));
         assert!(!receiver_type_matches(&db, &entry, bar));
+    }
+
+    #[test]
+    fn test_receiver_type_rejects_same_spelling_from_different_declarations() {
+        let db = salsa::DatabaseImpl::new();
+        let name = Symbol::new("Thing");
+        let first = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    Symbol::new("A::Thing"),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name,
+                args: vec![],
+            },
+        );
+        let second = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    Symbol::new("B::Thing"),
+                    crate::ast::NodeId::from_raw(2),
+                ),
+                name,
+                args: vec![],
+            },
+        );
+        let entry = method_entry(
+            &db,
+            "method",
+            func(&db, &[first], Type::new(&db, TypeKind::Int)),
+        );
+        assert!(!receiver_type_matches(&db, &entry, second));
     }
 
     #[salsa_test]

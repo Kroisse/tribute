@@ -25,6 +25,11 @@ pub struct TdnrResolver<'db> {
     /// Multiple candidates with different receiver types can share the same method name
     /// (e.g., `String::len` and `Bytes::len` both register under `len`).
     method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
+    /// Declaration-backed nominal identities used when rebuilding types from
+    /// source annotations during TDNR.
+    type_identities: HashMap<Symbol, crate::ast::TypeDefId<'db>>,
+    /// Lexical module prefix used while resolving expression-local annotations.
+    current_prefix: String,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -33,11 +38,16 @@ impl<'db> TdnrResolver<'db> {
         Self {
             db,
             method_index: HashMap::new(),
+            type_identities: HashMap::new(),
+            current_prefix: String::new(),
         }
     }
 
     /// Resolve method calls in a module.
     pub fn resolve_module(mut self, module: Module<TypedRef<'db>>) -> Module<TypedRef<'db>> {
+        let mut prefix = String::new();
+        self.collect_type_identities(&module.decls, &mut prefix);
+
         // Phase 1: Build method index from function declarations
         self.build_method_index(&module);
 
@@ -81,7 +91,34 @@ impl<'db> TdnrResolver<'db> {
     /// (no additional prefix), so FuncDefIds match what the rest of the pipeline expects.
     pub fn index_external_module(&mut self, module: &Module<TypedRef<'db>>) {
         let mut prefix = String::new();
+        self.collect_type_identities(&module.decls, &mut prefix);
+        prefix.clear();
         self.index_decls(&module.decls, &mut prefix);
+    }
+
+    fn collect_type_identities(&mut self, decls: &[Decl<TypedRef<'db>>], prefix: &mut String) {
+        for decl in decls {
+            match decl {
+                Decl::Struct(struct_decl) => {
+                    let qualified = qualified_symbol(prefix, struct_decl.name);
+                    let id = crate::ast::TypeDefId::source(self.db, qualified, struct_decl.id);
+                    self.type_identities.insert(qualified, id);
+                }
+                Decl::Enum(enum_decl) => {
+                    let qualified = qualified_symbol(prefix, enum_decl.name);
+                    let id = crate::ast::TypeDefId::source(self.db, qualified, enum_decl.id);
+                    self.type_identities.insert(qualified, id);
+                }
+                Decl::Module(module) => {
+                    if let Some(body) = &module.body {
+                        let saved = push_prefix(prefix, module.name);
+                        self.collect_type_identities(body, prefix);
+                        prefix.truncate(saved);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Recursively index declarations, including nested modules.
@@ -113,7 +150,7 @@ impl<'db> TdnrResolver<'db> {
                     let func_id = FuncDefId::new(self.db, qualified);
 
                     // Build function type from parameter and return type annotations
-                    let func_ty = self.build_func_type(func);
+                    let func_ty = self.build_func_type(func, prefix);
 
                     // Register under method name only; receiver type filtering at lookup time
                     self.method_index
@@ -171,8 +208,10 @@ impl<'db> TdnrResolver<'db> {
                                 },
                             }
                         };
-                        let self_ty = self.annotation_to_type(&Some(self_annotation));
-                        let field_ty = self.annotation_to_type(&Some(field.ty.clone()));
+                        let self_ty =
+                            self.annotation_to_type_in_scope(&Some(self_annotation), prefix);
+                        let field_ty =
+                            self.annotation_to_type_in_scope(&Some(field.ty.clone()), prefix);
 
                         let effect = crate::ast::EffectRow::pure(self.db);
                         let func_ty = Type::new(
@@ -208,21 +247,21 @@ impl<'db> TdnrResolver<'db> {
     }
 
     /// Build a function type from parameter and return type annotations.
-    fn build_func_type(&self, func: &FuncDecl<TypedRef<'db>>) -> Type<'db> {
+    fn build_func_type(&self, func: &FuncDecl<TypedRef<'db>>, prefix: &str) -> Type<'db> {
         use crate::ast::TypeKind;
 
         // Convert parameter types from annotations
         let params: Vec<Type<'db>> = func
             .params
             .iter()
-            .map(|p| self.annotation_to_type(&p.ty))
+            .map(|p| self.annotation_to_type_in_scope(&p.ty, prefix))
             .collect();
 
         // Get return type from annotation or infer from body
         let result = func
             .return_ty
             .as_ref()
-            .map(|ann| self.annotation_to_type(&Some(ann.clone())))
+            .map(|ann| self.annotation_to_type_in_scope(&Some(ann.clone()), prefix))
             .unwrap_or_else(|| {
                 // Try to get return type from body expression
                 self.get_expr_type(&func.body)
@@ -230,7 +269,7 @@ impl<'db> TdnrResolver<'db> {
             });
 
         // Convert effect annotations to EffectRow
-        let effect = self.annotations_to_effect_row(&func.effects);
+        let effect = self.annotations_to_effect_row(&func.effects, prefix);
 
         Type::new(
             self.db,
@@ -247,6 +286,7 @@ impl<'db> TdnrResolver<'db> {
     fn annotations_to_effect_row(
         &self,
         annotations: &Option<Vec<crate::ast::TypeAnnotation>>,
+        prefix: &str,
     ) -> crate::ast::EffectRow<'db> {
         use crate::ast::EffectRow;
 
@@ -265,13 +305,22 @@ impl<'db> TdnrResolver<'db> {
             self.db,
             anns,
             "",
-            &mut |ann| self.annotation_to_type(&Some(ann.clone())),
+            &mut |ann| self.annotation_to_type_in_scope(&Some(ann.clone()), prefix),
             || unreachable!("TDNR does not support open effect rows"),
         )
     }
 
     /// Convert a type annotation to a Type.
+    #[cfg(test)]
     fn annotation_to_type(&self, annotation: &Option<crate::ast::TypeAnnotation>) -> Type<'db> {
+        self.annotation_to_type_in_scope(annotation, &self.current_prefix)
+    }
+
+    fn annotation_to_type_in_scope(
+        &self,
+        annotation: &Option<crate::ast::TypeAnnotation>,
+        prefix: &str,
+    ) -> Type<'db> {
         use crate::ast::{TypeAnnotationKind, TypeKind};
 
         let Some(ann) = annotation else {
@@ -284,25 +333,26 @@ impl<'db> TdnrResolver<'db> {
                 if let Some(kind) = name.with_str(TypeKind::from_primitive_name) {
                     Type::new(self.db, kind)
                 } else {
-                    // User-defined type
-                    Type::new(
-                        self.db,
-                        TypeKind::Named {
-                            name: *name,
-                            args: vec![],
-                        },
-                    )
+                    self.nominal_type_in_scope(*name, prefix)
                 }
             }
             TypeAnnotationKind::Path(path) if !path.is_empty() => {
                 let name = crate::qualified_path_symbol(path).unwrap();
-                Type::new(self.db, TypeKind::Named { name, args: vec![] })
+                let id = self.lookup_type_identity(name, prefix);
+                Type::new(
+                    self.db,
+                    TypeKind::Named {
+                        id,
+                        name,
+                        args: vec![],
+                    },
+                )
             }
             TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type(&Some((**ctor).clone()));
+                let ctor_ty = self.annotation_to_type_in_scope(&Some((**ctor).clone()), prefix);
                 let arg_tys: Vec<Type<'db>> = args
                     .iter()
-                    .map(|a| self.annotation_to_type(&Some(a.clone())))
+                    .map(|a| self.annotation_to_type_in_scope(&Some(a.clone()), prefix))
                     .collect();
                 Type::new(
                     self.db,
@@ -314,6 +364,47 @@ impl<'db> TdnrResolver<'db> {
             }
             _ => Type::new(self.db, TypeKind::Error),
         }
+    }
+
+    fn nominal_type(&self, name: Symbol) -> Type<'db> {
+        self.nominal_type_in_scope(name, &self.current_prefix)
+    }
+
+    fn nominal_type_in_scope(&self, name: Symbol, prefix: &str) -> Type<'db> {
+        let id = self.lookup_type_identity(name, prefix);
+        Type::new(
+            self.db,
+            TypeKind::Named {
+                id,
+                name,
+                args: vec![],
+            },
+        )
+    }
+
+    fn lookup_type_identity(&self, name: Symbol, prefix: &str) -> crate::ast::TypeDefId<'db> {
+        let spelling = name.to_string();
+        if spelling.contains("::") {
+            return self
+                .type_identities
+                .get(&name)
+                .copied()
+                .unwrap_or_else(|| crate::ast::TypeDefId::synthetic(self.db, name));
+        }
+
+        let mut scope = prefix.trim_end_matches("::");
+        while !scope.is_empty() {
+            let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
+            if let Some(id) = self.type_identities.get(&candidate) {
+                return *id;
+            }
+            scope = scope.rsplit_once("::").map_or("", |(parent, _)| parent);
+        }
+
+        self.type_identities
+            .get(&name)
+            .copied()
+            .unwrap_or_else(|| crate::ast::TypeDefId::synthetic(self.db, name))
     }
 
     /// Check if a type annotation has a determinable type constructor name.
@@ -362,9 +453,11 @@ impl<'db> TdnrResolver<'db> {
         &mut self,
         module: crate::ast::ModuleDecl<TypedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
+        let saved = push_prefix(&mut self.current_prefix, module.name);
         let body = module
             .body
             .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+        self.current_prefix.truncate(saved);
 
         crate::ast::ModuleDecl {
             id: module.id,
@@ -573,7 +666,7 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::IntLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Int)),
             ExprKind::FloatLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Float)),
             ExprKind::BoolLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
-            ExprKind::StringLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::string())),
+            ExprKind::StringLit(_) => Some(self.nominal_type(Symbol::new("String"))),
             ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
             ExprKind::RuneLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Rune)),
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
@@ -909,6 +1002,7 @@ mod tests {
         let option_int = Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, option_name),
                 name: option_name,
                 args: vec![int_ty],
             },
@@ -944,7 +1038,7 @@ mod tests {
 
         let ty = resolver.get_expr_type(&expr);
         let Some(ty) = ty else { return false };
-        matches!(ty.kind(db), TypeKind::Named { name, args } if *name == option_name && args.len() == 1 && matches!(args[0].kind(db), TypeKind::Int))
+        matches!(ty.kind(db), TypeKind::Named { name, args, .. } if *name == option_name && args.len() == 1 && matches!(args[0].kind(db), TypeKind::Int))
     }
 
     #[salsa_test]
@@ -963,6 +1057,7 @@ mod tests {
         let point_ty = Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, point_name),
                 name: point_name,
                 args: vec![],
             },
@@ -1009,6 +1104,7 @@ mod tests {
         let ty = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Foo")),
                 name: Symbol::new("Foo"),
                 args: vec![],
             },
@@ -1026,6 +1122,7 @@ mod tests {
         let list_named = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![],
             },
@@ -1052,6 +1149,7 @@ mod tests {
         let map_named = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Map")),
                 name: Symbol::new("Map"),
                 args: vec![],
             },
@@ -1064,7 +1162,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let string_ty = Type::new(&db, TypeKind::string());
+        let string_ty = Type::new(&db, TypeKind::string(&db));
         let outer_app = Type::new(
             &db,
             TypeKind::App {
@@ -1087,7 +1185,7 @@ mod tests {
             (TypeKind::Nat, "Nat"),
             (TypeKind::Float, "Float"),
             (TypeKind::Bool, "Bool"),
-            (TypeKind::string(), "String"),
+            (TypeKind::string(&db), "String"),
             (TypeKind::Bytes, "Bytes"),
             (TypeKind::Rune, "Rune"),
             (TypeKind::Nil, "Nil"),
@@ -1133,6 +1231,7 @@ mod tests {
         let foo_ty = Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, type_name),
                 name: type_name,
                 args: vec![],
             },
@@ -1157,6 +1256,7 @@ mod tests {
         let receiver_ty = Some(Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, type_name),
                 name: type_name,
                 args: vec![],
             },
@@ -1185,6 +1285,7 @@ mod tests {
         let foo_ty = Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, type_name),
                 name: type_name,
                 args: vec![],
             },
@@ -1219,6 +1320,7 @@ mod tests {
         let receiver_ty = Some(Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, type_name),
                 name: type_name,
                 args: vec![],
             },
@@ -1244,6 +1346,7 @@ mod tests {
         let receiver_ty = Some(Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, Symbol::new("Foo")),
                 name: Symbol::new("Foo"),
                 args: vec![],
             },
@@ -1272,6 +1375,7 @@ mod tests {
         let list_named = Type::new(
             db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: type_name,
                 args: vec![],
             },

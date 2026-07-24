@@ -7,11 +7,11 @@ use trunk_ir::Symbol;
 use crate::ast::{
     Arm, Decl, EnumDecl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, FuncDefId, HandlerArm,
     HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl, Type, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef, VariantDecl,
+    TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
 
-use super::mangle::mangle_name;
+use super::mangle::{mangle_name, mangle_type_name};
 
 /// Generate specialized copies of generic functions for each instantiation.
 ///
@@ -78,13 +78,13 @@ pub fn generate_specializations<'db>(
 pub fn generate_struct_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<StructDecl> {
-    let struct_decls = collect_struct_decls(module);
+    let struct_decls = collect_struct_decls(db, module);
     let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
 
-    for (name, type_arg_sets) in instantiations {
-        let Some(decl) = struct_decls.get(name) else {
+    for (id, type_arg_sets) in instantiations {
+        let Some(decl) = struct_decls.get(id) else {
             continue;
         };
         if decl.type_params.is_empty() {
@@ -92,7 +92,7 @@ pub fn generate_struct_specializations<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_name(db, *name, type_args);
+            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
             let specialized = specialize_struct_decl(db, decl, type_args, mangled);
             entries.push((mangled, specialized));
         }
@@ -106,13 +106,13 @@ pub fn generate_struct_specializations<'db>(
 pub fn generate_enum_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<EnumDecl> {
-    let enum_decls = collect_enum_decls(module);
+    let enum_decls = collect_enum_decls(db, module);
     let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
 
-    for (name, type_arg_sets) in instantiations {
-        let Some(decl) = enum_decls.get(name) else {
+    for (id, type_arg_sets) in instantiations {
+        let Some(decl) = enum_decls.get(id) else {
             continue;
         };
         if decl.type_params.is_empty() {
@@ -120,7 +120,7 @@ pub fn generate_enum_specializations<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_name(db, *name, type_args);
+            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
             let specialized = specialize_enum_decl(db, decl, type_args, mangled);
             entries.push((mangled, specialized));
         }
@@ -258,12 +258,16 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
         TypeKind::Rune => TypeAnnotationKind::Named(Symbol::new("Rune")),
         TypeKind::Nil => TypeAnnotationKind::Named(Symbol::new("Nil")),
         TypeKind::Never => TypeAnnotationKind::Named(Symbol::new("Never")),
-        TypeKind::Named { name, args } => {
+        TypeKind::Named {
+            id: type_id,
+            name,
+            args,
+        } => {
             if args.is_empty() {
                 TypeAnnotationKind::Named(*name)
             } else {
                 // Use mangled name for generic types with args
-                let mangled = mangle_name(db, *name, args);
+                let mangled = mangle_type_name(db, *type_id, *name, args);
                 TypeAnnotationKind::Named(mangled)
             }
         }
@@ -331,28 +335,32 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
     TypeAnnotation { id, kind }
 }
 
-fn collect_struct_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a StructDecl> {
+fn collect_struct_decls<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    module: &'a Module<TypedRef<'db>>,
+) -> HashMap<TypeDefId<'db>, &'a StructDecl> {
     let mut map = HashMap::new();
     let mut prefix = String::new();
-    collect_struct_decls_inner(&module.decls, &mut prefix, &mut map);
+    collect_struct_decls_inner(db, &module.decls, &mut prefix, &mut map);
     map
 }
 
-fn collect_struct_decls_inner<'a>(
-    decls: &'a [Decl<TypedRef<'_>>],
+fn collect_struct_decls_inner<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
-    map: &mut HashMap<Symbol, &'a StructDecl>,
+    map: &mut HashMap<TypeDefId<'db>, &'a StructDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Struct(s) => {
                 let qualified = crate::qualified_symbol(prefix, s.name);
-                map.insert(qualified, s);
+                map.insert(TypeDefId::source(db, qualified, s.id), s);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let len = crate::push_prefix(prefix, m.name);
-                    collect_struct_decls_inner(body, prefix, map);
+                    collect_struct_decls_inner(db, body, prefix, map);
                     prefix.truncate(len);
                 }
             }
@@ -361,28 +369,32 @@ fn collect_struct_decls_inner<'a>(
     }
 }
 
-fn collect_enum_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a EnumDecl> {
+fn collect_enum_decls<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    module: &'a Module<TypedRef<'db>>,
+) -> HashMap<TypeDefId<'db>, &'a EnumDecl> {
     let mut map = HashMap::new();
     let mut prefix = String::new();
-    collect_enum_decls_inner(&module.decls, &mut prefix, &mut map);
+    collect_enum_decls_inner(db, &module.decls, &mut prefix, &mut map);
     map
 }
 
-fn collect_enum_decls_inner<'a>(
-    decls: &'a [Decl<TypedRef<'_>>],
+fn collect_enum_decls_inner<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
-    map: &mut HashMap<Symbol, &'a EnumDecl>,
+    map: &mut HashMap<TypeDefId<'db>, &'a EnumDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Enum(e) => {
                 let qualified = crate::qualified_symbol(prefix, e.name);
-                map.insert(qualified, e);
+                map.insert(TypeDefId::source(db, qualified, e.id), e);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let len = crate::push_prefix(prefix, m.name);
-                    collect_enum_decls_inner(body, prefix, map);
+                    collect_enum_decls_inner(db, body, prefix, map);
                     prefix.truncate(len);
                 }
             }
@@ -962,6 +974,7 @@ mod tests {
         let ty = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -980,6 +993,7 @@ mod tests {
         let ty = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int],
             },

@@ -102,7 +102,6 @@ impl<'db> TypeChecker<'db> {
                 next_bound_var += 1;
                 Type::new(self.db(), TypeKind::BoundVar { index })
             });
-
         // Build effect row from annotations (effects don't have BoundVars for now)
         let (effect, effect_origins) = match &func.effects {
             Some(anns) => {
@@ -219,7 +218,11 @@ impl<'db> TypeChecker<'db> {
         let args: Vec<Type<'db>> = (0..type_params.len() as u32)
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
-        let struct_ty = self.env.named_type(qualified_name, args);
+        let struct_ty = self.env.named_type_with_id(
+            crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
+            qualified_name,
+            args,
+        );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
         self.env.register_type_def(qualified_name, scheme);
@@ -274,7 +277,11 @@ impl<'db> TypeChecker<'db> {
         let args: Vec<Type<'db>> = (0..type_params.len() as u32)
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
-        let enum_ty = self.env.named_type(qualified_name, args);
+        let enum_ty = self.env.named_type_with_id(
+            crate::ast::TypeDefId::source(self.db(), qualified_name, e.id),
+            qualified_name,
+            args,
+        );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
         self.env.register_type_def(qualified_name, scheme);
@@ -418,12 +425,12 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_for_sig(ctor, type_var_map, next_bound_var);
-                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var))
                         .collect();
-                    self.env.named_type(*name, arg_types)
+                    self.env.named_type_with_id(*id, *name, arg_types)
                 } else {
                     self.env.error_type()
                 }
@@ -483,12 +490,12 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_for_ctor(ctor, type_param_indices);
-                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_for_ctor(a, type_param_indices))
                         .collect();
-                    self.env.named_type(*name, arg_types)
+                    self.env.named_type_with_id(*id, *name, arg_types)
                 } else {
                     self.env.error_type()
                 }

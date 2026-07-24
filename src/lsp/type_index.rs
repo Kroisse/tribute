@@ -53,7 +53,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             name.unwrap_or_else(|| format!("?{}", display_index))
         }
 
-        TypeKind::Named { name, args } => {
+        TypeKind::Named { name, args, .. } => {
             if args.is_empty() {
                 name.to_string()
             } else {
@@ -278,7 +278,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.add_entry(expr.id, float_ty);
             }
             ExprKind::StringLit(_) => {
-                let string_ty = Type::new(self.db, TypeKind::string());
+                let string_ty = Type::new(self.db, TypeKind::string(self.db));
                 self.add_entry(expr.id, string_ty);
             }
             ExprKind::BytesLit(_) => {
@@ -484,7 +484,7 @@ pub fn type_index<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_front::ast::UniVarId;
+    use tribute_front::ast::{TypeDefId, UniVarId};
 
     fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
         SourceCst::from_source_str(db, "test.trb", text)
@@ -512,6 +512,7 @@ mod tests {
         let list_ty = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -649,6 +650,7 @@ mod tests {
         let ctor_ty = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },

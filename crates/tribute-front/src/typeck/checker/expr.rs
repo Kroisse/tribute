@@ -859,7 +859,7 @@ impl<'db> TypeChecker<'db> {
     /// otherwise (None, empty vec).
     fn extract_struct_info(&self, ty: Type<'db>) -> (Option<Symbol>, Vec<Type<'db>>) {
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args } => (Some(*name), args.clone()),
+            TypeKind::Named { name, args, .. } => (Some(*name), args.clone()),
             TypeKind::App { ctor, args } => {
                 if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
                     (Some(*name), args.clone())
@@ -881,7 +881,7 @@ impl<'db> TypeChecker<'db> {
     ) -> Type<'db> {
         let list_sym = Symbol::new("List");
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args } if *name == list_sym && args.len() == 1 => args[0],
+            TypeKind::Named { name, args, .. } if *name == list_sym && args.len() == 1 => args[0],
             TypeKind::App { ctor, args } if args.len() == 1 => {
                 if let TypeKind::Named { name, .. } = ctor.kind(self.db())
                     && *name == list_sym
@@ -2113,12 +2113,12 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_with_ctx(ctx, ctor);
-                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_with_ctx(ctx, a))
                         .collect();
-                    ctx.named_type(*name, arg_types)
+                    ctx.named_type_with_id(*id, *name, arg_types)
                 } else {
                     ctx.error_type()
                 }
@@ -2403,7 +2403,8 @@ mod tests {
     use trunk_ir::Symbol;
 
     use crate::ast::{
-        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeKind,
+        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
+        TypeKind,
     };
     use crate::typeck::{FunctionInferenceContext, ModuleTypeEnv};
 
@@ -2469,7 +2470,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Should be Named { name: "MyType", args: [] }
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("MyType"));
             assert!(args.is_empty());
         } else {
@@ -2490,7 +2491,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Qualified type identity preserves the complete path.
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("std::Option"));
             assert!(args.is_empty());
         } else {
@@ -2516,7 +2517,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Should be Named { name: "List", args: [Int] }
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("List"));
             assert_eq!(args.len(), 1);
             assert_eq!(args[0], Type::new(db, TypeKind::Int));
@@ -2615,7 +2616,7 @@ mod tests {
         if let TypeKind::Tuple(elems) = ty.kind(db) {
             assert_eq!(elems.len(), 2);
             assert_eq!(elems[0], Type::new(db, TypeKind::Int));
-            assert_eq!(elems[1], Type::new(db, TypeKind::string()));
+            assert_eq!(elems[1], Type::new(db, TypeKind::string(db)));
         } else {
             panic!("Tuple annotation should be Tuple type");
         }
@@ -2758,6 +2759,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2774,10 +2776,11 @@ mod tests {
         let mut ctx = make_test_ctx(db, &env);
 
         // List<String> → String
-        let string_ty = Type::new(db, TypeKind::string());
+        let string_ty = Type::new(db, TypeKind::string(db));
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![string_ty],
             },
@@ -2817,6 +2820,7 @@ mod tests {
         let option_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -2842,6 +2846,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![],
             },
@@ -2868,6 +2873,7 @@ mod tests {
         let inner_list = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2875,6 +2881,7 @@ mod tests {
         let outer_list = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![inner_list],
             },
