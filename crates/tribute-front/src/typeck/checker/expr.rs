@@ -1188,10 +1188,8 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Handle { body, handlers } => {
-                let handle_ctx = ctx.pop_handle_ctx();
-                debug_assert!(
-                    handle_ctx.is_some(),
-                    "pop_handle_ctx should match a corresponding push_handle_ctx in infer phase"
+                let handle_ctx = ctx.pop_handle_ctx().expect(
+                    "pop_handle_ctx should match a corresponding push_handle_ctx in infer phase",
                 );
                 // Save and restore effect context for handle body conversion,
                 // just like in the infer phase. The body has its own effect
@@ -1206,7 +1204,7 @@ impl<'db> TypeChecker<'db> {
                     body: converted_body,
                     handlers: handlers
                         .into_iter()
-                        .map(|h| self.convert_handler_arm_with_ctx(ctx, h, handle_ctx.as_ref()))
+                        .map(|h| self.convert_handler_arm_with_ctx(ctx, h, &handle_ctx))
                         .collect(),
                 }
             }
@@ -1910,7 +1908,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
-        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+        handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
         ctx.with_scope(|ctx| self.convert_handler_arm_in_scope(ctx, arm, handle_ctx))
     }
@@ -1920,18 +1918,15 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
-        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+        handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Do { binding } => {
-                let binding = if let Some(handle_ctx) = handle_ctx {
-                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
-                    ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
-                    self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
-                    self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty)
-                } else {
-                    self.convert_pattern_with_ctx(ctx, binding)
-                };
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
+                ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
+                self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
+                let binding =
+                    self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty);
                 HandlerKind::Do { binding }
             }
             HandlerKind::Fn {
@@ -1973,15 +1968,12 @@ impl<'db> TypeChecker<'db> {
                     } else {
                         let arg_ty = ctx.fresh_type_var();
                         let result_ty = ctx.fresh_type_var();
-                        let cont_effect = handle_ctx
-                            .map(|hc| hc.body_effect)
-                            .unwrap_or_else(|| ctx.fresh_effect_row());
                         let cont_ty = Type::new(
                             self.db(),
                             TypeKind::Continuation {
                                 arg: arg_ty,
                                 result: result_ty,
-                                effect: cont_effect,
+                                effect: handle_ctx.body_effect,
                             },
                         );
                         ctx.bind_local(k_local_id, cont_ty);
@@ -2499,8 +2491,7 @@ mod tests {
             },
             body: local_expr(3, name, LocalId::new(1)),
         };
-        let converted_do =
-            checker.convert_handler_arm_with_ctx(&mut ctx, do_arm, Some(&handle_ctx));
+        let converted_do = checker.convert_handler_arm_with_ctx(&mut ctx, do_arm, &handle_ctx);
         assert_eq!(handler_body_type(&converted_do), body_ty);
 
         let ability = ResolvedRef::ability(AbilityId::source(db, Symbol::new("Test")));
@@ -2514,8 +2505,7 @@ mod tests {
             },
             body: local_expr(5, name, LocalId::UNRESOLVED),
         };
-        let converted_op =
-            checker.convert_handler_arm_with_ctx(&mut ctx, op_arm, Some(&handle_ctx));
+        let converted_op = checker.convert_handler_arm_with_ctx(&mut ctx, op_arm, &handle_ctx);
         assert!(
             matches!(
                 handler_body_type(&converted_op).kind(db),
@@ -2575,6 +2565,10 @@ mod tests {
         );
 
         let mut ctx = make_test_ctx(db, &checker.env);
+        let handle_ctx = HandleContext {
+            body_ty: Type::new(db, TypeKind::Nil),
+            body_effect: EffectRow::pure(db),
+        };
         let name = Symbol::new("value");
         let ability = ResolvedRef::ability(ability_id);
         let make_arm = |id, op, local_id| HandlerArm {
@@ -2591,12 +2585,12 @@ mod tests {
         let nat_arm = checker.convert_handler_arm_with_ctx(
             &mut ctx,
             make_arm(10, nat_op, LocalId::new(10)),
-            None,
+            &handle_ctx,
         );
         let bool_arm = checker.convert_handler_arm_with_ctx(
             &mut ctx,
             make_arm(20, bool_op, LocalId::new(20)),
-            None,
+            &handle_ctx,
         );
 
         assert_eq!(handler_body_type(&nat_arm), nat_ty);
