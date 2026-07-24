@@ -508,7 +508,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![bound_var],
             },
@@ -521,7 +521,7 @@ mod tests {
         let expected = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -594,7 +594,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![bound_var],
             },

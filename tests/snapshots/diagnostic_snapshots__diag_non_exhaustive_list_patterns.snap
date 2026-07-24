@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "non-exhaustive case expression: list patterns do not cover all lengths"
+  span:
+    start: 43
+    end: 45
+  severity: Error
+  phase: TypeChecking

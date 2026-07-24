@@ -702,6 +702,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ) -> Type<'db> {
         self.env.named_type_with_id(id, name, args)
     }
+
+    /// Construct the compiler-owned canonical `List(element)` type.
+    pub fn canonical_list_type(&self, element: Type<'db>) -> Type<'db> {
+        self.env.canonical_list_type(element)
+    }
 }
 
 #[cfg(test)]

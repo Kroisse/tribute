@@ -369,7 +369,24 @@ impl RewritePattern for RefIsNullPattern {
 
         let loc = ctx.op(op).location;
         let ptr_ty = core::ptr(ctx).as_type_ref();
-        let i1_ty = intern_i1_type(ctx);
+        let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
+            return false;
+        };
+        let result_ty = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, result_ty);
+        let result_data = ctx.types.get(result_ty);
+        let can_hold_i8 = result_data.dialect == Symbol::new("core")
+            && matches!(
+                result_data.name.to_string().as_str(),
+                "i8" | "i16" | "i32" | "i64"
+            );
+        if !can_hold_i8 {
+            return false;
+        }
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
         let ref_val = ref_is_null.r#ref(ctx);
 
         let null_op = clif::iconst(ctx, loc, ptr_ty, 0);
@@ -378,11 +395,17 @@ impl RewritePattern for RefIsNullPattern {
             loc,
             ref_val,
             null_op.result(ctx),
-            i1_ty,
+            i8_ty,
             Symbol::new("eq"),
         );
         rewriter.insert_op(null_op.op_ref());
-        rewriter.replace_op(icmp_op.op_ref());
+        if result_ty == i8_ty {
+            rewriter.replace_op(icmp_op.op_ref());
+        } else {
+            rewriter.insert_op(icmp_op.op_ref());
+            let extended = clif::uextend(ctx, loc, icmp_op.result(ctx), result_ty);
+            rewriter.replace_op(extended.op_ref());
+        }
         true
     }
 }
@@ -394,12 +417,16 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
 
-    fn run_pass(ir: &str) -> String {
+    fn run_pass_result(ir: &str) -> Result<String, trunk_ir::rewrite::ConversionError> {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let type_converter = TypeConverter::new();
-        super::lower(&mut ctx, module, type_converter).unwrap();
-        print_module(&ctx, module.op())
+        super::lower(&mut ctx, module, type_converter)?;
+        Ok(print_module(&ctx, module.op()))
+    }
+
+    fn run_pass(ir: &str) -> String {
+        run_pass_result(ir).unwrap()
     }
 
     #[test]
@@ -462,6 +489,35 @@ mod tests {
     fn test_ref_is_null_to_clif() {
         let result = run_pass(
             r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.ref_is_null %0 : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_ref_is_null_i8_needs_no_extension() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i8 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.ref_is_null %0 : core.i8
+    func.return %1
+  }
+}"#,
+        );
+        assert!(result.contains("clif.icmp"));
+        assert!(!result.contains("clif.uextend"));
+    }
+
+    #[test]
+    fn test_ref_is_null_rejects_unlowered_i1_result() {
+        let result = run_pass_result(
+            r#"core.module @test {
   func.func @test_fn() -> core.i1 {
     %0 = clif.iconst {value = 42} : core.ptr
     %1 = adt.ref_is_null %0 : core.i1
@@ -469,6 +525,6 @@ mod tests {
   }
 }"#,
         );
-        insta::assert_snapshot!(result);
+        assert!(result.is_err());
     }
 }

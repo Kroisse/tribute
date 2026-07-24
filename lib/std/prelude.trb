@@ -113,6 +113,22 @@ pub mod Result {
 }
 
 // =============================================================================
+// Opaque List construction
+// =============================================================================
+
+pub mod List {
+    /// Return a new list with value before every element of tail.
+    pub fn prepend(value: a, tail: List(a)) -> List(a) {
+        List::__tribute_list_prepend_intrinsic(value, tail)
+    }
+
+    extern "intrinsic" fn __tribute_list_prepend_intrinsic(
+        value: a,
+        tail: List(a),
+    ) -> List(a)
+}
+
+// =============================================================================
 // Numeric operator intrinsics
 // =============================================================================
 // Arithmetic and comparison operators for primitive numeric types.

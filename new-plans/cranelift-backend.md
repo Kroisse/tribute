@@ -61,6 +61,23 @@ ADT types by `String`, `Leaf`/`Branch`, or representation layout. Missing
 metadata is a lowering error whenever `adt.string_const` is present; this keeps
 hand-written or text-round-tripped IR from silently selecting a user lookalike.
 
+### Private List layout
+
+The native backend must eliminate shared `list.*` operations before the
+backend-ready boundary. M1 may use a private immutable singly linked node:
+
+```text
+empty       = null
+non-empty   = RC object [element, tail]
+```
+
+This is a target-private lowering choice, not an `adt.enum List` contract.
+Frontend/shared IR never names node fields or `Empty`/`Cons`. Node allocation
+uses the standard RC header, RTTI, retain/release insertion, and deep-release
+path. A node owns reference-typed elements and its tail; tail observation
+preserves order and persistence. Later replacement with an RRB representation
+must not require source or shared-IR changes.
+
 ### Native 타겟
 
 ```mermaid
@@ -69,6 +86,7 @@ flowchart TB
 
     subgraph native_passes["tribute-passes/src/native/"]
         cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
+        list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         rc_pass["RC insertion\nretain/release 삽입"]
     end
 
@@ -89,7 +107,7 @@ flowchart TB
 
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
-    input --> cont --> rc_pass
+    input --> cont --> list_lower --> rc_pass
     rc_pass --> arith --> scf --> adt --> func --> intrinsic --> const_pass
     const_pass --> validate --> codegen --> obj --> output
 ```

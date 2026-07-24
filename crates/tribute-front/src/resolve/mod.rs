@@ -136,6 +136,19 @@ pub fn build_env<'db>(
 
 /// Expose compiler-owned definitions through the ordinary resolver namespace.
 fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEnv<'db>) {
+    env.add_import_if_absent(
+        Symbol::new("List"),
+        Binding::TypeDef {
+            id: TypeDefId::builtin_list(db),
+        },
+    );
+    env.add_to_namespace_if_absent(
+        Symbol::new("std::collections"),
+        Symbol::new("List"),
+        Binding::TypeDef {
+            id: TypeDefId::builtin_list(db),
+        },
+    );
     env.add_to_namespace(
         Symbol::new("std::io"),
         Symbol::new("Io"),

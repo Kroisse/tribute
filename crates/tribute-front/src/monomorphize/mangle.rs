@@ -36,8 +36,12 @@ pub fn mangle_type_name(
 }
 
 fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
-    let qualified = id.qualified(db);
-    if qualified == name { name } else { qualified }
+    if id.is_builtin_list(db) {
+        Symbol::new("BuiltinList")
+    } else {
+        let qualified = id.qualified(db);
+        if qualified == name { name } else { qualified }
+    }
 }
 
 fn write_type_mangled(
@@ -177,13 +181,46 @@ mod tests {
         let list_option_int = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("List")),
+                id: crate::ast::TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
                 args: vec![option_int],
             },
         );
         let result = mangle_name(&db, base, &[list_option_int]);
-        assert_eq!(result.to_string(), "f$List$0$Option$0$Int$1$1");
+        assert_eq!(result.to_string(), "f$BuiltinList$0$Option$0$Int$1$1");
+    }
+
+    #[test]
+    fn test_builtin_and_source_list_mangle_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("identity");
+        let name = Symbol::new("List");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let builtin = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name,
+                args: vec![int_ty],
+            },
+        );
+        let source = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
+                name,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            mangle_name(&db, base, &[builtin]).to_string(),
+            "identity$BuiltinList$0$Int$1"
+        );
+        assert_eq!(
+            mangle_name(&db, base, &[source]).to_string(),
+            "identity$List$0$Int$1"
+        );
     }
 
     #[test]

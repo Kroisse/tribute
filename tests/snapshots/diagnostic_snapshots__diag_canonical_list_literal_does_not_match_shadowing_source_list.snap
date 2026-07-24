@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "type error in function 'bad': canonical compiler-owned type `List(Nat)` is distinct from source-declared type `List(Nat)`"
+  span:
+    start: 179
+    end: 212
+  severity: Error
+  phase: TypeChecking

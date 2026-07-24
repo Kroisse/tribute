@@ -512,7 +512,7 @@ mod tests {
         let list_ty = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -650,7 +650,7 @@ mod tests {
         let ctor_ty = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },
