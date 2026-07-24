@@ -67,13 +67,14 @@ pub mod List {
 ```
 
 M1 List public surface는 literal, sequence-view pattern,
-`List::prepend(value, tail) -> List(a)`로 제한된다. Prelude는 이 public function을
-compiler-provided intrinsic implementation으로 선언하며 shared
-`list.prepend`로 lower한다. Intrinsic ABI는 별도 source API가 아니다. Compiler
-lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`,
-`list.tail`도 shared IR operation이며 source API가 아니다. 이 operation들은
-sequence 의미만 갖고 target layout이나 variant tag를 노출하지 않는다. Native와
-Wasm은 각자 private layout으로 lower한다.
+`List::prepend(value, tail) -> List(a)`로 제한된다. Prelude의 public wrapper는
+private ABI-marked compiler intrinsic을 호출하고, shared pipeline은 그 private
+call만 `list.prepend`로 lower한다. 같은 public qualified name을 가진 일반 source
+function은 intrinsic이 아니다. Private intrinsic ABI는 별도 source API가 아니다.
+Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,
+`list.head`, `list.tail`도 shared IR operation이며 source API가 아니다. 이
+operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노출하지
+않는다. Native와 Wasm은 각자 private layout으로 lower한다.
 
 ### Use 문법
 

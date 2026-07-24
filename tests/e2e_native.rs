@@ -394,6 +394,25 @@ fn main() {
     );
 }
 
+#[test]
+fn test_native_source_list_prepend_function_is_not_treated_as_intrinsic() {
+    assert_native_output(
+        "source_list_prepend_function.trb",
+        r#"
+pub mod List {
+    pub fn prepend(value: Nat, tail: Nat) -> Nat {
+        value + tail
+    }
+}
+
+fn main() {
+    __tribute_print_nat(List::prepend(20, 22))
+}
+"#,
+        "42",
+    );
+}
+
 // =============================================================================
 // Intermediate Feature Tests
 // =============================================================================

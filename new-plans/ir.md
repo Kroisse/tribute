@@ -106,9 +106,10 @@ indices, allocation sizes, or target layout metadata. `list.prepend` is
 semantically persistent: it returns a new sequence and does not mutate its tail.
 Shared lowering may build a literal by first evaluating all elements left to
 right and then applying `list.prepend` in reverse value order.
-Calls to the public `List::prepend(value, tail)` prelude function lower to the
-same `list.prepend` operation through its compiler-provided intrinsic
-implementation. The intrinsic ABI is a compiler/prelude boundary, not an
+The public `List::prepend(value, tail)` prelude wrapper delegates to a private
+ABI-marked compiler intrinsic, whose calls lower to the same `list.prepend`
+operation. A source-defined function merely spelled `List::prepend` remains an
+ordinary call. The private intrinsic ABI is a compiler/prelude boundary, not an
 additional public symbol or a layout contract.
 
 List patterns lower to sequence observations. Exact-length patterns require an
