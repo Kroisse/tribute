@@ -325,10 +325,7 @@ fn main() {
     assert_native_output("abort_multiple_handles.trb", code, "30");
 }
 
-/// Test conditional abort with case expression (codegen limitation).
-///
-/// When `case` branches have different types (Never vs Nat), Cranelift
-/// codegen currently has a type mismatch. This test is ignored until fixed.
+/// Test conditional abort with case branches returning `Never` and `Nat`.
 #[test]
 fn test_abort_conditional() {
     let code = r#"ability Abort {
