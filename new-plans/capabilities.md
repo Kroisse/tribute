@@ -5,8 +5,8 @@ demonstrably parse, type-check, lower, compile, and execute. The language design
 documents describe intended semantics; they are not evidence that an
 implementation exists.
 
-The matrix was audited on 2026-07-23 at base commit
-`f37d8bffa7bdfdb7297ccbba4999d9ecf2c0761a`. A later change must update the
+The matrix was audited on 2026-07-24 at base commit
+`f2b675966b90268ab2245bfd208be2b5f2387a7b`. A later change must update the
 status and evidence together. A capability not listed here is
 **not-yet-verified**, not implicitly supported.
 
@@ -75,6 +75,7 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | Byte-wise `String` equality (`==` and `!=`) | **compile-only** | **native-run** | **wasm-run** | `test_string_equality_operators` verifies frontend resolution and lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_native_string_equality` and `test_execute_string_equality` execute shape-independent leaf-span comparison, mismatched leaf boundaries, empty leaves, shared/repeated subtrees, Unicode, length mismatch, and early/middle/late byte mismatch in [`e2e_native.rs`](../tests/e2e_native.rs) and [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The structural prelude test fixes the direct Leaf/Leaf span path and rejects the former equality-only flatten/index loop. |
 | `Bytes` literals, concatenation, and `String::from_bytes` | **compile-only** | **native-run** | **wasm-run** | Native literal, concat, length, indexing, and slicing tests are in [`e2e_native.rs`](../tests/e2e_native.rs); `test_native_bytes_get_safe` asserts both the in-range `Some` and out-of-range `None` paths. Wasm execution is limited to concatenation/output in `test_execute_dynamic_bytes_write_boundary` and to concatenation plus `String::from_bytes` in `test_execute_string_literals_and_dynamic_bytes`, which asserts the converted `dynamic bytes` and `shared bytes` output. Other Wasm `Bytes` APIs are **not-yet-verified**. |
 | `Nat` and `Int` arithmetic/comparison | **compile-only** | **native-run** | **compile-only** | Native execution is in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_arithmetic_expr` emits Wasm but does not run it. |
+| `Int::parse` and `Int::to_string` decimal text conversion | **compile-only** | **native-run** | **not-yet-verified** | `canonical_int_text_api_resolves_through_prelude` verifies the public signatures and canonical `Int::ParseError` identity in [`int_text.rs`](../crates/tribute-front/tests/int_text.rs). `public_int_text_api_covers_decimal_contract_and_boundaries` uses only public source APIs and executes signs, zero, invalid syntax, whitespace/data rejection, overflow, signed 32-bit boundaries, formatting, and round trips in [`e2e_int_text.rs`](../tests/e2e_int_text.rs). M1 accepts only `-2147483648` through `2147483647`; syntactically valid values outside that range return `OutOfRange` until the Fixnum/BigInt representation is implemented. No focused Wasm evidence was added. |
 | `Float` arithmetic, comparison, and NaN behavior | **compile-only** | **native-run** | **not-yet-verified** | The native suite, including `test_float_comparison_nan_semantics`, is in [`e2e_float.rs`](../tests/e2e_float.rs). No Wasm float execution or focused emission test was found. |
 | Tuple collection-like grouping | **compile-only** | **native-run** | **not-yet-verified** | See tuple construction and pattern evidence above. |
 | General collections (`List`, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | List construction cannot cross AST-to-IR, and no general collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
