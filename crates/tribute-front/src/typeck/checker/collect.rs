@@ -418,7 +418,8 @@ impl<'db> TypeChecker<'db> {
             TypeAnnotationKind::Named(name) => self.primitive_or_named_type(*name),
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env.named_type(name, vec![])
+                    self.env
+                        .named_type_in_scope(name, vec![], self.current_prefix())
                 } else {
                     self.env.error_type()
                 }
@@ -528,7 +529,8 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env.named_type(name, vec![])
+                    self.env
+                        .named_type_in_scope(name, vec![], self.current_prefix())
                 } else {
                     self.env.error_type()
                 }
@@ -549,8 +551,6 @@ impl<'db> TypeChecker<'db> {
             self.env.float_type()
         } else if name == "Bool" {
             self.env.bool_type()
-        } else if name == "String" {
-            self.env.string_type()
         } else if name == "Bytes" {
             self.env.bytes_type()
         } else if name == "Rune" {
@@ -560,7 +560,8 @@ impl<'db> TypeChecker<'db> {
         } else if name == "Never" {
             self.env.never_type()
         } else {
-            self.env.named_type(name, vec![])
+            self.env
+                .named_type_in_scope(name, vec![], self.current_prefix())
         }
     }
 }

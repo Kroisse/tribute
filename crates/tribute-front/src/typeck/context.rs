@@ -291,6 +291,25 @@ impl<'db> ModuleTypeEnv<'db> {
         self.type_defs.get(&name).copied()
     }
 
+    /// Look up a type definition from a lexical module scope.
+    pub fn lookup_type_def_in_scope(&self, name: Symbol, prefix: &str) -> Option<TypeScheme<'db>> {
+        let spelling = name.to_string();
+        if spelling.contains("::") {
+            return self.lookup_type_def(name);
+        }
+
+        let mut scope = prefix.trim_end_matches("::");
+        while !scope.is_empty() {
+            let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
+            if let Some(scheme) = self.lookup_type_def(candidate) {
+                return Some(scheme);
+            }
+            scope = scope.rsplit_once("::").map_or("", |(parent, _)| parent);
+        }
+
+        self.lookup_type_def(name)
+    }
+
     /// Look up struct field type by struct name and field name.
     /// Returns (type_params, field_type) if found.
     pub fn lookup_struct_field(
@@ -533,7 +552,10 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        self.named_type(Symbol::new("String"), vec![])
+        self.well_known_types
+            .string
+            .map(|string| string.ty)
+            .unwrap_or_else(|| self.named_type(Symbol::new("String"), vec![]))
     }
 
     /// Create the Bytes type.
@@ -597,8 +619,18 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
+        self.named_type_in_scope(name, args, "")
+    }
+
+    /// Create a named type using lexical module lookup.
+    pub fn named_type_in_scope(
+        &self,
+        name: Symbol,
+        args: Vec<Type<'db>>,
+        prefix: &str,
+    ) -> Type<'db> {
         let id = self
-            .lookup_type_def(name)
+            .lookup_type_def_in_scope(name, prefix)
             .and_then(|scheme| match scheme.body(self.db).kind(self.db) {
                 TypeKind::Named { id, .. } => Some(*id),
                 _ => None,

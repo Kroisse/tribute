@@ -683,6 +683,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.env.named_type(name, args)
     }
 
+    /// Create a named type using lexical module lookup.
+    pub fn named_type_in_scope(
+        &self,
+        name: Symbol,
+        args: Vec<Type<'db>>,
+        prefix: &str,
+    ) -> Type<'db> {
+        self.env.named_type_in_scope(name, args, prefix)
+    }
+
     /// Create a named type while preserving its resolved declaration identity.
     pub fn named_type_with_id(
         &self,

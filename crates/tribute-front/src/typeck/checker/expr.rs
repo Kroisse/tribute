@@ -2090,8 +2090,6 @@ impl<'db> TypeChecker<'db> {
                     ctx.float_type()
                 } else if *name == "Bool" {
                     ctx.bool_type()
-                } else if *name == "String" {
-                    ctx.string_type()
                 } else if *name == "Bytes" {
                     ctx.bytes_type()
                 } else if *name == "Rune" {
@@ -2101,12 +2099,12 @@ impl<'db> TypeChecker<'db> {
                 } else if *name == "Never" {
                     ctx.never_type()
                 } else {
-                    ctx.named_type(*name, vec![])
+                    ctx.named_type_in_scope(*name, vec![], self.current_prefix())
                 }
             }
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    ctx.named_type(name, vec![])
+                    ctx.named_type_in_scope(name, vec![], self.current_prefix())
                 } else {
                     ctx.error_type()
                 }

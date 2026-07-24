@@ -114,6 +114,32 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 }
 
 #[salsa::tracked]
+fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
+    let parsed = tribute_front::query::parsed_ast(db, source);
+    assert!(parsed.is_some(), "Should parse successfully");
+
+    let parsed = parsed.unwrap();
+    let ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+    let prelude = load_prelude(db);
+
+    let mut env = tribute_front::resolve::build_env(db, &ast);
+    if let Some(ref p) = prelude {
+        env.merge(&p.env);
+    }
+    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
+
+    let mut checker = tribute_front::typeck::TypeChecker::new(db, span_map);
+    if let Some(ref p) = prelude {
+        checker.inject_prelude(&p.exports);
+    }
+    let result = checker.check_module(resolved);
+
+    let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
+    let _ = tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+}
+
+#[salsa::tracked]
 fn tdnr_function_summary_inner<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -322,4 +348,16 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
 /// Panics if any error diagnostics were emitted during the pipeline.
 pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
     let _ = run_ast_pipeline_with_ir(db, source);
+}
+
+/// Run the full AST pipeline and return error diagnostic messages.
+pub fn ast_pipeline_error_messages(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+    run_frontend_pipeline_inner(db, source);
+    run_frontend_pipeline_inner::accumulated::<Diagnostic>(db, source)
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+        })
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect()
 }
