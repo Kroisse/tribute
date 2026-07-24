@@ -196,12 +196,7 @@ Result: 39 Markdown files linted with 0 errors.
   skipped checks: their required implementation paths are absent, so they are
   **unsupported**.
 
-The full workspace run skips one repository test:
-
-- `test_handler_transforms_result`: TDNR reports
-  `` unresolved method `+` for this receiver type `` in the `do` handler arm.
-  This remains the open subset of
-  [#617](https://github.com/Kroisse/tribute/issues/617).
+The full workspace run skips no repository tests.
 
 The issue #802 re-audit returned nine previously ignored tests to the default
 suite: three row-polymorphic callback tests, module-qualified ability handling,
