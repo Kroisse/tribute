@@ -47,6 +47,7 @@ fn describe(value: Option(Int)) -> Text {
     }
 }
 
+// Post-M1 illustrative List algorithms; M1은 이 API를 보장하지 않는다.
 // UFCS 체이닝 (인자 없으면 괄호 생략)
 fn process(data: List(Int)) -> Int {
     data
@@ -98,10 +99,11 @@ pub mod Option {
     pub fn map(value: Option(a), f: fn(a) -> b) -> Option(b) { ... }
 }
 
-// UFCS 사용 (인자 없으면 괄호 생략)
+// M1 List construction과 UFCS 사용
 let xs = [1, 2, 3]
-let len = xs.len              // List::len(xs)
-let ys = xs.map(fn(x) x + 1)  // List::map(xs, ...) 로 해석
+let prefixed = List::prepend(0, xs)
+let option = Option::Some(1)
+let mapped = option.map(fn(x) x + 1)  // Option::map(option, ...) 로 해석
 ```
 
 `List(a)`는 compiler-owned canonical identity를 가진 opaque nominal immutable

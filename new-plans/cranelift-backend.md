@@ -86,6 +86,7 @@ flowchart TB
 
     subgraph native_passes["tribute-passes/src/native/"]
         cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
+        list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         rc_pass["RC insertion\nretain/release 삽입"]
     end
 
@@ -106,7 +107,7 @@ flowchart TB
 
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
-    input --> cont --> rc_pass
+    input --> cont --> list_lower --> rc_pass
     rc_pass --> arith --> scf --> adt --> func --> intrinsic --> const_pass
     const_pass --> validate --> codegen --> obj --> output
 ```
