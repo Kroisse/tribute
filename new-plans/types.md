@@ -240,8 +240,6 @@ user.name      // User::name(user)
 user.age       // User::age(user)
 
 // 일반 함수도 인자 없으면 괄호 생략 가능
-list.len       // List::len(list)
-list.is_empty  // List::is_empty(list)
 option.is_some // Option::is_some(option)
 ```
 
@@ -279,8 +277,7 @@ user.name  // 함수 호출 - 호출 코드 변경 불필요
 인자가 있는 함수는 괄호 필수:
 
 ```rust
-list.map(fn(x) x + 1)      // OK
-list.filter(fn(x) x > 0)   // OK
+option.map(fn(x) x + 1)    // OK
 string.split(",")          // OK
 ```
 

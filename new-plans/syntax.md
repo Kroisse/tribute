@@ -278,9 +278,8 @@ ModDecl ::= 'pub'? 'mod' TypeId '{' Item* '}'
 **예시:**
 
 ```rust
-pub mod List {
-    pub fn empty() -> List(a) { [] }
-    pub fn map(xs: List(a), f: fn(a) ->{g} b) ->{g} List(b) { ... }
+pub mod Option {
+    pub fn map(opt: Option(a), f: fn(a) ->{g} b) ->{g} Option(b) { ... }
 }
 ```
 
@@ -301,7 +300,7 @@ TypePath ::= (PathSegment '::')* TypeId
 **예시:**
 
 ```rust
-List::empty()
+List::prepend(1, [])
 Option::Some(42)
 std::io::print_line("hello")
 ```
@@ -744,11 +743,10 @@ ExprList ::= Expression (',' Expression)* ','?
 ```rust
 // 일반 호출
 add(1, 2)
-List::map(xs, fn(x) x + 1)
+Option::map(opt, fn(x) x + 1)
 
 // UFCS - 단순 식별자
-xs.map(fn(x) x + 1)     // List::map(xs, ...)
-xs.len                   // List::len(xs) - 괄호 생략
+opt.map(fn(x) x + 1)     // Option::map(opt, ...)
 user.name                // User::name(user) - 필드 접근도 UFCS
 
 // UFCS - qualified path
@@ -1032,6 +1030,9 @@ let x = 1; let y = 2; x + y
 ---
 
 ## Complete Example
+
+이 예제의 `List::filter`와 `List::map`은 complete-program 구성을 보여 주기 위한
+post-M1 illustrative API이며 M1에서 보장되지 않는다.
 
 ```rust
 use std::collections::{List, Option}
