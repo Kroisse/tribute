@@ -177,19 +177,26 @@ pub mod Int {
         index: Nat,
         value: Int,
         negative: Bool,
+        overflowed: Bool,
     ) -> Result(Int, Int::ParseError) {
         case index == bytes.len() {
-            True -> Ok(value)
+            True -> case overflowed {
+                True -> Error(Int::ParseError::OutOfRange)
+                False -> Ok(value)
+            }
             False -> case Int::decimal_digit(bytes.get_or_panic(index)) {
                 None -> Error(Int::ParseError::InvalidSyntax)
-                Some(digit) -> case Int::decimal_step_overflows(value, digit, negative) {
-                    True -> Error(Int::ParseError::OutOfRange)
-                    False -> {
-                        let next = case negative {
-                            True -> value * +10 - digit
-                            False -> value * +10 + digit
+                Some(digit) -> case overflowed {
+                    True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                    False -> case Int::decimal_step_overflows(value, digit, negative) {
+                        True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                        False -> {
+                            let next = case negative {
+                                True -> value * +10 - digit
+                                False -> value * +10 + digit
+                            }
+                            Int::parse_digits(bytes, index + 1, next, negative, False)
                         }
-                        Int::parse_digits(bytes, index + 1, next, negative)
                     }
                 }
             }
@@ -199,7 +206,7 @@ pub mod Int {
     fn parse_after_sign(bytes: Bytes, index: Nat, negative: Bool) -> Result(Int, Int::ParseError) {
         case index == bytes.len() {
             True -> Error(Int::ParseError::InvalidSyntax)
-            False -> Int::parse_digits(bytes, index, +0, negative)
+            False -> Int::parse_digits(bytes, index, +0, negative, False)
         }
     }
 
@@ -211,7 +218,7 @@ pub mod Int {
             False -> case bytes.get_or_panic(0) {
                 43 -> Int::parse_after_sign(bytes, 1, False)
                 45 -> Int::parse_after_sign(bytes, 1, True)
-                _ -> Int::parse_digits(bytes, 0, +0, False)
+                _ -> Int::parse_digits(bytes, 0, +0, False, False)
             }
         }
     }

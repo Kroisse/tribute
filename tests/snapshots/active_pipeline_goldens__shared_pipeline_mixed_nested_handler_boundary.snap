@@ -5,7 +5,7 @@ expression: ir_text
 core.module @mixed_nested {
   !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
-  !String = adt.enum() {name = @String, tribute.definition.end = 11752, tribute.definition.source = 4923843560778033168, tribute.definition.start = 11687, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !String = adt.enum() {name = @String, tribute.definition.end = 12127, tribute.definition.source = 4923843560778033168, tribute.definition.start = 12062, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !"Result$T0$T1" = adt.enum() {name = @"Result$T0$T1", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)
@@ -16,9 +16,9 @@ core.module @mixed_nested {
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
   !t3 = closure.closure(!t1)
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
+  !"Result$T1$T0" = adt.enum() {name = @"Result$T1$T0", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T2" = adt.enum() {name = @"Option$T2", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !t4 = core.ability_ref() {name = @"abilities::Throw"}
-  !"Result$T1$T0" = adt.enum() {name = @"Result$T1$T0", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T3$T4" = adt.enum() {name = @"Result$T3$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T6$T5" = adt.enum() {name = @"Result$T6$T5", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !t5 = core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)
@@ -28,7 +28,7 @@ core.module @mixed_nested {
   !t0 = core.array(!_Marker)
   !t2 = closure.closure(core.func(tribute_rt.anyref, !t0, !t3, tribute_rt.anyref))
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
-  !"Result$T3$T2" = adt.enum() {name = @"Result$T3$T2", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
+  !"Result$T2$T3" = adt.enum() {name = @"Result$T2$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T4$T3" = adt.enum() {name = @"Result$T4$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Result$T5$T4" = adt.enum() {name = @"Result$T5$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T10" = adt.enum() {name = @"Option$T10", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
