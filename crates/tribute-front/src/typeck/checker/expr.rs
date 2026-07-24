@@ -853,16 +853,19 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Extract struct name and type arguments from a type.
+    /// Extract struct declaration identity and type arguments from a type.
     ///
-    /// Returns (Some(struct_name), type_args) if the type is a Named or App type,
+    /// Returns (Some(struct_id), type_args) if the type is a Named or App type,
     /// otherwise (None, empty vec).
-    fn extract_struct_info(&self, ty: Type<'db>) -> (Option<Symbol>, Vec<Type<'db>>) {
+    fn extract_struct_info(
+        &self,
+        ty: Type<'db>,
+    ) -> (Option<crate::ast::TypeDefId<'db>>, Vec<Type<'db>>) {
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args, .. } => (Some(*name), args.clone()),
+            TypeKind::Named { id, args, .. } => (Some(*id), args.clone()),
             TypeKind::App { ctor, args } => {
-                if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
-                    (Some(*name), args.clone())
+                if let TypeKind::Named { id, .. } = ctor.kind(self.db()) {
+                    (Some(*id), args.clone())
                 } else {
                     (None, vec![])
                 }
@@ -900,11 +903,11 @@ impl<'db> TypeChecker<'db> {
     fn lookup_field_type_from_struct(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        struct_name: Symbol,
+        struct_id: crate::ast::TypeDefId<'db>,
         field_name: Symbol,
         type_args: &[Type<'db>],
     ) -> Option<Type<'db>> {
-        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_id, field_name)?;
         if type_params.is_empty() || type_args.is_empty() {
             Some(field_ty)
         } else {
@@ -922,13 +925,13 @@ impl<'db> TypeChecker<'db> {
         receiver_ty: Type<'db>,
         field_name: Symbol,
     ) -> Option<Type<'db>> {
-        // Extract struct name from receiver type
-        let struct_name = match receiver_ty.kind(self.db()) {
-            TypeKind::Named { name, .. } => *name,
+        // Extract struct declaration identity from receiver type.
+        let struct_id = match receiver_ty.kind(self.db()) {
+            TypeKind::Named { id, .. } => *id,
             TypeKind::App { ctor, .. } => {
                 // Recursively extract from constructor
                 match ctor.kind(self.db()) {
-                    TypeKind::Named { name, .. } => *name,
+                    TypeKind::Named { id, .. } => *id,
                     _ => return None,
                 }
             }
@@ -940,7 +943,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Look up field in ModuleTypeEnv
-        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_id, field_name)?;
 
         // Substitute BoundVars with actual type arguments if any
         let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
@@ -1445,11 +1448,11 @@ impl<'db> TypeChecker<'db> {
             }
             PatternKind::Record { fields, .. } => {
                 let resolved_ty = resolve(ty);
-                let (struct_name, type_args) = self.extract_struct_info(resolved_ty);
+                let (struct_id, type_args) = self.extract_struct_info(resolved_ty);
                 for field in fields {
-                    let field_ty = struct_name
-                        .and_then(|name| {
-                            self.lookup_field_type_from_struct(ctx, name, field.name, &type_args)
+                    let field_ty = struct_id
+                        .and_then(|id| {
+                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
                         })
                         .map(resolve)
                         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -1606,12 +1609,12 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Record { fields, .. } => {
-                let (struct_name, type_args) = self.extract_struct_info(ty);
+                let (struct_id, type_args) = self.extract_struct_info(ty);
 
                 for field in fields {
-                    let field_ty = struct_name
-                        .and_then(|name| {
-                            self.lookup_field_type_from_struct(ctx, name, field.name, &type_args)
+                    let field_ty = struct_id
+                        .and_then(|id| {
+                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
                         })
                         .unwrap_or_else(|| ctx.fresh_type_var());
 
@@ -1826,14 +1829,14 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => {
-                let (struct_name, type_args) = self.extract_struct_info(expected);
+                let (struct_id, type_args) = self.extract_struct_info(expected);
 
                 let converted_fields = fields
                     .into_iter()
                     .map(|f| {
-                        let field_expected = struct_name
-                            .and_then(|name| {
-                                self.lookup_field_type_from_struct(ctx, name, f.name, &type_args)
+                        let field_expected = struct_id
+                            .and_then(|id| {
+                                self.lookup_field_type_from_struct(ctx, id, f.name, &type_args)
                             })
                             .unwrap_or_else(|| ctx.fresh_type_var());
 

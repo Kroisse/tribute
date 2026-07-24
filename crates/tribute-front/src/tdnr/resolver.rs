@@ -30,6 +30,8 @@ pub struct TdnrResolver<'db> {
     type_identities: HashMap<Symbol, crate::ast::TypeDefId<'db>>,
     /// Lexical module prefix used while resolving expression-local annotations.
     current_prefix: String,
+    /// Canonical prelude String type, when an external prelude is indexed.
+    string_type: Option<Type<'db>>,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -40,6 +42,7 @@ impl<'db> TdnrResolver<'db> {
             method_index: HashMap::new(),
             type_identities: HashMap::new(),
             current_prefix: String::new(),
+            string_type: None,
         }
     }
 
@@ -90,6 +93,25 @@ impl<'db> TdnrResolver<'db> {
     /// External module functions are indexed with their original qualified names
     /// (no additional prefix), so FuncDefIds match what the rest of the pipeline expects.
     pub fn index_external_module(&mut self, module: &Module<TypedRef<'db>>) {
+        if self.string_type.is_none() {
+            self.string_type = module.decls.iter().find_map(|decl| {
+                let (name, declaration) = match decl {
+                    Decl::Struct(decl) => (decl.name, decl.id),
+                    Decl::Enum(decl) => (decl.name, decl.id),
+                    _ => return None,
+                };
+                (name == "String").then(|| {
+                    Type::new(
+                        self.db,
+                        TypeKind::Named {
+                            id: crate::ast::TypeDefId::source(self.db, name, declaration),
+                            name,
+                            args: vec![],
+                        },
+                    )
+                })
+            });
+        }
         let mut prefix = String::new();
         self.collect_type_identities(&module.decls, &mut prefix);
         prefix.clear();
@@ -364,10 +386,6 @@ impl<'db> TdnrResolver<'db> {
             }
             _ => Type::new(self.db, TypeKind::Error),
         }
-    }
-
-    fn nominal_type(&self, name: Symbol) -> Type<'db> {
-        self.nominal_type_in_scope(name, &self.current_prefix)
     }
 
     fn nominal_type_in_scope(&self, name: Symbol, prefix: &str) -> Type<'db> {
@@ -666,7 +684,10 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::IntLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Int)),
             ExprKind::FloatLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Float)),
             ExprKind::BoolLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
-            ExprKind::StringLit(_) => Some(self.nominal_type(Symbol::new("String"))),
+            ExprKind::StringLit(_) => Some(
+                self.string_type
+                    .unwrap_or_else(|| Type::new(self.db, TypeKind::string(self.db))),
+            ),
             ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
             ExprKind::RuneLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Rune)),
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
@@ -884,6 +905,51 @@ mod tests {
 
         assert!(ty.is_some());
         assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
+    }
+
+    #[test]
+    fn test_string_literal_type_ignores_scope_shadowing() {
+        let db = test_db();
+        let mut resolver = TdnrResolver::new(&db);
+        let name = Symbol::new("String");
+        let user_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2));
+        resolver.type_identities.insert(name, user_id);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::StringLit("hello".to_owned()));
+        let ty = resolver.get_expr_type(&expr).expect("String literal type");
+        let TypeKind::Named { id, .. } = ty.kind(&db) else {
+            panic!("String literal should have a nominal type");
+        };
+
+        assert_ne!(*id, user_id);
+        assert_eq!(id.origin(&db), crate::ast::TypeOrigin::Synthetic);
+    }
+
+    #[test]
+    fn test_string_literal_preserves_indexed_prelude_identity() {
+        let db = test_db();
+        let mut resolver = TdnrResolver::new(&db);
+        let name = Symbol::new("String");
+        let prelude_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1));
+        let user_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2));
+        resolver.string_type = Some(Type::new(
+            &db,
+            TypeKind::Named {
+                id: prelude_id,
+                name,
+                args: vec![],
+            },
+        ));
+        resolver.type_identities.insert(name, user_id);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::StringLit("hello".to_owned()));
+        let ty = resolver.get_expr_type(&expr).expect("String literal type");
+        let TypeKind::Named { id, .. } = ty.kind(&db) else {
+            panic!("String literal should have a nominal type");
+        };
+
+        assert_eq!(*id, prelude_id);
+        assert_ne!(*id, user_id);
     }
 
     #[test]

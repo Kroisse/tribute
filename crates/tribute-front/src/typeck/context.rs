@@ -141,8 +141,8 @@ pub struct ModuleTypeEnv<'db> {
     /// Type definitions (struct/enum names to their types).
     type_defs: HashMap<Symbol, TypeScheme<'db>>,
 
-    /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)])
-    struct_fields: HashMap<Symbol, StructFieldInfo<'db>>,
+    /// Struct field definitions keyed by nominal declaration identity.
+    struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
 
     /// Enum variant information: enum_name → [variant_names]
     /// Used for exhaustiveness checking in case expressions.
@@ -248,12 +248,11 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Register struct field information.
     pub fn register_struct_fields(
         &mut self,
-        struct_name: Symbol,
+        struct_id: TypeDefId<'db>,
         type_params: Vec<TypeParam>,
         fields: Vec<(Symbol, Type<'db>)>,
     ) {
-        self.struct_fields
-            .insert(struct_name, (type_params, fields));
+        self.struct_fields.insert(struct_id, (type_params, fields));
     }
 
     /// Register enum variant information.
@@ -314,10 +313,10 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Returns (type_params, field_type) if found.
     pub fn lookup_struct_field(
         &self,
-        struct_name: Symbol,
+        struct_id: TypeDefId<'db>,
         field_name: Symbol,
     ) -> Option<(&[TypeParam], Type<'db>)> {
-        let (type_params, fields) = self.struct_fields.get(&struct_name)?;
+        let (type_params, fields) = self.struct_fields.get(&struct_id)?;
         for (name, ty) in fields {
             if *name == field_name {
                 return Some((type_params.as_slice(), *ty));
@@ -382,8 +381,8 @@ impl<'db> ModuleTypeEnv<'db> {
         for (name, scheme) in exports.type_defs(self.db) {
             self.type_defs.insert(*name, *scheme);
         }
-        for (name, info) in exports.struct_fields(self.db) {
-            self.struct_fields.insert(*name, info.clone());
+        for (id, info) in exports.struct_fields(self.db) {
+            self.struct_fields.insert(*id, info.clone());
         }
         for (name, variants) in exports.enum_variants(self.db) {
             self.enum_variants.insert(*name, variants.clone());
@@ -460,13 +459,16 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export struct field definitions for PreludeExports.
     ///
     /// Results are sorted alphabetically by struct name for deterministic output.
-    pub fn export_struct_fields(&self) -> Vec<(Symbol, StructFieldInfo<'db>)> {
+    pub fn export_struct_fields(&self) -> Vec<(TypeDefId<'db>, StructFieldInfo<'db>)> {
         let mut result: Vec<_> = self
             .struct_fields
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result.sort_by(|(a, _), (b, _)| {
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
+        });
         result
     }
 
@@ -555,7 +557,7 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
             .string
             .map(|string| string.ty)
-            .unwrap_or_else(|| self.named_type(Symbol::new("String"), vec![]))
+            .unwrap_or_else(|| Type::new(self.db, TypeKind::string(self.db)))
     }
 
     /// Create the Bytes type.
@@ -654,13 +656,31 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    use crate::ast::{CtorId, FuncDefId, Type, TypeKind, TypeScheme};
+    use crate::ast::{
+        CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
+    };
 
     use super::ModuleTypeEnv;
 
     // =========================================================================
     // Export ordering tests - verify deterministic output
     // =========================================================================
+
+    #[salsa_test]
+    fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let name = Symbol::new("String");
+        let user_id = TypeDefId::source(db, name, NodeId::from_raw(1));
+        let user_ty = env.named_type_with_id(user_id, name, vec![]);
+        env.register_type_def(name, TypeScheme::mono(db, user_ty));
+
+        let string_ty = env.string_type();
+        let TypeKind::Named { id, .. } = string_ty.kind(db) else {
+            panic!("String fallback should be nominal");
+        };
+        assert_ne!(*id, user_id);
+        assert_eq!(id.origin(db), TypeOrigin::Synthetic);
+    }
 
     #[salsa_test]
     fn test_export_function_types_sorted(db: &dyn salsa::Database) {
@@ -782,14 +802,17 @@ mod tests {
         let int_ty = Type::new(db, TypeKind::Int);
         let fields = vec![(Symbol::new("x"), int_ty)];
 
-        env.register_struct_fields(Symbol::new("Zebra"), vec![], fields.clone());
-        env.register_struct_fields(Symbol::new("Alpha"), vec![], fields.clone());
-        env.register_struct_fields(Symbol::new("Middle"), vec![], fields);
+        let zebra = TypeDefId::synthetic(db, Symbol::new("Zebra"));
+        let alpha = TypeDefId::synthetic(db, Symbol::new("Alpha"));
+        let middle = TypeDefId::synthetic(db, Symbol::new("Middle"));
+        env.register_struct_fields(zebra, vec![], fields.clone());
+        env.register_struct_fields(alpha, vec![], fields.clone());
+        env.register_struct_fields(middle, vec![], fields);
 
         let exported = env.export_struct_fields();
 
         // Should be sorted alphabetically by struct name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.qualified(db)).collect();
         assert_eq!(
             names,
             vec![

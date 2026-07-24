@@ -290,6 +290,38 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
     );
 }
 
+#[salsa_test]
+fn string_literal_method_uses_prelude_identity_when_shadowed(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "shadowed_string_tdnr.trb",
+        r#"
+enum String {
+    Fake
+}
+
+fn len(_value: String) -> Nat {
+    99
+}
+
+fn test() -> Nat {
+    "hello".len()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "String::len".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
+}
+
 // ========================================================================
 // Snapshot Tests (verify IR output)
 // ========================================================================

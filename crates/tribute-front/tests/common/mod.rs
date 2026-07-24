@@ -166,7 +166,9 @@ fn tdnr_function_summary_inner<'db>(
     }
     let result = checker.check_module(resolved);
 
-    let module = tribute_front::tdnr::resolve_tdnr(db, result.module, std::iter::empty());
+    let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
+    let module =
+        tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
     let body = function_body(&module, &function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);

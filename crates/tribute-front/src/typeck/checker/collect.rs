@@ -23,6 +23,11 @@ impl<'db> TypeChecker<'db> {
 
     /// Collect type definitions and function signatures from declarations.
     pub(crate) fn collect_declarations(&mut self, module: &Module<ResolvedRef<'db>>) {
+        self.predeclare_nominal_types(&module.decls);
+        self.collect_declarations_in_order(module);
+    }
+
+    fn collect_declarations_in_order(&mut self, module: &Module<ResolvedRef<'db>>) {
         for decl in &module.decls {
             match decl {
                 Decl::Function(func) => {
@@ -54,13 +59,60 @@ impl<'db> TypeChecker<'db> {
                             name: Some(m.name),
                             decls: body.clone(),
                         };
-                        self.collect_declarations(&inner_module);
+                        self.collect_declarations_in_order(&inner_module);
                         // Restore prefix
                         self.prefix.truncate(prev_len);
                     }
                 }
             }
         }
+    }
+
+    /// Register every nominal declaration before converting any annotations.
+    fn predeclare_nominal_types(&mut self, decls: &[Decl<ResolvedRef<'db>>]) {
+        for decl in decls {
+            match decl {
+                Decl::Struct(s) => {
+                    self.predeclare_nominal_type(s.name, s.id, &s.type_params);
+                }
+                Decl::Enum(e) => {
+                    self.predeclare_nominal_type(e.name, e.id, &e.type_params);
+                }
+                Decl::Module(module) => {
+                    if let Some(body) = &module.body {
+                        let saved = crate::push_prefix(&mut self.prefix, module.name);
+                        self.predeclare_nominal_types(body);
+                        self.prefix.truncate(saved);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn predeclare_nominal_type(
+        &mut self,
+        name: Symbol,
+        declaration: crate::ast::NodeId,
+        params: &[crate::ast::TypeParamDecl],
+    ) {
+        let qualified = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let type_params: Vec<TypeParam> = params
+            .iter()
+            .map(|param| TypeParam::named(param.name))
+            .collect();
+        let args = (0..type_params.len() as u32)
+            .map(|index| Type::new(self.db(), TypeKind::BoundVar { index }))
+            .collect();
+        let ty = self.env.named_type_with_id(
+            crate::ast::TypeDefId::source(self.db(), qualified, declaration),
+            qualified,
+            args,
+        );
+        self.env.register_type_def(
+            qualified,
+            TypeScheme::new(self.db(), type_params, Vec::new(), ty),
+        );
     }
 
     /// Collect a function's type signature.
@@ -259,8 +311,11 @@ impl<'db> TypeChecker<'db> {
                 Some((field_name, field_ty))
             })
             .collect();
-        self.env
-            .register_struct_fields(qualified_name, type_params, fields);
+        self.env.register_struct_fields(
+            crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
+            type_params,
+            fields,
+        );
     }
 
     /// Collect an enum definition.
