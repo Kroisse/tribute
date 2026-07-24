@@ -2418,7 +2418,7 @@ mod tests {
     use crate::ast::{
         AbilityId, EffectRow, Expr, ExprKind, FuncDefId, HandlerArm, HandlerKind, LocalId, NodeId,
         OpDeclKind, Pattern, PatternKind, ResolvedRef, SpanMap, Type, TypeAnnotation,
-        TypeAnnotationKind, TypeKind, TypedRef,
+        TypeAnnotationKind, TypeKind,
     };
     use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
     use crate::typeck::func_context::HandleContext;
@@ -2465,13 +2465,6 @@ mod tests {
         )
     }
 
-    fn handler_body_type<'db>(handler: &HandlerArm<TypedRef<'db>>) -> Type<'db> {
-        let ExprKind::Var(reference) = &*handler.body.kind else {
-            panic!("handler body should be a variable reference");
-        };
-        reference.ty
-    }
-
     #[salsa_test]
     fn test_handler_do_binding_does_not_leak(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
@@ -2492,7 +2485,10 @@ mod tests {
             body: local_expr(3, name, LocalId::new(1)),
         };
         let converted_do = checker.convert_handler_arm_with_ctx(&mut ctx, do_arm, &handle_ctx);
-        assert_eq!(handler_body_type(&converted_do), body_ty);
+        assert!(matches!(
+            &*converted_do.body.kind,
+            ExprKind::Var(reference) if reference.ty == body_ty
+        ));
 
         let ability = ResolvedRef::ability(AbilityId::source(db, Symbol::new("Test")));
         let op_arm = HandlerArm {
@@ -2508,8 +2504,9 @@ mod tests {
         let converted_op = checker.convert_handler_arm_with_ctx(&mut ctx, op_arm, &handle_ctx);
         assert!(
             matches!(
-                handler_body_type(&converted_op).kind(db),
-                TypeKind::UniVar { .. }
+                &*converted_op.body.kind,
+                ExprKind::Var(reference)
+                    if matches!(reference.ty.kind(db), TypeKind::UniVar { .. })
             ),
             "do-arm binding should not type an unresolved name in a later operation arm"
         );
@@ -2519,11 +2516,12 @@ mod tests {
             local_expr(6, name, LocalId::UNRESOLVED),
             Mode::Infer,
         );
-        let ExprKind::Var(reference) = &*outside.kind else {
-            panic!("outside expression should be a variable reference");
-        };
         assert!(
-            matches!(reference.ty.kind(db), TypeKind::UniVar { .. }),
+            matches!(
+                &*outside.kind,
+                ExprKind::Var(reference)
+                    if matches!(reference.ty.kind(db), TypeKind::UniVar { .. })
+            ),
             "do-arm binding should not type an unresolved name outside the handle"
         );
     }
@@ -2593,8 +2591,14 @@ mod tests {
             &handle_ctx,
         );
 
-        assert_eq!(handler_body_type(&nat_arm), nat_ty);
-        assert_eq!(handler_body_type(&bool_arm), bool_ty);
+        assert!(matches!(
+            &*nat_arm.body.kind,
+            ExprKind::Var(reference) if reference.ty == nat_ty
+        ));
+        assert!(matches!(
+            &*bool_arm.body.kind,
+            ExprKind::Var(reference) if reference.ty == bool_ty
+        ));
         assert!(ctx.lookup_local(LocalId::new(10)).is_none());
         assert!(ctx.lookup_local(LocalId::new(20)).is_none());
         assert!(ctx.lookup_local_by_name(name).is_none());
