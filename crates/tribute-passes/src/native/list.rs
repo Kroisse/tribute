@@ -243,3 +243,59 @@ impl RewritePattern for TailPattern {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    #[test]
+    fn lowers_all_shared_list_ops_to_private_native_representation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @scalar(%0: core.i32) -> tribute_rt.anyref {
+                ^bb0:
+                    %1 = list.empty {element_type = core.i32} : tribute_rt.anyref
+                    %2 = list.prepend %0, %1 {element_type = core.i32} : tribute_rt.anyref
+                    %3 = list.is_empty %2 {element_type = core.i32} : core.i1
+                    %4 = list.head %2 {element_type = core.i32} : core.i32
+                    %5 = list.tail %2 {element_type = core.i32} : tribute_rt.anyref
+                    func.return %5
+                }
+                func.func @reference(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+                ^bb0:
+                    %1 = list.empty {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %2 = list.prepend %0, %1 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    %3 = list.head %1 {element_type = tribute_rt.anyref} : tribute_rt.anyref
+                    func.return %3
+                }
+            }
+            "#,
+        );
+
+        lower(&mut ctx, module).expect("native List lowering");
+
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("list."), "{output}");
+        assert!(output.contains("adt.struct_new"), "{output}");
+        assert!(output.contains("adt.ref_is_null"), "{output}");
+        assert!(output.contains("adt.struct_get"), "{output}");
+        assert!(output.contains("[@element, core.i32]"), "{output}");
+        assert!(output.contains("[@element, tribute_rt.anyref]"), "{output}");
+        assert!(
+            output.contains("arith.const {value = 0} : core.i32"),
+            "{output}"
+        );
+        assert!(
+            output.contains("adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref"),
+            "{output}"
+        );
+
+        let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);
+        assert!(validation.is_ok(), "{:?}", validation.errors);
+    }
+}
