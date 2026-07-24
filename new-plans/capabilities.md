@@ -196,12 +196,13 @@ Result: 39 Markdown files linted with 0 errors.
   skipped checks: their required implementation paths are absent, so they are
   **unsupported**.
 
-The full workspace run skips one repository test:
-
-- `test_handler_transforms_result`: TDNR reports
-  `` unresolved method `+` for this receiver type `` in the `do` handler arm.
-  This remains the open subset of
-  [#617](https://github.com/Kroisse/tribute/issues/617).
+A separate 2026-07-24 full workspace run at PR #807's `4abca64e` head used
+the same workspace selection with nextest's slow timeout raised from 30 to 120
+seconds; the local `test_native_std_io_read_line_contract` run took 38.613
+seconds. Result: 1643 passed, 0 failed, 0 skipped. `cargo nextest list
+--workspace` also listed 1643 active tests and no ignored tests. Thus the
+current suite has no ignored repository tests; the one skipped test above is
+the historical 2026-07-23 audit result.
 
 The issue #802 re-audit returned nine previously ignored tests to the default
 suite: three row-polymorphic callback tests, module-qualified ability handling,

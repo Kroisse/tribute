@@ -27,6 +27,7 @@ use super::subst;
 /// Captures the body type and body effect row so that handler arms
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
+    pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
 }
 
