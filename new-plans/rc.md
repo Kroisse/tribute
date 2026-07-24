@@ -94,6 +94,16 @@ Boxed primitives are the simplest heap objects — just the raw value:
 | boxed i32 (Int/Nat/Bool) | 4 bytes | `[i32 value]` |
 | boxed f64 (Float) | 8 bytes | `[f64 value]` |
 
+### Private native List nodes
+
+The M1 native `List(a)` representation may use the ordinary RC object header
+with a target-private immutable payload `[element, tail]`; empty is a private
+null sentinel. A non-empty node owns every reference-typed field, including its
+tail. Sequence observation may borrow fields transiently, but a tail that
+escapes the observation or outlives the original list must be retained by the
+normal ownership rules. The representation is replaceable and is not visible
+as public `Empty`/`Cons` constructors or shared-IR field indices.
+
 ---
 
 ## RC Operations

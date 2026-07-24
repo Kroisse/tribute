@@ -52,6 +52,11 @@ fn map(xs: List(a), f: fn(a) -> b) -> List(b)
 ambient ability이므로 handler로 제거할 수 없고 `main`에 terminal effect로 남을
 수 있다. Calling convention과 표준 API는 [io.md](io.md)를 따른다.
 
+`List(a)`도 compiler-owned nominal identity를 갖는다. List literal과 list pattern은
+resolver scope의 short name을 다시 검색하지 않고 이 identity로 constraint를 만든다.
+Named type unification은 declaration identity와 type argument를 모두 비교하므로, 같은
+`List` spelling을 가진 source declaration이 canonical list syntax를 capture할 수 없다.
+
 ### 암묵적 Effect Polymorphism
 
 Effect annotation이 생략되면 암묵적으로 polymorphic:
