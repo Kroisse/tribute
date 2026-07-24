@@ -119,6 +119,12 @@ pub mod Result {
 // These are resolved via TDNR and lowered to arith dialect operations.
 
 pub mod Int {
+    /// Errors returned by decimal integer parsing.
+    pub enum ParseError {
+        InvalidSyntax,
+        OutOfRange,
+    }
+
     extern "intrinsic" fn (+)(left: Int, right: Int) -> Int
     extern "intrinsic" fn (-)(left: Int, right: Int) -> Int
     extern "intrinsic" fn (*)(left: Int, right: Int) -> Int
@@ -130,6 +136,183 @@ pub mod Int {
     extern "intrinsic" fn (<=)(left: Int, right: Int) -> Bool
     extern "intrinsic" fn (>)(left: Int, right: Int) -> Bool
     extern "intrinsic" fn (>=)(left: Int, right: Int) -> Bool
+
+    fn decimal_digit(byte: Nat) -> Option(Int) {
+        case byte {
+            48 -> Some(+0)
+            49 -> Some(+1)
+            50 -> Some(+2)
+            51 -> Some(+3)
+            52 -> Some(+4)
+            53 -> Some(+5)
+            54 -> Some(+6)
+            55 -> Some(+7)
+            56 -> Some(+8)
+            57 -> Some(+9)
+            _ -> None
+        }
+    }
+
+    fn decimal_step_overflows(value: Int, digit: Int, negative: Bool) -> Bool {
+        case negative {
+            True -> case value < -214748364 {
+                True -> True
+                False -> case value == -214748364 {
+                    True -> digit > +8
+                    False -> False
+                }
+            }
+            False -> case value > +214748364 {
+                True -> True
+                False -> case value == +214748364 {
+                    True -> digit > +7
+                    False -> False
+                }
+            }
+        }
+    }
+
+    fn parse_digits(
+        bytes: Bytes,
+        index: Nat,
+        value: Int,
+        negative: Bool,
+        overflowed: Bool,
+    ) -> Result(Int, Int::ParseError) {
+        case index == bytes.len() {
+            True -> case overflowed {
+                True -> Error(Int::ParseError::OutOfRange)
+                False -> Ok(value)
+            }
+            False -> case Int::decimal_digit(bytes.get_or_panic(index)) {
+                None -> Error(Int::ParseError::InvalidSyntax)
+                Some(digit) -> case overflowed {
+                    True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                    False -> case Int::decimal_step_overflows(value, digit, negative) {
+                        True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                        False -> {
+                            let next = case negative {
+                                True -> value * +10 - digit
+                                False -> value * +10 + digit
+                            }
+                            Int::parse_digits(bytes, index + 1, next, negative, False)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn parse_after_sign(bytes: Bytes, index: Nat, negative: Bool) -> Result(Int, Int::ParseError) {
+        case index == bytes.len() {
+            True -> Error(Int::ParseError::InvalidSyntax)
+            False -> Int::parse_digits(bytes, index, +0, negative, False)
+        }
+    }
+
+    /// Parse an optionally signed ASCII decimal integer.
+    pub fn parse(input: String) -> Result(Int, Int::ParseError) {
+        let bytes = input.to_bytes()
+        case bytes.len() == 0 {
+            True -> Error(Int::ParseError::InvalidSyntax)
+            False -> case bytes.get_or_panic(0) {
+                43 -> Int::parse_after_sign(bytes, 1, False)
+                45 -> Int::parse_after_sign(bytes, 1, True)
+                _ -> Int::parse_digits(bytes, 0, +0, False, False)
+            }
+        }
+    }
+
+    fn positive_digit_string(digit: Int) -> String {
+        case digit == +0 {
+            True -> "0"
+            False -> case digit == +1 {
+                True -> "1"
+                False -> case digit == +2 {
+                    True -> "2"
+                    False -> case digit == +3 {
+                        True -> "3"
+                        False -> case digit == +4 {
+                            True -> "4"
+                            False -> case digit == +5 {
+                                True -> "5"
+                                False -> case digit == +6 {
+                                    True -> "6"
+                                    False -> case digit == +7 {
+                                        True -> "7"
+                                        False -> case digit == +8 {
+                                            True -> "8"
+                                            False -> "9"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn negative_digit_string(digit: Int) -> String {
+        case digit == +0 {
+            True -> "0"
+            False -> case digit == -1 {
+                True -> "1"
+                False -> case digit == -2 {
+                    True -> "2"
+                    False -> case digit == -3 {
+                        True -> "3"
+                        False -> case digit == -4 {
+                            True -> "4"
+                            False -> case digit == -5 {
+                                True -> "5"
+                                False -> case digit == -6 {
+                                    True -> "6"
+                                    False -> case digit == -7 {
+                                        True -> "7"
+                                        False -> case digit == -8 {
+                                            True -> "8"
+                                            False -> "9"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn format_positive(value: Int) -> String {
+        let quotient = value / +10
+        let digit = Int::positive_digit_string(value % +10)
+        case quotient == +0 {
+            True -> digit
+            False -> Int::format_positive(quotient) <> digit
+        }
+    }
+
+    fn format_negative(value: Int) -> String {
+        let quotient = value / +10
+        let digit = Int::negative_digit_string(value % +10)
+        case quotient == +0 {
+            True -> digit
+            False -> Int::format_negative(quotient) <> digit
+        }
+    }
+
+    /// Format an integer as canonical ASCII decimal text.
+    pub fn to_string(value: Int) -> String {
+        case value == +0 {
+            True -> "0"
+            False -> case value < +0 {
+                True -> "-" <> Int::format_negative(value)
+                False -> Int::format_positive(value)
+            }
+        }
+    }
 }
 
 pub mod Nat {
