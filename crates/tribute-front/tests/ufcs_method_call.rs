@@ -109,6 +109,48 @@ fn test() -> Nat {
     run_ast_pipeline(db, source);
 }
 
+/// A do-arm binding receives the handled body's type before TDNR.
+#[salsa_test]
+fn test_handler_do_binding_tdnr_uses_body_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn pure_value() ->{State(Nat)} Nat { 10 }
+
+fn test() -> Nat {
+    handle pure_value() {
+        do result { result + result }
+        op State::get() { resume 0 }
+        op State::set(value) { resume Nil }
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![
+                TdnrCall {
+                    target: "pure_value".to_owned(),
+                    arg_count: 0,
+                },
+                TdnrCall {
+                    target: "Nat::+".to_owned(),
+                    arg_count: 2,
+                },
+            ],
+        }
+    );
+}
+
 // ========================================================================
 // TDNR AST Tests (verify MethodCall -> Call before IR lowering)
 // ========================================================================
