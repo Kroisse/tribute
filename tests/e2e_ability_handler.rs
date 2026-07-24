@@ -498,6 +498,33 @@ fn main() {
     assert_native_output("handler_transforms_result.trb", code, "20");
 }
 
+/// Test a result transformation after resuming an effectful operation.
+///
+/// `effectful_value()` resumes twice with 10, producing 21, and the result arm
+/// doubles it. This exercises nested ability operations in both a let initializer
+/// and the final value, then verifies result TDNR and native execution.
+#[test]
+fn test_handler_transforms_resumed_result() {
+    let code = r#"ability State(s) {
+    op get() -> s
+}
+
+fn effectful_value() ->{State(Nat)} Nat {
+    let first = State::get() + 1
+    first + State::get()
+}
+
+fn main() {
+    let result = handle effectful_value() {
+        do result { result + result }
+        op State::get() { resume 10 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_transforms_resumed_result.trb", code, "42");
+}
+
 // =============================================================================
 // Counter Output Verification Tests
 // =============================================================================
