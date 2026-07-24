@@ -125,6 +125,7 @@ struct Point { x: Nat, y: Nat }
 fn test(p: Point) -> Nat {
     p.x
 }
+
 "#,
     );
 
@@ -240,6 +241,81 @@ fn test(i: Item) -> Nat {
             method_calls: vec![],
             calls: vec![TdnrCall {
                 target: "Outer::score".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
+}
+
+#[salsa_test]
+fn test_tdnr_distinguishes_same_short_type_name_in_nested_modules(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "nested_same_name.trb",
+        r#"
+pub mod A {
+    pub struct Thing { value: Nat }
+    pub fn score(thing: Thing) -> Nat { thing.value }
+}
+
+pub mod B {
+    pub struct Thing { value: Nat }
+    pub fn score(thing: Thing) -> Nat { thing.value + 1 }
+}
+
+fn score_a(thing: A::Thing) -> Nat { thing.score() }
+fn score_b(thing: B::Thing) -> Nat { thing.score() }
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "score_a"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "A::score".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
+    assert_eq!(
+        tdnr_function_summary(db, source, "score_b"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "B::score".to_owned(),
+                arg_count: 1,
+            }],
+        }
+    );
+}
+
+#[salsa_test]
+fn string_literal_method_uses_prelude_identity_when_shadowed(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "shadowed_string_tdnr.trb",
+        r#"
+enum String {
+    Fake
+}
+
+fn len(_value: String) -> Nat {
+    99
+}
+
+fn test() -> Nat {
+    "hello".len()
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![TdnrCall {
+                target: "String::len".to_owned(),
                 arg_count: 1,
             }],
         }

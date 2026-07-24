@@ -14,7 +14,7 @@ use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use super::NodeId;
-use super::phases::FuncDefId;
+use super::phases::{FuncDefId, TypeDefId};
 
 /// A monomorphic type.
 ///
@@ -96,6 +96,8 @@ pub enum TypeKind<'db> {
     // === Compound types ===
     /// Named type (struct, enum, or type alias) with optional type arguments.
     Named {
+        /// Resolved nominal declaration identity.
+        id: TypeDefId<'db>,
         /// The type name (may be qualified path like `std::List`)
         name: Symbol,
         /// Type arguments for generic types
@@ -143,7 +145,7 @@ pub enum TypeKind<'db> {
     Error,
 }
 
-impl TypeKind<'_> {
+impl<'db> TypeKind<'db> {
     /// Returns the canonical name for primitive types, or `None` for compound/variable types.
     pub fn primitive_name(&self) -> Option<&'static str> {
         match self {
@@ -159,10 +161,12 @@ impl TypeKind<'_> {
         }
     }
 
-    /// Create the String type (prelude-defined enum, not a primitive).
-    pub fn string() -> Self {
+    /// Create a synthetic String type for isolated contexts.
+    pub fn string(db: &'db dyn salsa::Database) -> Self {
+        let name = Symbol::new("String");
         Self::Named {
-            name: Symbol::new("String"),
+            id: TypeDefId::synthetic(db, name),
+            name,
             args: vec![],
         }
     }
@@ -202,7 +206,7 @@ impl fmt::Display for TypeKind<'_> {
             Self::Rune => f.write_str("Rune"),
             Self::Nil => f.write_str("Nil"),
             Self::Never => f.write_str("Never"),
-            Self::Named { name, args } => {
+            Self::Named { name, args, .. } => {
                 name.with_str(|s| f.write_str(s))?;
                 if !args.is_empty() {
                     let args = args

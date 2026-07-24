@@ -168,7 +168,7 @@ fn collect_definition<'db>(
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
             let qualified = qualified_symbol(prefix, s.name);
-            let type_def_id = TypeDefId::new(db, qualified);
+            let type_def_id = TypeDefId::source(db, qualified, s.id);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name, type_def_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
@@ -191,7 +191,7 @@ fn collect_definition<'db>(
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let qualified = qualified_symbol(prefix, e.name);
-            let type_def_id = TypeDefId::new(db, qualified);
+            let type_def_id = TypeDefId::source(db, qualified, e.id);
             env.add_type(e.name, type_def_id);
 
             // Add each variant as a constructor in the enum's namespace

@@ -40,6 +40,25 @@ cannot express a required invariant.
 
 ---
 
+## Nominal Type Identity
+
+The resolved AST stores a declaration-backed identity on every named type.
+Source declarations derive that identity from their declaration node and carry
+it through annotation conversion, type checking, substitution, TDNR receiver
+matching, and AST-to-IR lowering. Reconstructing a named type from an
+unqualified symbol alone is not sound.
+
+TDNR annotation reconstruction uses the current module prefix: a qualified path
+and a local unqualified reference must select the same declaration identity as
+ordinary type resolution. Generic type collection and rewrite maps are keyed by
+that identity rather than by display symbols.
+
+Specialization mangling uses the declaration's qualified identity when needed
+to distinguish same-spelled declarations. When the qualified identity equals
+the existing display name, the ordinary mangle remains unchanged.
+
+---
+
 ## Semantic Model
 
 ### 동적 의미론

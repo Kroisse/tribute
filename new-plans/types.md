@@ -6,6 +6,18 @@
 
 Tribute는 `struct`와 `enum` 두 키워드로 타입을 선언한다.
 
+### Nominal Identity
+
+Every `struct` and `enum` declaration introduces a distinct nominal type
+identity. Identity comes from the resolved declaration, not from the displayed
+type name alone. Two declarations with the same short name remain different
+types, including declarations in different nested modules.
+
+Qualified and locally unqualified references to one declaration resolve to the
+same identity. Type display remains source-oriented and may use the same short
+spelling for different declarations; equality, unification, method receiver
+selection, and specialization must still compare declaration identity.
+
 ## Primitive Numeric Types
 
 `Float`는 IEEE 754 부동소수점 값을 표현한다. 현재 산술/비교 연산은

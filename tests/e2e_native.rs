@@ -79,6 +79,68 @@ fn main() {
 }
 
 #[test]
+fn test_native_generic_specializations_distinguish_same_spelled_source_types() {
+    assert_native_output(
+        "generic_same_spelled_source_types.trb",
+        r#"
+pub mod A {
+    pub struct Thing { value: Nat }
+}
+
+pub mod B {
+    pub struct Thing { value: Nat }
+}
+
+fn keep(value: a) -> a {
+    value
+}
+
+fn accept_a(_value: A::Thing) {}
+fn accept_b(_value: B::Thing) {}
+
+fn main() {
+    accept_a(keep(A::Thing { value: 1 }))
+    accept_b(keep(B::Thing { value: 2 }))
+    __tribute_print_nat(3)
+}
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_native_nested_generic_types_keep_declaration_identity() {
+    assert_native_output(
+        "nested_generic_nominal_identity.trb",
+        r#"
+pub mod A {
+    pub struct Token(a) {}
+
+    pub fn tag(_value: Token(Nat)) -> Nat {
+        1
+    }
+}
+
+pub mod B {
+    pub struct Token(a) {}
+
+    pub fn tag(_value: Token(Nat)) -> Nat {
+        12
+    }
+}
+
+fn main() {
+    let a = A::Token {}
+    let b = B::Token {}
+    __tribute_print_nat(a.tag())
+    __tribute_print_nat(b.tag())
+}
+"#,
+        "1\n12",
+    );
+}
+
+#[test]
 fn test_native_let_binding() {
     assert_native_output(
         "let_binding.trb",

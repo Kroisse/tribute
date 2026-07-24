@@ -123,19 +123,41 @@ impl<'db> FuncDefId<'db> {
     }
 }
 
-/// A unique identifier for a type definition (struct or enum).
+/// The origin of a nominal type definition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum TypeOrigin {
+    /// A source declaration, identified independently of its spelling.
+    Source(NodeId),
+    /// A synthetic identity used by isolated tests and pre-resolution helpers.
+    Synthetic,
+}
+
+/// A unique identifier for a nominal type definition.
 ///
 /// TypeDefId identifies the type definition itself, not its constructors.
 ///
-/// TypeDefId is interned (not tracked) so that the same qualified name
-/// always produces the same TypeDefId, regardless of where it's created.
+/// Different source declarations remain distinct even when their display names
+/// are identical.
 #[salsa::interned(debug)]
 pub struct TypeDefId<'db> {
+    pub origin: TypeOrigin,
     /// The fully qualified name (e.g., `"std::option::Option"`).
     pub qualified: Symbol,
 }
 
 impl<'db> TypeDefId<'db> {
+    pub fn source(db: &'db dyn salsa::Database, qualified: Symbol, declaration: NodeId) -> Self {
+        Self::new(db, TypeOrigin::Source(declaration), qualified)
+    }
+
+    pub fn synthetic(db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
+        Self::new(db, TypeOrigin::Synthetic, qualified)
+    }
+
+    pub fn with_qualified(self, db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
+        Self::new(db, self.origin(db), qualified)
+    }
+
     /// Returns the unqualified type name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
         self.qualified(db).last_segment()
