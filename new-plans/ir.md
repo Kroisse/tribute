@@ -24,6 +24,7 @@ High-level
   effect    target-independent effect ABI
   closure   closure construction and decomposition
   adt       structs, variants, arrays, references, literals
+  list      opaque persistent-sequence construction and observation
 
 Mid-level
   func      functions, calls, returns, function references
@@ -97,6 +98,22 @@ native uses function pointers plus heap environments.
 
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
+
+`list.*` represents the opaque canonical `List(a)` sequence contract. M1 uses
+`list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
+These operations carry element/result types but no variant tags, node field
+indices, allocation sizes, or target layout metadata. `list.prepend` is
+semantically persistent: it returns a new sequence and does not mutate its tail.
+Shared lowering may build a literal by first evaluating all elements left to
+right and then applying `list.prepend` in reverse value order.
+Calls to the public `List::prepend(value, tail)` prelude function lower to the
+same `list.prepend` operation through its compiler-provided intrinsic
+implementation. The intrinsic ABI is a compiler/prelude boundary, not an
+additional public symbol or a layout contract.
+
+List patterns lower to sequence observations. Exact-length patterns require an
+empty remainder; prefix-rest patterns return the remainder as the same canonical
+List type. A backend must eliminate `list.*` before its backend-ready boundary.
 
 The root `core.module` carries Tribute-specific well-known type identities as
 `TypeRef` attributes. In particular, `tribute.type.string` is the exact
@@ -194,8 +211,10 @@ Important stage invariants:
 
 Primitive scalar, pointer, reference, bytes, array, tuple, function, and nil
 types are represented in TrunkIR. Library data types such as `Option`, `Result`,
-`List`, and `Text` lower through ADT and runtime/library conventions rather than
-special IR phases.
+and `Text` lower through ADT and runtime/library conventions. `List` is an
+opaque nominal builtin whose shared construction and sequence-view observations
+use `list.*`; target-specific passes choose and eliminate its private
+representation.
 
 ## Open Questions
 

@@ -79,9 +79,9 @@ enum Option(a) {
     Some(a)
 }
 
-enum List(a) {
-    Empty
-    Cons(a, List(a))
+enum Tree(a) {
+    Leaf(a)
+    Branch(Tree(a), Tree(a))
 }
 
 // Named fields를 가진 variant
@@ -138,12 +138,56 @@ Positional field는 소괄호, named field는 중괄호:
 // Positional
 let some = Some(42)
 let none = None
-let cons = Cons(1, Cons(2, Empty))
+let tree = Branch(Leaf(1), Leaf(2))
 
 // Named
 let ok = Ok { value: 42 }
 let error = Error { error: "something went wrong" }
 ```
+
+## List
+
+`List(a)` is an opaque nominal immutable persistent sequence. Its nominal
+identity is compiler-owned and distinct from every source declaration, including
+a user declaration also spelled `List`. Name-based equality is not sufficient
+for named types: type checking and lowering compare declaration identities.
+
+The representation is not a source contract. In particular, `Empty` and `Cons`
+are not public constructors or patterns. M1 construction uses list literals and
+the canonical persistent prepend operation:
+
+```rust
+let empty: List(Int) = []
+let values = [first(), second(), third()]
+let dynamic = List::prepend(next_value, previous_values)
+```
+
+List literal element expressions are evaluated from left to right, exactly once.
+Construction performed after those evaluations must preserve the same sequence
+order. Lists are immutable and persistent: observing a tail never changes the
+original list, and a tail retains the original element order.
+`List::prepend(value, tail)` returns a new canonical `List(a)` whose first
+element is `value` and whose remaining sequence is `tail`; it does not mutate or
+expose the representation of `tail`. This is the only general source-level List
+construction operation required by M1.
+
+M1 exposes sequence-view patterns:
+
+```rust
+[]                    // exactly empty
+[x, y]                // exactly two elements
+[head, ..tail]        // at least one element; tail is a List(a)
+[first, second, ..]   // at least two elements; ignore the remainder
+```
+
+Exact patterns require the stated length. Prefix-rest patterns require at least
+the prefix length and bind the remaining sequence without copying or mutation.
+Element subpatterns are matched left to right.
+
+The initial backend representation may be a simpler persistent linked sequence.
+Full RRB-tree layout, logarithmic concatenation, and transient/uniqueness
+optimization are future work. Those changes must not alter source syntax,
+`List(a)` identity, or shared `list.*` IR contracts.
 
 ### Shorthand Syntax
 

@@ -89,21 +89,27 @@ fn fetch_user(id: UserId) ->{Http, Async} User {
 use std::collections::{List, Option}
 
 // Enum과 동명 네임스페이스
-pub enum List(a) {
-    Empty
-    Cons(a, List(a))
+pub enum Option(a) {
+    None
+    Some(a)
 }
 
-pub mod List {
-    pub fn empty() -> List(a) { Empty }
-    pub fn map(xs: List(a), f: fn(a) -> b) -> List(b) { ... }
+pub mod Option {
+    pub fn map(value: Option(a), f: fn(a) -> b) -> Option(b) { ... }
 }
 
 // UFCS 사용 (인자 없으면 괄호 생략)
-let xs = List::empty()
+let xs = [1, 2, 3]
 let len = xs.len              // List::len(xs)
 let ys = xs.map(fn(x) x + 1)  // List::map(xs, ...) 로 해석
 ```
+
+`List(a)`는 compiler-owned canonical identity를 가진 opaque nominal immutable
+persistent sequence다. `[]`와 `[a, b, c]`가 유일한 M1 construction syntax이며,
+원소 표현식은 왼쪽에서 오른쪽으로 정확히 한 번 평가된다. `Empty`/`Cons` 같은
+representation constructor는 source API가 아니다. List의 shared IR operation과
+source-visible observation은 sequence 의미만 표현하고, native와 Wasm backend는 서로
+다른 private layout을 선택할 수 있다.
 
 ---
 
