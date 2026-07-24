@@ -77,7 +77,11 @@ fn read_qualified(value: A::Later) -> Nat {
 }
 
 struct Holder {
-    value: FieldLater
+    value: Wrapper(FieldLater)
+}
+
+struct Wrapper(a) {
+    value: a
 }
 
 struct Later {
@@ -95,7 +99,7 @@ struct FieldLater {
 }
 
 fn unwrap(holder: Holder) -> FieldLater {
-    holder.value
+    holder.value.value
 }
 "#,
     );

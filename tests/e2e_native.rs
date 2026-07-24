@@ -109,6 +109,38 @@ fn main() {
 }
 
 #[test]
+fn test_native_nested_generic_types_keep_declaration_identity() {
+    assert_native_output(
+        "nested_generic_nominal_identity.trb",
+        r#"
+pub mod A {
+    pub struct Token(a) {}
+
+    pub fn tag(_value: Token(Nat)) -> Nat {
+        1
+    }
+}
+
+pub mod B {
+    pub struct Token(a) {}
+
+    pub fn tag(_value: Token(Nat)) -> Nat {
+        12
+    }
+}
+
+fn main() {
+    let a = A::Token {}
+    let b = B::Token {}
+    __tribute_print_nat(a.tag())
+    __tribute_print_nat(b.tag())
+}
+"#,
+        "1\n12",
+    );
+}
+
+#[test]
 fn test_native_let_binding() {
     assert_native_output(
         "let_binding.trb",
