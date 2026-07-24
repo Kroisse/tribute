@@ -118,7 +118,14 @@ pub mod Result {
 
 pub mod List {
     /// Return a new list with value before every element of tail.
-    extern "intrinsic" fn prepend(value: a, tail: List(a)) -> List(a)
+    pub fn prepend(value: a, tail: List(a)) -> List(a) {
+        List::__tribute_list_prepend_intrinsic(value, tail)
+    }
+
+    extern "intrinsic" fn __tribute_list_prepend_intrinsic(
+        value: a,
+        tail: List(a),
+    ) -> List(a)
 }
 
 // =============================================================================

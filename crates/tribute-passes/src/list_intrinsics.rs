@@ -11,7 +11,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-const PREPEND_INTRINSIC: &str = "List::prepend";
+const PREPEND_INTRINSIC: &str = "List::__tribute_list_prepend_intrinsic";
 
 fn is_prepend_intrinsic(name: Symbol) -> bool {
     name.with_str(|name| {
@@ -85,7 +85,9 @@ impl RewritePattern for PrependDeclarationPattern {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             return false;
         };
-        if !is_prepend_intrinsic(function.sym_name(ctx)) {
+        if !is_prepend_intrinsic(function.sym_name(ctx))
+            || ctx.op(op).attributes.get_str("abi") != Some("intrinsic")
+        {
             return false;
         }
         rewriter.erase_op(vec![]);
@@ -106,14 +108,14 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"List::prepend"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
+                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
                     attributes {abi = "intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::prepend$String"} : tribute_rt.anyref
+                    %2 = func.call %0, %1 {callee = @"List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -125,6 +127,37 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(output.contains("list.prepend"), "{output}");
-        assert!(!output.contains("List::prepend"), "{output}");
+        assert!(
+            !output.contains("List::__tribute_list_prepend_intrinsic"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn leaves_same_spelled_public_source_function_untouched() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"List::prepend"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
+                ^bb0:
+                    func.return %0
+                }
+                func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
+                ^bb0:
+                    %2 = func.call %0, %1 {callee = @"List::prepend"} : tribute_rt.int
+                    func.return %2
+                }
+            }
+            "#,
+        );
+        let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
+
+        LowerListIntrinsics.run(&mut ctx, core).unwrap();
+
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("list.prepend"), "{output}");
+        assert!(output.contains("List::prepend"), "{output}");
     }
 }

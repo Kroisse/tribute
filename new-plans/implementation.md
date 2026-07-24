@@ -85,11 +85,12 @@ first. Pattern lowering uses empty/head/tail sequence views for empty,
 exact-length, and prefix-rest matching.
 
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
-construction API with a compiler-provided intrinsic implementation. The shared
-pipeline replaces calls to that public function with `list.prepend`. User code
-depends only on the function signature and canonical `List(a)` contract; the
-intrinsic ABI, shared operation, and native node layout are not separately
-addressable collection APIs.
+construction API. Its source wrapper delegates to a private compiler intrinsic,
+and the shared pipeline replaces only that private ABI-marked call with
+`list.prepend`. An ordinary source function with the same public qualified name
+is not an intrinsic. User code depends only on the public function signature and
+canonical `List(a)` contract; the private intrinsic, shared operation, and native
+node layout are not separately addressable collection APIs.
 
 For M1, native may lower the operations to private immutable singly linked
 RC-managed nodes with empty represented by a private null sentinel. Each
