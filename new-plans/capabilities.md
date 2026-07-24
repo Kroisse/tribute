@@ -72,6 +72,7 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | Capability | Shared/frontend | Native | WasmGC | Evidence and boundary |
 | --- | --- | --- | --- | --- |
 | `String` literals, concatenation, `String::from_bytes`, and output | **compile-only** | **native-run** | **wasm-run** | Native String and dynamic output tests are in [`e2e_native.rs`](../tests/e2e_native.rs). `test_execute_string_literals_and_dynamic_bytes` compiles Tribute source, runs it with Wasmtime, and asserts literal, Unicode, empty, `String::from_bytes`, shared, and rope output in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
+| Byte-wise `String` equality (`==` and `!=`) | **compile-only** | **native-run** | **wasm-run** | `test_string_equality_operators` verifies frontend resolution and lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_native_string_equality` and `test_execute_string_equality` execute shape-independent leaf-span comparison, mismatched leaf boundaries, empty leaves, shared/repeated subtrees, Unicode, length mismatch, and early/middle/late byte mismatch in [`e2e_native.rs`](../tests/e2e_native.rs) and [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The structural prelude test fixes the direct Leaf/Leaf span path and rejects the former equality-only flatten/index loop. |
 | `Bytes` literals, concatenation, and `String::from_bytes` | **compile-only** | **native-run** | **wasm-run** | Native literal, concat, length, indexing, and slicing tests are in [`e2e_native.rs`](../tests/e2e_native.rs); `test_native_bytes_get_safe` asserts both the in-range `Some` and out-of-range `None` paths. Wasm execution is limited to concatenation/output in `test_execute_dynamic_bytes_write_boundary` and to concatenation plus `String::from_bytes` in `test_execute_string_literals_and_dynamic_bytes`, which asserts the converted `dynamic bytes` and `shared bytes` output. Other Wasm `Bytes` APIs are **not-yet-verified**. |
 | `Nat` and `Int` arithmetic/comparison | **compile-only** | **native-run** | **compile-only** | Native execution is in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_arithmetic_expr` emits Wasm but does not run it. |
 | `Float` arithmetic, comparison, and NaN behavior | **compile-only** | **native-run** | **not-yet-verified** | The native suite, including `test_float_comparison_nan_semantics`, is in [`e2e_float.rs`](../tests/e2e_float.rs). No Wasm float execution or focused emission test was found. |
@@ -80,9 +81,9 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | `std::io::print` and `print_line` | **compile-only** | **native-run** | **wasm-run** | Native output behavior is tested in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm output execution is covered by the two execution tests in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The Wasm lowering implements `tribute_io.write` in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 | `std::io::read_line` | **compile-only** | **native-run** | **unsupported** | Native line endings, empty/partial input, EOF, invalid UTF-8, and system errors execute in the `test_native_std_io_read_line_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). Native lowering is in [`native/io.rs`](../crates/tribute-passes/src/native/io.rs). Wasm I/O lowering has only a `WritePattern` and rejects residual `tribute_io` operations in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 
-The only current **wasm-run** language-level claim is String/Bytes output
-through `std::io::print_line`. That evidence does not establish general
-WasmGC parity with native.
+The current **wasm-run** language-level claims in this table are String/Bytes
+output through `std::io::print_line` and byte-wise String equality. That
+evidence does not establish general WasmGC parity with native.
 
 ## Diagnostics, LSP, and Compilation Boundaries
 

@@ -5,7 +5,7 @@
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -13,6 +13,7 @@ use trunk_ir::refs::{OpRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::TypeDataBuilder;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -89,6 +90,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern)
         .add_pattern(BytesGetOrPanicPattern)
+        .add_pattern(BytesRangeEqualPattern)
         .add_pattern(BytesConcatPattern);
 
     applicator.apply_partial(ctx, module);
@@ -229,6 +231,193 @@ impl RewritePattern for BytesGetOrPanicPattern {
     fn name(&self) -> &'static str {
         "BytesGetOrPanicPattern"
     }
+}
+
+/// Pattern for comparing equal-length ranges in two Bytes values.
+///
+/// The generated Wasm loop compares bytes directly in the two backing arrays
+/// and exits at the first mismatch. String equality invokes this once per pair
+/// of contiguous rope-leaf spans rather than once per logical byte.
+struct BytesRangeEqualPattern;
+
+impl RewritePattern for BytesRangeEqualPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !is_bytes_intrinsic_call(ctx, op, &["__tribute_bytes_range_equal"]) {
+            return false;
+        }
+
+        let operands = ctx.op_operands(op).to_vec();
+        if operands.len() != 5 {
+            return false;
+        }
+        let location = ctx.op(op).location;
+        let result_ty = ctx.op_result_types(op)[0];
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let nil_ty = core::nil(ctx).as_type_ref();
+        let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
+        let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
+        let left_start = wasm_dialect::i32_add(ctx, location, left.offset, operands[1], i32_ty);
+        let right_start = wasm_dialect::i32_add(ctx, location, right.offset, operands[3], i32_ty);
+        let len = operands[4];
+        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+
+        let loop_block = ctx.create_block(BlockData {
+            location,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let index = ctx.block_arg(loop_block, 0);
+
+        let done = wasm_dialect::i32_ge_u(ctx, location, index, len, i32_ty);
+        ctx.push_op(loop_block, done.op_ref());
+        let done_then = value_break_region(ctx, location, i32_ty, 1);
+        let done_else = empty_region(ctx, location);
+        let break_when_done = wasm_dialect::r#if(
+            ctx,
+            location,
+            done.result(ctx),
+            nil_ty,
+            done_then,
+            done_else,
+        );
+        ctx.push_op(loop_block, break_when_done.op_ref());
+
+        let left_index =
+            wasm_dialect::i32_add(ctx, location, left_start.result(ctx), index, i32_ty);
+        ctx.push_op(loop_block, left_index.op_ref());
+        let left_byte = wasm_dialect::array_get_u(
+            ctx,
+            location,
+            left.data,
+            left_index.result(ctx),
+            i32_ty,
+            BYTES_ARRAY_IDX,
+        );
+        ctx.push_op(loop_block, left_byte.op_ref());
+        let right_index =
+            wasm_dialect::i32_add(ctx, location, right_start.result(ctx), index, i32_ty);
+        ctx.push_op(loop_block, right_index.op_ref());
+        let right_byte = wasm_dialect::array_get_u(
+            ctx,
+            location,
+            right.data,
+            right_index.result(ctx),
+            i32_ty,
+            BYTES_ARRAY_IDX,
+        );
+        ctx.push_op(loop_block, right_byte.op_ref());
+        let mismatch = wasm_dialect::i32_ne(
+            ctx,
+            location,
+            left_byte.result(ctx),
+            right_byte.result(ctx),
+            i32_ty,
+        );
+        ctx.push_op(loop_block, mismatch.op_ref());
+        let mismatch_then = value_break_region(ctx, location, i32_ty, 0);
+        let mismatch_else = empty_region(ctx, location);
+        let break_on_mismatch = wasm_dialect::r#if(
+            ctx,
+            location,
+            mismatch.result(ctx),
+            nil_ty,
+            mismatch_then,
+            mismatch_else,
+        );
+        ctx.push_op(loop_block, break_on_mismatch.op_ref());
+
+        let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+        ctx.push_op(loop_block, one.op_ref());
+        let next = wasm_dialect::i32_add(ctx, location, index, one.result(ctx), i32_ty);
+        ctx.push_op(loop_block, next.op_ref());
+        let yield_next = wasm_dialect::r#yield(ctx, location, next.result(ctx));
+        ctx.push_op(loop_block, yield_next.op_ref());
+        let continue_loop = wasm_dialect::br(ctx, location, 0);
+        ctx.push_op(loop_block, continue_loop.op_ref());
+
+        let loop_region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![loop_block],
+            parent_op: None,
+        });
+        let compare_loop =
+            wasm_dialect::r#loop(ctx, location, [zero.result(ctx)], result_ty, loop_region);
+        let outer_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![compare_loop.op_ref()],
+            parent_region: None,
+        });
+        let outer_region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec![outer_block],
+            parent_op: None,
+        });
+        let compare = wasm_dialect::block(ctx, location, result_ty, outer_region);
+
+        for field_op in left_ops.into_iter().chain(right_ops) {
+            rewriter.insert_op(field_op);
+        }
+        rewriter.insert_op(left_start.op_ref());
+        rewriter.insert_op(right_start.op_ref());
+        rewriter.insert_op(zero.op_ref());
+        rewriter.replace_op(compare.op_ref());
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "BytesRangeEqualPattern"
+    }
+}
+
+fn empty_region(ctx: &mut IrContext, location: trunk_ir::types::Location) -> trunk_ir::RegionRef {
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![block],
+        parent_op: None,
+    })
+}
+
+fn value_break_region(
+    ctx: &mut IrContext,
+    location: trunk_ir::types::Location,
+    i32_ty: trunk_ir::TypeRef,
+    value: i32,
+) -> trunk_ir::RegionRef {
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    let value = wasm_dialect::i32_const(ctx, location, i32_ty, value);
+    ctx.push_op(block, value.op_ref());
+    let yield_value = wasm_dialect::r#yield(ctx, location, value.result(ctx));
+    ctx.push_op(block, yield_value.op_ref());
+    let break_outer = wasm_dialect::br(ctx, location, 2);
+    ctx.push_op(block, break_outer.op_ref());
+    ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![block],
+        parent_op: None,
+    })
 }
 
 /// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both

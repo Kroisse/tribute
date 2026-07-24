@@ -507,6 +507,48 @@ pub unsafe extern "C" fn __tribute_bytes_len(bytes: *const TributeBytes) -> u32 
     b.len as u32
 }
 
+/// Compare equal-length ranges in two Bytes values.
+///
+/// Returns `1` when the ranges contain the same bytes and `0` otherwise.
+/// This is the native target primitive used by rope String equality: callers
+/// select contiguous spans from the current pair of leaves, so no flattening
+/// or temporary byte buffer is required.
+///
+/// # Safety
+///
+/// `left` and `right` must be valid pointers to `TributeBytes` payloads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_range_equal(
+    left: *const TributeBytes,
+    left_start: u32,
+    right: *const TributeBytes,
+    right_start: u32,
+    len: u32,
+) -> u32 {
+    let left = unsafe { &*left };
+    let right = unsafe { &*right };
+    let left_start = u64::from(left_start);
+    let right_start = u64::from(right_start);
+    let len = u64::from(len);
+
+    let Some(left_end) = left_start.checked_add(len) else {
+        return 0;
+    };
+    let Some(right_end) = right_start.checked_add(len) else {
+        return 0;
+    };
+    if left_end > left.len || right_end > right.len {
+        return 0;
+    }
+    if len == 0 {
+        return 1;
+    }
+
+    let left_ptr = unsafe { left.ptr.add(left_start as usize) };
+    let right_ptr = unsafe { right.ptr.add(right_start as usize) };
+    u32::from(unsafe { libc::memcmp(left_ptr.cast(), right_ptr.cast(), len as usize) == 0 })
+}
+
 /// Concatenate two Bytes values, returning a new RC-managed Bytes.
 ///
 /// Allocates a `TributeRc<TributeBytes>` (RC header + TributeBytes payload),
@@ -975,6 +1017,43 @@ mod tests {
         let _: extern "C" fn() -> *mut NativeReadLineResult = __tribute_io_read_line;
         let _: unsafe extern "C" fn(*mut NativeReadLineResult) =
             __tribute_io_read_line_result_dealloc;
+        let _: unsafe extern "C" fn(
+            *const TributeBytes,
+            u32,
+            *const TributeBytes,
+            u32,
+            u32,
+        ) -> u32 = __tribute_bytes_range_equal;
+    }
+
+    #[test]
+    fn test_bytes_range_equal() {
+        let left_data = b"prefix-middle-suffix";
+        let equal_data = b"other-middle-tail";
+        let unequal_data = b"other-mXddle-tail";
+        let left = TributeBytes {
+            ptr: left_data.as_ptr(),
+            len: left_data.len() as u64,
+        };
+        let equal = TributeBytes {
+            ptr: equal_data.as_ptr(),
+            len: equal_data.len() as u64,
+        };
+        let unequal = TributeBytes {
+            ptr: unequal_data.as_ptr(),
+            len: unequal_data.len() as u64,
+        };
+        let empty = TributeBytes {
+            ptr: core::ptr::null(),
+            len: 0,
+        };
+
+        unsafe {
+            assert_eq!(__tribute_bytes_range_equal(&left, 7, &equal, 6, 6), 1);
+            assert_eq!(__tribute_bytes_range_equal(&left, 7, &unequal, 6, 6), 0);
+            assert_eq!(__tribute_bytes_range_equal(&empty, 0, &empty, 0, 0), 1);
+            assert_eq!(__tribute_bytes_range_equal(&left, 18, &equal, 0, 6), 0);
+        }
     }
 
     #[test]

@@ -144,9 +144,32 @@ s.split(sep: String) -> List(String)
 s.lines() -> List(String)
 
 // 비교
-s1 == s2 -> Bool      // byte-wise equality
+s1 == s2 -> Bool      // logical UTF-8 bytes의 equality (rope shape과 무관)
+s1 != s2 -> Bool      // ==의 logical complement
 String::compare(a: String, b: String) -> Ordering
 ```
+
+String equality는 cached rope metadata, variant identity, 또는 pointer identity가
+아니라 전체 logical UTF-8 byte sequence를 비교한다. 따라서 `Leaf(b"ab")`와
+`Branch(Leaf(b"a"), Leaf(b"b"), 2)`는 같다. Flattening, traversal, allocation
+전략은 일반적으로 library implementation detail이지만, canonical prelude 구현은
+equality를 위해 전체 rope를 flatten하지 않는다. 양쪽 rope의 leaf를 순서대로
+lockstep 순회하면서 현재 leaf의 남은 길이 중 더 짧은 연속 byte span을 비교하고,
+소진된 쪽 cursor를 다음 non-empty leaf로 전진시킨다. 연속 span 비교는 target
+primitive로 lowering되어 Tribute-level byte별 함수 호출을 만들지 않는다.
+
+먼저 root의 cached byte length를 비교하여 길이가 다르면 O(1)에 실패할 수 있다.
+길이가 같고 양쪽 root가 모두 `Leaf`이면 전체 leaf를 하나의 연속 span으로 정확히 한
+번 비교한다. 이 흔한 경로는 cursor를 만들지 않고 auxiliary allocation도 하지 않는다.
+
+한쪽이라도 `Branch`이면 cursor fallback을 사용한다. 처음 다른 byte에서 early
+exit하며, 모두 같을 때 시간 복잡도는 O(n + r1 + r2)이다. 여기서 `n`은 logical byte
+length이고 `r1`, `r2`는 방문한 rope node 수이다. Equality는 어느 경로에서도 byte
+length에 비례하는 payload allocation을 하지 않는다. Fallback cursor node의 총
+allocation은 방문한 rope node 수에 대해 선형이고, 동시에 살아 있는 cursor heap
+state는 각 rope 깊이에 비례한다. 현재 source-level recursive comparison driver를
+일반 tail call로 변환하지 않는 target에서는 비교한 leaf span 수에 비례하는 control
+stack도 사용할 수 있다.
 
 ---
 

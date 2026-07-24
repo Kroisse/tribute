@@ -1,0 +1,29 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 195
+expression: ir_text
+---
+core.module @test {
+  !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !__tuple_i1_i1 = adt.struct() {fields = [[@0, core.i1], [@1, core.i1]], name = @__tuple_i1_i1}
+
+  func.func @"test::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+  func.func @comparisons(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
+      %2 = adt.ref_null {type = !t0} : !t0
+      %3 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %4 = closure.new %3 {func_ref = @"test::__lambda_0"} : !t1
+      %5 = func.call %2, %4, %0, %1 {callee = @"String::==", tribute.calling_convention = 2} : tribute_rt.anyref
+      %6 = core.unrealized_conversion_cast %5 : core.i1
+      %7 = adt.ref_null {type = !t0} : !t0
+      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %9 = closure.new %8 {func_ref = @"test::__lambda_0"} : !t1
+      %10 = func.call %7, %9, %0, %1 {callee = @"String::!=", tribute.calling_convention = 2} : tribute_rt.anyref
+      %11 = core.unrealized_conversion_cast %10 : core.i1
+      %12 = adt.struct_new %6, %11 {type = !__tuple_i1_i1} : adt.typeref() {name = @__tuple_i1_i1}
+      %13 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
+      func.return %13
+  }
+}

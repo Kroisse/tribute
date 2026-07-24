@@ -171,6 +171,15 @@ enum String {
 }
 
 pub mod String {
+    // Internal depth-first traversal state used to compare rope leaves without
+    // flattening. Chunk offsets and remaining lengths always describe a valid
+    // contiguous range in `bytes`.
+    enum Cursor {
+        CursorDone,
+        CursorPending(String, String::Cursor),
+        CursorChunk(Bytes, Nat, Nat, String::Cursor),
+    }
+
     /// Create an empty string.
     pub fn empty() -> String { Leaf(b"") }
 
@@ -202,6 +211,138 @@ pub mod String {
             Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
         }
     }
+
+    fn next_cursor(cursor: String::Cursor) -> String::Cursor {
+        case cursor {
+            String::Cursor::CursorDone -> String::Cursor::CursorDone
+            String::Cursor::CursorPending(string, rest) -> case string {
+                Leaf(bytes) -> {
+                    let len = bytes.len()
+                    case len == 0 {
+                        True -> String::next_cursor(rest)
+                        False -> String::Cursor::CursorChunk(bytes, 0, len, rest)
+                    }
+                }
+                Branch(left, right, _) -> String::next_cursor(
+                    String::Cursor::CursorPending(
+                        left,
+                        String::Cursor::CursorPending(right, rest)
+                    )
+                )
+            }
+            String::Cursor::CursorChunk(_, _, _, _) -> cursor
+        }
+    }
+
+    fn cursors_equal(left: String::Cursor, right: String::Cursor) -> Bool {
+        case left {
+            String::Cursor::CursorDone -> case right {
+                String::Cursor::CursorDone -> True
+                String::Cursor::CursorPending(_, _) -> String::cursors_equal(
+                    left,
+                    String::next_cursor(right)
+                )
+                String::Cursor::CursorChunk(_, _, _, _) -> False
+            }
+            String::Cursor::CursorPending(_, _) -> String::cursors_equal(
+                String::next_cursor(left),
+                right
+            )
+            String::Cursor::CursorChunk(
+                left_bytes,
+                left_offset,
+                left_remaining,
+                left_rest
+            ) -> case right {
+                String::Cursor::CursorDone -> False
+                String::Cursor::CursorPending(_, _) -> String::cursors_equal(
+                    left,
+                    String::next_cursor(right)
+                )
+                String::Cursor::CursorChunk(
+                    right_bytes,
+                    right_offset,
+                    right_remaining,
+                    right_rest
+                ) -> {
+                    let span = case left_remaining < right_remaining {
+                        True -> left_remaining
+                        False -> right_remaining
+                    }
+                    case __tribute_bytes_range_equal(
+                        left_bytes,
+                        left_offset,
+                        right_bytes,
+                        right_offset,
+                        span
+                    ) {
+                        False -> False
+                        True -> {
+                            let next_left = case left_remaining == span {
+                                True -> String::next_cursor(left_rest)
+                                False -> String::Cursor::CursorChunk(
+                                    left_bytes,
+                                    left_offset + span,
+                                    left_remaining - span,
+                                    left_rest
+                                )
+                            }
+                            let next_right = case right_remaining == span {
+                                True -> String::next_cursor(right_rest)
+                                False -> String::Cursor::CursorChunk(
+                                    right_bytes,
+                                    right_offset + span,
+                                    right_remaining - span,
+                                    right_rest
+                                )
+                            }
+                            String::cursors_equal(next_left, next_right)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn rope_equal(left: String, right: String) -> Bool {
+        String::cursors_equal(
+            String::next_cursor(
+                String::Cursor::CursorPending(left, String::Cursor::CursorDone)
+            ),
+            String::next_cursor(
+                String::Cursor::CursorPending(right, String::Cursor::CursorDone)
+            )
+        )
+    }
+
+    /// Compare strings by their logical UTF-8 bytes, independent of rope shape.
+    pub fn (==)(left: String, right: String) -> Bool {
+        let len = left.len()
+        case len == right.len() {
+            True -> case left {
+                Leaf(left_bytes) -> case right {
+                    Leaf(right_bytes) -> __tribute_bytes_range_equal(
+                        left_bytes,
+                        0,
+                        right_bytes,
+                        0,
+                        len
+                    )
+                    Branch(_, _, _) -> String::rope_equal(left, right)
+                }
+                Branch(_, _, _) -> String::rope_equal(left, right)
+            }
+            False -> False
+        }
+    }
+
+    /// Return the logical complement of string equality.
+    pub fn (!=)(left: String, right: String) -> Bool {
+        case left == right {
+            True -> False
+            False -> True
+        }
+    }
 }
 
 // =============================================================================
@@ -219,6 +360,13 @@ extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
 
 extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
 extern "C" fn __tribute_bytes_concat(left: Bytes, right: Bytes) -> Bytes
+extern "C" fn __tribute_bytes_range_equal(
+    left: Bytes,
+    left_start: Nat,
+    right: Bytes,
+    right_start: Nat,
+    len: Nat,
+) -> Bool
 extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 extern "C" fn __tribute_bytes_print(bytes: Bytes) -> Nil
 extern "C" fn __tribute_print_newline() -> Nil

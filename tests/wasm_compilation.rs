@@ -210,6 +210,73 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[salsa_test]
+fn test_execute_string_equality(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "string_equality.trb",
+        r#"
+fn bool_text(value: Bool) -> String {
+    case value {
+        True -> "1"
+        False -> "0"
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let flat = "abcd"
+    let two_leaves = "ab" <> "cd"
+    let three_leaf_suffix = "bc" <> "d"
+    let three_leaves = "a" <> three_leaf_suffix
+    std::io::print_line(bool_text(flat == two_leaves))
+    std::io::print_line(bool_text(flat == three_leaves))
+
+    let boundaries_left = "ab" <> "cdef"
+    let boundaries_prefix = "a" <> "bc"
+    let boundaries_right = boundaries_prefix <> "def"
+    std::io::print_line(bool_text(boundaries_left == boundaries_right))
+
+    let empty_end_suffix = "abcd" <> ""
+    let empty_ends = "" <> empty_end_suffix
+    let empty_middle_prefix = "ab" <> ""
+    let empty_middle = empty_middle_prefix <> "cd"
+    std::io::print_line(bool_text(empty_ends == empty_middle))
+
+    let shared = "xy"
+    let repeated_suffix = shared <> shared
+    let repeated_left = shared <> repeated_suffix
+    let repeated_prefix = "x" <> "yxy"
+    let repeated_right = repeated_prefix <> "xy"
+    std::io::print_line(bool_text(repeated_left == repeated_right))
+
+    let unicode_suffix = "녕" <> "🌍"
+    let unicode_rope = "안" <> unicode_suffix
+    std::io::print_line(bool_text("안녕🌍" == unicode_rope))
+
+    std::io::print_line(bool_text("short" != "shorter"))
+    std::io::print_line(bool_text("xbc" != "abc"))
+    std::io::print_line(bool_text("axc" != "abc"))
+    std::io::print_line(bool_text("abx" != "abc"))
+    std::io::print_line(bool_text(flat != flat))
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile String equality");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n");
+}
+
+#[salsa_test]
 fn test_compile_local_variables(db: &salsa::DatabaseImpl) {
     let code = r#"
 fn test_ops() -> Nat {
