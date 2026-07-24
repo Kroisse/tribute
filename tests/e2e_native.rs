@@ -272,6 +272,30 @@ fn main() {
 }
 
 #[test]
+fn test_native_list_as_pattern_binds_the_whole_sequence() {
+    assert_native_output(
+        "list_as_pattern.trb",
+        r#"
+fn observe(values: List(Nat)) -> Nat {
+    case values {
+        [head, ..tail] as whole -> case whole {
+            [first, second] -> head * 100 + first * 10 + second
+            _ -> 0
+        }
+        [] -> 9
+    }
+}
+
+fn main() {
+    __tribute_print_nat(observe([]))
+    __tribute_print_nat(observe([2, 3]))
+}
+"#,
+        "9\n223",
+    );
+}
+
+#[test]
 fn test_native_list_retains_reference_elements_and_shared_tails() {
     let output = compile_and_run_native_asan(
         "list_reference_ownership.trb",
