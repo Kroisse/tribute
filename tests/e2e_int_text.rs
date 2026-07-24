@@ -61,6 +61,10 @@ fn main() ->{Io} Nil {
     print_line(show_parse("-2147483649"))
     print_line(show_parse("999999999999999999999999"))
     print_line(show_parse("-999999999999999999999999"))
+    print_line(show_parse("2147483648x"))
+    print_line(show_parse("-2147483649x"))
+    print_line(show_parse("21474836480x"))
+    print_line(show_parse("-21474836490x"))
 
     print_line(show_round_trip("0"))
     print_line(show_round_trip("1"))
@@ -112,6 +116,10 @@ fn main() ->{Io} Nil {
             "error:range\n",
             "error:range\n",
             "error:range\n",
+            "error:syntax\n",
+            "error:syntax\n",
+            "error:syntax\n",
+            "error:syntax\n",
             "ok:0\n",
             "ok:1\n",
             "ok:-1\n",
