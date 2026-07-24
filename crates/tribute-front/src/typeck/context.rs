@@ -179,11 +179,30 @@ impl<'db> ModuleTypeEnv<'db> {
             },
         );
 
+        let list_name = Symbol::new("List");
+        let list_arg = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let list_ty = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(db),
+                name: list_name,
+                args: vec![list_arg],
+            },
+        );
+        let list_scheme = TypeScheme::new(
+            db,
+            vec![TypeParam::named(Symbol::new("a"))],
+            Vec::new(),
+            list_ty,
+        );
+        let mut type_defs = HashMap::new();
+        type_defs.insert(list_name, list_scheme);
+
         Self {
             db,
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
-            type_defs: HashMap::new(),
+            type_defs,
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
             ability_defs,
@@ -649,6 +668,11 @@ impl<'db> ModuleTypeEnv<'db> {
     ) -> Type<'db> {
         Type::new(self.db, TypeKind::Named { id, name, args })
     }
+
+    pub fn canonical_list_type(&self, element: Type<'db>) -> Type<'db> {
+        let name = Symbol::new("List");
+        self.named_type_with_id(TypeDefId::builtin_list(self.db), name, vec![element])
+    }
 }
 
 #[cfg(test)]
@@ -789,6 +813,7 @@ mod tests {
             names,
             vec![
                 Symbol::new("Alpha"),
+                Symbol::new("List"),
                 Symbol::new("Middle"),
                 Symbol::new("Zebra")
             ]
@@ -1055,11 +1080,7 @@ mod tests {
         let first = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    Symbol::new("A::Thing"),
-                    crate::ast::NodeId::from_raw(1),
-                ),
+                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
                 name,
                 args: vec![],
             },
@@ -1067,11 +1088,7 @@ mod tests {
         let second = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(
-                    &db,
-                    Symbol::new("B::Thing"),
-                    crate::ast::NodeId::from_raw(2),
-                ),
+                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2)),
                 name,
                 args: vec![],
             },

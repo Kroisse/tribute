@@ -759,7 +759,7 @@ mod tests {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
-        let list_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List"));
+        let list_id = crate::ast::TypeDefId::builtin_list(&db);
         let option_int = Type::new(
             &db,
             TypeKind::Named {

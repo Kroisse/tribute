@@ -18,7 +18,7 @@ use crate::ast::{
     BinOpKind, Expr, ExprKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef,
 };
 
-use tribute_ir::dialect::{ability, closure};
+use tribute_ir::dialect::{ability, closure, list};
 
 use super::case::bind_pattern_fields;
 use super::{
@@ -770,7 +770,36 @@ pub(super) fn lower_expr<'db>(
             Some(call_op.result(builder.ir))
         }
 
-        ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
+        ExprKind::List(elements) => {
+            // Evaluate source elements before constructing the persistent
+            // sequence so the reverse construction fold cannot reorder or
+            // duplicate effects.
+            let values = builder.collect_args(elements)?;
+            let list_ast_ty = builder.ctx.get_node_type(expr_node_id).copied();
+            let element_ast_ty = list_ast_ty.and_then(|ty| match ty.kind(builder.db()) {
+                TypeKind::Named { id, args, .. }
+                    if id.is_builtin_list(builder.db()) && args.len() == 1 =>
+                {
+                    Some(args[0])
+                }
+                _ => None,
+            });
+            let element_ty = element_ast_ty
+                .map(|ty| builder.ctx.convert_type(builder.ir, ty))
+                .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
+            let list_ty = builder.ctx.anyref_type(builder.ir);
+
+            let empty = list::empty(builder.ir, location, list_ty, element_ty);
+            builder.ir.push_op(builder.block, empty.op_ref());
+            let mut result = empty.result(builder.ir);
+            for value in values.into_iter().rev() {
+                let prepend =
+                    list::prepend(builder.ir, location, value, result, list_ty, element_ty);
+                builder.ir.push_op(builder.block, prepend.op_ref());
+                result = prepend.result(builder.ir);
+            }
+            Some(result)
+        }
 
         ExprKind::Error => Some(builder.emit_nil(location)),
     }

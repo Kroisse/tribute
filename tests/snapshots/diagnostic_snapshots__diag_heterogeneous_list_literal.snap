@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "type error in function 'values': expected `Bool`, found `Nat`"
+  span:
+    start: 1
+    end: 43
+  severity: Error
+  phase: TypeChecking
