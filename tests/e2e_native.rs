@@ -601,12 +601,124 @@ fn main() {
     let shared_twice = shared <> shared
     __tribute_print_nat(bool_to_nat(shared_twice == "sharedshared"))
 
+    let flat = "abcd"
+    let two_leaves = "ab" <> "cd"
+    let three_leaf_suffix = "bc" <> "d"
+    let three_leaves = "a" <> three_leaf_suffix
+    __tribute_print_nat(bool_to_nat(flat == two_leaves))
+    __tribute_print_nat(bool_to_nat(flat == three_leaves))
+
+    let boundaries_left = "ab" <> "cdef"
+    let boundaries_prefix = "a" <> "bc"
+    let boundaries_right = boundaries_prefix <> "def"
+    __tribute_print_nat(bool_to_nat(boundaries_left == boundaries_right))
+
+    let empty_end_suffix = "abcd" <> ""
+    let empty_ends = "" <> empty_end_suffix
+    let empty_middle_prefix = "ab" <> ""
+    let empty_middle = empty_middle_prefix <> "cd"
+    __tribute_print_nat(bool_to_nat(empty_ends == empty_middle))
+
+    let shared_part = "xy"
+    let repeated_suffix = shared_part <> shared_part
+    let repeated_left = shared_part <> repeated_suffix
+    let repeated_prefix = "x" <> "yxy"
+    let repeated_right = repeated_prefix <> "xy"
+    __tribute_print_nat(bool_to_nat(repeated_left == repeated_right))
+
+    let unicode_suffix = "녕" <> "🌍"
+    let unicode_rope = "안" <> unicode_suffix
+    __tribute_print_nat(bool_to_nat("안녕🌍" == unicode_rope))
+
+    __tribute_print_nat(bool_to_nat("short" != "shorter"))
+    __tribute_print_nat(bool_to_nat("xbc" != "abc"))
+    __tribute_print_nat(bool_to_nat("axc" != "abc"))
+    __tribute_print_nat(bool_to_nat("abx" != "abc"))
+
     __tribute_print_nat(bool_to_nat("abc" != "axc"))
     __tribute_print_nat(bool_to_nat("a" != "a"))
     __tribute_print_nat(bool_to_nat("a" == "b"))
 }
 "#,
-        "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0",
+        "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0",
+    );
+}
+
+#[test]
+fn test_string_equality_prelude_uses_direct_leaf_and_cursor_spans() {
+    let prelude = include_str!("../lib/std/prelude.trb");
+    let equality_start = prelude
+        .find("fn cursors_equal")
+        .expect("String equality cursor helper");
+    let equality_end = prelude[equality_start..]
+        .find("// =============================================================================")
+        .map(|offset| equality_start + offset)
+        .expect("end of String module");
+    let equality = &prelude[equality_start..equality_end];
+
+    assert!(equality.contains("__tribute_bytes_range_equal"));
+    assert!(!equality.contains("bytes_equal_at"));
+    assert!(!equality.contains(".get_or_panic("));
+    assert!(!equality.contains(".to_bytes()"));
+
+    let operator_start = equality
+        .find("pub fn (==)")
+        .expect("String equality operator");
+    let operator_end = equality[operator_start..]
+        .find("/// Return the logical complement")
+        .map(|offset| operator_start + offset)
+        .expect("end of String equality operator");
+    let operator = &equality[operator_start..operator_end];
+    assert!(operator.contains("Leaf(left_bytes)"));
+    assert!(operator.contains("Leaf(right_bytes)"));
+    assert!(operator.contains(
+        "__tribute_bytes_range_equal(\n                        left_bytes,\n                        0,\n                        right_bytes,\n                        0,\n                        len"
+    ));
+    assert_eq!(
+        operator.matches("__tribute_bytes_range_equal").count(),
+        1,
+        "Leaf/Leaf should make exactly one full-span comparison"
+    );
+    assert!(
+        !operator.contains("Cursor"),
+        "Leaf/Leaf direct path must not construct cursors"
+    );
+    assert_eq!(
+        operator.matches("String::rope_equal(left, right)").count(),
+        2,
+        "only Branch-containing cases should use the cursor fallback"
+    );
+}
+
+#[test]
+fn test_native_string_equality_does_not_collide_with_user_string_cursor() {
+    assert_native_output(
+        "string_cursor_name.trb",
+        r#"
+enum StringCursor {
+    UserCursor(Nat),
+    EmptyCursor,
+}
+
+fn bool_to_nat(value: Bool) -> Nat {
+    case value {
+        True -> 1
+        False -> 0
+    }
+}
+
+fn main() {
+    let cursor = UserCursor(7)
+    case cursor {
+        UserCursor(value) -> __tribute_print_nat(value)
+        EmptyCursor -> __tribute_print_nat(0)
+    }
+    __tribute_print_nat(bool_to_nat("leaf" == "leaf"))
+    let rope = "ro" <> "pe"
+    __tribute_print_nat(bool_to_nat(rope == "rope"))
+}
+"#,
+        "7\n1\n1",
     );
 }
 

@@ -253,6 +253,7 @@ impl RewritePattern for ArithCmpPattern {
                 ("i64", "sgt") => wasm_dialect::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("i32", "sge") => wasm_dialect::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("i64", "sge") => wasm_dialect::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "ult") => wasm_dialect::i32_lt_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             };
             rewriter.replace_op(new_op);
@@ -603,4 +604,39 @@ pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    #[test]
+    fn lowers_i32_unsigned_less_than() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+core.module @test {
+  func.func @compare(%0: core.i32, %1: core.i32) -> core.i1 {
+    %2 = arith.cmpi %0, %1 {predicate = @ult} : core.i1
+    func.return %2
+  }
+}
+"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains("wasm.i32_lt_u"),
+            "i32 ult should lower to wasm.i32_lt_u:\n{output}"
+        );
+        assert!(
+            !output.contains("arith.cmpi"),
+            "i32 ult should not remain as arith.cmpi:\n{output}"
+        );
+    }
 }
