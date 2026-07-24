@@ -415,6 +415,7 @@ impl<'db> TypeChecker<'db> {
                 // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
                 // row `{e, State(s)}` so it matches the expected `comp` parameter type.
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
+                    body_ty,
                     body_effect: body_effect_after,
                 });
 
@@ -1912,9 +1913,17 @@ impl<'db> TypeChecker<'db> {
         handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
-            HandlerKind::Do { binding } => HandlerKind::Do {
-                binding: self.convert_pattern_with_ctx(ctx, binding),
-            },
+            HandlerKind::Do { binding } => {
+                let binding = if let Some(handle_ctx) = handle_ctx {
+                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
+                    ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
+                    self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
+                    self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty)
+                } else {
+                    self.convert_pattern_with_ctx(ctx, binding)
+                };
+                HandlerKind::Do { binding }
+            }
             HandlerKind::Fn {
                 ability,
                 op,
