@@ -570,6 +570,47 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[test]
+fn test_native_string_equality() {
+    assert_native_output(
+        "string_equality.trb",
+        r#"
+fn bool_to_nat(value: Bool) -> Nat {
+    case value {
+        True -> 1
+        False -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(bool_to_nat("same" == "same"))
+    __tribute_print_nat(bool_to_nat("same" != "different"))
+    __tribute_print_nat(bool_to_nat("" == String::empty()))
+    __tribute_print_nat(bool_to_nat("" != "x"))
+    __tribute_print_nat(bool_to_nat("안녕🌍" == "안녕🌍"))
+    __tribute_print_nat(bool_to_nat("안녕🌍" != "안녕🌎"))
+    let ab = "a" <> "b"
+    __tribute_print_nat(bool_to_nat("ab" == ab))
+
+    let left_prefix = "a" <> "b"
+    let left_shape = left_prefix <> "c"
+    let right_suffix = "b" <> "c"
+    let right_shape = "a" <> right_suffix
+    __tribute_print_nat(bool_to_nat(left_shape == right_shape))
+
+    let shared = "shared"
+    let shared_twice = shared <> shared
+    __tribute_print_nat(bool_to_nat(shared_twice == "sharedshared"))
+
+    __tribute_print_nat(bool_to_nat("abc" != "axc"))
+    __tribute_print_nat(bool_to_nat("a" != "a"))
+    __tribute_print_nat(bool_to_nat("a" == "b"))
+}
+"#,
+        "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0",
+    );
+}
+
+#[test]
 fn test_native_std_io_read_line_contract() {
     for (name, stdin, expected) in [
         ("empty", b"\n".as_slice(), "\n"),

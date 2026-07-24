@@ -144,9 +144,15 @@ s.split(sep: String) -> List(String)
 s.lines() -> List(String)
 
 // 비교
-s1 == s2 -> Bool      // byte-wise equality
+s1 == s2 -> Bool      // logical UTF-8 bytes의 equality (rope shape과 무관)
+s1 != s2 -> Bool      // ==의 logical complement
 String::compare(a: String, b: String) -> Ordering
 ```
+
+String equality는 cached rope metadata, variant identity, 또는 pointer identity가
+아니라 전체 logical UTF-8 byte sequence를 비교한다. 따라서 `Leaf(b"ab")`와
+`Branch(Leaf(b"a"), Leaf(b"b"), 2)`는 같다. Flattening, traversal, allocation
+전략은 library implementation detail이며 language contract가 아니다.
 
 ---
 

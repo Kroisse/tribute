@@ -202,6 +202,35 @@ pub mod String {
             Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
         }
     }
+
+    fn bytes_equal_at(left: Bytes, right: Bytes, index: Nat, len: Nat) -> Bool {
+        case index == len {
+            True -> True
+            False -> case left.get_or_panic(index) == right.get_or_panic(index) {
+                True -> String::bytes_equal_at(left, right, index + 1, len)
+                False -> False
+            }
+        }
+    }
+
+    /// Compare strings by their logical UTF-8 bytes, independent of rope shape.
+    pub fn (==)(left: String, right: String) -> Bool {
+        let left_bytes = left.to_bytes()
+        let right_bytes = right.to_bytes()
+        let len = left_bytes.len()
+        case len == right_bytes.len() {
+            True -> String::bytes_equal_at(left_bytes, right_bytes, 0, len)
+            False -> False
+        }
+    }
+
+    /// Return the logical complement of string equality.
+    pub fn (!=)(left: String, right: String) -> Bool {
+        case left == right {
+            True -> False
+            False -> True
+        }
+    }
 }
 
 // =============================================================================
