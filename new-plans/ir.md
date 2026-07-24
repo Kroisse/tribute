@@ -106,6 +106,11 @@ indices, allocation sizes, or target layout metadata. `list.prepend` is
 semantically persistent: it returns a new sequence and does not mutate its tail.
 Shared lowering may build a literal by first evaluating all elements left to
 right and then applying `list.prepend` in reverse value order.
+`list.head` and `list.tail` are internal observation operations with a
+non-empty input precondition. Compiler-generated uses must establish
+non-emptiness before executing either operation. A backend must trap if the
+precondition is violated; it must not return a type-default head, a null tail,
+or any other fallback value.
 The public `List::prepend(value, tail)` prelude wrapper delegates to a private
 ABI-marked compiler intrinsic, whose calls lower to the same `list.prepend`
 operation. A source-defined function merely spelled `List::prepend` remains an

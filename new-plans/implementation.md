@@ -82,7 +82,10 @@ The dialect is representation-independent. In particular, shared IR contains no
 Literal lowering evaluates source elements into SSA values from left to right
 exactly once, then constructs the sequence from the last value back to the
 first. Pattern lowering uses empty/head/tail sequence views for empty,
-exact-length, and prefix-rest matching.
+exact-length, and prefix-rest matching. It executes `list.head` and `list.tail`
+only on the non-empty control-flow path established by `list.is_empty`.
+Backends retain a trap path for either observation if malformed shared IR
+violates that precondition; they never synthesize a fallback element or tail.
 
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
