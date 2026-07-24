@@ -102,6 +102,22 @@ fn test() -> Int {
 }
 
 #[salsa_test]
+fn diag_list_literal_element_type_mismatch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn invalid() -> List(Nat) {
+    [1, True]
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

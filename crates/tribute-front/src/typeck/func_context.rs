@@ -682,6 +682,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         self.env.named_type(name, args)
     }
+
+    /// Construct the canonical prelude `List(element)` type.
+    pub fn canonical_list_type(&self, element: Type<'db>) -> Option<Type<'db>> {
+        let list = self.env.well_known_types().list?;
+        let TypeKind::Named { name, .. } = list.ty.kind(self.db) else {
+            return None;
+        };
+        Some(self.env.named_type(*name, vec![element]))
+    }
 }
 
 #[cfg(test)]

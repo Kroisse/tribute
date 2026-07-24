@@ -770,7 +770,43 @@ pub(super) fn lower_expr<'db>(
             Some(call_op.result(builder.ir))
         }
 
-        ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
+        ExprKind::List(elements) => {
+            // Preserve source evaluation order independently of the reverse
+            // fold used to construct the recursive representation.
+            let values = builder.collect_args(elements)?;
+            let Some(list_ty) = builder.ctx.canonical_list_type() else {
+                return builder.emit_unsupported(
+                    location,
+                    "list expression without canonical prelude List metadata",
+                );
+            };
+            let result_ty = builder.ctx.anyref_type(builder.ir);
+            let empty = adt::variant_new(
+                builder.ir,
+                location,
+                std::iter::empty(),
+                result_ty,
+                list_ty,
+                Symbol::new("Empty"),
+            );
+            builder.ir.push_op(builder.block, empty.op_ref());
+            let mut list = empty.result(builder.ir);
+
+            for value in values.into_iter().rev() {
+                let cons = adt::variant_new(
+                    builder.ir,
+                    location,
+                    [value, list],
+                    result_ty,
+                    list_ty,
+                    Symbol::new("Cons"),
+                );
+                builder.ir.push_op(builder.block, cons.op_ref());
+                list = cons.result(builder.ir);
+            }
+
+            Some(list)
+        }
 
         ExprKind::Error => Some(builder.emit_nil(location)),
     }

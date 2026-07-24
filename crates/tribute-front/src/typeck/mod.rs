@@ -70,6 +70,7 @@ pub struct WellKnownType<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
+    pub list: Option<WellKnownType<'db>>,
 }
 
 /// A typed key for extracting a semantic type from the prelude.
@@ -87,9 +88,22 @@ impl WellKnownTypeKey for StringType {
     }
 }
 
+/// Key for the prelude-defined `List` type.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListType;
+
+impl WellKnownTypeKey for ListType {
+    fn name(self) -> Symbol {
+        Symbol::new("List")
+    }
+}
+
 impl WellKnownTypes<'_> {
     pub const fn empty() -> Self {
-        Self { string: None }
+        Self {
+            string: None,
+            list: None,
+        }
     }
 }
 

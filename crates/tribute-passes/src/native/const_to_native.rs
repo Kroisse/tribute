@@ -456,6 +456,7 @@ mod tests {
         let user_string = type_alias(&ctx, "UserString");
         tribute_ir::metadata::WellKnownTypes {
             string: Some(prelude_string),
+            list: None,
         }
         .attach(&mut ctx, module.op());
 

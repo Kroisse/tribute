@@ -6,7 +6,7 @@ core.module @float_comparisons {
   !"Result$T0$T1" = adt.enum() {name = @"Result$T0$T1", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
-  !String = adt.enum() {name = @String, tribute.definition.end = 5768, tribute.definition.source = 4923843560778033168, tribute.definition.start = 5703, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !String = adt.enum() {name = @String, tribute.definition.end = 5950, tribute.definition.source = 4923843560778033168, tribute.definition.start = 5885, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}

@@ -89,6 +89,37 @@ enum Expr {
 enum Ordering { Less, Equal, Greater }
 ```
 
+### Canonical `List` and List Literals
+
+The embedded prelude declaration above is the canonical `List(a)` used by list
+syntax. Its variant order is part of the compiler contract:
+
+| Index | Variant | Fields |
+| ----- | ------- | ------ |
+| 0 | `Empty` | none |
+| 1 | `Cons` | head `a`, tail `List(a)` |
+
+List literals desugar structurally:
+
+```rust
+[]        // Empty
+[x]       // Cons(x, Empty)
+[x, y, z] // Cons(x, Cons(y, Cons(z, Empty)))
+```
+
+The apparent nested form does not change evaluation order. The compiler first
+evaluates `x`, then `y`, then `z`, each exactly once. It creates `Empty` only
+after those evaluations and folds the saved values in reverse into `Cons`.
+
+All elements must have one type. `[]` introduces a fresh element type variable,
+so context can infer, for example, `fn empty() -> List(Int) { [] }`. If no
+context fixes the variable, normal unresolved-polymorphism rules apply.
+
+List syntax refers to the canonical prelude declaration by semantic identity.
+A user-defined type named `List`, including a layout-compatible type, cannot
+capture `[]` or `[x, y]`. Explicit constructor expressions and patterns continue
+to use normal name resolution.
+
 ### 타입 파라미터
 
 타입 파라미터는 소괄호를 사용한다:

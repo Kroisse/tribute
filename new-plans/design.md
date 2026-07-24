@@ -157,6 +157,32 @@ Continuation은 **linear 타입**으로 취급한다:
 
 > 타입 선언, record, UFCS 규칙은 types.md 참조
 
+### Canonical Prelude List
+
+The embedded prelude defines the language's canonical collection type:
+
+```rust
+enum List(a) {
+    Empty
+    Cons(a, List(a))
+}
+```
+
+`Empty` is variant 0 and `Cons` is variant 1. List syntax is compiler-owned
+surface sugar for this exact prelude declaration, not for whichever type named
+`List` is visible in source:
+
+```rust
+[]        // Empty
+[a, b, c] // Cons(a, Cons(b, Cons(c, Empty)))
+```
+
+Element expressions are evaluated exactly once from left to right. Construction
+then starts with `Empty` and folds the already evaluated values from right to
+left into `Cons`. An empty literal has type `List(a)` for a fresh `a`, which can
+be fixed by its expected type. User declarations named `List`, `Empty`, or
+`Cons` do not capture list syntax.
+
 ### 함수 타입과 Ability
 
 함수 타입에 ability 정보가 포함된다:

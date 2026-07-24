@@ -647,13 +647,24 @@ Tribute 컴파일러 파이프라인은 다음 원칙을 따른다:
 4. **관심사 분리**: 패스 구현과 파이프라인 조합을 분리
 
 Prelude가 정의하는 well-known type은 type checking 결과의 별도 metadata로
-보존한다. 최소 metadata 집합인 `WellKnownTypes`는 prelude `String`의 semantic
-type과 stable declaration identity를 `TypedModule` 경계까지 전달하고,
-AST-to-IR lowering은 declaration identity를 직접 비교해 이를 정확한
-TrunkIR `TypeRef`로 변환해 root module의 `tribute.type.string` attribute에
-기록한다. Native/Wasm constant lowering은 이 attribute만 사용하며 이름이나
-layout scan으로 복구하지 않는다. Textual IR에서 attribute가 유실된 경우
-string constant lowering은 보수적으로 실패한다.
+보존한다. `WellKnownTypes`는 prelude `String`과 `List(a)`의 semantic type 및
+stable declaration identity를 `TypedModule` 경계까지 전달한다. AST-to-IR
+lowering은 declaration identity를 직접 비교해 정확한 TrunkIR `TypeRef`를 만들고
+root module의 `tribute.type.string`과 `tribute.type.list` attribute에 기록한다.
+
+List type inference constructs the literal result from the registry's canonical
+`List` type constructor plus one fresh element type variable. It does not call
+the ordinary short-name lookup for `List`. AST-to-IR lowering likewise reads
+the canonical list `TypeRef` captured during declaration prescan, evaluates
+elements left to right once, constructs `Empty`, and reverse-folds saved SSA
+values into `Cons`. This preserves source evaluation order while producing the
+canonical recursive representation and remains correct when a user declaration
+shadows the name `List`.
+
+Native/Wasm string constant lowering uses the String attribute only and does
+not recover it by name or layout scan. Textual IR에서 attribute가 유실된 경우
+string constant lowering은 보수적으로 실패한다. List syntax needs no
+backend-specific lowering after shared `adt.variant_new` construction.
 
 ```rust
 // 패스 구현 (tribute-passes): 순수 변환만 담당

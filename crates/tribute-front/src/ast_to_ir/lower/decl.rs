@@ -24,12 +24,17 @@ struct PendingWellKnownType {
 
 struct WellKnownTypePrescan {
     string: Option<PendingWellKnownType>,
+    list: Option<PendingWellKnownType>,
 }
 
 impl WellKnownTypePrescan {
     fn new(types: crate::typeck::WellKnownTypes<'_>) -> Self {
         Self {
             string: types.string.map(|ty| PendingWellKnownType {
+                definition: ty.definition,
+                ir_type: None,
+            }),
+            list: types.list.map(|ty| PendingWellKnownType {
                 definition: ty.definition,
                 ir_type: None,
             }),
@@ -48,9 +53,22 @@ impl WellKnownTypePrescan {
         }
     }
 
+    fn is_list(&self, definition: crate::typeck::DefinitionIdentity) -> bool {
+        self.list
+            .as_ref()
+            .is_some_and(|list| list.definition == definition)
+    }
+
+    fn record_list(&mut self, ir_type: TypeRef) {
+        if let Some(list) = &mut self.list {
+            list.ir_type = Some(ir_type);
+        }
+    }
+
     fn finish(self) -> tribute_ir::metadata::WellKnownTypes {
         tribute_ir::metadata::WellKnownTypes {
             string: self.string.and_then(|string| string.ir_type),
+            list: self.list.and_then(|list| list.ir_type),
         }
     }
 }
@@ -108,7 +126,9 @@ fn prescan_struct_fields<'db>(
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
                 let definition =
                     crate::typeck::DefinitionIdentity::new(e.id, ctx.location(e.id).span);
-                let enum_ir_type = if well_known_types.is_string(definition) {
+                let enum_ir_type = if well_known_types.is_string(definition)
+                    || well_known_types.is_list(definition)
+                {
                     ctx.adt_enum_type_with_definition(ir, qualified, &ir_variants, definition)
                 } else {
                     ctx.adt_enum_type(ir, qualified, &ir_variants)
@@ -116,6 +136,9 @@ fn prescan_struct_fields<'db>(
                 ctx.register_type(qualified, enum_ir_type);
                 if well_known_types.is_string(definition) {
                     well_known_types.record_string(enum_ir_type);
+                }
+                if well_known_types.is_list(definition) {
+                    well_known_types.record_list(enum_ir_type);
                 }
             }
             Decl::Module(m) => {
@@ -222,6 +245,7 @@ impl<'db> TypedModule<'db> {
         );
 
         let well_known_types = well_known_types.finish();
+        ctx.set_well_known_types(well_known_types);
 
         // Create the module block (top-down: create block first, push ops into it)
         let module_block = ir.create_block(BlockData {

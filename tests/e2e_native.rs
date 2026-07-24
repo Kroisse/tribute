@@ -230,6 +230,64 @@ fn main() {
 }
 
 #[test]
+fn test_native_list_explicit_construction_and_patterns() {
+    assert_native_output(
+        "list_explicit.trb",
+        r#"
+fn sum(xs: List(Nat)) -> Nat {
+    case xs {
+        Empty -> 0
+        Cons(head, tail) -> head + sum(tail)
+    }
+}
+
+fn main() {
+    __tribute_print_nat(sum(Cons(10, Cons(20, Empty))))
+}
+"#,
+        "30",
+    );
+}
+
+#[test]
+fn test_native_list_literal_evaluates_elements_left_to_right_once() {
+    assert_native_output(
+        "list_literal_order.trb",
+        r#"
+ability Trace {
+    op record(value: Nat) -> Nat
+}
+
+fn effect(value: Nat) ->{Trace} Nat {
+    Trace::record(value)
+}
+
+fn sum(xs: List(Nat)) -> Nat {
+    case xs {
+        Empty -> 0
+        Cons(head, tail) -> head + sum(tail)
+    }
+}
+
+fn main() {
+    let total = handle {
+        let values = [effect(1), effect(2), effect(3)]
+        sum(values)
+    } {
+        do result { result }
+        op Trace::record(value) {
+            __tribute_print_nat(value)
+            resume value
+        }
+    }
+    __tribute_print_nat(total)
+}
+"#,
+        "1\n2\n3\n6",
+    );
+}
+
+#[test]
 fn test_native_recursion() {
     assert_native_output(
         "recursion.trb",

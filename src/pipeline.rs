@@ -1985,6 +1985,78 @@ fn main() -> String { "hello" }
     }
 
     #[salsa_test]
+    fn well_known_list_metadata_uses_prelude_declaration_identity(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "list_lookalike.trb",
+            r#"
+enum List(a) {
+    Empty,
+    Cons(a, List(a)),
+}
+
+fn literal() -> List(Nat) { [1, 2] }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let canonical = typed
+            .well_known_types(db)
+            .list
+            .expect("prelude List identity");
+        let (ctx, module) =
+            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let list_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
+            .list
+            .expect("List IR metadata");
+        let list_data = ctx.types.get(list_ty);
+
+        assert_eq!(
+            list_data.attrs.get("tribute.definition.source"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.source as i128
+            ))
+        );
+        assert_eq!(
+            list_data.attrs.get("tribute.definition.start"),
+            Some(&trunk_ir::Attribute::Int(
+                canonical.definition.start as i128
+            ))
+        );
+        assert_eq!(
+            list_data.attrs.get("tribute.definition.end"),
+            Some(&trunk_ir::Attribute::Int(canonical.definition.end as i128))
+        );
+
+        let user_lookalike = ctx.types.iter().find_map(|(ty, data)| {
+            (ty != list_ty
+                && data.dialect == "adt"
+                && data.name == "enum"
+                && data.attrs.get_symbol("name") == Some(trunk_ir::Symbol::new("List")))
+            .then_some(ty)
+        });
+        assert!(
+            user_lookalike.is_some(),
+            "compatible user List must remain distinct from prelude List"
+        );
+
+        let mut literal_variants = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if let Ok(variant) = trunk_ir::dialect::adt::VariantNew::from_op(&ctx, op)
+                && variant
+                    .tag(&ctx)
+                    .with_str(|tag| matches!(tag, "Empty" | "Cons"))
+            {
+                literal_variants.push(variant);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert_eq!(literal_variants.len(), 3);
+        assert!(
+            literal_variants.iter().all(|op| op.r#type(&ctx) == list_ty),
+            "list syntax must use canonical List metadata after user shadowing"
+        );
+    }
+
+    #[salsa_test]
     fn test_ast_pipeline_let_binding(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "test.trb",

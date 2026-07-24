@@ -1,0 +1,18 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+expression: ir_text
+---
+core.module @test {
+  !List = adt.enum() {name = @List, tribute.definition.end = 287, tribute.definition.source = 10782962623459145919, tribute.definition.start = 238, variants = [[@Empty, []], [@Cons, [tribute_rt.anyref, tribute_rt.anyref]]]}
+
+  func.func @values() -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
+      %0 = arith.const {value = 1} : core.i32
+      %1 = arith.const {value = 2} : core.i32
+      %2 = arith.const {value = 3} : core.i32
+      %3 = adt.variant_new {tag = @Empty, type = !List} : tribute_rt.anyref
+      %4 = adt.variant_new %2, %3 {tag = @Cons, type = !List} : tribute_rt.anyref
+      %5 = adt.variant_new %1, %4 {tag = @Cons, type = !List} : tribute_rt.anyref
+      %6 = adt.variant_new %0, %5 {tag = @Cons, type = !List} : tribute_rt.anyref
+      func.return %6
+  }
+}

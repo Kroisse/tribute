@@ -87,6 +87,9 @@ pub struct IrLoweringCtx<'db> {
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
 
+    /// Canonical prelude ADT identities materialized during declaration prescan.
+    well_known_types: tribute_ir::metadata::WellKnownTypes,
+
     /// When true, continuation calls in handler arms use `func.call_indirect`
     /// instead of `ability.resume` (CPS effect handling mode).
     pub(crate) cps_handler_mode: bool,
@@ -133,6 +136,7 @@ impl<'db> IrLoweringCtx<'db> {
             active_prompt_tag_stack: Vec::new(),
 
             node_types,
+            well_known_types: tribute_ir::metadata::WellKnownTypes::default(),
             cps_handler_mode: false,
             done_k: None,
             evidence: None,
@@ -412,6 +416,14 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Named { name, .. } => self.get_type(*name),
             _ => None,
         }
+    }
+
+    pub fn set_well_known_types(&mut self, types: tribute_ir::metadata::WellKnownTypes) {
+        self.well_known_types = types;
+    }
+
+    pub fn canonical_list_type(&self) -> Option<TypeRef> {
+        self.well_known_types.list
     }
 
     /// Get the type of an AST node by NodeId.

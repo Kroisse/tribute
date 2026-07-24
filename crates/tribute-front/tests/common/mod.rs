@@ -15,6 +15,7 @@ struct PreludeData<'db> {
     exports: tribute_front::typeck::PreludeExports<'db>,
     env: tribute_front::resolve::ModuleEnv<'db>,
     typed_module: tribute_front::ast::Module<tribute_front::ast::TypedRef<'db>>,
+    span_map: tribute_front::ast::SpanMap,
 }
 
 /// Load and type-check the prelude so tests can use arithmetic operators.
@@ -50,13 +51,14 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     let exports = checker.check_module_for_prelude(resolved_prelude.clone());
 
     // Type-check to get typed module (for TDNR imports)
-    let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
+    let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
     let result2 = checker2.check_module(resolved_prelude);
 
     Some(PreludeData {
         exports,
         env,
         typed_module: result2.module,
+        span_map: prelude_span_map,
     })
 }
 
@@ -94,16 +96,33 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
     let tdnr_ast =
         tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut merged_decls = prelude
+        .iter()
+        .flat_map(|data| data.typed_module.decls.iter())
+        .filter(|decl| {
+            matches!(
+                decl,
+                Decl::Enum(enum_decl) if enum_decl.name == trunk_ir::Symbol::new("List")
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    merged_decls.extend(tdnr_ast.decls);
+    let tdnr_ast = Module::new(tdnr_ast.id, tdnr_ast.name, merged_decls);
 
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let ability_conventions: std::collections::HashMap<_, _> =
         result.ability_conventions.into_iter().collect();
+    let lowering_span_map = prelude
+        .as_ref()
+        .map(|data| span_map.merge(&data.span_map))
+        .unwrap_or(span_map);
     let mut ir = IrContext::new();
     let module = tribute_front::ast_to_ir::TypedModule {
         ast: tdnr_ast,
-        span_map,
+        span_map: lowering_span_map,
         function_types: function_types_map,
         node_types: node_types_map,
         ability_conventions,

@@ -99,20 +99,33 @@ native uses function pointers plus heap environments.
 literal operations.
 
 The root `core.module` carries Tribute-specific well-known type identities as
-`TypeRef` attributes. In particular, `tribute.type.string` is the exact
-`adt.enum` type produced from the prelude `String` declaration. String-literal
-lowering must consume this identity directly; it must not rediscover `String`
-by type name, variant names, or field layout. This metadata is semantic compiler
-state rather than a nominal-layout convention. The frontend preserves the
-prelude declaration's stable identity through type checking and compares that
-identity, not its name, when materializing this `TypeRef`.
+`TypeRef` attributes. `tribute.type.string` is the exact `adt.enum` type
+produced from the prelude `String` declaration, and `tribute.type.list` is the
+exact `adt.enum` type produced from the prelude `List(a)` declaration.
+String-literal and list-literal lowering must consume these identities directly;
+they must not rediscover either type by type name, variant names, or field
+layout. This metadata is semantic compiler state rather than a nominal-layout
+convention. The frontend preserves each prelude declaration's stable identity
+through type checking and compares that identity, not its name, when
+materializing the `TypeRef`.
+
+`ExprKind::List` lowers entirely in the shared frontend. It evaluates element
+expressions from left to right into SSA values, emits `adt.variant_new` for
+canonical `Empty`, then folds the saved values in reverse with canonical
+`Cons`. The root module's `tribute.type.list` attribute records the canonical
+`TypeRef`; each generated `adt.variant_new` references that exact `TypeRef`
+through its `type` attribute. A short-name type-map lookup is forbidden because
+a user `List` may shadow that key.
 
 The current specialized textual printer for `core.module` does not serialize
 arbitrary module attributes. Consequently, parsing printed IR conservatively
 drops well-known type metadata. A backend may still process byte constants, but
 must reject `adt.string_const` when `tribute.type.string` is absent rather
-than scanning types for a plausible replacement. A future textual format may
-make these attributes round-trip explicitly.
+than scanning types for a plausible replacement. List expressions have already
+become ordinary `adt.variant_new` operations before this boundary; their
+canonical `TypeRef` remains attached to each operation even if the root
+attribute is dropped. A future textual format may make these attributes
+round-trip explicitly.
 
 ## Mid-Level Dialects
 

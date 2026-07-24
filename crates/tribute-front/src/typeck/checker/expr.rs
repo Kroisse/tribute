@@ -445,7 +445,8 @@ impl<'db> TypeChecker<'db> {
                     let ty = self.infer_expr_type_with_ctx(ctx, elem);
                     ctx.constrain_eq(ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
+                    .unwrap_or_else(|| ctx.error_type())
             }
             ExprKind::Resume { arg, local_id } => {
                 let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
@@ -1544,7 +1545,8 @@ impl<'db> TypeChecker<'db> {
                     let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
+                    .unwrap_or_else(|| ctx.error_type())
             }
             PatternKind::ListRest { head, .. } => {
                 let elem_ty = ctx.fresh_type_var();
@@ -1552,7 +1554,8 @@ impl<'db> TypeChecker<'db> {
                     let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
+                    .unwrap_or_else(|| ctx.error_type())
             }
             PatternKind::Record { type_name, .. } => {
                 if let Some(type_ref) = type_name {
@@ -1642,7 +1645,9 @@ impl<'db> TypeChecker<'db> {
                 }
                 if let Some(local_id) = rest_local_id {
                     // The rest is also a list of the same element type
-                    let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                    let list_ty = ctx
+                        .canonical_list_type(elem_ty)
+                        .unwrap_or_else(|| ctx.error_type());
                     ctx.bind_local(*local_id, list_ty);
                 }
             }
@@ -1864,7 +1869,9 @@ impl<'db> TypeChecker<'db> {
             }
             PatternKind::List(patterns) => {
                 let elem_ty = ctx.fresh_type_var();
-                let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                let list_ty = ctx
+                    .canonical_list_type(elem_ty)
+                    .unwrap_or_else(|| ctx.error_type());
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::List(
                     patterns
@@ -1879,7 +1886,9 @@ impl<'db> TypeChecker<'db> {
                 rest_local_id,
             } => {
                 let elem_ty = ctx.fresh_type_var();
-                let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                let list_ty = ctx
+                    .canonical_list_type(elem_ty)
+                    .unwrap_or_else(|| ctx.error_type());
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::ListRest {
                     head: head

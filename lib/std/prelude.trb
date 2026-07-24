@@ -1,6 +1,13 @@
 // Tribute Standard Library - Prelude
 // These types are automatically available in all Tribute programs.
 
+/// The canonical singly linked list type used by list literal syntax.
+/// Variant order is compiler-visible: Empty = 0, Cons = 1.
+enum List(a) {
+    Empty,
+    Cons(a, List(a)),
+}
+
 /// A type that represents an optional value.
 /// Either contains `Some(value)` or `None`.
 enum Option(a) {

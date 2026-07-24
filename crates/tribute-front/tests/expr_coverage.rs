@@ -148,6 +148,38 @@ fn pair() -> #(Nat, Bool) {
 }
 
 #[salsa_test]
+fn test_list_literal_lowering(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn values() -> List(Nat) {
+    [1, 2, 3]
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
+fn test_empty_list_infers_from_result_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn empty_ints() -> List(Int) {
+    []
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
 fn test_boolean_operators(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

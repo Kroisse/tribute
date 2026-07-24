@@ -1213,6 +1213,7 @@ mod tests {
             .expect("String alias");
         tribute_ir::metadata::WellKnownTypes {
             string: Some(string_ty),
+            list: None,
         }
         .attach(&mut ctx, module.op());
 

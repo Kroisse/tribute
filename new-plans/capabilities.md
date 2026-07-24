@@ -49,7 +49,7 @@ target column is intentionally no stronger than its own evidence.
 | Direct recursion | **compile-only** | **native-run** | **not-yet-verified** | `test_native_recursion` executes Fibonacci in [`e2e_native.rs`](../tests/e2e_native.rs). `test_calc_eval` adds recursive enum evaluation coverage in [`e2e_add.rs`](../tests/e2e_add.rs). |
 | UFCS and type-directed method resolution | **compile-only** | **native-run** | **not-yet-verified** | Resolution tests are in [`ufcs_method_call.rs`](../crates/tribute-front/tests/ufcs_method_call.rs). Native chaining and disambiguation execute in the `test_native_ufcs_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). |
 | Type/effect inference and local let generalization | **compile-only** | **not-yet-verified** | **not-yet-verified** | Effect rows and value restriction are tested in [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs), [`let_generalization.rs`](../crates/tribute-front/tests/let_generalization.rs), and [`effect_var_collision.rs`](../tests/effect_var_collision.rs). These tests establish typing behavior, not a target-specific runtime guarantee. |
-| List expressions such as `[1, 2]` | **unsupported** | **unsupported** | **unsupported** | The parser and type checker contain list shapes, but AST-to-IR explicitly emits unsupported for `ExprKind::List` in [`ast_to_ir/lower/expr.rs`](../crates/tribute-front/src/ast_to_ir/lower/expr.rs). The current prelude also has no `List` definition in [`prelude.trb`](../lib/std/prelude.trb). |
+| Canonical `List(a)`, `Empty`/`Cons`, and list literals | **compile-only** | **native-run** | **not-yet-verified** | The embedded canonical declaration is in [`prelude.trb`](../lib/std/prelude.trb). Frontend inference, canonical identity/shadowing, diagnostics, and ADT lowering are covered by focused frontend and pipeline tests. Native tests execute explicit construction, literals with left-to-right exactly-once element evaluation, and `Empty`/`Cons` patterns. No focused Wasm emission or execution evidence is claimed. |
 
 ## Abilities and Handlers
 
@@ -76,13 +76,19 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | `Nat` and `Int` arithmetic/comparison | **compile-only** | **native-run** | **compile-only** | Native execution is in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_arithmetic_expr` emits Wasm but does not run it. |
 | `Float` arithmetic, comparison, and NaN behavior | **compile-only** | **native-run** | **not-yet-verified** | The native suite, including `test_float_comparison_nan_semantics`, is in [`e2e_float.rs`](../tests/e2e_float.rs). No Wasm float execution or focused emission test was found. |
 | Tuple collection-like grouping | **compile-only** | **native-run** | **not-yet-verified** | See tuple construction and pattern evidence above. |
-| General collections (`List`, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | List construction cannot cross AST-to-IR, and no general collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
+| General collection APIs (`List::map`, filter/fold, maps, and sets) | **unsupported** | **unsupported** | **unsupported** | M1 establishes only canonical `List` construction, literal lowering, and `Empty`/`Cons` patterns. Collection algorithms and additional data structures remain out of scope. |
 | `std::io::print` and `print_line` | **compile-only** | **native-run** | **wasm-run** | Native output behavior is tested in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm output execution is covered by the two execution tests in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The Wasm lowering implements `tribute_io.write` in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 | `std::io::read_line` | **compile-only** | **native-run** | **unsupported** | Native line endings, empty/partial input, EOF, invalid UTF-8, and system errors execute in the `test_native_std_io_read_line_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). Native lowering is in [`native/io.rs`](../crates/tribute-passes/src/native/io.rs). Wasm I/O lowering has only a `WritePattern` and rejects residual `tribute_io` operations in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 
 The only current **wasm-run** language-level claim is String/Bytes output
 through `std::io::print_line`. That evidence does not establish general
 WasmGC parity with native.
+
+The M1 List evidence boundary is intentionally native-only. Shared/frontend
+tests establish typing and target-independent ADT lowering, while native E2E
+tests establish execution. Until a focused Wasm test emits or executes the same
+List forms and asserts the relevant boundary, the WasmGC status remains
+**not-yet-verified**.
 
 ## Diagnostics, LSP, and Compilation Boundaries
 
@@ -143,6 +149,31 @@ All names above refer to [`e2e_native.rs`](../tests/e2e_native.rs),
 [`wasm_compilation.rs`](../tests/wasm_compilation.rs).
 
 ## Audit Commands
+
+The 2026-07-24 M1 List implementation ran:
+
+```shell
+cargo nextest run --workspace -E 'test(test_prelude_loads) | test(test_list_literal_lowering) | test(test_empty_list_infers_from_result_type) | test(diag_list_literal_element_type_mismatch) | test(well_known_list_metadata_uses_prelude_declaration_identity) | test(test_native_list_explicit_construction_and_patterns) | test(test_native_list_literal_evaluates_elements_left_to_right_once)'
+```
+
+Result: 7 passed, 0 failed, 1632 skipped. This selection covers prelude
+loading, non-empty and empty list IR, result-directed empty-list inference,
+heterogeneous-element diagnostics, canonical identity under a user `List`
+shadow, explicit native construction and patterns, and native left-to-right
+exactly-once literal evaluation.
+
+```shell
+cargo nextest run --workspace
+```
+
+Result: 1638 passed, 0 failed, 1 skipped.
+
+```shell
+cargo fmt --check
+npx --offline markdownlint-cli2 "**/*.md"
+```
+
+Result: formatting passed; 40 Markdown files were linted with 0 errors.
 
 The 2026-07-23 audit ran:
 

@@ -34,7 +34,8 @@ use crate::ast::{
 
 use super::context::ModuleTypeEnv;
 use super::{
-    DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
+    DefinitionIdentity, ListType, PreludeExports, StringType, WellKnownType, WellKnownTypeKey,
+    WellKnownTypes,
 };
 use crate::ast::CallingConvention;
 
@@ -216,6 +217,7 @@ impl<'db> TypeChecker<'db> {
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
         let string_type = self.prelude_well_known_type(&module, StringType);
+        let list_type = self.prelude_well_known_type(&module, ListType);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
@@ -236,6 +238,7 @@ impl<'db> TypeChecker<'db> {
         let ability_conventions = self.env.export_ability_conventions();
         let well_known_types = WellKnownTypes {
             string: string_type,
+            list: list_type,
         };
 
         PreludeExports::new(

@@ -343,6 +343,7 @@ mod tests {
     fn attach_string_type(ctx: &mut IrContext, module: Module, string: trunk_ir::TypeRef) {
         tribute_ir::metadata::WellKnownTypes {
             string: Some(string),
+            list: None,
         }
         .attach(ctx, module.op());
     }
