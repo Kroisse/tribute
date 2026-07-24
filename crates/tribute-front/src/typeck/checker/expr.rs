@@ -1912,6 +1912,16 @@ impl<'db> TypeChecker<'db> {
         arm: HandlerArm<ResolvedRef<'db>>,
         handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
+        ctx.with_scope(|ctx| self.convert_handler_arm_in_scope(ctx, arm, handle_ctx))
+    }
+
+    /// Convert a handler arm within its arm-local scope.
+    fn convert_handler_arm_in_scope(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        arm: HandlerArm<ResolvedRef<'db>>,
+        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Do { binding } => {
                 let binding = if let Some(handle_ctx) = handle_ctx {
@@ -2408,15 +2418,21 @@ impl<'db> TypeChecker<'db> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
     use crate::ast::{
-        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeKind,
+        AbilityId, EffectRow, Expr, ExprKind, FuncDefId, HandlerArm, HandlerKind, LocalId, NodeId,
+        OpDeclKind, Pattern, PatternKind, ResolvedRef, SpanMap, Type, TypeAnnotation,
+        TypeAnnotationKind, TypeKind, TypedRef,
     };
+    use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
+    use crate::typeck::func_context::HandleContext;
     use crate::typeck::{FunctionInferenceContext, ModuleTypeEnv};
 
-    use super::TypeChecker;
+    use super::{Mode, TypeChecker};
 
     /// Helper to create a TypeChecker for testing.
     fn make_test_checker(db: &dyn salsa::Database) -> TypeChecker<'_> {
@@ -2438,6 +2454,156 @@ mod tests {
             id: NodeId::from_raw(0),
             kind,
         }
+    }
+
+    fn bind_pattern<'db>(id: usize, name: Symbol, local_id: LocalId) -> Pattern<ResolvedRef<'db>> {
+        Pattern::new(
+            NodeId::from_raw(id),
+            PatternKind::Bind {
+                name,
+                local_id: Some(local_id),
+            },
+        )
+    }
+
+    fn local_expr<'db>(id: usize, name: Symbol, local_id: LocalId) -> Expr<ResolvedRef<'db>> {
+        Expr::new(
+            NodeId::from_raw(id),
+            ExprKind::Var(ResolvedRef::local(local_id, name)),
+        )
+    }
+
+    fn handler_body_type<'db>(handler: &HandlerArm<TypedRef<'db>>) -> Type<'db> {
+        let ExprKind::Var(reference) = &*handler.body.kind else {
+            panic!("handler body should be a variable reference");
+        };
+        reference.ty
+    }
+
+    #[salsa_test]
+    fn test_handler_do_binding_does_not_leak(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let name = Symbol::new("result");
+        let body_ty = Type::new(db, TypeKind::Nat);
+        let handle_ctx = HandleContext {
+            body_ty,
+            body_effect: EffectRow::pure(db),
+        };
+
+        let do_arm = HandlerArm {
+            id: NodeId::from_raw(1),
+            kind: HandlerKind::Do {
+                binding: bind_pattern(2, name, LocalId::new(1)),
+            },
+            body: local_expr(3, name, LocalId::new(1)),
+        };
+        let converted_do =
+            checker.convert_handler_arm_with_ctx(&mut ctx, do_arm, Some(&handle_ctx));
+        assert_eq!(handler_body_type(&converted_do), body_ty);
+
+        let ability = ResolvedRef::ability(AbilityId::source(db, Symbol::new("Test")));
+        let op_arm = HandlerArm {
+            id: NodeId::from_raw(4),
+            kind: HandlerKind::Op {
+                ability,
+                op: Symbol::new("get"),
+                params: vec![],
+                resume_local_id: None,
+            },
+            body: local_expr(5, name, LocalId::UNRESOLVED),
+        };
+        let converted_op =
+            checker.convert_handler_arm_with_ctx(&mut ctx, op_arm, Some(&handle_ctx));
+        assert!(
+            matches!(
+                handler_body_type(&converted_op).kind(db),
+                TypeKind::UniVar { .. }
+            ),
+            "do-arm binding should not type an unresolved name in a later operation arm"
+        );
+
+        let outside = checker.check_expr_with_ctx(
+            &mut ctx,
+            local_expr(6, name, LocalId::UNRESOLVED),
+            Mode::Infer,
+        );
+        let ExprKind::Var(reference) = &*outside.kind else {
+            panic!("outside expression should be a variable reference");
+        };
+        assert!(
+            matches!(reference.ty.kind(db), TypeKind::UniVar { .. }),
+            "do-arm binding should not type an unresolved name outside the handle"
+        );
+    }
+
+    #[salsa_test]
+    fn test_same_name_handler_bindings_are_independent(db: &dyn salsa::Database) {
+        let mut checker = make_test_checker(db);
+        let ability_id = AbilityId::source(db, Symbol::new("Choice"));
+        let nat_op = Symbol::new("nat");
+        let bool_op = Symbol::new("bool");
+        let nat_ty = Type::new(db, TypeKind::Nat);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+        checker.env.register_ability(
+            ability_id,
+            AbilityInfo {
+                id: ability_id,
+                type_params: vec![],
+                operations: HashMap::from([
+                    (
+                        nat_op,
+                        AbilityOpInfo {
+                            name: nat_op,
+                            kind: OpDeclKind::Op,
+                            param_types: vec![nat_ty],
+                            return_type: Type::new(db, TypeKind::Nil),
+                        },
+                    ),
+                    (
+                        bool_op,
+                        AbilityOpInfo {
+                            name: bool_op,
+                            kind: OpDeclKind::Op,
+                            param_types: vec![bool_ty],
+                            return_type: Type::new(db, TypeKind::Nil),
+                        },
+                    ),
+                ]),
+            },
+        );
+
+        let mut ctx = make_test_ctx(db, &checker.env);
+        let name = Symbol::new("value");
+        let ability = ResolvedRef::ability(ability_id);
+        let make_arm = |id, op, local_id| HandlerArm {
+            id: NodeId::from_raw(id),
+            kind: HandlerKind::Op {
+                ability: ability.clone(),
+                op,
+                params: vec![bind_pattern(id + 1, name, local_id)],
+                resume_local_id: None,
+            },
+            body: local_expr(id + 2, name, local_id),
+        };
+
+        let nat_arm = checker.convert_handler_arm_with_ctx(
+            &mut ctx,
+            make_arm(10, nat_op, LocalId::new(10)),
+            None,
+        );
+        let bool_arm = checker.convert_handler_arm_with_ctx(
+            &mut ctx,
+            make_arm(20, bool_op, LocalId::new(20)),
+            None,
+        );
+
+        assert_eq!(handler_body_type(&nat_arm), nat_ty);
+        assert_eq!(handler_body_type(&bool_arm), bool_ty);
+        assert!(ctx.lookup_local(LocalId::new(10)).is_none());
+        assert!(ctx.lookup_local(LocalId::new(20)).is_none());
+        assert!(ctx.lookup_local_by_name(name).is_none());
     }
 
     // =========================================================================
