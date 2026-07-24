@@ -11,7 +11,10 @@ mod common;
 
 #[cfg(unix)]
 use common::compile_and_run_native_with_closed_stdin;
-use common::{assert_native_output, compile_and_run_native, compile_and_run_native_with_stdin};
+use common::{
+    assert_native_output, compile_and_run_native, compile_and_run_native_asan,
+    compile_and_run_native_with_stdin,
+};
 
 fn std_io_read_line_program() -> &'static str {
     r#"
@@ -152,6 +155,242 @@ fn main() {
 }
 "#,
         "30",
+    );
+}
+
+#[test]
+fn test_native_list_literal_evaluates_left_to_right_once() {
+    assert_native_output(
+        "list_literal_order.trb",
+        r#"
+fn mark(value: Nat) -> Nat {
+    __tribute_print_nat(value)
+    value
+}
+
+fn main() {
+    let values = [mark(1), mark(2), mark(3)]
+    case values {
+        [] -> Nil
+        [head, ..tail] -> __tribute_print_nat(head)
+    }
+}
+"#,
+        "1\n2\n3\n1",
+    );
+}
+
+#[test]
+fn test_native_list_empty_exact_and_rest_patterns() {
+    assert_native_output(
+        "list_patterns.trb",
+        r#"
+fn classify(values: List(Nat)) -> Nat {
+    case values {
+        [] -> 0
+        [only] -> only
+        [first, second] -> first + second
+        [head, ..tail] -> head
+    }
+}
+
+fn main() {
+    __tribute_print_nat(classify([]))
+    __tribute_print_nat(classify([4]))
+    __tribute_print_nat(classify([5, 6]))
+    __tribute_print_nat(classify([7, 8, 9]))
+}
+"#,
+        "0\n4\n11\n7",
+    );
+}
+
+#[test]
+fn test_native_short_lists_skip_nested_pattern_observation() {
+    assert_native_output(
+        "list_nested_pattern_safety.trb",
+        r#"
+enum Item {
+    Number(Nat),
+}
+
+fn exact(values: List(Item)) -> Nat {
+    case values {
+        [Number(first), Number(second)] -> first + second
+        _ -> 9
+    }
+}
+
+fn prefix(values: List(Item)) -> Nat {
+    case values {
+        [Number(first), Number(second), ..tail] -> first + second
+        _ -> 8
+    }
+}
+
+fn main() {
+    __tribute_print_nat(exact([]))
+    __tribute_print_nat(exact([Number(1)]))
+    __tribute_print_nat(prefix([]))
+    __tribute_print_nat(prefix([Number(1)]))
+}
+"#,
+        "9\n9\n8\n8",
+    );
+}
+
+#[test]
+fn test_native_list_tail_order_and_persistence() {
+    assert_native_output(
+        "list_tail_persistence.trb",
+        r#"
+fn tail(values: List(Nat)) -> List(Nat) {
+    case values {
+        [] -> []
+        [head, ..tail] -> tail
+    }
+}
+
+fn head_or_zero(values: List(Nat)) -> Nat {
+    case values {
+        [] -> 0
+        [head, ..tail] -> head
+    }
+}
+
+fn main() {
+    let original = [4, 5, 6]
+    let rest = tail(original)
+    let last = tail(rest)
+    __tribute_print_nat(head_or_zero(original))
+    __tribute_print_nat(head_or_zero(rest))
+    __tribute_print_nat(head_or_zero(last))
+}
+"#,
+        "4\n5\n6",
+    );
+}
+
+#[test]
+fn test_native_list_retains_reference_elements_and_shared_tails() {
+    let output = compile_and_run_native_asan(
+        "list_reference_ownership.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn tail(values: List(String)) -> List(String) {
+    case values {
+        [] -> []
+        [head, ..tail] -> tail
+    }
+}
+
+fn head_or_empty(values: List(String)) -> String {
+    case values {
+        [] -> ""
+        [head, ..tail] -> head
+    }
+}
+
+fn main() ->{Io} Nil {
+    let original = ["first", "second"]
+    let rest = tail(original)
+    print_line(head_or_empty(rest))
+    print_line(head_or_empty(original))
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "ASan list ownership run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "second\nfirst"
+    );
+}
+
+#[test]
+fn test_native_list_prepend_builds_dynamic_strings_recursively() {
+    assert_native_output(
+        "list_dynamic_string_prepend.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn build(token: String, remaining: Nat) -> List(String) {
+    case remaining {
+        0 -> []
+        _ -> List::prepend(token, build(token <> "!", remaining - 1))
+    }
+}
+
+fn join(values: List(String)) -> String {
+    case values {
+        [] -> ""
+        [head, ..tail] -> head <> join(tail)
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(join(build("x", 3)))
+}
+"#,
+        "xx!x!!",
+    );
+}
+
+#[test]
+fn test_native_list_float_exact_pattern_has_typed_empty_fallback() {
+    assert_native_output(
+        "list_float_pattern.trb",
+        r#"
+fn only_or_default(values: List(Float)) -> Float {
+    case values {
+        [value] -> value
+        _ -> 9.5
+    }
+}
+
+fn main() {
+    __tribute_print_float(only_or_default([]))
+    __tribute_print_float(only_or_default([1.25]))
+}
+"#,
+        "9.5\n1.25",
+    );
+}
+
+#[test]
+fn test_native_generic_specializations_distinguish_builtin_and_source_list() {
+    assert_native_output(
+        "generic_builtin_and_source_list.trb",
+        r#"
+enum List(a) {
+    SourceList(a),
+}
+
+fn keep(value: a) -> a {
+    value
+}
+
+fn builtin_value() -> Nat {
+    case keep([1]) {
+        [value] -> value
+        _ -> 0
+    }
+}
+
+fn source_value(value: List(Nat)) -> Nat {
+    2
+}
+
+fn main() {
+    let source = source_value(keep(SourceList(2)))
+    __tribute_print_nat(builtin_value() + source)
+}
+"#,
+        "3",
     );
 }
 

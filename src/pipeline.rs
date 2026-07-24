@@ -624,6 +624,7 @@ fn run_shared_pipeline_with_options(
     structural_pm
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+        .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
         .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics)
         // Evidence params are now inserted directly during ast_to_ir lowering.
         .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
@@ -967,6 +968,9 @@ fn prepare_module_to_native(
 
     // Phase -0.2 - Lower target-independent I/O to the native runtime ABI.
     tribute_passes::native::io::lower(ctx, module).map_err(native_conversion_failure)?;
+
+    // Phase -0.1 - Select the private native representation for opaque lists.
+    tribute_passes::native::list::lower(ctx, module).map_err(native_conversion_failure)?;
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, module.op()) {

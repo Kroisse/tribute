@@ -164,6 +164,54 @@ fn logic(a: Bool, b: Bool) -> Bool {
 }
 
 #[salsa_test]
+fn test_list_literals_use_shared_sequence_ops(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn empty() {
+    []
+}
+
+fn numbers() {
+    [1, 2, 3]
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert!(ir_text.contains("list.empty"));
+    assert!(ir_text.contains("list.prepend"));
+    assert!(!ir_text.contains("Empty"));
+    assert!(!ir_text.contains("Cons"));
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
+fn test_list_sequence_patterns_use_shared_observation_ops(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn observe(xs: List(Nat)) -> Nat {
+    case xs {
+        [] -> 0
+        [only] -> only
+        [first, second] -> second
+        [head, ..tail] -> head
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert!(ir_text.contains("list.is_empty"));
+    assert!(ir_text.contains("list.head"));
+    assert!(ir_text.contains("list.tail"));
+    assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
 fn test_float_comparison_operators(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

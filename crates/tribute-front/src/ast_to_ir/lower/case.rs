@@ -4,6 +4,7 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
+use tribute_ir::dialect::list;
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -221,10 +222,190 @@ fn emit_pattern_check<'db>(
                 Some(result)
             }
         }
+        PatternKind::List(elements) => {
+            emit_list_pattern_check(builder, location, scrutinee, pattern, elements, true)
+        }
+        PatternKind::ListRest { head, .. } => {
+            emit_list_pattern_check(builder, location, scrutinee, pattern, head, false)
+        }
+        PatternKind::As { pattern, .. } => {
+            emit_pattern_check(builder, location, scrutinee, pattern)
+        }
         _ => {
             unreachable!("unsupported pattern in IR lowering: {:?}", pattern.kind)
         }
     }
+}
+
+fn emit_list_pattern_check<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: ValueRef,
+    whole_pattern: &Pattern<TypedRef<'db>>,
+    elements: &[Pattern<TypedRef<'db>>],
+    exact: bool,
+) -> Option<ValueRef> {
+    let list_ty = builder.ctx.anyref_type(builder.ir);
+    let list_ast_ty = builder.ctx.get_node_type(whole_pattern.id).copied();
+    let element_ast_ty = list_ast_ty.and_then(|ty| match ty.kind(builder.db()) {
+        crate::ast::TypeKind::Named { id, args, .. }
+            if id.is_builtin_list(builder.db()) && args.len() == 1 =>
+        {
+            Some(args[0])
+        }
+        _ => None,
+    });
+    let element_ty = element_ast_ty
+        .map(|ty| builder.ctx.convert_type(builder.ir, ty))
+        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
+
+    emit_list_pattern_suffix(
+        builder, location, scrutinee, elements, exact, list_ty, element_ty,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_list_pattern_suffix<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    current: ValueRef,
+    elements: &[Pattern<TypedRef<'db>>],
+    exact: bool,
+    list_ty: TypeRef,
+    element_ty: TypeRef,
+) -> Option<ValueRef> {
+    let bool_ty = builder.ctx.bool_type(builder.ir);
+    let Some((element, rest)) = elements.split_first() else {
+        let terminal = if exact {
+            list::is_empty(builder.ir, location, current, bool_ty, element_ty).op_ref()
+        } else {
+            arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(true)).op_ref()
+        };
+        builder.ir.push_op(builder.block, terminal);
+        return Some(builder.ir.op_result(terminal, 0));
+    };
+
+    let empty = list::is_empty(builder.ir, location, current, bool_ty, element_ty);
+    builder.ir.push_op(builder.block, empty.op_ref());
+    let true_value = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(true));
+    builder.ir.push_op(builder.block, true_value.op_ref());
+    let non_empty = arith::xor(
+        builder.ir,
+        location,
+        empty.result(builder.ir),
+        true_value.result(builder.ir),
+        bool_ty,
+    );
+    builder.ir.push_op(builder.block, non_empty.op_ref());
+
+    let then_block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let then_value = {
+        let mut nested = IrBuilder::new(builder.ctx, builder.ir, then_block);
+        let result_ty = nested
+            .ctx
+            .get_node_type(element.id)
+            .map(|ty| nested.ctx.convert_type(nested.ir, *ty))
+            .unwrap_or(element_ty);
+        let head = list::head(nested.ir, location, current, result_ty, element_ty);
+        nested.ir.push_op(nested.block, head.op_ref());
+        let head_value = head.result(nested.ir);
+        let element_condition = emit_pattern_check(&mut nested, location, head_value, element)?;
+
+        let match_block = nested.ir.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let suffix_condition = {
+            let mut matched = IrBuilder::new(nested.ctx, nested.ir, match_block);
+            let tail = list::tail(matched.ir, location, current, list_ty, element_ty);
+            matched.ir.push_op(matched.block, tail.op_ref());
+            let tail_value = tail.result(matched.ir);
+            emit_list_pattern_suffix(
+                &mut matched,
+                location,
+                tail_value,
+                rest,
+                exact,
+                list_ty,
+                element_ty,
+            )?
+        };
+        let match_yield = scf::r#yield(nested.ir, location, [suffix_condition]);
+        nested.ir.push_op(match_block, match_yield.op_ref());
+        let match_region = nested.ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![match_block],
+            parent_op: None,
+        });
+
+        let mismatch_block = nested.ir.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let false_value = arith::r#const(nested.ir, location, bool_ty, Attribute::Bool(false));
+        nested.ir.push_op(mismatch_block, false_value.op_ref());
+        let mismatch_yield = scf::r#yield(nested.ir, location, [false_value.result(nested.ir)]);
+        nested.ir.push_op(mismatch_block, mismatch_yield.op_ref());
+        let mismatch_region = nested.ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![mismatch_block],
+            parent_op: None,
+        });
+
+        let guarded_suffix = scf::r#if(
+            nested.ir,
+            location,
+            element_condition,
+            bool_ty,
+            match_region,
+            mismatch_region,
+        );
+        nested.ir.push_op(nested.block, guarded_suffix.op_ref());
+        guarded_suffix.result(nested.ir)
+    };
+    let then_yield = scf::r#yield(builder.ir, location, [then_value]);
+    builder.ir.push_op(then_block, then_yield.op_ref());
+    let then_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![then_block],
+        parent_op: None,
+    });
+
+    let else_block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let false_value = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(false));
+    builder.ir.push_op(else_block, false_value.op_ref());
+    let else_yield = scf::r#yield(builder.ir, location, [false_value.result(builder.ir)]);
+    builder.ir.push_op(else_block, else_yield.op_ref());
+    let else_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![else_block],
+        parent_op: None,
+    });
+
+    let guarded = scf::r#if(
+        builder.ir,
+        location,
+        non_empty.result(builder.ir),
+        bool_ty,
+        then_region,
+        else_region,
+    );
+    builder.ir.push_op(builder.block, guarded.op_ref());
+    Some(guarded.result(builder.ir))
 }
 
 /// Emit a literal equality check.
@@ -564,11 +745,83 @@ pub(super) fn bind_pattern_fields<'db>(
                 bind_pattern_fields(ctx, ir, block, location, elem_val, elem_pat);
             }
         }
+        PatternKind::List(elements) => {
+            bind_list_pattern_fields(ctx, ir, block, location, scrutinee, pattern, elements, None);
+        }
+        PatternKind::ListRest {
+            head,
+            rest,
+            rest_local_id,
+        } => {
+            bind_list_pattern_fields(
+                ctx,
+                ir,
+                block,
+                location,
+                scrutinee,
+                pattern,
+                head,
+                rest.zip(*rest_local_id),
+            );
+        }
+        PatternKind::As {
+            pattern,
+            name,
+            local_id,
+        } => {
+            if let Some(id) = local_id {
+                ctx.bind(*id, *name, scrutinee);
+            }
+            bind_pattern_fields(ctx, ir, block, location, scrutinee, pattern);
+        }
         _ => {
             unreachable!(
                 "unsupported pattern in bind_pattern_fields: {:?}",
                 pattern.kind
             )
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_list_pattern_fields<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    scrutinee: ValueRef,
+    whole_pattern: &Pattern<TypedRef<'db>>,
+    elements: &[Pattern<TypedRef<'db>>],
+    rest: Option<(Symbol, crate::ast::LocalId)>,
+) {
+    let list_ty = ctx.anyref_type(ir);
+    let element_ty = ctx
+        .get_node_type(whole_pattern.id)
+        .and_then(|ty| match ty.kind(ctx.db()) {
+            crate::ast::TypeKind::Named { id, args, .. }
+                if id.is_builtin_list(ctx.db()) && args.len() == 1 =>
+            {
+                Some(ctx.convert_type(ir, args[0]))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| ctx.anyref_type(ir));
+    let mut current = scrutinee;
+
+    for element in elements {
+        let result_ty = ctx
+            .get_node_type(element.id)
+            .map(|ty| ctx.convert_type(ir, *ty))
+            .unwrap_or(element_ty);
+        let head = list::head(ir, location, current, result_ty, element_ty);
+        ir.push_op(block, head.op_ref());
+        bind_pattern_fields(ctx, ir, block, location, head.result(ir), element);
+        let tail = list::tail(ir, location, current, list_ty, element_ty);
+        ir.push_op(block, tail.op_ref());
+        current = tail.result(ir);
+    }
+
+    if let Some((name, id)) = rest {
+        ctx.bind(id, name, current);
     }
 }

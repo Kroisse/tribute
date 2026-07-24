@@ -12,7 +12,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Pattern,
-    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
+    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeOrigin, TypeScheme, TypedRef, UniVarId,
     collect_effect_vars,
 };
 
@@ -28,6 +28,40 @@ fn solve_error_context(kind: Option<ConstraintOriginKind>) -> &'static str {
         Some(ConstraintOriginKind::HandlerBoundary) => " at handler boundary",
         Some(ConstraintOriginKind::Expression) | None => "",
     }
+}
+
+fn format_solve_error(
+    db: &dyn salsa::Database,
+    error: &super::super::solver::SolveError<'_>,
+) -> String {
+    if let super::super::solver::SolveError::TypeMismatch { expected, actual } = error
+        && let (
+            TypeKind::Named {
+                id: expected_id, ..
+            },
+            TypeKind::Named { id: actual_id, .. },
+        ) = (expected.kind(db), actual.kind(db))
+        && expected_id != actual_id
+        && expected.to_string() == actual.to_string()
+    {
+        match (expected_id.origin(db), actual_id.origin(db)) {
+            (TypeOrigin::Builtin(_), TypeOrigin::Source(_)) => {
+                return format!(
+                    "canonical compiler-owned type `{expected}` is distinct from \
+                     source-declared type `{actual}`"
+                );
+            }
+            (TypeOrigin::Source(_), TypeOrigin::Builtin(_)) => {
+                return format!(
+                    "canonical compiler-owned type `{actual}` is distinct from \
+                     source-declared type `{expected}`"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    error.to_string()
 }
 
 impl<'db> TypeChecker<'db> {
@@ -339,11 +373,9 @@ impl<'db> TypeChecker<'db> {
             .map(|origin| origin.node_id)
             .unwrap_or(func_id);
         let context = solve_error_context(failure.origin.map(|origin| origin.kind));
+        let error = format_solve_error(self.db(), &failure.error);
         let mut diagnostic = Diagnostic::builder(
-            format!(
-                "type error{context} in function '{}': {}",
-                func_name, failure.error
-            ),
+            format!("type error{context} in function '{}': {error}", func_name),
             self.get_span(primary_node),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
