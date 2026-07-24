@@ -671,9 +671,10 @@ fn test_string_equality_prelude_uses_direct_leaf_and_cursor_spans() {
     let operator = &equality[operator_start..operator_end];
     assert!(operator.contains("Leaf(left_bytes)"));
     assert!(operator.contains("Leaf(right_bytes)"));
-    assert!(operator.contains(
-        "__tribute_bytes_range_equal(\n                        left_bytes,\n                        0,\n                        right_bytes,\n                        0,\n                        len"
-    ));
+    let compact_operator: String = operator.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact_operator.contains("__tribute_bytes_range_equal(left_bytes,0,right_bytes,0,len)")
+    );
     assert_eq!(
         operator.matches("__tribute_bytes_range_equal").count(),
         1,
