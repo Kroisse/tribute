@@ -1031,8 +1031,8 @@ let x = 1; let y = 2; x + y
 
 ## Complete Example
 
-이 예제의 `List::filter`와 `List::map`은 complete-program 구성을 보여 주기 위한
-post-M1 illustrative API이며 M1에서 보장되지 않는다.
+이 예제의 `List::filter`, `List::map`, `List::each`는 complete-program 구성을
+보여 주기 위한 post-M1 illustrative API이며 M1에서 보장되지 않는다.
 
 ```rust
 use std::collections::{List, Option}
