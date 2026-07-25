@@ -5,7 +5,7 @@
 
 mod common;
 
-use self::common::run_ast_pipeline_with_ir;
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -122,6 +122,61 @@ fn to_nat(b: Bool) -> Nat {
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
+}
+
+/// `as`-wrapped list patterns must participate in list exhaustiveness checking.
+#[salsa_test]
+fn test_list_as_patterns_are_exhaustive(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn classify(values: List(Nat)) -> Nat {
+    case values {
+        [] as empty -> 0
+        [head, ..tail] as whole -> head
+    }
+}
+"#,
+    );
+
+    assert!(
+        ast_pipeline_error_messages(db, source).is_empty(),
+        "as-wrapped exact and rest list patterns should be exhaustive"
+    );
+}
+
+/// Literal list elements do not cover every list of the same length, with or
+/// without an `as` binding.
+#[salsa_test]
+fn test_literal_list_patterns_are_not_exhaustive(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn bare(values: List(Nat)) -> Nat {
+    case values {
+        [0] -> 0
+    }
+}
+
+fn bound(values: List(Nat)) -> Nat {
+    case values {
+        [0] as singleton -> 0
+    }
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.contains("list patterns do not cover all lengths"))
+            .count(),
+        2,
+        "literal list patterns should not count as length-exhaustive: {errors:?}"
+    );
 }
 
 /// Test nested case expressions.

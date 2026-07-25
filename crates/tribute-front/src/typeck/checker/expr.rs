@@ -2874,6 +2874,32 @@ mod tests {
     }
 
     #[salsa_test]
+    fn test_extract_list_element_type_from_app(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let list_ctor = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(db),
+                name: Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let list_ty = Type::new(
+            db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(checker.extract_list_element_type(list_ty, &mut ctx), int_ty);
+    }
+
+    #[salsa_test]
     fn test_extract_list_element_type_non_list_returns_fresh_var(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);

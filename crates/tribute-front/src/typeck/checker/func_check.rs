@@ -1293,10 +1293,11 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeKind};
+    use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
     use crate::typeck::{TypeChecker, TypeSolver};
 
-    use super::{ConstraintOriginKind, solve_error_context};
+    use super::super::super::solver::SolveError;
+    use super::{ConstraintOriginKind, format_solve_error, solve_error_context};
 
     #[test]
     fn solve_error_context_describes_each_origin() {
@@ -1315,6 +1316,40 @@ mod tests {
                 "",
                 ""
             ]
+        );
+    }
+
+    #[salsa_test]
+    fn format_solve_error_describes_builtin_actual_against_source_expected(
+        db: &dyn salsa::Database,
+    ) {
+        let int_ty = Type::new(db, TypeKind::Int);
+        let source = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::source(db, Symbol::new("List"), NodeId::from_raw(1)),
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+        let builtin = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(db),
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            format_solve_error(
+                db,
+                &SolveError::TypeMismatch {
+                    expected: source,
+                    actual: builtin,
+                },
+            ),
+            "canonical compiler-owned type `List(Int)` is distinct from source-declared type `List(Int)`"
         );
     }
 
