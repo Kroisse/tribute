@@ -37,8 +37,8 @@ pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeParam,
-    TypeScheme, TypedRef,
+    AbilityId, CallingConvention, CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId,
+    TypeParam, TypeScheme, TypedRef,
 };
 
 /// Semantic identities supplied by the prelude and required downstream.
@@ -145,9 +145,9 @@ pub struct PreludeExports<'db> {
     #[returns(ref)]
     pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
 
-    /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)]).
+    /// Struct field definitions keyed by nominal declaration identity.
     #[returns(ref)]
-    pub struct_fields: Vec<(Symbol, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
+    pub struct_fields: Vec<(TypeDefId<'db>, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
 
     /// Enum variant information: enum_name → [variant_names].
     #[returns(ref)]

@@ -15,6 +15,13 @@
 | 중복 label | 금지 | 허용 (런타임 모호성) |
 | 암묵적 polymorphism | `fn(a) -> b` = `fn(a) ->{e} b` | 항상 명시 |
 
+### Nominal Type Equality
+
+Named types unify only when their resolved declaration identities match and
+their type arguments unify pairwise. The source spelling is diagnostic
+presentation, not semantic identity. Substitution and generalization preserve
+the declaration identity of every named type.
+
 ---
 
 ## Effect Row Syntax

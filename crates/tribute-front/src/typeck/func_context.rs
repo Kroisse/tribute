@@ -682,12 +682,32 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         self.env.named_type(name, args)
     }
+
+    /// Create a named type using lexical module lookup.
+    pub fn named_type_in_scope(
+        &self,
+        name: Symbol,
+        args: Vec<Type<'db>>,
+        prefix: &str,
+    ) -> Type<'db> {
+        self.env.named_type_in_scope(name, args, prefix)
+    }
+
+    /// Create a named type while preserving its resolved declaration identity.
+    pub fn named_type_with_id(
+        &self,
+        id: crate::ast::TypeDefId<'db>,
+        name: Symbol,
+        args: Vec<Type<'db>>,
+    ) -> Type<'db> {
+        self.env.named_type_with_id(id, name, args)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::TypeParam;
+    use crate::ast::{TypeDefId, TypeParam};
     use salsa_test_macros::salsa_test;
 
     /// Create a type parameter with just a name.
@@ -995,6 +1015,7 @@ mod tests {
         let result_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, type_name),
                 name: type_name,
                 args: vec![bound_var],
             },
@@ -1047,12 +1068,12 @@ mod tests {
             }
 
             // Results should be Named types with the UniVar as argument
-            let r1_ok = if let TypeKind::Named { name, args } = r1.kind(db) {
+            let r1_ok = if let TypeKind::Named { name, args, .. } = r1.kind(db) {
                 *name == type_name && args.len() == 1 && args[0] == p1[0]
             } else {
                 false
             };
-            let r2_ok = if let TypeKind::Named { name, args } = r2.kind(db) {
+            let r2_ok = if let TypeKind::Named { name, args, .. } = r2.kind(db) {
                 *name == type_name && args.len() == 1 && args[0] == p2[0]
             } else {
                 false

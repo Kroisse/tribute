@@ -58,7 +58,7 @@ pub fn substitute_bound_vars<'db>(
                 }
             }
         }
-        TypeKind::Named { name, args } => {
+        TypeKind::Named { id, name, args } => {
             let mut new_args = Vec::with_capacity(args.len());
             for arg in args {
                 match substitute_bound_vars(db, *arg, subst) {
@@ -69,6 +69,7 @@ pub fn substitute_bound_vars<'db>(
             SubstResult::Ok(Type::new(
                 db,
                 TypeKind::Named {
+                    id: *id,
                     name: *name,
                     args: new_args,
                 },
@@ -286,9 +287,10 @@ fn freshen_effect_vars_inner<'db>(
         };
 
     match ty.kind(db) {
-        TypeKind::Named { name, args } => Type::new(
+        TypeKind::Named { id, name, args } => Type::new(
             db,
             TypeKind::Named {
+                id: *id,
                 name: *name,
                 args: args
                     .iter()
@@ -411,7 +413,7 @@ fn freshen_effect_vars_inner<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, EffectRow};
+    use crate::ast::{AbilityId, CallingConvention, EffectRow, TypeDefId};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -506,6 +508,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![bound_var],
             },
@@ -518,6 +521,7 @@ mod tests {
         let expected = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -590,6 +594,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![bound_var],
             },

@@ -2,7 +2,7 @@ use std::fmt;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Type, TypeKind};
+use crate::ast::{Type, TypeDefId, TypeKind};
 
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
@@ -26,6 +26,20 @@ pub fn mangle_name(db: &dyn salsa::Database, base: Symbol, type_args: &[Type<'_>
     Symbol::from_dynamic(&buf)
 }
 
+pub fn mangle_type_name(
+    db: &dyn salsa::Database,
+    id: TypeDefId<'_>,
+    name: Symbol,
+    type_args: &[Type<'_>],
+) -> Symbol {
+    mangle_name(db, nominal_mangle_base(db, id, name), type_args)
+}
+
+fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
+    let qualified = id.qualified(db);
+    if qualified == name { name } else { qualified }
+}
+
 fn write_type_mangled(
     db: &dyn salsa::Database,
     ty: Type<'_>,
@@ -40,8 +54,8 @@ fn write_type_mangled(
         TypeKind::Rune => f.write_str("Rune"),
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
-        TypeKind::Named { name, args } => {
-            name.with_str(|s| f.write_str(s))?;
+        TypeKind::Named { id, name, args } => {
+            nominal_mangle_base(db, *id, *name).with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
                 f.write_str("$0$")?;
                 write_type_mangled_list(db, args, f)?;
@@ -121,6 +135,7 @@ mod tests {
         let text_ty = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -137,6 +152,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -153,6 +169,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -160,12 +177,54 @@ mod tests {
         let list_option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![option_int],
             },
         );
         let result = mangle_name(&db, base, &[list_option_int]);
         assert_eq!(result.to_string(), "f$List$0$Option$0$Int$1$1");
+    }
+
+    #[test]
+    fn test_same_spelled_source_types_mangle_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("identity");
+        let name = Symbol::new("Thing");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let a_thing = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    Symbol::new("A::Thing"),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name,
+                args: vec![int_ty],
+            },
+        );
+        let b_thing = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    Symbol::new("B::Thing"),
+                    crate::ast::NodeId::from_raw(2),
+                ),
+                name,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            mangle_name(&db, base, &[a_thing]).to_string(),
+            "identity$A::Thing$0$Int$1"
+        );
+        assert_eq!(
+            mangle_name(&db, base, &[b_thing]).to_string(),
+            "identity$B::Thing$0$Int$1"
+        );
     }
 
     #[test]
@@ -176,6 +235,7 @@ mod tests {
         let text_ty = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
                 name: Symbol::new("Text"),
                 args: vec![],
             },
@@ -183,6 +243,7 @@ mod tests {
         let pair = Type::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Pair")),
                 name: Symbol::new("Pair"),
                 args: vec![int_ty, text_ty],
             },

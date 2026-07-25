@@ -178,12 +178,19 @@ impl<'db> TypeSubst<'db> {
                     ty
                 }
             }
-            TypeKind::Named { name, args } => {
+            TypeKind::Named { id, name, args } => {
                 let args = args
                     .iter()
                     .map(|a| self.apply_with_rows(db, *a, row_subst))
                     .collect();
-                Type::new(db, TypeKind::Named { name: *name, args })
+                Type::new(
+                    db,
+                    TypeKind::Named {
+                        id: *id,
+                        name: *name,
+                        args,
+                    },
+                )
             }
             TypeKind::Func {
                 params,
@@ -466,7 +473,7 @@ impl<'db> TypeSubst<'db> {
                     ty
                 }
             }
-            TypeKind::Named { name, args } => {
+            TypeKind::Named { id, name, args } => {
                 let new_args: Vec<_> = args
                     .iter()
                     .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
@@ -474,6 +481,7 @@ impl<'db> TypeSubst<'db> {
                 Type::new(
                     db,
                     TypeKind::Named {
+                        id: *id,
                         name: *name,
                         args: new_args,
                     },
@@ -823,15 +831,17 @@ impl<'db> TypeSolver<'db> {
             // Structural unification for compound types
             (
                 &TypeKind::Named {
-                    name: n1,
+                    id: i1,
                     args: ref a1,
+                    ..
                 },
                 &TypeKind::Named {
-                    name: n2,
+                    id: i2,
                     args: ref a2,
+                    ..
                 },
             ) => {
-                if n1 != n2 || a1.len() != a2.len() {
+                if i1 != i2 || a1.len() != a2.len() {
                     return Err(SolveError::TypeMismatch {
                         expected: t1,
                         actual: t2,
@@ -1295,8 +1305,15 @@ impl<'db> TypeSolver<'db> {
             | (TypeKind::Bytes, TypeKind::Bytes)
             | (TypeKind::Rune, TypeKind::Rune)
             | (TypeKind::Nil, TypeKind::Nil) => true,
-            (TypeKind::Named { name: n1, args: a1 }, TypeKind::Named { name: n2, args: a2 }) => {
-                n1 == n2
+            (
+                TypeKind::Named {
+                    id: i1, args: a1, ..
+                },
+                TypeKind::Named {
+                    id: i2, args: a2, ..
+                },
+            ) => {
+                i1 == i2
                     && a1.len() == a2.len()
                     && a1
                         .iter()
@@ -1469,7 +1486,7 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, Effect, EffectRow, UniVarSource};
+    use crate::ast::{AbilityId, Effect, EffectRow, TypeDefId, UniVarSource};
     use trunk_ir::Symbol;
 
     fn test_db() -> salsa::DatabaseImpl {
@@ -1548,6 +1565,7 @@ mod tests {
         let list_ty = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![var_ty],
             },
@@ -1855,6 +1873,7 @@ mod tests {
         let list_var = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![var_ty],
             },
@@ -1862,6 +1881,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -1884,6 +1904,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -1891,6 +1912,7 @@ mod tests {
         let option_int = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option")),
                 name: trunk_ir::Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -1898,6 +1920,43 @@ mod tests {
 
         let result = solver.unify_types(list_int, option_int);
         assert!(matches!(result, Err(SolveError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn test_unify_named_types_rejects_same_spelling_with_different_identity() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+        let name = Symbol::new("Thing");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let first = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::source(
+                    &db,
+                    Symbol::new("A::Thing"),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name,
+                args: vec![int_ty],
+            },
+        );
+        let second = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::source(
+                    &db,
+                    Symbol::new("B::Thing"),
+                    crate::ast::NodeId::from_raw(2),
+                ),
+                name,
+                args: vec![int_ty],
+            },
+        );
+
+        assert!(matches!(
+            solver.unify_types(first, second),
+            Err(SolveError::TypeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -1911,6 +1970,7 @@ mod tests {
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },
@@ -1991,6 +2051,7 @@ mod tests {
         let list_never = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![never_ty],
             },
@@ -1998,6 +2059,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2819,6 +2881,7 @@ mod tests {
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },
@@ -2826,6 +2889,7 @@ mod tests {
         let option_ctor = Type::new(
             &db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option")),
                 name: trunk_ir::Symbol::new("Option"),
                 args: vec![],
             },

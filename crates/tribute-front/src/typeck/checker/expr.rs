@@ -853,16 +853,19 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Extract struct name and type arguments from a type.
+    /// Extract struct declaration identity and type arguments from a type.
     ///
-    /// Returns (Some(struct_name), type_args) if the type is a Named or App type,
+    /// Returns (Some(struct_id), type_args) if the type is a Named or App type,
     /// otherwise (None, empty vec).
-    fn extract_struct_info(&self, ty: Type<'db>) -> (Option<Symbol>, Vec<Type<'db>>) {
+    fn extract_struct_info(
+        &self,
+        ty: Type<'db>,
+    ) -> (Option<crate::ast::TypeDefId<'db>>, Vec<Type<'db>>) {
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args } => (Some(*name), args.clone()),
+            TypeKind::Named { id, args, .. } => (Some(*id), args.clone()),
             TypeKind::App { ctor, args } => {
-                if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
-                    (Some(*name), args.clone())
+                if let TypeKind::Named { id, .. } = ctor.kind(self.db()) {
+                    (Some(*id), args.clone())
                 } else {
                     (None, vec![])
                 }
@@ -881,7 +884,7 @@ impl<'db> TypeChecker<'db> {
     ) -> Type<'db> {
         let list_sym = Symbol::new("List");
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args } if *name == list_sym && args.len() == 1 => args[0],
+            TypeKind::Named { name, args, .. } if *name == list_sym && args.len() == 1 => args[0],
             TypeKind::App { ctor, args } if args.len() == 1 => {
                 if let TypeKind::Named { name, .. } = ctor.kind(self.db())
                     && *name == list_sym
@@ -900,11 +903,11 @@ impl<'db> TypeChecker<'db> {
     fn lookup_field_type_from_struct(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        struct_name: Symbol,
+        struct_id: crate::ast::TypeDefId<'db>,
         field_name: Symbol,
         type_args: &[Type<'db>],
     ) -> Option<Type<'db>> {
-        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_id, field_name)?;
         if type_params.is_empty() || type_args.is_empty() {
             Some(field_ty)
         } else {
@@ -922,13 +925,13 @@ impl<'db> TypeChecker<'db> {
         receiver_ty: Type<'db>,
         field_name: Symbol,
     ) -> Option<Type<'db>> {
-        // Extract struct name from receiver type
-        let struct_name = match receiver_ty.kind(self.db()) {
-            TypeKind::Named { name, .. } => *name,
+        // Extract struct declaration identity from receiver type.
+        let struct_id = match receiver_ty.kind(self.db()) {
+            TypeKind::Named { id, .. } => *id,
             TypeKind::App { ctor, .. } => {
                 // Recursively extract from constructor
                 match ctor.kind(self.db()) {
-                    TypeKind::Named { name, .. } => *name,
+                    TypeKind::Named { id, .. } => *id,
                     _ => return None,
                 }
             }
@@ -940,7 +943,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Look up field in ModuleTypeEnv
-        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_id, field_name)?;
 
         // Substitute BoundVars with actual type arguments if any
         let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
@@ -1445,11 +1448,11 @@ impl<'db> TypeChecker<'db> {
             }
             PatternKind::Record { fields, .. } => {
                 let resolved_ty = resolve(ty);
-                let (struct_name, type_args) = self.extract_struct_info(resolved_ty);
+                let (struct_id, type_args) = self.extract_struct_info(resolved_ty);
                 for field in fields {
-                    let field_ty = struct_name
-                        .and_then(|name| {
-                            self.lookup_field_type_from_struct(ctx, name, field.name, &type_args)
+                    let field_ty = struct_id
+                        .and_then(|id| {
+                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
                         })
                         .map(resolve)
                         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -1606,12 +1609,12 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Record { fields, .. } => {
-                let (struct_name, type_args) = self.extract_struct_info(ty);
+                let (struct_id, type_args) = self.extract_struct_info(ty);
 
                 for field in fields {
-                    let field_ty = struct_name
-                        .and_then(|name| {
-                            self.lookup_field_type_from_struct(ctx, name, field.name, &type_args)
+                    let field_ty = struct_id
+                        .and_then(|id| {
+                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
                         })
                         .unwrap_or_else(|| ctx.fresh_type_var());
 
@@ -1826,14 +1829,14 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => {
-                let (struct_name, type_args) = self.extract_struct_info(expected);
+                let (struct_id, type_args) = self.extract_struct_info(expected);
 
                 let converted_fields = fields
                     .into_iter()
                     .map(|f| {
-                        let field_expected = struct_name
-                            .and_then(|name| {
-                                self.lookup_field_type_from_struct(ctx, name, f.name, &type_args)
+                        let field_expected = struct_id
+                            .and_then(|id| {
+                                self.lookup_field_type_from_struct(ctx, id, f.name, &type_args)
                             })
                             .unwrap_or_else(|| ctx.fresh_type_var());
 
@@ -2090,8 +2093,6 @@ impl<'db> TypeChecker<'db> {
                     ctx.float_type()
                 } else if *name == "Bool" {
                     ctx.bool_type()
-                } else if *name == "String" {
-                    ctx.string_type()
                 } else if *name == "Bytes" {
                     ctx.bytes_type()
                 } else if *name == "Rune" {
@@ -2101,24 +2102,24 @@ impl<'db> TypeChecker<'db> {
                 } else if *name == "Never" {
                     ctx.never_type()
                 } else {
-                    ctx.named_type(*name, vec![])
+                    ctx.named_type_in_scope(*name, vec![], self.current_prefix())
                 }
             }
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    ctx.named_type(name, vec![])
+                    ctx.named_type_in_scope(name, vec![], self.current_prefix())
                 } else {
                     ctx.error_type()
                 }
             }
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_with_ctx(ctx, ctor);
-                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
                         .map(|a| self.annotation_to_type_with_ctx(ctx, a))
                         .collect();
-                    ctx.named_type(*name, arg_types)
+                    ctx.named_type_with_id(*id, *name, arg_types)
                 } else {
                     ctx.error_type()
                 }
@@ -2403,7 +2404,8 @@ mod tests {
     use trunk_ir::Symbol;
 
     use crate::ast::{
-        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeKind,
+        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeDefId,
+        TypeKind,
     };
     use crate::typeck::{FunctionInferenceContext, ModuleTypeEnv};
 
@@ -2469,7 +2471,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Should be Named { name: "MyType", args: [] }
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("MyType"));
             assert!(args.is_empty());
         } else {
@@ -2490,7 +2492,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Qualified type identity preserves the complete path.
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("std::Option"));
             assert!(args.is_empty());
         } else {
@@ -2516,7 +2518,7 @@ mod tests {
         let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
 
         // Should be Named { name: "List", args: [Int] }
-        if let TypeKind::Named { name, args } = ty.kind(db) {
+        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
             assert_eq!(*name, Symbol::new("List"));
             assert_eq!(args.len(), 1);
             assert_eq!(args[0], Type::new(db, TypeKind::Int));
@@ -2615,7 +2617,7 @@ mod tests {
         if let TypeKind::Tuple(elems) = ty.kind(db) {
             assert_eq!(elems.len(), 2);
             assert_eq!(elems[0], Type::new(db, TypeKind::Int));
-            assert_eq!(elems[1], Type::new(db, TypeKind::string()));
+            assert_eq!(elems[1], Type::new(db, TypeKind::string(db)));
         } else {
             panic!("Tuple annotation should be Tuple type");
         }
@@ -2758,6 +2760,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2774,10 +2777,11 @@ mod tests {
         let mut ctx = make_test_ctx(db, &env);
 
         // List<String> → String
-        let string_ty = Type::new(db, TypeKind::string());
+        let string_ty = Type::new(db, TypeKind::string(db));
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![string_ty],
             },
@@ -2817,6 +2821,7 @@ mod tests {
         let option_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, Symbol::new("Option")),
                 name: Symbol::new("Option"),
                 args: vec![int_ty],
             },
@@ -2842,6 +2847,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![],
             },
@@ -2868,6 +2874,7 @@ mod tests {
         let inner_list = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2875,6 +2882,7 @@ mod tests {
         let outer_list = Type::new(
             db,
             TypeKind::Named {
+                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![inner_list],
             },

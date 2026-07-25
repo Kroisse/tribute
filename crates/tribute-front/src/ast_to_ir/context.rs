@@ -863,6 +863,7 @@ mod tests {
         let ty = AstType::new(
             &db,
             TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
