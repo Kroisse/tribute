@@ -325,10 +325,7 @@ fn main() {
     assert_native_output("abort_multiple_handles.trb", code, "30");
 }
 
-/// Test conditional abort with case expression (codegen limitation).
-///
-/// When `case` branches have different types (Never vs Nat), Cranelift
-/// codegen currently has a type mismatch. This test is ignored until fixed.
+/// Test conditional abort with case branches returning `Never` and `Nat`.
 #[test]
 fn test_abort_conditional() {
     let code = r#"ability Abort {
@@ -479,7 +476,6 @@ fn main() {
 /// `pure_value()` returns 10 with no effects. The handler's result arm
 /// doubles it: result + result = 20.
 #[test]
-#[ignore = "TDNR reports unresolved method '+' in do handler arm (#617)"]
 fn test_handler_transforms_result() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -500,6 +496,33 @@ fn main() {
 }
 "#;
     assert_native_output("handler_transforms_result.trb", code, "20");
+}
+
+/// Test a result transformation after resuming an effectful operation.
+///
+/// `effectful_value()` resumes twice with 10, producing 21, and the result arm
+/// doubles it. This exercises nested ability operations in both a let initializer
+/// and the final value, then verifies result TDNR and native execution.
+#[test]
+fn test_handler_transforms_resumed_result() {
+    let code = r#"ability State(s) {
+    op get() -> s
+}
+
+fn effectful_value() ->{State(Nat)} Nat {
+    let first = State::get() + 1
+    first + State::get()
+}
+
+fn main() {
+    let result = handle effectful_value() {
+        do result { result + result }
+        op State::get() { resume 10 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_transforms_resumed_result.trb", code, "42");
 }
 
 // =============================================================================
