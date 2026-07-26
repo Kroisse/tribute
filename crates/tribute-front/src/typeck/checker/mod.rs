@@ -158,6 +158,19 @@ impl<'db> TypeChecker<'db> {
         self.check_module_inner_for_prelude(module)
     }
 
+    /// Type check the prelude when its typed declarations are needed directly.
+    pub fn check_module_as_prelude(
+        mut self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> ModuleCheckResult<'db> {
+        self.collect_declarations(&module);
+        let string_type = self.prelude_well_known_type(&module, StringType);
+        self.env.set_well_known_types(WellKnownTypes {
+            string: string_type,
+        });
+        self.check_collected_module(module)
+    }
+
     /// Internal implementation for module type checking.
     ///
     /// Uses per-function type inference:
@@ -170,6 +183,13 @@ impl<'db> TypeChecker<'db> {
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
         self.collect_declarations(&module);
+        self.check_collected_module(module)
+    }
+
+    fn check_collected_module(
+        mut self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> ModuleCheckResult<'db> {
         // Phase 2: Type check each declaration with per-function inference
         // Each function gets its own FunctionInferenceContext with isolated constraints
         let decls: Vec<Decl<TypedRef<'db>>> = module
@@ -216,6 +236,9 @@ impl<'db> TypeChecker<'db> {
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
         let string_type = self.prelude_well_known_type(&module, StringType);
+        self.env.set_well_known_types(WellKnownTypes {
+            string: string_type,
+        });
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module

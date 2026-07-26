@@ -421,6 +421,11 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
+    /// Register the prelude types that receive compiler-defined treatment.
+    pub fn set_well_known_types(&mut self, well_known_types: super::WellKnownTypes<'db>) {
+        self.well_known_types = well_known_types;
+    }
+
     // =========================================================================
     // Export methods
     // =========================================================================

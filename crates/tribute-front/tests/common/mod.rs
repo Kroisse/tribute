@@ -51,7 +51,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 
     // Type-check to get typed module (for TDNR imports)
     let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let result2 = checker2.check_module(resolved_prelude);
+    let result2 = checker2.check_module_as_prelude(resolved_prelude);
 
     Some(PreludeData {
         exports,
