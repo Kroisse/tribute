@@ -2,11 +2,84 @@
 
 mod common;
 
-use common::compile_and_run_native;
+use common::compile_and_run_native_asan;
+
+#[test]
+fn public_int_to_string_formats_zero() {
+    let output = compile_and_run_native_asan(
+        "int_text_format_zero.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(+0))
+}
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+}
+
+#[test]
+fn public_int_parse_handles_zero() {
+    let output = compile_and_run_native_asan(
+        "int_text_parse_zero.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    case Int::parse("0") {
+        Ok(value) -> print_line(Int::to_string(value))
+        Error(_) -> print_line("error")
+    }
+}
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+}
+
+#[test]
+fn result_int_value_can_flow_to_public_int_to_string() {
+    let output = compile_and_run_native_asan(
+        "result_int_to_string.trb",
+        r#"
+use std::io::{Io, print_line}
+
+enum LocalError { Failed }
+
+fn parsed() -> Result(Int, LocalError) { Ok(+0) }
+
+fn main() ->{Io} Nil {
+    case parsed() {
+        Ok(value) -> print_line(Int::to_string(value))
+        Error(_) -> print_line("error")
+    }
+}
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+}
 
 #[test]
 fn public_int_text_api_covers_decimal_contract_and_boundaries() {
-    let output = compile_and_run_native(
+    let output = compile_and_run_native_asan(
         "int_text_public_api.trb",
         r#"
 use std::io::{Io, print_line}

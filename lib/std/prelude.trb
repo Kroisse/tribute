@@ -153,19 +153,19 @@ pub mod Int {
     extern "intrinsic" fn (>)(left: Int, right: Int) -> Bool
     extern "intrinsic" fn (>=)(left: Int, right: Int) -> Bool
 
-    fn decimal_digit(byte: Nat) -> Option(Int) {
+    fn decimal_digit_or_invalid(byte: Nat) -> Int {
         case byte {
-            48 -> Some(+0)
-            49 -> Some(+1)
-            50 -> Some(+2)
-            51 -> Some(+3)
-            52 -> Some(+4)
-            53 -> Some(+5)
-            54 -> Some(+6)
-            55 -> Some(+7)
-            56 -> Some(+8)
-            57 -> Some(+9)
-            _ -> None
+            48 -> +0
+            49 -> +1
+            50 -> +2
+            51 -> +3
+            52 -> +4
+            53 -> +5
+            54 -> +6
+            55 -> +7
+            56 -> +8
+            57 -> +9
+            _ -> -1
         }
     }
 
@@ -200,18 +200,21 @@ pub mod Int {
                 True -> Error(Int::ParseError::OutOfRange)
                 False -> Ok(value)
             }
-            False -> case Int::decimal_digit(bytes.get_or_panic(index)) {
-                None -> Error(Int::ParseError::InvalidSyntax)
-                Some(digit) -> case overflowed {
-                    True -> Int::parse_digits(bytes, index + 1, value, negative, True)
-                    False -> case Int::decimal_step_overflows(value, digit, negative) {
+            False -> {
+                let digit = Int::decimal_digit_or_invalid(bytes.get_or_panic(index))
+                case digit < +0 {
+                    True -> Error(Int::ParseError::InvalidSyntax)
+                    False -> case overflowed {
                         True -> Int::parse_digits(bytes, index + 1, value, negative, True)
-                        False -> {
-                            let next = case negative {
-                                True -> value * +10 - digit
-                                False -> value * +10 + digit
+                        False -> case Int::decimal_step_overflows(value, digit, negative) {
+                            True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                            False -> {
+                                let next = case negative {
+                                    True -> value * +10 - digit
+                                    False -> value * +10 + digit
+                                }
+                                Int::parse_digits(bytes, index + 1, next, negative, False)
                             }
-                            Int::parse_digits(bytes, index + 1, next, negative, False)
                         }
                     }
                 }

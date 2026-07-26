@@ -15,7 +15,10 @@ use trunk_ir::types::{Attribute, Location};
 use crate::ast::{Arm, Expr, LiteralPattern, Pattern, PatternKind, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
-use super::{IrBuilder, get_or_create_tuple_type, is_irrefutable_pattern, resolve_enum_type_attr};
+use super::{
+    IrBuilder, get_or_create_tuple_type, is_irrefutable_pattern,
+    resolve_enum_type_attr_for_constructor,
+};
 
 fn lower_case_region_expr_with_local_done_k<'db>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -164,7 +167,12 @@ fn emit_pattern_check<'db>(
             // Test if scrutinee is of the specific variant
             let (variant_name, enum_ty) = match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
-                    let ty = resolve_enum_type_attr(builder.ctx, builder.ir, ctor.ty);
+                    let ty = resolve_enum_type_attr_for_constructor(
+                        builder.ctx,
+                        builder.ir,
+                        &ctor.resolved,
+                        ctor.ty,
+                    );
                     (*variant, ty)
                 }
                 _ => {
@@ -685,7 +693,8 @@ pub(super) fn bind_pattern_fields<'db>(
         PatternKind::Variant { ctor, fields } => {
             let (variant_name, enum_ty) = match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
-                    let ty = resolve_enum_type_attr(ctx, ir, ctor.ty);
+                    let ty =
+                        resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
                     (*variant, ty)
                 }
                 _ => unreachable!("non-constructor in variant pattern: {:?}", ctor.resolved),
