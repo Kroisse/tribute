@@ -32,12 +32,14 @@ fn generic_constructor_boxes_int_for_its_specialized_layout(db: &salsa::Database
         "generic_constructor_int.trb",
         r#"
 enum Boxed(a) {
+    Empty,
     Box(a),
 }
 
 fn format_box(value: Int) -> String {
     case Box(value) {
         Box(inner) -> Int::to_string(inner)
+        Empty -> "empty"
     }
 }
 "#,
