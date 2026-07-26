@@ -123,11 +123,19 @@ impl<'db> FuncDefId<'db> {
     }
 }
 
+/// Compiler-owned nominal types whose identity cannot be supplied by source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub enum BuiltinType {
+    List,
+}
+
 /// The origin of a nominal type definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum TypeOrigin {
     /// A source declaration, identified independently of its spelling.
     Source(NodeId),
+    /// A compiler-owned nominal type.
+    Builtin(BuiltinType),
     /// A synthetic identity used by isolated tests and pre-resolution helpers.
     Synthetic,
 }
@@ -136,8 +144,8 @@ pub enum TypeOrigin {
 ///
 /// TypeDefId identifies the type definition itself, not its constructors.
 ///
-/// Different source declarations remain distinct even when their display names
-/// are identical.
+/// Source and compiler-owned types remain distinct even when their display
+/// names are identical.
 #[salsa::interned(debug)]
 pub struct TypeDefId<'db> {
     pub origin: TypeOrigin,
@@ -154,8 +162,20 @@ impl<'db> TypeDefId<'db> {
         Self::new(db, TypeOrigin::Synthetic, qualified)
     }
 
+    pub fn builtin_list(db: &'db dyn salsa::Database) -> Self {
+        Self::new(
+            db,
+            TypeOrigin::Builtin(BuiltinType::List),
+            Symbol::new("List"),
+        )
+    }
+
     pub fn with_qualified(self, db: &'db dyn salsa::Database, qualified: Symbol) -> Self {
         Self::new(db, self.origin(db), qualified)
+    }
+
+    pub fn is_builtin_list(self, db: &'db dyn salsa::Database) -> bool {
+        self.origin(db) == TypeOrigin::Builtin(BuiltinType::List)
     }
 
     /// Returns the unqualified type name (last segment).

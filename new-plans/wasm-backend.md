@@ -114,6 +114,15 @@ analysis and its `i32` pointer plus `literal_len` representation are not part of
 the backend boundary; string literals remain canonical `String` values until
 the standard-library I/O wrapper explicitly converts them to `Bytes`.
 
+### Private List layout
+
+WasmGC must lower the same representation-independent `list.*` sequence
+operations to a target-private GC layout and eliminate them before the
+backend-ready boundary. It is not required to share native's linked-node/null
+layout. The M1 native implementation and compile-only shared frontend evidence
+do not by themselves establish Wasm compilation or execution support; capability
+claims require focused Wasm evidence.
+
 ---
 
 ## WasmGC 타입 처리

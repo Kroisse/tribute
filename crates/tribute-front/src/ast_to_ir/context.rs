@@ -103,6 +103,10 @@ pub struct IrLoweringCtx<'db> {
 }
 
 impl<'db> IrLoweringCtx<'db> {
+    pub(crate) fn db(&self) -> &'db dyn salsa::Database {
+        self.db
+    }
+
     /// Create a new IR lowering context.
     pub fn new(
         db: &'db dyn salsa::Database,
@@ -863,7 +867,7 @@ mod tests {
         let ty = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: crate::ast::TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },

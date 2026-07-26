@@ -795,6 +795,24 @@ mod tests {
     }
 
     #[test]
+    fn test_type_rewrite_map_keeps_builtin_and_source_list_distinct() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let builtin_id = TypeDefId::builtin_list(&db);
+        let source_id =
+            TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
+        let mut instantiations = HashMap::new();
+        instantiations.insert(builtin_id, HashSet::from([vec![int]]));
+        instantiations.insert(source_id, HashSet::from([vec![int]]));
+
+        let map = build_type_rewrite_map(&db, &instantiations);
+
+        assert_eq!(map.len(), 2);
+        assert_eq!(map[&builtin_id][0].1.to_string(), "BuiltinList$Int");
+        assert_eq!(map[&source_id][0].1.to_string(), "List$Int");
+    }
+
+    #[test]
     fn test_type_rewrite_map_keeps_same_spelled_source_types_distinct() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);

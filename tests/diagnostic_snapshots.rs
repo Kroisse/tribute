@@ -102,6 +102,71 @@ fn test() -> Int {
 }
 
 #[salsa_test]
+fn diag_heterogeneous_list_literal(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn values() -> List(Nat) {
+    [1, True]
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_canonical_list_literal_does_not_match_shadowing_source_list(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum List(a) {
+    UserList(a),
+}
+
+fn source_value() -> List(Nat) {
+    UserList(1)
+}
+
+fn value() -> Nat {
+    case [1] {
+        [] -> 0
+        [head, ..tail] -> head
+    }
+}
+
+fn bad() -> List(Nat) {
+    [1]
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_non_exhaustive_list_patterns(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn first(xs: List(Nat)) -> Nat {
+    case xs {
+        [head, ..tail] -> head
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

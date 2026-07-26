@@ -1,13 +1,13 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
-assertion_line: 451
 expression: result
 ---
 core.module @test {
-  func.func @test_fn() -> core.i1 {
+  func.func @test_fn() -> core.i32 {
       %0 = clif.iconst {value = 42} : core.ptr
       %1 = clif.iconst {value = 0} : core.ptr
-      %2 = clif.icmp %0, %1 {cond = @eq} : core.i1
-      func.return %2
+      %2 = clif.icmp %0, %1 {cond = @eq} : core.i8
+      %3 = clif.uextend %2 : core.i32
+      func.return %3
   }
 }

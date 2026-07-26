@@ -446,7 +446,7 @@ impl<'db> TypeChecker<'db> {
                     let ty = self.infer_expr_type_with_ctx(ctx, elem);
                     ctx.constrain_eq(ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
             }
             ExprKind::Resume { arg, local_id } => {
                 let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
@@ -634,6 +634,21 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(outer_effect);
 
                 ctx.func_type(param_types, body_ty, inferred_effect)
+            }
+            ExprKind::Tuple(elems) => {
+                let elem_tys = elems
+                    .iter()
+                    .map(|elem| self.infer_expr_type_with_ctx(ctx, elem))
+                    .collect();
+                ctx.tuple_type(elem_tys)
+            }
+            ExprKind::List(elems) => {
+                let elem_ty = ctx.fresh_type_var();
+                for elem in elems {
+                    let ty = self.infer_expr_type_with_ctx(ctx, elem);
+                    ctx.constrain_eq(ty, elem_ty);
+                }
+                ctx.canonical_list_type(elem_ty)
             }
             _ => ctx.fresh_type_var(),
         }
@@ -883,12 +898,15 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
     ) -> Type<'db> {
-        let list_sym = Symbol::new("List");
         match ty.kind(self.db()) {
-            TypeKind::Named { name, args, .. } if *name == list_sym && args.len() == 1 => args[0],
+            TypeKind::Named { id, args, .. }
+                if id.is_builtin_list(self.db()) && args.len() == 1 =>
+            {
+                args[0]
+            }
             TypeKind::App { ctor, args } if args.len() == 1 => {
-                if let TypeKind::Named { name, .. } = ctor.kind(self.db())
-                    && *name == list_sym
+                if let TypeKind::Named { id, .. } = ctor.kind(self.db())
+                    && id.is_builtin_list(self.db())
                 {
                     return args[0];
                 }
@@ -1546,7 +1564,7 @@ impl<'db> TypeChecker<'db> {
                     let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
             }
             PatternKind::ListRest { head, .. } => {
                 let elem_ty = ctx.fresh_type_var();
@@ -1554,7 +1572,7 @@ impl<'db> TypeChecker<'db> {
                     let pat_ty = self.infer_pattern_type_with_ctx(ctx, pat);
                     ctx.constrain_eq(pat_ty, elem_ty);
                 }
-                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+                ctx.canonical_list_type(elem_ty)
             }
             PatternKind::Record { type_name, .. } => {
                 if let Some(type_ref) = type_name {
@@ -1644,7 +1662,7 @@ impl<'db> TypeChecker<'db> {
                 }
                 if let Some(local_id) = rest_local_id {
                     // The rest is also a list of the same element type
-                    let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                    let list_ty = ctx.canonical_list_type(elem_ty);
                     ctx.bind_local(*local_id, list_ty);
                 }
             }
@@ -1866,7 +1884,7 @@ impl<'db> TypeChecker<'db> {
             }
             PatternKind::List(patterns) => {
                 let elem_ty = ctx.fresh_type_var();
-                let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                let list_ty = ctx.canonical_list_type(elem_ty);
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::List(
                     patterns
@@ -1881,7 +1899,7 @@ impl<'db> TypeChecker<'db> {
                 rest_local_id,
             } => {
                 let elem_ty = ctx.fresh_type_var();
-                let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                let list_ty = ctx.canonical_list_type(elem_ty);
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::ListRest {
                     head: head
@@ -2202,6 +2220,24 @@ impl<'db> TypeChecker<'db> {
             return; // Exhaustive via catch-all
         }
 
+        if matches!(
+            scrutinee_ty.kind(self.db()),
+            TypeKind::Named { id, .. } if id.is_builtin_list(self.db())
+        ) {
+            if self.list_patterns_are_exhaustive(arms) {
+                return;
+            }
+            let span = self.get_span(span_node_id);
+            Diagnostic::new(
+                "non-exhaustive case expression: list patterns do not cover all lengths",
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+            return;
+        }
+
         // Extract the enum name from the scrutinee type
         let enum_name = match scrutinee_ty.kind(self.db()) {
             TypeKind::Named { name, .. } => *name,
@@ -2303,6 +2339,52 @@ impl<'db> TypeChecker<'db> {
             PatternKind::As { pattern, .. } => self.is_catch_all_pattern(pattern),
             _ => false,
         }
+    }
+
+    fn list_patterns_are_exhaustive(&self, arms: &[Arm<TypedRef<'db>>]) -> bool {
+        let mut exact_lengths = HashSet::new();
+        let mut prefix_lengths = Vec::new();
+
+        for arm in arms.iter().filter(|arm| arm.guard.is_none()) {
+            match &*arm.pattern.kind {
+                PatternKind::List(elements)
+                    if elements
+                        .iter()
+                        .all(|element| self.is_catch_all_pattern(element)) =>
+                {
+                    exact_lengths.insert(elements.len());
+                }
+                PatternKind::ListRest { head, .. }
+                    if head
+                        .iter()
+                        .all(|element| self.is_catch_all_pattern(element)) =>
+                {
+                    prefix_lengths.push(head.len());
+                }
+                PatternKind::As { pattern, .. } => match &*pattern.kind {
+                    PatternKind::List(elements)
+                        if elements
+                            .iter()
+                            .all(|element| self.is_catch_all_pattern(element)) =>
+                    {
+                        exact_lengths.insert(elements.len());
+                    }
+                    PatternKind::ListRest { head, .. }
+                        if head
+                            .iter()
+                            .all(|element| self.is_catch_all_pattern(element)) =>
+                    {
+                        prefix_lengths.push(head.len());
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        prefix_lengths
+            .into_iter()
+            .any(|minimum| (0..minimum).all(|length| exact_lengths.contains(&length)))
     }
 
     /// Collect variant names covered by a pattern.
@@ -2932,7 +3014,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2953,7 +3035,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![string_ty],
             },
@@ -2961,6 +3043,32 @@ mod tests {
 
         let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
         assert_eq!(elem_ty, string_ty);
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_from_app(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let list_ctor = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(db),
+                name: Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let list_ty = Type::new(
+            db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(checker.extract_list_element_type(list_ty, &mut ctx), int_ty);
     }
 
     #[salsa_test]
@@ -3019,7 +3127,7 @@ mod tests {
         let list_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![],
             },
@@ -3046,7 +3154,7 @@ mod tests {
         let inner_list = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -3054,7 +3162,7 @@ mod tests {
         let outer_list = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(db),
                 name: Symbol::new("List"),
                 args: vec![inner_list],
             },

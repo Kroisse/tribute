@@ -1565,7 +1565,7 @@ mod tests {
         let list_ty = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![var_ty],
             },
@@ -1873,7 +1873,7 @@ mod tests {
         let list_var = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![var_ty],
             },
@@ -1881,7 +1881,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -1904,7 +1904,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -1923,7 +1923,36 @@ mod tests {
     }
 
     #[test]
-    fn test_unify_named_types_rejects_same_spelling_with_different_identity() {
+    fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+        let name = Symbol::new("List");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let builtin = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(&db),
+                name,
+                args: vec![int_ty],
+            },
+        );
+        let source = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
+                name,
+                args: vec![int_ty],
+            },
+        );
+
+        assert!(matches!(
+            solver.unify_types(builtin, source),
+            Err(SolveError::TypeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unify_named_types_rejects_same_spelled_source_declarations() {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
         let name = Symbol::new("Thing");
@@ -1970,7 +1999,7 @@ mod tests {
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },
@@ -2051,7 +2080,7 @@ mod tests {
         let list_never = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
                 args: vec![never_ty],
             },
@@ -2059,7 +2088,7 @@ mod tests {
         let list_int = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
                 args: vec![int_ty],
             },
@@ -2881,7 +2910,7 @@ mod tests {
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: TypeDefId::builtin_list(&db),
                 name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },

@@ -59,6 +59,56 @@ the existing display name, the ordinary mangle remains unchanged.
 
 ---
 
+## Opaque Persistent Lists
+
+`List(a)` uses a compiler-owned nominal type identity. Named type equality and
+unification compare resolved declaration identity as well as type arguments;
+the spelling `List` alone never selects the builtin. A source declaration with
+the same short name may shadow ordinary annotation lookup, but it remains a
+different nominal type and cannot capture list literal or list-pattern syntax.
+
+The frontend lowers literals and patterns to the shared `list.*` dialect:
+
+```text
+list.empty<a>
+list.prepend<a>(element, tail)
+list.is_empty<a>(list)
+list.head<a>(list)
+list.tail<a>(list)
+```
+
+The dialect is representation-independent. In particular, shared IR contains no
+`Empty`/`Cons` `adt.variant_new`, target field offsets, or allocation sizes.
+Literal lowering evaluates source elements into SSA values from left to right
+exactly once, then constructs the sequence from the last value back to the
+first. Pattern lowering uses empty/head/tail sequence views for empty,
+exact-length, and prefix-rest matching. It executes `list.head` and `list.tail`
+only on the non-empty control-flow path established by `list.is_empty`.
+Backends retain a trap path for either observation if malformed shared IR
+violates that precondition; they never synthesize a fallback element or tail.
+
+The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
+construction API. Its source wrapper delegates to a private compiler intrinsic,
+and the shared pipeline replaces only that private ABI-marked call with
+`list.prepend`. An ordinary source function with the same public qualified name
+is not an intrinsic. User code depends only on the public function signature and
+canonical `List(a)` contract; the private intrinsic, shared operation, and native
+node layout are not separately addressable collection APIs.
+
+For M1, native may lower the operations to private immutable singly linked
+RC-managed nodes with empty represented by a private null sentinel. Each
+non-empty node owns its element when reference-typed and its tail. Existing RTTI,
+RC insertion, deep release, and borrowed-field rules apply after the private
+node operations become native ADT/load/store operations. Returning or binding a
+tail must keep it alive independently of the original list. Mutation based on a
+uniqueness proof is an optional optimization and cannot change semantics.
+
+WasmGC selects its own private GC layout. Native layout choices are not shared
+IR conventions and do not establish Wasm execution parity. Full RRB trees,
+efficient concatenation, slicing, and transients remain post-M1 work.
+
+---
+
 ## Semantic Model
 
 ### 동적 의미론

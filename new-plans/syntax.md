@@ -278,9 +278,8 @@ ModDecl ::= 'pub'? 'mod' TypeId '{' Item* '}'
 **예시:**
 
 ```rust
-pub mod List {
-    pub fn empty() -> List(a) { Empty }
-    pub fn map(xs: List(a), f: fn(a) ->{g} b) ->{g} List(b) { ... }
+pub mod Option {
+    pub fn map(opt: Option(a), f: fn(a) ->{g} b) ->{g} Option(b) { ... }
 }
 ```
 
@@ -301,7 +300,7 @@ TypePath ::= (PathSegment '::')* TypeId
 **예시:**
 
 ```rust
-List::empty()
+List::prepend(1, [])
 Option::Some(42)
 std::io::print_line("hello")
 ```
@@ -649,6 +648,13 @@ OperatorFn ::= '(' Operator ')'           // (+), (<>)
 ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine, 생략 시 Nil)
 ```
 
+List literal은 canonical opaque `List(a)`를 만든다. 각 element expression은 source
+순서대로 왼쪽에서 오른쪽으로 정확히 한 번 평가되며, 내부 persistent representation을
+구성하기 위한 reverse fold가 이 evaluation order를 바꾸거나 재평가해서는 안 된다.
+Runtime value를 기존 tail 앞에 붙이는 M1 public API는
+`List::prepend(value, tail)`이다. 이 함수는 새 canonical List를 반환하며 tail을
+변경하지 않는다. `Empty`와 `Cons`는 List syntax의 constructor가 아니다.
+
 ### Block Expression
 
 ```ebnf
@@ -710,7 +716,7 @@ VariantExpr ::= TypePath '(' ExprList? ')'     // positional
 ```rust
 Some(42)
 None
-Cons(1, Cons(2, Empty))
+Branch(Leaf(1), Leaf(2))
 Ok { value: 42 }
 Error { error: "failed" }
 ```
@@ -737,11 +743,10 @@ ExprList ::= Expression (',' Expression)* ','?
 ```rust
 // 일반 호출
 add(1, 2)
-List::map(xs, fn(x) x + 1)
+Option::map(opt, fn(x) x + 1)
 
 // UFCS - 단순 식별자
-xs.map(fn(x) x + 1)     // List::map(xs, ...)
-xs.len                   // List::len(xs) - 괄호 생략
+opt.map(fn(x) x + 1)     // Option::map(opt, ...)
 user.name                // User::name(user) - 필드 접근도 UFCS
 
 // UFCS - qualified path
@@ -894,7 +899,7 @@ name
 // Variant
 Some(x)
 None
-Cons(head, tail)
+Branch(left, right)
 Ok { value }
 Error { error: e }
 std::io::Error::EndOfFile
@@ -921,6 +926,18 @@ Some(x) as opt              // x에 내부값, opt에 전체
 [head, ..tail] as list      // head, tail, list 모두 바인딩
 User { name, .. } as user   // name과 전체 user 바인딩
 ```
+
+List patterns are sequence views over the opaque canonical `List(a)`:
+
+- `[]` matches only length zero.
+- `[p1, ..., pn]` matches exactly length `n`.
+- `[p1, ..., pn, ..tail]` matches length at least `n` and binds `tail` to
+  the remaining `List(a)` without mutation or element reordering.
+- `[p1, ..., pn, ..]` has the same prefix requirement and ignores the remainder.
+
+Pattern lowering must use representation-independent shared list observation
+operations. It must not synthesize public variant patterns or expose target
+field offsets in frontend/shared IR.
 
 ---
 
@@ -1013,6 +1030,9 @@ let x = 1; let y = 2; x + y
 ---
 
 ## Complete Example
+
+이 예제의 `List::filter`, `List::map`, `List::each`는 complete-program 구성을
+보여 주기 위한 post-M1 illustrative API이며 M1에서 보장되지 않는다.
 
 ```rust
 use std::collections::{List, Option}

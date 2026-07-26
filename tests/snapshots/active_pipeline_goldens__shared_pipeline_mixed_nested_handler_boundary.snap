@@ -5,7 +5,7 @@ expression: ir_text
 core.module @mixed_nested {
   !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
-  !String = adt.enum() {name = @String, tribute.definition.end = 5768, tribute.definition.source = 4923843560778033168, tribute.definition.start = 5703, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !String = adt.enum() {name = @String, tribute.definition.end = 6286, tribute.definition.source = 4923843560778033168, tribute.definition.start = 6221, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !"Result$T0$T1" = adt.enum() {name = @"Result$T0$T1", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)

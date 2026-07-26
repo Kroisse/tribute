@@ -37,10 +37,16 @@ pub struct TdnrResolver<'db> {
 impl<'db> TdnrResolver<'db> {
     /// Create a new TDNR resolver.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
+        let mut type_identities = HashMap::new();
+        type_identities.insert(Symbol::new("List"), crate::ast::TypeDefId::builtin_list(db));
+        type_identities.insert(
+            Symbol::new("std::collections::List"),
+            crate::ast::TypeDefId::builtin_list(db),
+        );
         Self {
             db,
             method_index: HashMap::new(),
-            type_identities: HashMap::new(),
+            type_identities,
             current_prefix: String::new(),
             string_type: None,
         }
@@ -1188,7 +1194,7 @@ mod tests {
         let list_named = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("List")),
+                id: crate::ast::TypeDefId::builtin_list(&db),
                 name: Symbol::new("List"),
                 args: vec![],
             },
@@ -1441,7 +1447,7 @@ mod tests {
         let list_named = Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, trunk_ir::Symbol::new("List")),
+                id: crate::ast::TypeDefId::builtin_list(db),
                 name: type_name,
                 args: vec![],
             },

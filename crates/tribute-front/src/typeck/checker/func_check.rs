@@ -12,7 +12,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Pattern,
-    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
+    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeOrigin, TypeScheme, TypedRef, UniVarId,
     collect_effect_vars,
 };
 
@@ -28,6 +28,40 @@ fn solve_error_context(kind: Option<ConstraintOriginKind>) -> &'static str {
         Some(ConstraintOriginKind::HandlerBoundary) => " at handler boundary",
         Some(ConstraintOriginKind::Expression) | None => "",
     }
+}
+
+fn format_solve_error(
+    db: &dyn salsa::Database,
+    error: &super::super::solver::SolveError<'_>,
+) -> String {
+    if let super::super::solver::SolveError::TypeMismatch { expected, actual } = error
+        && let (
+            TypeKind::Named {
+                id: expected_id, ..
+            },
+            TypeKind::Named { id: actual_id, .. },
+        ) = (expected.kind(db), actual.kind(db))
+        && expected_id != actual_id
+        && expected.to_string() == actual.to_string()
+    {
+        match (expected_id.origin(db), actual_id.origin(db)) {
+            (TypeOrigin::Builtin(_), TypeOrigin::Source(_)) => {
+                return format!(
+                    "canonical compiler-owned type `{expected}` is distinct from \
+                     source-declared type `{actual}`"
+                );
+            }
+            (TypeOrigin::Source(_), TypeOrigin::Builtin(_)) => {
+                return format!(
+                    "canonical compiler-owned type `{actual}` is distinct from \
+                     source-declared type `{expected}`"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    error.to_string()
 }
 
 impl<'db> TypeChecker<'db> {
@@ -339,11 +373,9 @@ impl<'db> TypeChecker<'db> {
             .map(|origin| origin.node_id)
             .unwrap_or(func_id);
         let context = solve_error_context(failure.origin.map(|origin| origin.kind));
+        let error = format_solve_error(self.db(), &failure.error);
         let mut diagnostic = Diagnostic::builder(
-            format!(
-                "type error{context} in function '{}': {}",
-                func_name, failure.error
-            ),
+            format!("type error{context} in function '{}': {error}", func_name),
             self.get_span(primary_node),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
@@ -1261,10 +1293,11 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeKind};
+    use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
     use crate::typeck::{TypeChecker, TypeSolver};
 
-    use super::{ConstraintOriginKind, solve_error_context};
+    use super::super::super::solver::SolveError;
+    use super::{ConstraintOriginKind, format_solve_error, solve_error_context};
 
     #[test]
     fn solve_error_context_describes_each_origin() {
@@ -1283,6 +1316,40 @@ mod tests {
                 "",
                 ""
             ]
+        );
+    }
+
+    #[salsa_test]
+    fn format_solve_error_describes_builtin_actual_against_source_expected(
+        db: &dyn salsa::Database,
+    ) {
+        let int_ty = Type::new(db, TypeKind::Int);
+        let source = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::source(db, Symbol::new("List"), NodeId::from_raw(1)),
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+        let builtin = Type::new(
+            db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(db),
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            format_solve_error(
+                db,
+                &SolveError::TypeMismatch {
+                    expected: source,
+                    actual: builtin,
+                },
+            ),
+            "canonical compiler-owned type `List(Int)` is distinct from source-declared type `List(Int)`"
         );
     }
 
