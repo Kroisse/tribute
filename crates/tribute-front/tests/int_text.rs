@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::run_ast_pipeline;
+use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
@@ -43,5 +43,9 @@ fn format_box(value: Int) -> String {
 "#,
     );
 
-    run_ast_pipeline(db, source);
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.contains("core.unrealized_conversion_cast") && ir.contains("adt.variant_new"),
+        "generic constructor must cast Int for its erased field:\n{ir}"
+    );
 }
