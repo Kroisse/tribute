@@ -78,6 +78,32 @@ fn main() ->{Io} Nil {
 }
 
 #[test]
+fn generic_constructor_int_payload_uses_specialized_layout() {
+    let output = compile_and_run_native_asan(
+        "generic_constructor_int_payload.trb",
+        r#"
+use std::io::{Io, print_line}
+
+enum Boxed(a) { Box(a), Empty }
+
+fn main() ->{Io} Nil {
+    case Box(+42) {
+        Box(value) -> print_line(Int::to_string(value))
+        Empty -> print_line("empty")
+    }
+}
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+}
+
+#[test]
 fn public_int_text_api_covers_decimal_contract_and_boundaries() {
     let output = compile_and_run_native_asan(
         "int_text_public_api.trb",
