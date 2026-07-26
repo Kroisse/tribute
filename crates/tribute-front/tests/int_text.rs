@@ -2,7 +2,7 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir};
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeline_with_ir};
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
@@ -22,6 +22,11 @@ fn format(value: Int) -> String {
 "#,
     );
 
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "canonical Int text API must type-check through the prelude: {errors:?}"
+    );
     run_ast_pipeline(db, source);
 }
 
@@ -46,8 +51,14 @@ fn format_box(value: Int) -> String {
     );
 
     let ir = run_ast_pipeline_with_ir(db, source);
+    let format_box = ir
+        .split("func.func @format_box")
+        .nth(1)
+        .expect("format_box function must be lowered");
     assert!(
-        ir.contains("core.unrealized_conversion_cast") && ir.contains("adt.variant_new"),
-        "generic constructor must cast Int for its erased field:\n{ir}"
+        format_box.contains(
+            "%1 = core.unrealized_conversion_cast %0 : tribute_rt.anyref\n      %2 = adt.variant_new %1 {tag = @Box, type = !Boxed}"
+        ),
+        "generic constructor must cast its Int payload before constructing Box:\n{format_box}"
     );
 }
