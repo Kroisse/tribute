@@ -5,9 +5,7 @@ demonstrably parse, type-check, lower, compile, and execute. The language design
 documents describe intended semantics; they are not evidence that an
 implementation exists.
 
-The matrix was audited on 2026-07-23 at base commit
-`f37d8bffa7bdfdb7297ccbba4999d9ecf2c0761a`. A later change must update the
-status and evidence together. A capability not listed here is
+Statuses and evidence must be updated together. A capability not listed here is
 **not-yet-verified**, not implicitly supported.
 
 ## Status Vocabulary
@@ -142,76 +140,6 @@ All names above refer to [`e2e_native.rs`](../tests/e2e_native.rs),
 [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs),
 [`e2e_float.rs`](../tests/e2e_float.rs), or
 [`wasm_compilation.rs`](../tests/wasm_compilation.rs).
-
-## Audit Commands
-
-The 2026-07-23 audit ran:
-
-```shell
-cargo nextest run --workspace -E 'test(test_native_enum_case) | test(test_native_closure) | test(test_native_recursion) | test(test_native_ufcs_chained_multi_arg_user_defined) | test(test_native_std_io_read_line_contract) | test(test_native_bytes_literal_concat) | test(test_float_comparison_nan_semantics) | test(test_state_set_then_get) | test(test_fn_handler_arm) | test(test_execute_dynamic_bytes_write_boundary) | test(test_execute_string_literals_and_dynamic_bytes) | test(diag_non_exhaustive_case) | test(test_hover_via_message) | test(test_completion_via_message)'
-```
-
-Result: 14 passed, 0 failed, 1618 skipped. The selection covered native ADTs,
-closures, recursion, UFCS, String/Bytes, Float, both handler forms,
-`read_line`, both Wasm execution tests, a diagnostic snapshot, and LSP hover
-and completion.
-
-```shell
-cargo nextest run -p tribute --test wasm_compilation -E 'test(test_compile_tail_dispatch_ability) | test(test_compile_cps_dispatch_ability) | test(test_compile_arithmetic_expr)'
-```
-
-Result: 3 passed, 0 failed, 9 skipped. These tests verify Wasm emission only.
-
-```shell
-cargo nextest run -p tribute-front --test expr_coverage -E 'test(test_rune_literal) | test(test_string_literal) | test(test_bytes_literal)'
-```
-
-Result: 3 passed, 0 failed, 9 skipped. These tests verify the shared frontend
-pipeline only.
-
-```shell
-cargo nextest run --workspace
-```
-
-Result: 1631 passed, 0 failed, 1 skipped.
-
-```shell
-npx markdownlint-cli2 "**/*.md"
-```
-
-Result: 39 Markdown files linted with 0 errors.
-
-## Skipped Runtime Checks
-
-- Wasm ability execution was not run because the repository's focused `fn` and
-  `op` tests stop after artifact emission. This documentation-only issue does
-  not own adding runtime tests, so both forms remain **compile-only**.
-- Native and Wasm Rune execution were not run because no focused target
-  execution fixture or output assertion exists. Rune remains
-  **not-yet-verified** on both targets.
-- Wasm enum/ADT, tuple, closure, recursion, UFCS, Float, and non-output `Bytes`
-  runtime checks were not run because the current Wasm suite has no execution
-  assertion for those features. They remain **not-yet-verified**.
-- Wasm `read_line`, file-module loading, and package compilation were not
-  skipped checks: their required implementation paths are absent, so they are
-  **unsupported**.
-
-A separate 2026-07-24 full workspace run at PR #807's `4abca64e` head used
-the same workspace selection with nextest's slow timeout raised from 30 to 120
-seconds; the local `test_native_std_io_read_line_contract` run took 38.613
-seconds. The comparison baseline is the #804 post-audit merge `8a8042ca` on
-2026-07-23, which produced the adjacent 1631-passed, 1-skipped result. The
-12-test active-inventory delta comprises four #807 handler/TDNR tests (including
-the re-enabled `test_handler_transforms_result`), one #803 canonical-source
-test, and seven #808 String/runtime/Wasm/backend tests. Result: 1643 passed, 0
-failed, 0 skipped. `cargo nextest list --workspace` also listed 1643 active
-tests and no ignored tests. Thus the current suite has no ignored repository
-tests; the one skipped test above is the historical 2026-07-23 audit result.
-
-The issue #802 re-audit returned nine previously ignored tests to the default
-suite: three row-polymorphic callback tests, module-qualified ability handling,
-sequential Throw operations, tuple destructuring from a function result, the
-two struct-field diagnostics, and safe `Bytes::get` `Some`/`None` behavior.
 
 ## Updating This Matrix
 
