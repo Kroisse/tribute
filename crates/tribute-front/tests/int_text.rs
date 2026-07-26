@@ -24,3 +24,24 @@ fn format(value: Int) -> String {
 
     run_ast_pipeline(db, source);
 }
+
+#[salsa_test]
+fn generic_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_constructor_int.trb",
+        r#"
+enum Boxed(a) {
+    Box(a),
+}
+
+fn format_box(value: Int) -> String {
+    case Box(value) {
+        Box(inner) -> Int::to_string(inner)
+    }
+}
+"#,
+    );
+
+    run_ast_pipeline(db, source);
+}
