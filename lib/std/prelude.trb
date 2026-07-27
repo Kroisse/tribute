@@ -243,64 +243,32 @@ pub mod Int {
     }
 
     fn positive_digit_string(digit: Int) -> String {
-        case digit == +0 {
-            True -> "0"
-            False -> case digit == +1 {
-                True -> "1"
-                False -> case digit == +2 {
-                    True -> "2"
-                    False -> case digit == +3 {
-                        True -> "3"
-                        False -> case digit == +4 {
-                            True -> "4"
-                            False -> case digit == +5 {
-                                True -> "5"
-                                False -> case digit == +6 {
-                                    True -> "6"
-                                    False -> case digit == +7 {
-                                        True -> "7"
-                                        False -> case digit == +8 {
-                                            True -> "8"
-                                            False -> "9"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        case digit {
+            +0 -> "0",
+            +1 -> "1",
+            +2 -> "2",
+            +3 -> "3",
+            +4 -> "4",
+            +5 -> "5",
+            +6 -> "6",
+            +7 -> "7",
+            +8 -> "8",
+            _ -> "9",
         }
     }
 
     fn negative_digit_string(digit: Int) -> String {
-        case digit == +0 {
-            True -> "0"
-            False -> case digit == -1 {
-                True -> "1"
-                False -> case digit == -2 {
-                    True -> "2"
-                    False -> case digit == -3 {
-                        True -> "3"
-                        False -> case digit == -4 {
-                            True -> "4"
-                            False -> case digit == -5 {
-                                True -> "5"
-                                False -> case digit == -6 {
-                                    True -> "6"
-                                    False -> case digit == -7 {
-                                        True -> "7"
-                                        False -> case digit == -8 {
-                                            True -> "8"
-                                            False -> "9"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        case digit {
+            +0 -> "0",
+            -1 -> "1",
+            -2 -> "2",
+            -3 -> "3",
+            -4 -> "4",
+            -5 -> "5",
+            -6 -> "6",
+            -7 -> "7",
+            -8 -> "8",
+            _ -> "9",
         }
     }
 
