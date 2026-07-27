@@ -1,0 +1,6 @@
+  add -7 12
+mul 3 4
+add nope 2
+sub 9 4
+quit
+add 99 1

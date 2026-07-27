@@ -1,0 +1,132 @@
+use abilities::Throw
+use std::io::{Error as IoError, Io, print_line, read_line}
+
+fn is_horizontal_space(byte: Nat) -> Bool {
+    case byte == 32 {
+        True -> True
+        False -> byte == 9
+    }
+}
+
+fn skip_horizontal_space(bytes: Bytes, index: Nat) -> Nat {
+    case index == bytes.len() {
+        True -> index
+        False -> case is_horizontal_space(bytes.get_or_panic(index)) {
+            True -> skip_horizontal_space(bytes, index + 1)
+            False -> index
+        }
+    }
+}
+
+fn token_end(bytes: Bytes, index: Nat) -> Nat {
+    case index == bytes.len() {
+        True -> index
+        False -> case is_horizontal_space(bytes.get_or_panic(index)) {
+            True -> index
+            False -> token_end(bytes, index + 1)
+        }
+    }
+}
+
+fn tokenize_from(bytes: Bytes, index: Nat) -> List(String) {
+    let start = skip_horizontal_space(bytes, index)
+    case start == bytes.len() {
+        True -> []
+        False -> {
+            let end = token_end(bytes, start)
+            let token = String::from_bytes(bytes.slice(start, end))
+            List::prepend(token, tokenize_from(bytes, end))
+        }
+    }
+}
+
+fn tokenize(line: String) -> List(String) {
+    tokenize_from(String::to_bytes(line), 0)
+}
+
+fn invalid_command() ->{Io} Bool {
+    print_line("error: expected 'add|sub|mul <int> <int>' or 'quit'")
+    True
+}
+
+fn invalid_integer(error: Int::ParseError) ->{Io} Bool {
+    case error {
+        Int::ParseError::InvalidSyntax -> print_line("error: invalid integer")
+        Int::ParseError::OutOfRange -> print_line("error: integer out of range")
+    }
+    True
+}
+
+fn print_calculation(operator: String, left: Int, right: Int) ->{Io} Bool {
+    case operator == "add" {
+        True -> {
+            print_line(Int::to_string(left + right))
+            True
+        }
+        False -> case operator == "sub" {
+            True -> {
+                print_line(Int::to_string(left - right))
+                True
+            }
+            False -> case operator == "mul" {
+                True -> {
+                    print_line(Int::to_string(left * right))
+                    True
+                }
+                False -> invalid_command()
+            }
+        }
+    }
+}
+
+fn execute_calculation(operator: String, left: String, right: String) ->{Io} Bool {
+    case Int::parse(left) {
+        Error(error) -> invalid_integer(error)
+        Ok(left_value) -> case Int::parse(right) {
+            Error(error) -> invalid_integer(error)
+            Ok(right_value) -> print_calculation(operator, left_value, right_value)
+        }
+    }
+}
+
+fn execute(tokens: List(String)) ->{Io} Bool {
+    case tokens {
+        [command] -> case command == "quit" {
+            True -> False
+            False -> invalid_command()
+        }
+        [operator, left, right] -> execute_calculation(operator, left, right)
+        _ -> invalid_command()
+    }
+}
+
+fn next_input() ->{Io} String {
+    handle read_line() {
+        do line { line }
+        op Throw::throw(error) {
+            case error {
+                IoError::EndOfFile -> "\0eof"
+                IoError::InvalidEncoding -> "\0failure"
+                IoError::System(_) -> "\0failure"
+            }
+        }
+    }
+}
+
+fn read_commands() ->{Io} Nil {
+    let line = next_input()
+    case line == "\0eof" {
+        True -> Nil
+        False -> case line == "\0failure" {
+            True -> print_line("error: input failure")
+            False -> case execute(tokenize(line)) {
+            True -> read_commands()
+            False -> Nil
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    read_commands()
+}
