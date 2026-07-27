@@ -421,9 +421,9 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
-    /// Register the prelude types that receive compiler-defined treatment.
-    pub fn set_well_known_types(&mut self, well_known_types: super::WellKnownTypes<'db>) {
-        self.well_known_types = well_known_types;
+    /// Mutably access the prelude types that receive compiler-defined treatment.
+    pub fn well_known_types_mut(&mut self) -> &mut super::WellKnownTypes<'db> {
+        &mut self.well_known_types
     }
 
     // =========================================================================
@@ -688,12 +688,30 @@ mod tests {
     use crate::ast::{
         CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
     };
+    use crate::typeck::{DefinitionIdentity, WellKnownType};
 
     use super::ModuleTypeEnv;
 
     // =========================================================================
     // Export ordering tests - verify deterministic output
     // =========================================================================
+
+    #[salsa_test]
+    fn well_known_types_mut_updates_one_registry_entry(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let string = WellKnownType {
+            ty: Type::new(db, TypeKind::Int),
+            definition: DefinitionIdentity {
+                source: 1,
+                start: 2,
+                end: 3,
+            },
+        };
+
+        env.well_known_types_mut().string = Some(string);
+
+        assert_eq!(env.well_known_types().string, Some(string));
+    }
 
     #[salsa_test]
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
