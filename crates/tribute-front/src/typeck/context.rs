@@ -421,12 +421,9 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
-    /// Mutably access the prelude type selected by `key`.
-    pub(crate) fn well_known_type_mut(
-        &mut self,
-        key: impl super::WellKnownTypeKey,
-    ) -> &mut Option<super::WellKnownType<'db>> {
-        key.slot_mut(&mut self.well_known_types)
+    /// Record the canonical `String` type selected from the prelude.
+    pub(crate) fn set_prelude_string_type(&mut self, string: Option<super::WellKnownType<'db>>) {
+        self.well_known_types.string = string;
     }
 
     // =========================================================================
@@ -688,33 +685,14 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
+    use super::ModuleTypeEnv;
     use crate::ast::{
         CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
     };
-    use crate::typeck::{DefinitionIdentity, StringType, WellKnownType};
-
-    use super::ModuleTypeEnv;
 
     // =========================================================================
     // Export ordering tests - verify deterministic output
     // =========================================================================
-
-    #[salsa_test]
-    fn well_known_type_mut_updates_selected_slot(db: &dyn salsa::Database) {
-        let mut env = ModuleTypeEnv::new(db);
-        let string = WellKnownType {
-            ty: Type::new(db, TypeKind::Int),
-            definition: DefinitionIdentity {
-                source: 1,
-                start: 2,
-                end: 3,
-            },
-        };
-
-        *env.well_known_type_mut(StringType) = Some(string);
-
-        assert_eq!(env.well_known_types().string, Some(string));
-    }
 
     #[salsa_test]
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {

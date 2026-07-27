@@ -165,7 +165,7 @@ impl<'db> TypeChecker<'db> {
     ) -> ModuleCheckResult<'db> {
         self.collect_declarations(&module);
         let string_type = self.prelude_well_known_type(&module, StringType);
-        *self.env.well_known_type_mut(StringType) = string_type;
+        self.env.set_prelude_string_type(string_type);
         self.check_collected_module(module)
     }
 
@@ -234,7 +234,7 @@ impl<'db> TypeChecker<'db> {
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
         let string_type = self.prelude_well_known_type(&module, StringType);
-        *self.env.well_known_type_mut(StringType) = string_type;
+        self.env.set_prelude_string_type(string_type);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
