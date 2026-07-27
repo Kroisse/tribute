@@ -73,7 +73,7 @@ pub struct WellKnownTypes<'db> {
 }
 
 /// A typed key for extracting a semantic type from the prelude.
-pub trait WellKnownTypeKey: Copy {
+pub(crate) trait WellKnownTypeKey: Copy {
     fn name(self) -> Symbol;
 
     fn slot_mut<'db, 'types>(

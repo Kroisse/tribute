@@ -422,7 +422,7 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Mutably access the prelude type selected by `key`.
-    pub fn well_known_type_mut(
+    pub(crate) fn well_known_type_mut(
         &mut self,
         key: impl super::WellKnownTypeKey,
     ) -> &mut Option<super::WellKnownType<'db>> {
