@@ -79,6 +79,7 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | General collection APIs beyond M1 list literals/patterns/prepend (`List` algorithms, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | The M1 public surface is intentionally limited to literals, `List::prepend`, and sequence patterns. No broader collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
 | `std::io::print` and `print_line` | **compile-only** | **native-run** | **wasm-run** | Native output behavior is tested in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm output execution is covered by the two execution tests in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The Wasm lowering implements `tribute_io.write` in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 | `std::io::read_line` | **compile-only** | **native-run** | **unsupported** | Native line endings, empty/partial input, EOF, invalid UTF-8, and system errors execute in the `test_native_std_io_read_line_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). Native lowering is in [`native/io.rs`](../crates/tribute-passes/src/native/io.rs). Wasm I/O lowering has only a `WritePattern` and rejects residual `tribute_io` operations in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
+| Canonical M1 calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). The same scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source also opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
 
 The current **wasm-run** language-level claims in this table are String/Bytes
 output through `std::io::print_line` and byte-wise String equality. That
@@ -99,19 +100,22 @@ These compiler/tooling statuses are independent of a target runtime.
 | Package/project compilation and manifests | **unsupported** | The CLI accepts a source file rather than a package root or manifest in [`cli.rs`](../src/cli.rs). No package graph or manifest loader is present in the active pipeline. |
 | Separate compilation/linking of Tribute modules | **unsupported** | Native linking consumes one object generated from one `SourceCst` in [`main.rs`](../src/main.rs) and [`pipeline.rs`](../src/pipeline.rs); it does not link independently compiled Tribute modules. |
 
-## Canonical M0 Artifacts and Runtime Set
+## Canonical M1 Preview and M0 Artifacts
 
 ### User-Facing Canonical Artifacts
 
-Issue #797 owns these user-facing artifacts and their documentation. Their
-paths are written as code because they may be absent until that separate change
-is integrated:
+Issue #806 adds the M1 native preview. Issue #797 owns the retained M0
+artifacts and their documentation:
 
-1. `lang-examples/native_effects.trb` is the canonical **native-run** example.
+1. `lang-examples/native_calculator.trb` is the canonical M1 **native-run**
+   example. Its scripted and EOF stdin/stdout contracts are checked in under
+   `tests/fixtures/` and `tests/expected/`; the scripted session also has
+   AddressSanitizer and LSP protocol evidence.
+2. `lang-examples/native_effects.trb` is a retained M0 **native-run** artifact.
    Its expected stdout is `Recovered: the failure was handled`.
-2. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
+3. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
    example. Wasmtime execution must assert its expected String/Bytes output.
-3. `lang-examples/invalid_unresolved_name.trb` is the canonical frontend
+4. `lang-examples/invalid_unresolved_name.trb` is the canonical frontend
    failure example. Its diagnostic must include
    `` unresolved name `missing_value` ``.
 

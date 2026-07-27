@@ -117,6 +117,56 @@ jobs:
             tests/expected/native_effects.stdout \
             target/native-effects-example.stdout
 
+      - name: Compile canonical M1 calculator
+        run: |
+          cargo run --locked -- compile lang-examples/native_calculator.trb \
+            -o target/native-calculator
+
+      - name: Execute scripted calculator session
+        run: |
+          ./target/native-calculator \
+            < tests/fixtures/native_calculator_scripted.stdin \
+            > target/native-calculator-scripted.stdout
+
+      - name: Check scripted calculator output
+        run: |
+          diff -u \
+            tests/expected/native_calculator_scripted.stdout \
+            target/native-calculator-scripted.stdout
+
+      - name: Execute EOF calculator session
+        run: |
+          ./target/native-calculator \
+            < tests/fixtures/native_calculator_eof.stdin \
+            > target/native-calculator-eof.stdout
+
+      - name: Check EOF calculator output
+        run: |
+          diff -u \
+            tests/expected/native_calculator_eof.stdout \
+            target/native-calculator-eof.stdout
+
+      - name: Compile AddressSanitizer calculator
+        if: matrix.platform == 'Ubuntu'
+        run: |
+          cargo run --locked -- compile --sanitize=address \
+            lang-examples/native_calculator.trb \
+            -o target/native-calculator-asan
+
+      - name: Execute AddressSanitizer calculator session
+        if: matrix.platform == 'Ubuntu'
+        run: |
+          ./target/native-calculator-asan \
+            < tests/fixtures/native_calculator_scripted.stdin \
+            > target/native-calculator-asan.stdout
+
+      - name: Check AddressSanitizer calculator output
+        if: matrix.platform == 'Ubuntu'
+        run: |
+          diff -u \
+            tests/expected/native_calculator_scripted.stdout \
+            target/native-calculator-asan.stdout
+
   canonical-wasm:
     name: Canonical WasmGC example
     permissions:
