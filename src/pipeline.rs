@@ -274,7 +274,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module(resolved);
+    let result = checker.check_module_as_prelude(resolved);
 
     // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());

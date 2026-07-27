@@ -177,6 +177,24 @@ pub(super) fn resolve_enum_type_attr<'db>(
         .unwrap_or_else(|| ctx.anyref_type(ir))
 }
 
+/// Resolve an enum type attribute from a constructor identity.
+///
+/// Monomorphization rewrites constructor IDs to their specialized enum name,
+/// while a constructor's function type can remain polymorphic. The ID is the
+/// authoritative layout identity for construction and pattern matching.
+pub(super) fn resolve_enum_type_attr_for_constructor<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    resolved: &ResolvedRef<'db>,
+    fallback_ctor_ty: crate::ast::Type<'db>,
+) -> TypeRef {
+    match resolved {
+        ResolvedRef::Constructor { id, .. } => ctx.get_type(id.qualified(ctx.db)),
+        _ => None,
+    }
+    .unwrap_or_else(|| resolve_enum_type_attr(ctx, ir, fallback_ctor_ty))
+}
+
 /// Extract the type name from a ResolvedRef.
 pub(super) fn extract_type_name<'db>(
     db: &'db dyn salsa::Database,

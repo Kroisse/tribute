@@ -421,6 +421,11 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
+    /// Record the canonical `String` type selected from the prelude.
+    pub(crate) fn set_prelude_string_type(&mut self, string: Option<super::WellKnownType<'db>>) {
+        self.well_known_types.string = string;
+    }
+
     // =========================================================================
     // Export methods
     // =========================================================================
@@ -680,11 +685,10 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
+    use super::ModuleTypeEnv;
     use crate::ast::{
         CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
     };
-
-    use super::ModuleTypeEnv;
 
     // =========================================================================
     // Export ordering tests - verify deterministic output

@@ -112,6 +112,60 @@ Int = i31ref (fixnum) | BigInt (bignum)
       (call $bigint_eq (local.get $a) (local.get $b)))))
 ```
 
+### Decimal text conversion
+
+The canonical public numeric text boundary belongs to the `Int` module:
+
+```tribute
+pub mod Int {
+    pub enum ParseError {
+        InvalidSyntax,
+        OutOfRange,
+    }
+
+    pub fn parse(input: String) -> Result(Int, Int::ParseError)
+    pub fn to_string(value: Int) -> String
+}
+```
+
+`Int::ParseError` is the canonical type identity. `InvalidSyntax` means the
+complete input does not match the accepted grammar. `OutOfRange` means the
+syntax is valid but the current implementation cannot represent the value.
+The variants carry no fields because parsing does not promise a byte offset or
+preserve the rejected input.
+
+`Int::parse` accepts exactly one optional leading ASCII sign followed by one or
+more ASCII decimal digits:
+
+```text
+[+-]?[0-9]+
+```
+
+Both `+` and `-` are accepted. Leading zeroes are accepted, and signed zeroes
+produce the integer zero. Empty input, a sign without digits, non-ASCII decimal
+digits, base prefixes, separators, embedded whitespace, surrounding
+whitespace, and trailing data return `InvalidSyntax`. Whitespace normalization
+belongs to a separate `String` operation; parsing never trims implicitly.
+
+The M1 representation is a signed 32-bit integer with the inclusive range
+`-2147483648` through `2147483647`. A syntactically valid decimal outside that
+range returns `OutOfRange`. The implementation must detect overflow before an
+arithmetic operation would exceed the range; it must not wrap, trap, truncate,
+or accept a prefix of the input.
+
+`Int::to_string` returns canonical ASCII decimal text: `"0"` for zero, a leading
+`-` only for negative values, and no leading zeroes. It must format the minimum
+representable value without first negating it.
+
+The public functions consume and produce `String`; their implementation may
+cross the existing public `String`/`Bytes` boundary or use a documented
+target-independent compiler intrinsic. A native runtime ABI must not become a
+source-level API. The current fixed-width check is an implementation capability,
+not part of the permanent language-level signature. When the Fixnum/BigInt
+representation is implemented, parsing expands to all representable `Int`
+values and formatting handles both representations without changing these
+functions or `Int::ParseError`.
+
 ---
 
 ## Float Type

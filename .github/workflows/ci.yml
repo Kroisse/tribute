@@ -226,6 +226,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          disable_search: true
           fail_ci_if_error: false
 
   markdownlint:

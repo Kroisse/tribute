@@ -8,6 +8,7 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_core::set_calling_convention;
 use trunk_ir::Symbol;
+use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
@@ -23,9 +24,39 @@ use tribute_ir::dialect::{ability, closure, list};
 use super::case::bind_pattern_fields;
 use super::{
     IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, qualified_type_name,
-    resolve_enum_type_attr,
+    resolve_enum_type_attr_for_constructor,
 };
 use crate::ast::CallingConvention;
+
+/// Coerce constructor arguments to the representation recorded in the enum
+/// layout. Generic enum fields are erased to `anyref`, so primitive payloads
+/// must cross an explicit conversion boundary before `adt.variant_new`.
+fn cast_variant_args<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    args: Vec<ValueRef>,
+    enum_ty: TypeRef,
+    variant: Symbol,
+) -> Vec<ValueRef> {
+    let field_types = get_enum_variants(builder.ir, enum_ty)
+        .and_then(|variants| {
+            variants
+                .into_iter()
+                .find_map(|(tag, fields)| (tag == variant).then_some(fields))
+        })
+        .expect("resolved constructor must exist in enum metadata");
+
+    assert_eq!(
+        args.len(),
+        field_types.len(),
+        "type checking must enforce constructor arity"
+    );
+
+    args.into_iter()
+        .zip(field_types)
+        .map(|(arg, field_ty)| builder.cast_if_needed(location, arg, field_ty))
+        .collect()
+}
 
 /// Lower an expression to arena TrunkIR.
 pub(super) fn lower_expr<'db>(
@@ -160,8 +191,12 @@ pub(super) fn lower_expr<'db>(
                     _ => {
                         // Zero-argument constructor
                         let result_ty = builder.ctx.convert_type(builder.ir, typed_ref.ty);
-                        let type_attr =
-                            resolve_enum_type_attr(builder.ctx, builder.ir, typed_ref.ty);
+                        let type_attr = resolve_enum_type_attr_for_constructor(
+                            builder.ctx,
+                            builder.ir,
+                            &typed_ref.resolved,
+                            typed_ref.ty,
+                        );
                         let op = adt::variant_new(
                             builder.ir,
                             location,
@@ -409,8 +444,14 @@ pub(super) fn lower_expr<'db>(
                     }
                     ResolvedRef::Constructor { variant, .. } => {
                         let result_ty = builder.call_result_type(&typed_ref.ty);
-                        let type_attr =
-                            resolve_enum_type_attr(builder.ctx, builder.ir, typed_ref.ty);
+                        let type_attr = resolve_enum_type_attr_for_constructor(
+                            builder.ctx,
+                            builder.ir,
+                            &typed_ref.resolved,
+                            typed_ref.ty,
+                        );
+                        let arg_values =
+                            cast_variant_args(builder, location, arg_values, type_attr, *variant);
                         let op = adt::variant_new(
                             builder.ir, location, arg_values, result_ty, type_attr, *variant,
                         );
@@ -514,7 +555,14 @@ pub(super) fn lower_expr<'db>(
             match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
                     let result_ty = builder.call_result_type(&ctor.ty);
-                    let type_attr = resolve_enum_type_attr(builder.ctx, builder.ir, ctor.ty);
+                    let type_attr = resolve_enum_type_attr_for_constructor(
+                        builder.ctx,
+                        builder.ir,
+                        &ctor.resolved,
+                        ctor.ty,
+                    );
+                    let arg_values =
+                        cast_variant_args(builder, location, arg_values, type_attr, *variant);
                     let op = adt::variant_new(
                         builder.ir, location, arg_values, result_ty, type_attr, *variant,
                     );
