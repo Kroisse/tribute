@@ -1490,6 +1490,15 @@ mod tests {
 
         /// Send a didOpen notification and process it.
         fn open_document(&mut self, uri: &Uri, text: &str) {
+            let _ = self.open_document_with_diagnostics(uri, text);
+        }
+
+        /// Send a didOpen notification, process it, and return published diagnostics.
+        fn open_document_with_diagnostics(
+            &mut self,
+            uri: &Uri,
+            text: &str,
+        ) -> PublishDiagnosticsParams {
             let params = DidOpenTextDocumentParams {
                 text_document: lsp_types::TextDocumentItem {
                     uri: uri.clone(),
@@ -1508,8 +1517,13 @@ mod tests {
             let msg = self.server.connection.receiver.recv().unwrap();
             self.server.process_message(msg).unwrap();
 
-            // Consume the diagnostics notification sent back
-            let _ = self.client.receiver.try_recv();
+            match self.client.receiver.recv().unwrap() {
+                Message::Notification(notif) => {
+                    assert_eq!(notif.method, PublishDiagnostics::METHOD);
+                    serde_json::from_value(notif.params).unwrap()
+                }
+                other => panic!("expected diagnostics notification, got {other:?}"),
+            }
         }
 
         /// Send a request and get the response.
@@ -1595,6 +1609,76 @@ mod tests {
         };
         assert!(contents.value.contains("Compiler-owned ambient ability"));
         assert!(contents.value.contains("std::io::Io"));
+    }
+
+    #[test]
+    fn canonical_calculator_opens_cleanly_and_exposes_public_symbols() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("native_calculator");
+        let source = include_str!("../../lang-examples/native_calculator.trb");
+        let diagnostics = harness.open_document_with_diagnostics(&uri, source);
+        assert!(
+            diagnostics.diagnostics.is_empty(),
+            "canonical calculator diagnostics: {:?}",
+            diagnostics.diagnostics,
+        );
+
+        let parse_line = source
+            .lines()
+            .position(|line| line.contains("Int::parse(left)"))
+            .expect("calculator Int::parse reference") as u32;
+        let parse_character = source
+            .lines()
+            .nth(parse_line as usize)
+            .and_then(|line| line.find("Int::parse"))
+            .expect("calculator Int::parse column") as u32
+            + 5;
+        let hover: Option<Hover> = harness.request::<HoverRequest>(HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: parse_line,
+                    character: parse_character,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        });
+        assert!(
+            hover.is_some(),
+            "Int::parse should provide hover information"
+        );
+
+        let io_line = source
+            .lines()
+            .position(|line| line.contains("Io, print_line"))
+            .expect("calculator Io import") as u32;
+        let io_character = source
+            .lines()
+            .nth(io_line as usize)
+            .and_then(|line| line.find("Io, print_line"))
+            .expect("calculator Io column") as u32
+            + 2;
+        let completion: Option<lsp_types::CompletionResponse> =
+            harness.request::<Completion>(CompletionParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri },
+                    position: lsp_types::Position {
+                        line: io_line,
+                        character: io_character,
+                    },
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: None,
+            });
+        let Some(lsp_types::CompletionResponse::List(items)) = completion else {
+            panic!("calculator Io completion should return a completion list");
+        };
+        assert!(
+            items.items.iter().any(|item| item.label == "Io"),
+            "calculator completion should include imported Io: {:?}",
+            items.items,
+        );
     }
 
     #[test]
