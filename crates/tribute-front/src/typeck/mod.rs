@@ -75,6 +75,11 @@ pub struct WellKnownTypes<'db> {
 /// A typed key for extracting a semantic type from the prelude.
 pub trait WellKnownTypeKey: Copy {
     fn name(self) -> Symbol;
+
+    fn slot_mut<'db, 'types>(
+        self,
+        types: &'types mut WellKnownTypes<'db>,
+    ) -> &'types mut Option<WellKnownType<'db>>;
 }
 
 /// Key for the prelude-defined `String` type.
@@ -84,6 +89,13 @@ pub struct StringType;
 impl WellKnownTypeKey for StringType {
     fn name(self) -> Symbol {
         Symbol::new("String")
+    }
+
+    fn slot_mut<'db, 'types>(
+        self,
+        types: &'types mut WellKnownTypes<'db>,
+    ) -> &'types mut Option<WellKnownType<'db>> {
+        &mut types.string
     }
 }
 

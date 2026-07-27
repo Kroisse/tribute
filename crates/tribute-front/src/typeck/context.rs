@@ -421,9 +421,12 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
-    /// Mutably access the prelude types that receive compiler-defined treatment.
-    pub fn well_known_types_mut(&mut self) -> &mut super::WellKnownTypes<'db> {
-        &mut self.well_known_types
+    /// Mutably access the prelude type selected by `key`.
+    pub fn well_known_type_mut(
+        &mut self,
+        key: impl super::WellKnownTypeKey,
+    ) -> &mut Option<super::WellKnownType<'db>> {
+        key.slot_mut(&mut self.well_known_types)
     }
 
     // =========================================================================
@@ -688,7 +691,7 @@ mod tests {
     use crate::ast::{
         CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
     };
-    use crate::typeck::{DefinitionIdentity, WellKnownType};
+    use crate::typeck::{DefinitionIdentity, StringType, WellKnownType};
 
     use super::ModuleTypeEnv;
 
@@ -697,7 +700,7 @@ mod tests {
     // =========================================================================
 
     #[salsa_test]
-    fn well_known_types_mut_updates_one_registry_entry(db: &dyn salsa::Database) {
+    fn well_known_type_mut_updates_selected_slot(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let string = WellKnownType {
             ty: Type::new(db, TypeKind::Int),
@@ -708,7 +711,7 @@ mod tests {
             },
         };
 
-        env.well_known_types_mut().string = Some(string);
+        *env.well_known_type_mut(StringType) = Some(string);
 
         assert_eq!(env.well_known_types().string, Some(string));
     }
