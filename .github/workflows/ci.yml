@@ -221,13 +221,6 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
 
-      - name: Preserve LCOV report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-lcov-${{ github.run_id }}-${{ github.sha }}
-          path: lcov.info
-          retention-days: 7
-
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
