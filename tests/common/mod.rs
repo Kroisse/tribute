@@ -188,12 +188,7 @@ pub fn compile_and_run_native_with_stdin_baseline_optimizations(
         source_name,
         source_code,
         false,
-        NativeTestOptimizations {
-            done_continuation: DoneContinuationPolicy::PerUse,
-            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-            borrowed_parameters: BorrowedParameterPolicy::Preserve,
-            temporary_borrows: TemporaryBorrowPolicy::Preserve,
-        },
+        NativeTestOptimizations::baseline(),
         NativeStdin::Bytes(stdin),
     )
 }
@@ -289,6 +284,15 @@ struct NativeTestOptimizations {
 }
 
 impl NativeTestOptimizations {
+    const fn baseline() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerUse,
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+        }
+    }
+
     const fn production() -> Self {
         Self {
             done_continuation: DoneContinuationPolicy::PerCompilationUnit,
