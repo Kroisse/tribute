@@ -115,22 +115,9 @@ impl<'db> Normalizer<'_, 'db> {
         let kind = match *expr.kind {
             ExprKind::Call { callee, args } => {
                 let (mut stmts, callee) = self.normalize_to_atom(callee);
-                let mut atoms = Vec::with_capacity(args.len());
-                for arg in args {
-                    let (prefix, atom) = self.normalize_to_atom(arg);
-                    stmts.extend(prefix);
-                    atoms.push(atom);
-                }
-                return self.with_prefix(
-                    stmts,
-                    Expr::new(
-                        id,
-                        ExprKind::Call {
-                            callee,
-                            args: atoms,
-                        },
-                    ),
-                );
+                let (arg_stmts, args) = self.normalize_atoms(args);
+                stmts.extend(arg_stmts);
+                return self.with_prefix(stmts, Expr::new(id, ExprKind::Call { callee, args }));
             }
             ExprKind::Cons { ctor, args } => {
                 let (stmts, args) = self.normalize_atoms(args);

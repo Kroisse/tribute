@@ -156,7 +156,8 @@ fn prescan_definition_conventions<'db>(
                     continue;
                 };
 
-                if (func_decl.effects.is_none() || is_root_main(prefix, func_decl.name))
+                if (func_decl.effects.is_none()
+                    || crate::is_root_main(func_decl.name, prefix.is_empty()))
                     && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
                 {
                     // A root entrypoint is an ABI delimiter, not an ordinary
@@ -219,7 +220,9 @@ fn promote_definition_conventions_pass<'db>(
                 // Root `main` closes implementation-level CPS evaluation at
                 // the frontend entry boundary. Nested `main` declarations are
                 // ordinary workers and remain eligible for promotion.
-                if is_root_main(prefix, func_decl.name) && convention != CallingConvention::Cps {
+                if crate::is_root_main(func_decl.name, prefix.is_empty())
+                    && convention != CallingConvention::Cps
+                {
                     continue;
                 }
                 if convention != CallingConvention::Cps
@@ -240,10 +243,6 @@ fn promote_definition_conventions_pass<'db>(
             _ => {}
         }
     }
-}
-
-fn is_root_main(prefix: &str, name: Symbol) -> bool {
-    prefix.is_empty() && name == Symbol::new("main")
 }
 
 impl<'db> TypedModule<'db> {
@@ -375,7 +374,7 @@ fn lower_function<'db>(
     let convention = ctx
         .function_calling_convention(qualified_name)
         .unwrap_or(semantic_convention);
-    let is_root_main = ctx.module_path().len() == 1 && func_name == Symbol::new("main");
+    let is_root_main = crate::is_root_main(func_name, ctx.module_path().len() == 1);
     let anyref_ty = ctx.anyref_type(ir);
     let evidence_ty = ability::evidence_adt_type_ref(ir);
     let abi = CallableAbi::new(convention, param_ir_types.iter().copied(), return_ty);

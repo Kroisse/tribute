@@ -223,7 +223,7 @@ impl<'db> TypeChecker<'db> {
 
         // Only the exact root `main` is an entrypoint. A nested-module
         // function named `main` is an ordinary worker.
-        let is_root_main = func.name == "main" && self.current_prefix().is_empty();
+        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
 
         // Validate that root `main` returns Nil.
         if is_root_main
