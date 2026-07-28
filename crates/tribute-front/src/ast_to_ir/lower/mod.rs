@@ -411,6 +411,151 @@ pub(super) fn create_identity_done_k(
     closure_op.result(builder.ir)
 }
 
+/// Return the compiler-private completion carrier type used only by #815
+/// handle boundaries. Its values remain physically `anyref`.
+pub(super) fn cps_control_type(builder: &mut IrBuilder<'_, '_>) -> TypeRef {
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let i32_ty = builder.ctx.i32_type(builder.ir);
+    builder.ctx.adt_enum_type(
+        builder.ir,
+        Symbol::new("__tribute_cps_control"),
+        &[
+            (Symbol::new("Normal"), vec![anyref_ty]),
+            (Symbol::new("Escape"), vec![i32_ty, anyref_ty]),
+        ],
+    )
+}
+
+/// Create a done continuation which constructs a private `Normal` completion.
+/// The resulting closure is only passed where the
+/// recipient is known to return `__tribute_cps_control`.
+pub(super) fn create_cps_control_done_k(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+) -> ValueRef {
+    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::dialect::{adt, func};
+
+    use tribute_ir::dialect::{ability, closure};
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let control_ty = cps_control_type(builder);
+    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
+    let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
+    let done_ty = builder
+        .ctx
+        .func_type(builder.ir, &all_param_types, anyref_ty);
+    let module_block = builder
+        .ctx
+        .module_block()
+        .expect("module block should be set");
+    let tag = Symbol::new("Normal");
+
+    let create = |name| {
+        let done_block = builder.ir.create_block(BlockData {
+            location,
+            args: vec![
+                BlockArgData {
+                    ty: evidence_ty,
+                    attrs: Default::default(),
+                },
+                BlockArgData {
+                    ty: anyref_ty,
+                    attrs: Default::default(),
+                },
+                BlockArgData {
+                    ty: anyref_ty,
+                    attrs: Default::default(),
+                },
+            ],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let value = builder.ir.block_arg(done_block, 2);
+        let carrier = adt::variant_new(
+            builder.ir,
+            location,
+            vec![value],
+            anyref_ty,
+            control_ty,
+            tag,
+        );
+        builder.ir.push_op(done_block, carrier.op_ref());
+        let ret = func::r#return(builder.ir, location, [carrier.result(builder.ir)]);
+        builder.ir.push_op(done_block, ret.op_ref());
+        let done_region = builder.ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![done_block],
+            parent_op: None,
+        });
+        let done_func = func::func(builder.ir, location, name, done_ty, done_region);
+        builder.ir.push_op(module_block, done_func.op_ref());
+    };
+    let done_name = builder.ctx.normal_done_k_func(create);
+
+    let null = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);
+    builder.ir.push_op(builder.block, null.op_ref());
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
+    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+    let closure = closure::new(
+        builder.ir,
+        location,
+        null.result(builder.ir),
+        closure_ty,
+        done_name,
+    );
+    builder.ir.push_op(builder.block, closure.op_ref());
+    closure.result(builder.ir)
+}
+
+/// Create an invocation-local completion continuation for a general handler
+/// arm. Its captured i32 owner is the selected runtime evidence Marker tag;
+/// the owner itself is never boxed or allocated as a source value.
+pub(super) fn create_cps_escape_done_k(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    owner_tag: ValueRef,
+) -> ValueRef {
+    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::dialect::{adt, func};
+
+    use tribute_ir::dialect::closure;
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let control_ty = cps_control_type(builder);
+    let block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![BlockArgData {
+            ty: anyref_ty,
+            attrs: Default::default(),
+        }],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let value = builder.ir.block_arg(block, 0);
+    let escape = adt::variant_new(
+        builder.ir,
+        location,
+        [owner_tag, value],
+        anyref_ty,
+        control_ty,
+        Symbol::new("Escape"),
+    );
+    builder.ir.push_op(block, escape.op_ref());
+    let ret = func::r#return(builder.ir, location, [escape.result(builder.ir)]);
+    builder.ir.push_op(block, ret.op_ref());
+    let body = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    });
+    let func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
+    let closure_ty = builder.ctx.closure_type(builder.ir, func_ty);
+    let closure = closure::lambda(builder.ir, location, [owner_tag], closure_ty, body);
+    builder.ir.push_op(builder.block, closure.op_ref());
+    closure.result(builder.ir)
+}
+
 /// Emit a call to the `done_k` continuation closure with a result value,
 /// followed by `func.return` with the call's result.
 ///

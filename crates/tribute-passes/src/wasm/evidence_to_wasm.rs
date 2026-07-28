@@ -350,12 +350,11 @@ impl RewritePattern for EffectDispatchCpsPattern {
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let ability_ref = dispatch_op.ability_ref(ctx);
-        let dispatch_closure = insert_dispatch_closure_lookup(
+        let (dispatch_closure, owner_tag) = insert_dispatch_closure_and_owner(
             ctx,
             loc,
             dispatch_op.evidence(ctx),
             ability_ref,
-            MarkerField::HandlerDispatch,
             rewriter,
         );
         let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
@@ -369,6 +368,7 @@ impl RewritePattern for EffectDispatchCpsPattern {
                 dispatch_op.evidence(ctx),
                 env,
                 dispatch_op.continuation(ctx),
+                owner_tag,
                 op_idx,
                 dispatch_op.payload(ctx),
             ],
@@ -385,6 +385,53 @@ impl RewritePattern for EffectDispatchCpsPattern {
     fn name(&self) -> &'static str {
         "EffectDispatchCpsPattern"
     }
+}
+
+/// Extract the general handler closure and its dynamic owner from one selected
+/// Marker. WasmGC keeps both fields in the same immutable Marker struct.
+fn insert_dispatch_closure_and_owner(
+    ctx: &mut IrContext,
+    loc: Location,
+    evidence: ValueRef,
+    ability_ref_ty: TypeRef,
+    rewriter: &mut PatternRewriter<'_>,
+) -> (ValueRef, ValueRef) {
+    let ability_id = compute_ability_id(ctx, ability_ref_ty);
+    let i32_ty = intern_i32(ctx);
+    let marker_ty = ability::marker_adt_type_ref(ctx);
+    let closure_ty = crate::wasm::type_converter::closure_adt_type(ctx);
+
+    let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
+    let lookup = wasm_dialect::call(
+        ctx,
+        loc,
+        [evidence, ability_id_const.result(ctx)],
+        [marker_ty],
+        Symbol::new(evidence_abi::LOOKUP),
+    );
+    let marker = lookup.results(ctx)[0];
+    let closure_get = wasm_dialect::struct_get(
+        ctx,
+        loc,
+        marker,
+        closure_ty,
+        MARKER_IDX,
+        MarkerField::HandlerDispatch.index(),
+    );
+    let owner_get = wasm_dialect::struct_get(
+        ctx,
+        loc,
+        marker,
+        i32_ty,
+        MARKER_IDX,
+        MarkerField::PromptTag.index(),
+    );
+
+    rewriter.insert_op(ability_id_const.op_ref());
+    rewriter.insert_op(lookup.op_ref());
+    rewriter.insert_op(closure_get.op_ref());
+    rewriter.insert_op(owner_get.op_ref());
+    (closure_get.result(ctx), owner_get.result(ctx))
 }
 
 /// Pattern that matches `ability.evidence_extend` and replaces it with
@@ -1333,8 +1380,69 @@ mod tests {
 
         assert!(!output.contains("effect.dispatch_cps"), "{output}");
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
-        assert!(output.contains("wasm.struct_get"), "{output}");
-        assert!(output.contains("wasm.call_indirect"), "{output}");
+
+        fn result_name(line: &str) -> &str {
+            line.split_whitespace()
+                .next()
+                .expect("lowered operation must have an SSA result")
+        }
+        fn struct_operand(line: &str) -> &str {
+            line.split("wasm.struct_get ")
+                .nth(1)
+                .expect("expected wasm.struct_get")
+                .split_whitespace()
+                .next()
+                .expect("wasm.struct_get must have a struct operand")
+        }
+        let handler_field = format!("field_idx = {}", MarkerField::HandlerDispatch.index());
+        let prompt_field = format!("field_idx = {}", MarkerField::PromptTag.index());
+        let handler_get = output
+            .lines()
+            .find(|line| line.contains("wasm.struct_get") && line.contains(&handler_field))
+            .expect("CPS dispatch must extract MarkerField::HandlerDispatch");
+        let marker = struct_operand(handler_get);
+        let handler = result_name(handler_get);
+        let owner_get = output
+            .lines()
+            .find(|line| {
+                line.contains("wasm.struct_get")
+                    && line.contains(&prompt_field)
+                    && struct_operand(line) == marker
+            })
+            .expect("CPS dispatch must extract MarkerField::PromptTag from the same Marker");
+        let owner = result_name(owner_get);
+        let table_get = output
+            .lines()
+            .find(|line| {
+                line.contains("wasm.struct_get")
+                    && struct_operand(line) == handler
+                    && line.contains("field_idx = 0")
+            })
+            .expect("CPS dispatch must unpack the handler closure table index");
+        let table = result_name(table_get);
+        let env_get = output
+            .lines()
+            .find(|line| {
+                line.contains("wasm.struct_get")
+                    && struct_operand(line) == handler
+                    && line.contains("field_idx = 1")
+            })
+            .expect("CPS dispatch must unpack the handler closure environment");
+        let env = result_name(env_get);
+        let indirect = output
+            .lines()
+            .find(|line| line.contains("wasm.call_indirect"))
+            .expect("CPS dispatch must lower to wasm.call_indirect");
+        assert!(
+            indirect.contains(&format!(
+                "wasm.call_indirect {table}, %0, {env}, %1, {owner},"
+            )),
+            "CPS indirect call must pass the extracted owner after k:\n{output}"
+        );
+        assert!(
+            indirect.contains(", %2 {table ="),
+            "CPS indirect call must retain the source payload as its final argument:\n{output}"
+        );
     }
 
     #[test]

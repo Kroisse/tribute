@@ -8,8 +8,9 @@
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
-use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func, scf};
+use trunk_ir::Symbol;
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{adt, core, func, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
@@ -18,11 +19,59 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     RewriteScope, TypeConverter,
 };
-use trunk_ir::types::Location;
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use tribute_ir::dialect::ability;
 
 const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
+
+const CPS_CONTROL_TYPE: &str = "__tribute_cps_control";
+const CPS_NORMAL: &str = "Normal";
+const CPS_ESCAPE: &str = "Escape";
+
+/// Recreate the frontend-only completion-carrier type. Its only consumers are
+/// `ability.handle_dispatch` operands, which the frontend constructs from the
+/// matching private done continuations. This is the proof boundary: no source
+/// value reaches the operations below.
+fn cps_control_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+    let anyref_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let variants = Attribute::List(vec![
+        Attribute::List(vec![
+            Attribute::Symbol(Symbol::new(CPS_NORMAL)),
+            Attribute::List(vec![Attribute::Type(anyref_ty)]),
+        ]),
+        Attribute::List(vec![
+            Attribute::Symbol(Symbol::new(CPS_ESCAPE)),
+            Attribute::List(vec![Attribute::Type(i32_ty), Attribute::Type(anyref_ty)]),
+        ]),
+    ]);
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            .attr("name", Attribute::Symbol(Symbol::new(CPS_CONTROL_TYPE)))
+            .attr("variants", variants)
+            .build(),
+    )
+}
+
+fn anyref_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build())
+}
+
+fn i1_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+}
+
+fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
 
 /// Conversion target for IR after shared ability lowering.
 pub fn ability_lowered_target() -> ConversionTarget {
@@ -74,35 +123,238 @@ impl RewritePattern for LowerHandleDispatchPattern {
         };
 
         let location = ctx.op(op).location;
-        // operand[0] = body result (anyref), operand[1] = handler_fn (unused here)
+        // operand[0] = body result and is proven by frontend construction to
+        // be the private #815 carrier. owner_tag is a dynamic i32 token, never
+        // a source value or a syntactic prompt tag.
         let body_result = ctx.op_operands(op)[0];
+        let owner_tag = dispatch_op.owner_tag(ctx);
         let user_result_ty = dispatch_op.result_type(ctx);
         let handler_body = dispatch_op.body(ctx);
+        let escape_body = dispatch_op.escape(ctx);
 
-        // In the tail-call CPS design, the body result is the final value
-        // (effects are handled via tail calls, not YieldResult dispatch).
-        // Just apply the done handler to the body result.
+        // The frontend proves that this operand is the private #815 carrier:
+        // the body normal continuation constructs `Normal`, and general op
+        // arms construct `Escape`. Never apply these probes to a source SSA
+        // value or a public ADT.
         let done_region = get_done_region(ctx, handler_body);
+        let control_ty = cps_control_type(ctx);
+        let i1_ty = i1_type(ctx);
+        let normal = adt::variant_is(
+            ctx,
+            location,
+            body_result,
+            i1_ty,
+            control_ty,
+            Symbol::new(CPS_NORMAL),
+        );
+        rewriter.insert_op(normal.op_ref());
 
-        let block = ctx.op(op).parent_block.unwrap();
-        let final_result = if let Some(done_body) = done_region {
-            inline_done_body(ctx, block, location, done_body, body_result, op)
-        } else {
-            body_result
-        };
-
-        // Cast to user result type if needed
-        let result_val = if ctx.value_ty(final_result) != user_result_ty {
-            let cast =
-                core::unrealized_conversion_cast(ctx, location, final_result, user_result_ty);
-            rewriter.insert_op(cast.op_ref());
-            cast.result(ctx)
-        } else {
-            final_result
-        };
-
-        rewriter.erase_op(vec![result_val]);
+        let normal_region = completion_region(
+            ctx,
+            location,
+            body_result,
+            control_ty,
+            Symbol::new(CPS_NORMAL),
+            user_result_ty,
+            done_region,
+        );
+        let escape_region = escape_region(
+            ctx,
+            location,
+            body_result,
+            control_ty,
+            owner_tag,
+            user_result_ty,
+            escape_body,
+        );
+        let dispatch = scf::r#if(
+            ctx,
+            location,
+            normal.result(ctx),
+            user_result_ty,
+            normal_region,
+            escape_region,
+        );
+        rewriter.insert_op(dispatch.op_ref());
+        rewriter.erase_op(vec![dispatch.result(ctx)]);
         true
+    }
+}
+
+/// Build the Normal branch. Its carrier proof comes from the matching
+/// `ability.handle_dispatch` operand and the preceding private variant test.
+fn completion_region(
+    ctx: &mut IrContext,
+    location: Location,
+    carrier: ValueRef,
+    control_ty: trunk_ir::refs::TypeRef,
+    tag: Symbol,
+    user_result_ty: trunk_ir::refs::TypeRef,
+    done_body: Option<RegionRef>,
+) -> RegionRef {
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let anyref_ty = anyref_type(ctx);
+    let cast = adt::variant_cast(ctx, location, carrier, anyref_ty, control_ty, tag);
+    ctx.push_op(block, cast.op_ref());
+    let payload = adt::variant_get(
+        ctx,
+        location,
+        cast.result(ctx),
+        anyref_ty,
+        control_ty,
+        tag,
+        0,
+    );
+    ctx.push_op(block, payload.op_ref());
+    let payload = payload.result(ctx);
+    let result = if let Some(done_body) = done_body {
+        inline_done_body(ctx, block, done_body, payload)
+    } else {
+        payload
+    };
+    let result = if ctx.value_ty(result) != user_result_ty {
+        let cast = core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
+        ctx.push_op(block, cast.op_ref());
+        cast.result(ctx)
+    } else {
+        result
+    };
+    let yield_op = scf::r#yield(ctx, location, [result]);
+    ctx.push_op(block, yield_op.op_ref());
+    ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
+
+/// Build the Escape branch. A foreign owner returns the exact carrier without
+/// entering a source continuation or `do` region; the matching owner inlines
+/// the frontend-built completion region.
+fn escape_region(
+    ctx: &mut IrContext,
+    location: Location,
+    carrier: ValueRef,
+    control_ty: trunk_ir::refs::TypeRef,
+    owner_tag: ValueRef,
+    user_result_ty: trunk_ir::refs::TypeRef,
+    escape_body: RegionRef,
+) -> RegionRef {
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let anyref_ty = anyref_type(ctx);
+    let i32_ty = i32_type(ctx);
+    let i1_ty = i1_type(ctx);
+    let cast = adt::variant_cast(
+        ctx,
+        location,
+        carrier,
+        anyref_ty,
+        control_ty,
+        Symbol::new(CPS_ESCAPE),
+    );
+    ctx.push_op(block, cast.op_ref());
+    let owner = adt::variant_get(
+        ctx,
+        location,
+        cast.result(ctx),
+        i32_ty,
+        control_ty,
+        Symbol::new(CPS_ESCAPE),
+        0,
+    );
+    ctx.push_op(block, owner.op_ref());
+    let payload = adt::variant_get(
+        ctx,
+        location,
+        cast.result(ctx),
+        anyref_ty,
+        control_ty,
+        Symbol::new(CPS_ESCAPE),
+        1,
+    );
+    ctx.push_op(block, payload.op_ref());
+    let same_owner = trunk_ir::dialect::arith::cmpi(
+        ctx,
+        location,
+        owner.result(ctx),
+        owner_tag,
+        i1_ty,
+        Symbol::new("eq"),
+    );
+    ctx.push_op(block, same_owner.op_ref());
+
+    let own_block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let own_result = inline_done_body(ctx, own_block, escape_body, payload.result(ctx));
+    let own_result = cast_result_if_needed(ctx, own_block, location, own_result, user_result_ty);
+    let own_yield = scf::r#yield(ctx, location, [own_result]);
+    ctx.push_op(own_block, own_yield.op_ref());
+    let own_region = ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![own_block],
+        parent_op: None,
+    });
+
+    let foreign_block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let foreign = cast_result_if_needed(ctx, foreign_block, location, carrier, user_result_ty);
+    let foreign_yield = scf::r#yield(ctx, location, [foreign]);
+    ctx.push_op(foreign_block, foreign_yield.op_ref());
+    let foreign_region = ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![foreign_block],
+        parent_op: None,
+    });
+
+    let dispatch = scf::r#if(
+        ctx,
+        location,
+        same_owner.result(ctx),
+        user_result_ty,
+        own_region,
+        foreign_region,
+    );
+    ctx.push_op(block, dispatch.op_ref());
+    let yield_op = scf::r#yield(ctx, location, [dispatch.result(ctx)]);
+    ctx.push_op(block, yield_op.op_ref());
+    ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
+
+fn cast_result_if_needed(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    result: ValueRef,
+    user_result_ty: trunk_ir::refs::TypeRef,
+) -> ValueRef {
+    if ctx.value_ty(result) == user_result_ty {
+        result
+    } else {
+        let cast = core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
+        ctx.push_op(block, cast.op_ref());
+        cast.result(ctx)
     }
 }
 
@@ -130,10 +382,8 @@ fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
 fn inline_done_body(
     ctx: &mut IrContext,
     dest_block: BlockRef,
-    _location: Location,
     done_body: trunk_ir::refs::RegionRef,
     done_value: ValueRef,
-    insert_before: OpRef,
 ) -> ValueRef {
     let done_blocks = &ctx.region(done_body).blocks;
     let Some(&done_block) = done_blocks.first() else {
@@ -157,7 +407,7 @@ fn inline_done_body(
             continue;
         }
         let cloned = ctx.clone_op(done_op, &mut mapping);
-        ctx.insert_op_before(dest_block, insert_before, cloned);
+        ctx.push_op(dest_block, cloned);
         let cloned_results = ctx.op_results(cloned);
         if !cloned_results.is_empty() {
             final_result = cloned_results[0];
@@ -185,10 +435,14 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   func.func @run() -> tribute_rt.anyref {
-    %body = arith.const {value = 42} : tribute_rt.anyref
+    %value = arith.const {value = 42} : tribute_rt.anyref
+    %body = adt.variant_new %value {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
@@ -197,6 +451,9 @@ mod tests {
         ^bb0(%k: tribute_rt.anyref, %sv: tribute_rt.anyref):
           scf.yield %k
       }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        scf.yield %v
     }
     func.return %result
   }
@@ -217,10 +474,14 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   func.func @run() -> core.i32 {
-    %body = arith.const {value = 10} : tribute_rt.anyref
+    %value = arith.const {value = 10} : tribute_rt.anyref
+    %body = adt.variant_new %value {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = core.i32} : core.i32 {
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = core.i32} : core.i32 {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           %one = arith.const {value = 1} : core.i32
@@ -228,6 +489,10 @@ mod tests {
           %sum = arith.addi %cast, %one : core.i32
           scf.yield %sum
       }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        %cast = core.unrealized_conversion_cast %v : core.i32
+        scf.yield %cast
     }
     func.return %result
   }
@@ -248,14 +513,21 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   func.func @run() -> tribute_rt.anyref {
-    %body = arith.const {value = 42} : tribute_rt.anyref
+    %value = arith.const {value = 42} : tribute_rt.anyref
+    %body = adt.variant_new %value {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: tribute_rt.anyref, %sv: tribute_rt.anyref):
           scf.yield %k
       }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        scf.yield %v
     }
     func.return %result
   }
@@ -265,6 +537,48 @@ mod tests {
         lower_handle_dispatch(&mut ctx, module).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
+        assert_snapshot!(ir_text);
+    }
+
+    /// A different dynamic owner is not a completed source result. The final
+    /// handle pass must forward that exact private carrier without entering
+    /// either completion region.
+    #[test]
+    fn test_lower_handle_dispatch_forwards_foreign_escape() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
+  func.func @run() -> tribute_rt.anyref {
+    %payload = arith.const {value = 42} : tribute_rt.anyref
+    %foreign_owner = arith.const {value = 2} : core.i32
+    %body = adt.variant_new %foreign_owner, %payload {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 1} : core.i32
+    %handler_fn = arith.const {value = 0} : tribute_rt.anyref
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+      ability.done {
+        ^bb0(%v: tribute_rt.anyref):
+          scf.yield %v
+      }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        %marker = arith.const {value = 99} : tribute_rt.anyref
+        scf.yield %marker
+    }
+    func.return %result
+  }
+}"#,
+        );
+
+        lower_handle_dispatch(&mut ctx, module).unwrap();
+
+        let ir_text = print_module(&ctx, module.op());
+        assert!(
+            ir_text.contains("scf.yield %2"),
+            "foreign branch must yield the carrier"
+        );
         assert_snapshot!(ir_text);
     }
 
@@ -290,25 +604,38 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   func.func @selected() -> tribute_rt.anyref {
-    %body = arith.const {value = 42} : tribute_rt.anyref
+    %value = arith.const {value = 42} : tribute_rt.anyref
+    %body = adt.variant_new %value {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
       }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        scf.yield %v
     }
     func.return %result
   }
   func.func @untouched() -> tribute_rt.anyref {
-    %body = arith.const {value = 7} : tribute_rt.anyref
+    %value = arith.const {value = 7} : tribute_rt.anyref
+    %body = adt.variant_new %value {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+    %owner = arith.const {value = 2} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %handler_fn {tag = 2, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 2, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
       }
+    } {
+      ^bb0(%v: tribute_rt.anyref):
+        scf.yield %v
     }
     func.return %result
   }

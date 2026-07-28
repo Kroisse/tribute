@@ -39,6 +39,13 @@ pub struct CaptureInfo {
 #[derive(Default)]
 struct GeneratedFunctionCache {
     identity_done_k: Option<Symbol>,
+    normal_done_k: Option<Symbol>,
+}
+
+#[derive(Clone, Copy)]
+enum DoneKKind {
+    Identity,
+    Normal,
 }
 
 /// Context for lowering AST to arena TrunkIR.
@@ -54,6 +61,9 @@ pub struct IrLoweringCtx<'db> {
     /// Scoped tags identifying locals whose SSA value is a suspended handler
     /// continuation rather than a source value.
     resume_scopes: Vec<HashSet<LocalId>>,
+    /// Dynamic prompt owner token in scope while lowering one general handler
+    /// arm. It is an SSA i32 supplied by the selected evidence Marker.
+    handler_owner_scopes: Vec<Option<ValueRef>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
     /// Ability-level calling-convention requirements.
@@ -127,6 +137,7 @@ impl<'db> IrLoweringCtx<'db> {
             span_map,
             scopes: vec![HashMap::new()],
             resume_scopes: vec![HashSet::new()],
+            handler_owner_scopes: vec![None],
             function_types,
             ability_conventions,
             definition_conventions: HashMap::new(),
@@ -150,6 +161,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Select immutable policies before lowering begins.
     pub(crate) fn with_options(mut self, options: AstToIrOptions) -> Self {
         debug_assert!(self.generated_functions.identity_done_k.is_none());
+        debug_assert!(self.generated_functions.normal_done_k.is_none());
         self.options = options;
         self
     }
@@ -200,12 +212,15 @@ impl<'db> IrLoweringCtx<'db> {
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
         self.resume_scopes.push(HashSet::new());
+        self.handler_owner_scopes
+            .push(self.handler_owner_scopes.last().copied().flatten());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
     fn exit_scope(&mut self) {
         self.scopes.pop();
         self.resume_scopes.pop();
+        self.handler_owner_scopes.pop();
     }
 
     /// Bind a local variable to an SSA value.
@@ -229,6 +244,16 @@ impl<'db> IrLoweringCtx<'db> {
             .any(|scope| scope.contains(&local_id))
             .then(|| self.lookup(local_id))
             .flatten()
+    }
+
+    pub(crate) fn set_handler_owner_tag(&mut self, owner_tag: ValueRef) {
+        if let Some(slot) = self.handler_owner_scopes.last_mut() {
+            *slot = Some(owner_tag);
+        }
+    }
+
+    pub(crate) fn handler_owner_tag(&self) -> Option<ValueRef> {
+        self.handler_owner_scopes.last().copied().flatten()
     }
 
     /// Look up a function's type scheme by name.
@@ -390,6 +415,16 @@ impl<'db> IrLoweringCtx<'db> {
     ///
     /// The symbol is cached only after `init` completes successfully.
     pub(crate) fn identity_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
+        self.done_k_func(DoneKKind::Identity, init)
+    }
+
+    /// Return a private CPS completion helper selected by the optimization
+    /// profile. These helpers share the ordinary done-continuation cache policy.
+    pub(crate) fn normal_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
+        self.done_k_func(DoneKKind::Normal, init)
+    }
+
+    fn done_k_func(&mut self, kind: DoneKKind, init: impl FnOnce(Symbol)) -> Symbol {
         match self.options.done_continuation {
             DoneContinuationPolicy::PerUse => {
                 let name = self.gen_lambda_name();
@@ -399,13 +434,20 @@ impl<'db> IrLoweringCtx<'db> {
             DoneContinuationPolicy::PerCompilationUnit => {}
         }
 
-        if let Some(name) = self.generated_functions.identity_done_k {
+        let cached = match kind {
+            DoneKKind::Identity => self.generated_functions.identity_done_k,
+            DoneKKind::Normal => self.generated_functions.normal_done_k,
+        };
+        if let Some(name) = cached {
             return name;
         }
 
         let name = self.gen_compilation_unit_lambda_name();
         init(name);
-        self.generated_functions.identity_done_k = Some(name);
+        match kind {
+            DoneKKind::Identity => self.generated_functions.identity_done_k = Some(name),
+            DoneKKind::Normal => self.generated_functions.normal_done_k = Some(name),
+        }
         name
     }
 

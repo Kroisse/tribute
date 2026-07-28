@@ -21,7 +21,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -585,26 +585,39 @@ fn transform_shifts_in_block(
             let tag = dispatch_op.tag(ctx);
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
 
+            // The frontend emits a target-independent fresh-token request at
+            // every handle. Resolve it here, before either backend and before
+            // lower_handle_dispatch consume the handle boundary.
+            let owner_request = dispatch_op.owner_tag(ctx);
+            let owner_tag = match ctx.value_def(owner_request) {
+                ValueDef::OpResult(owner_op, _)
+                    if effect::FreshPromptTag::from_op(ctx, owner_op).is_ok() =>
+                {
+                    let i32_ty = i32_type_ref(ctx);
+                    let tag_call = func::call(
+                        ctx,
+                        loc,
+                        std::iter::empty::<ValueRef>(),
+                        i32_ty,
+                        Symbol::new("__tribute_next_tag"),
+                    );
+                    let tag_val = tag_call.result(ctx);
+                    ctx.insert_op_before(block, op, tag_call.op_ref());
+                    ctx.replace_all_uses(owner_request, tag_val);
+                    erase_op(ctx, owner_op);
+                    tag_val
+                }
+                _ => owner_request,
+            };
+
             let mut current_ev = ev_value;
 
             if !abilities.is_empty() {
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
-                let i32_ty = i32_type_ref(ctx);
 
                 // All evidence extension ops are inserted before handle_dispatch.
                 // The body closure call (which needs extended evidence) is moved
                 // to after the extension, also before handle_dispatch.
-
-                // Generate runtime tag
-                let tag_call = func::call(
-                    ctx,
-                    loc,
-                    std::iter::empty::<ValueRef>(),
-                    i32_ty,
-                    Symbol::new("__tribute_next_tag"),
-                );
-                let tag_val = ctx.op_result(tag_call.op_ref(), 0);
-                ctx.insert_op_before(block, op, tag_call.op_ref());
 
                 // Extract handler_fn and tr_dispatch_fn from handle_dispatch operands.
                 // Keep them as semantic closure values; backend-specific lowering
@@ -612,11 +625,11 @@ fn transform_shifts_in_block(
                 let operands = ctx.op_operands(op).to_vec();
 
                 let tr_dispatch_fn_val = *operands
-                    .get(2)
-                    .expect("handle_dispatch must have operand[2] (tr_dispatch_fn)");
+                    .get(3)
+                    .expect("handle_dispatch must have operand[3] (tr_dispatch_fn)");
                 let handler_dispatch_val = *operands
-                    .get(1)
-                    .expect("handle_dispatch must have operand[1] (handler closure)");
+                    .get(2)
+                    .expect("handle_dispatch must have operand[2] (handler closure)");
 
                 // Extend evidence for each ability
                 for &ability_ref in &abilities {
@@ -624,7 +637,7 @@ fn transform_shifts_in_block(
                         ctx,
                         loc,
                         current_ev,
-                        tag_val,
+                        owner_tag,
                         tr_dispatch_fn_val,
                         handler_dispatch_val,
                         evidence_ty,

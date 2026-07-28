@@ -1,0 +1,35 @@
+---
+source: crates/tribute-passes/src/lower_handle_dispatch.rs
+expression: ir_text
+---
+core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
+
+  func.func @run() -> tribute_rt.anyref {
+      %0 = arith.const {value = 42} : tribute_rt.anyref
+      %1 = arith.const {value = 2} : core.i32
+      %2 = adt.variant_new %1, %0 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+      %3 = arith.const {value = 1} : core.i32
+      %4 = arith.const {value = 0} : tribute_rt.anyref
+      %5 = arith.const {value = 0} : tribute_rt.anyref
+      %6 = adt.variant_is %2 {tag = @Normal, type = !__tribute_cps_control} : core.i1
+      %7 = scf.if %6 : tribute_rt.anyref {
+          %8 = adt.variant_cast %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+          %9 = adt.variant_get %8 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+          scf.yield %9
+      } {
+          %10 = adt.variant_cast %2 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %11 = adt.variant_get %10 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
+          %12 = adt.variant_get %10 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %13 = arith.cmpi %11, %3 {predicate = @eq} : core.i1
+          %14 = scf.if %13 : tribute_rt.anyref {
+              %15 = arith.const {value = 99} : tribute_rt.anyref
+              scf.yield %15
+          } {
+              scf.yield %2
+          }
+          scf.yield %14
+      }
+      func.return %7
+  }
+}

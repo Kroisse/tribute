@@ -817,11 +817,8 @@ fn lower_value_impl<'db>(
         }
 
         ExprKind::Handle { body, handlers } => {
-            // A handle is internally CPS, but its delimiter turns its completed
-            // HandleAnswer into a source value.  A raw Direct/EvidenceDirect
-            // parent owns exactly one normalization traversal of the complete
-            // handle; a normalized CPS parent has already normalized these
-            // isolated regions and must not allocate another set of temps.
+            // A source or ambient parent closes the private carrier at this
+            // delimiter. `HandleAnswer` composition uses lower_comp instead.
             if !nested_regions_normalized {
                 let normalized = super::super::normalize::normalize_for_cps(
                     builder.ctx,
@@ -928,10 +925,8 @@ pub(super) fn evaluation_control_class<'db>(
 
     match &*expr.kind {
         ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
-        // A handle is a source-value delimiter: its body/arms can be CPS, but
-        // a completed HandleAnswer is converted only at that delimiter before
-        // its parent receives the source value.  Resume, in contrast, must
-        // compose the arm-local current continuation.
+        // A source delimiter is Direct by default. The existing HandleAnswer
+        // domain selects carrier propagation structurally below.
         ExprKind::Handle { .. } => EvaluationControlClass::Direct,
         ExprKind::Resume { .. } => EvaluationControlClass::Cps,
         ExprKind::Call { callee, args } => {
@@ -1001,6 +996,84 @@ pub(super) fn evaluation_control_class<'db>(
     }
 }
 
+/// Classify evaluation under a typed CPS answer domain. Ambient and
+/// `HandleAnswer` computations carry the opaque private result, so nested
+/// handles forward foreign Escapes to their dynamic owner. Source convention
+/// selection continues to use `evaluation_control_class` above, preserving
+/// #817's Direct/EvidenceDirect/Cps ordering.
+pub(super) fn evaluation_control_class_in<'db, D: ControlDomain>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    expr: &Expr<TypedRef<'db>>,
+) -> EvaluationControlClass {
+    let children = |children: &[Expr<TypedRef<'db>>]| {
+        children
+            .iter()
+            .fold(EvaluationControlClass::Direct, |class, child| {
+                class.join(evaluation_control_class_in::<D>(ctx, child))
+            })
+    };
+
+    match &*expr.kind {
+        ExprKind::Handle { .. } if D::PROPAGATES_HANDLES => EvaluationControlClass::Cps,
+        ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
+        ExprKind::Call { callee, args } => {
+            let call = if is_cps_call_expr(ctx, expr) {
+                EvaluationControlClass::Cps
+            } else {
+                EvaluationControlClass::Direct
+            };
+            call.join(evaluation_control_class_in::<D>(ctx, callee))
+                .join(children(args))
+        }
+        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+            children(args)
+        }
+        ExprKind::Record { fields, spread, .. } => {
+            let spread = spread
+                .as_ref()
+                .map_or(EvaluationControlClass::Direct, |spread| {
+                    evaluation_control_class_in::<D>(ctx, spread)
+                });
+            fields.iter().fold(spread, |class, (_, field)| {
+                class.join(evaluation_control_class_in::<D>(ctx, field))
+            })
+        }
+        ExprKind::Block { stmts, value } => {
+            let statements = stmts
+                .iter()
+                .fold(EvaluationControlClass::Direct, |class, stmt| {
+                    let expr = match stmt {
+                        Stmt::Let { value, .. } => value,
+                        Stmt::Expr { expr, .. } => expr,
+                    };
+                    class.join(evaluation_control_class_in::<D>(ctx, expr))
+                });
+            statements.join(evaluation_control_class_in::<D>(ctx, value))
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => evaluation_control_class_in::<D>(ctx, lhs)
+            .join(evaluation_control_class_in::<D>(ctx, rhs)),
+        ExprKind::Case { scrutinee, arms } => arms.iter().fold(
+            evaluation_control_class_in::<D>(ctx, scrutinee),
+            |class, arm| {
+                let guard = arm
+                    .guard
+                    .as_ref()
+                    .map_or(EvaluationControlClass::Direct, |guard| {
+                        evaluation_control_class_in::<D>(ctx, guard)
+                    });
+                class
+                    .join(guard)
+                    .join(evaluation_control_class_in::<D>(ctx, &arm.body))
+            },
+        ),
+        ExprKind::MethodCall { receiver, args, .. } => {
+            evaluation_control_class_in::<D>(ctx, receiver).join(children(args))
+        }
+        ExprKind::Resume { .. } => EvaluationControlClass::Cps,
+        _ => evaluation_control_class(ctx, expr),
+    }
+}
+
 /// Lower an unnormalized computation entry exactly once.
 pub(super) fn lower_comp<'db, D: ControlDomain>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -1017,7 +1090,7 @@ pub(super) fn lower_comp_normalized<'db, D: ControlDomain>(
     expr: Expr<TypedRef<'db>>,
     continuation: ContinuationRef<D>,
 ) -> Option<ControlResultRef<D>> {
-    if evaluation_control_class(builder.ctx, &expr) == EvaluationControlClass::Direct {
+    if evaluation_control_class_in::<D>(builder.ctx, &expr) == EvaluationControlClass::Direct {
         let location = builder.location(expr.id);
         let value = lower_value_normalized(builder, expr)?;
         return Some(invoke_continuation(builder, location, continuation, value));
@@ -1045,6 +1118,9 @@ pub(super) fn lower_comp_normalized<'db, D: ControlDomain>(
             local_id,
             continuation,
         ),
+        ExprKind::Handle { body, handlers } => {
+            super::handle::lower_handle_comp(builder, location, &body, &handlers, continuation)
+        }
         _ => panic!("ICE: non-normal CPS expression reached computation lowering"),
     }
 }
@@ -1066,7 +1142,7 @@ pub(super) fn lower_normalized_block<'db, D: ControlDomain>(
             Stmt::Let { value, .. } => value,
             Stmt::Expr { expr, .. } => expr,
         };
-        if evaluation_control_class(builder.ctx, rhs) == EvaluationControlClass::Direct {
+        if evaluation_control_class_in::<D>(builder.ctx, rhs) == EvaluationControlClass::Direct {
             lower_single_stmt(builder, stmt);
             continue;
         }
@@ -1492,6 +1568,15 @@ fn build_cps_continuation<'db, D: ControlDomain>(
         builder,
         Symbol::new("__outer_k"),
         Some(continuation_abi(body.outer_k)),
+    );
+    // The dynamic owner is lowering metadata rather than a source local, so
+    // AST free-variable analysis cannot see it. A continuation formed inside
+    // a general handler may compare it after closure extraction.
+    capture_ctx_value(
+        &mut captures,
+        builder,
+        Symbol::new("__handler_owner"),
+        builder.ctx.handler_owner_tag(),
     );
 
     // Build body region with one parameter: the ability op result (anyref).

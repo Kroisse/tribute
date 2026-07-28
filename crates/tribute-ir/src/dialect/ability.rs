@@ -34,12 +34,17 @@ mod ability {
     #[attr(ability_ref: Type, op_name: Symbol)]
     fn perform(continuation: (), #[rest] values: ()) -> result {}
 
-    /// Handler dispatch loop over a YieldResult value.
+    /// Handler dispatch over a proven private CPS answer.
     ///
-    /// Matches the prompt tag and dispatches to the appropriate handler
-    /// arm in the body region.
+    /// Runs the `Normal` path or a matching-owner `Escape` path and forwards
+    /// a foreign `Escape` unchanged through the escape region.
     ///
-    /// The `handler_fn` operand is a closure `(k, op_idx, value) -> void`
+    /// The `owner_tag` operand is the dynamic prompt owner for this handle
+    /// activation. `resolve_evidence` threads the same value into every
+    /// installed Marker.
+    ///
+    /// The `handler_fn` operand is a closure
+    /// `(k, owner_tag, op_idx, value) -> anyref`
     /// that dispatches to the appropriate handler arm. It is stored in the
     /// Marker's `handler_dispatch` field by `resolve_evidence` for use by
     /// the tail-call-based CPS path in `lower_ability_perform`.
@@ -50,13 +55,16 @@ mod ability {
     /// are no `fn` handlers.
     ///
     /// ```text
-    /// %result = ability.handle_dispatch %yield_result, %handler_fn, %tr_dispatch_fn
+    /// %result = ability.handle_dispatch %yield_result, %owner_tag,
+    ///   %handler_fn, %tr_dispatch_fn
     ///   { tag: 0, result_type: anyref }
     ///   body { ... handler arms ... }
     /// ```
     #[attr(tag: u32, result_type: Type)]
-    fn handle_dispatch(value: (), handler_fn: (), tr_dispatch_fn: ()) -> result {
+    fn handle_dispatch(value: (), owner_tag: (), handler_fn: (), tr_dispatch_fn: ()) -> result {
         #[region(body)]
+        {}
+        #[region(escape)]
         {}
     }
 
@@ -318,8 +326,9 @@ pub fn evidence_runtime_symbols() -> [Symbol; 5] {
 /// not fully tail-resumptive.
 ///
 /// `handler_dispatch` is a pointer to the full CPS handler dispatch closure
-/// `(k: ptr, op_idx: i32, value: ptr) -> void`, or null if not using
-/// full CPS. Used by the tail-call-based effect handling path.
+/// `(k: ptr, owner_tag: i32, op_idx: i32, value: ptr) -> ptr`, or null if not
+/// using full CPS. It returns the private `Normal`/`Escape` answer through the
+/// compatibility ABI and is used by the tail-call-based effect handling path.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let fields_attr = Attribute::List(
         MARKER_FIELDS

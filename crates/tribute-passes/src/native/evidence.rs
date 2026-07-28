@@ -504,6 +504,19 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let dispatch_val = dispatch_closure.result(ctx);
         rewriter.insert_op(dispatch_closure.op_ref());
 
+        // The native lookup ABI already returns the Marker prompt tag. Thread
+        // that dynamic owner into the general handler closure; it is compared
+        // only against a proven private Escape by shared lowering.
+        let owner_lookup = func::call(
+            ctx,
+            loc,
+            [dispatch_op.evidence(ctx), ability_id_val],
+            i32_ty,
+            Symbol::new(evidence_abi::LOOKUP),
+        );
+        let owner_tag = owner_lookup.result(ctx);
+        rewriter.insert_op(owner_lookup.op_ref());
+
         let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
         let op_idx_val = op_idx_op.result(ctx);
         rewriter.insert_op(op_idx_op.op_ref());
@@ -525,6 +538,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
                 dispatch_op.evidence(ctx),
                 env_val,
                 dispatch_op.continuation(ctx),
+                owner_tag,
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
