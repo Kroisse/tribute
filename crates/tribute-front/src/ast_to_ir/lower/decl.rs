@@ -134,8 +134,8 @@ fn prescan_struct_fields<'db>(
 ///
 /// An omitted effect annotation denotes an open row, but its generalized tail
 /// does not by itself require the definition's worker to use CPS. Concrete
-/// residual effects still contribute their ability-level requirements. An
-/// explicit annotations use the convention derived from their closed row.
+/// residual effects still contribute their ability-level requirements.
+/// Explicit annotations use the convention derived from their closed row.
 fn prescan_definition_conventions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     decls: &[Decl<TypedRef<'db>>],
