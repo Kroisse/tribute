@@ -13,6 +13,39 @@ use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
+/// A diagnosed CPS root must still leave valid IR: failed CPS lowering uses
+/// the same Nil fallback as other direct-returning functions.
+#[salsa_test]
+fn test_root_main_cps_lowering_failure_still_returns(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn apply_open(value: Int, callback: fn(Int) -> Nil) -> Nil {
+    callback(value)
+}
+
+fn main() {
+    apply_open(State::get, fn(_) { Nil })
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let main = ir_text
+        .split("func.func @main")
+        .nth(1)
+        .expect("root main must be lowered");
+    assert!(
+        main.contains("func.return"),
+        "root main must retain a terminator after CPS lowering fails:\n{main}"
+    );
+}
+
 // ========================================================================
 // Resume Expression Tests
 // ========================================================================

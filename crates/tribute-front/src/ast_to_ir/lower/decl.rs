@@ -480,16 +480,19 @@ fn lower_function<'db>(
                     &mut builder,
                     location,
                 );
-                if let Some(answer) = expr::lower_comp(&mut builder, func_decl.body, done_k) {
-                    let result = super::control::root_main_answer_to_source(
-                        &mut builder,
-                        location,
-                        answer,
-                        return_ty,
-                    );
-                    let ret_op = func::r#return(builder.ir, location, [result]);
-                    builder.ir.push_op(builder.block, ret_op.op_ref());
-                }
+                let result =
+                    if let Some(answer) = expr::lower_comp(&mut builder, func_decl.body, done_k) {
+                        super::control::root_main_answer_to_source(
+                            &mut builder,
+                            location,
+                            answer,
+                            return_ty,
+                        )
+                    } else {
+                        builder.emit_nil(location)
+                    };
+                let ret_op = func::r#return(builder.ir, location, [result]);
+                builder.ir.push_op(builder.block, ret_op.op_ref());
             } else if let Some(result) = expr::lower_value(&mut builder, func_decl.body) {
                 let result = builder.cast_if_needed(location, result, return_ty);
                 let ret_op = func::r#return(builder.ir, location, [result]);
