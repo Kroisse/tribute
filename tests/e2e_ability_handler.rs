@@ -7,6 +7,330 @@ mod common;
 
 use common::{assert_native_output, compile_and_run_native};
 
+fn cps_control_read_outcome_program() -> &'static str {
+    r#"
+use abilities::Throw
+use std::io::{Error, Io, print_line, read_line}
+
+// `Line` intentionally owns public enum tag zero. The normal path pattern
+// matches and transforms its payload, so treating this value as a private
+// carrier cannot accidentally produce the expected result.
+enum ReadOutcome {
+    Line(String),
+    EndOfInput,
+}
+
+ability Gate {
+    op decide() -> ReadOutcome
+}
+
+fn read_outcome() ->{Io} ReadOutcome {
+    handle read_line() {
+        do line { ReadOutcome::Line(line) }
+        op Throw::throw(error) {
+            case error {
+                Error::EndOfFile -> ReadOutcome::EndOfInput
+                _ -> ReadOutcome::EndOfInput
+            }
+        }
+    }
+}
+
+fn gate_body() ->{Gate} ReadOutcome {
+    let value = Gate::decide()
+    case value {
+        ReadOutcome::Line(text) -> ReadOutcome::Line(text <> "-suffix")
+        ReadOutcome::EndOfInput -> ReadOutcome::EndOfInput
+    }
+}
+
+fn nested_gate(stop: Bool) -> ReadOutcome {
+    let inner = handle gate_body() {
+        do value {
+            case value {
+                ReadOutcome::Line(text) -> ReadOutcome::Line(text <> "-inner-do")
+                ReadOutcome::EndOfInput -> ReadOutcome::Line("inner-do-eof")
+            }
+        }
+        // This is an ordinary `op`, not a `Never` operation. The branch
+        // dynamically completes without resume and must skip the `do` arm.
+        op Gate::decide() {
+            case stop {
+                True -> ReadOutcome::EndOfInput
+                False -> resume ReadOutcome::Line("resumed")
+            }
+        }
+    }
+    handle inner {
+        do value {
+            case value {
+                ReadOutcome::Line(text) -> ReadOutcome::Line(text <> "-outer-do")
+                ReadOutcome::EndOfInput -> ReadOutcome::Line("outer-do-eof")
+            }
+        }
+        op Throw::throw(_) { ReadOutcome::EndOfInput }
+    }
+}
+
+fn print_outcome(outcome: ReadOutcome) {
+    case outcome {
+        ReadOutcome::Line(text) -> print_line("line:" <> text)
+        ReadOutcome::EndOfInput -> print_line("eof")
+    }
+}
+
+fn main() {
+    print_outcome(read_outcome())
+    print_outcome(nested_gate(False))
+    print_outcome(nested_gate(True))
+}
+"#
+}
+
+#[test]
+fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume() {
+    for (name, stdin, expected) in [
+        (
+            "input",
+            b"typed\n".as_slice(),
+            "line:typed\nline:resumed-suffix-inner-do-outer-do\nline:outer-do-eof\n",
+        ),
+        (
+            "eof",
+            b"".as_slice(),
+            "eof\nline:resumed-suffix-inner-do-outer-do\nline:outer-do-eof\n",
+        ),
+    ] {
+        let profiles = [
+            (
+                "production",
+                common::compile_and_run_native_with_stdin(
+                    &format!("cps_control_read_outcome_{name}_production.trb"),
+                    cps_control_read_outcome_program(),
+                    stdin,
+                ),
+            ),
+            (
+                "baseline",
+                common::compile_and_run_native_with_stdin_baseline_optimizations(
+                    &format!("cps_control_read_outcome_{name}_baseline.trb"),
+                    cps_control_read_outcome_program(),
+                    stdin,
+                ),
+            ),
+            (
+                "asan",
+                common::compile_and_run_native_with_stdin_asan(
+                    &format!("cps_control_read_outcome_{name}_asan.trb"),
+                    cps_control_read_outcome_program(),
+                    stdin,
+                ),
+            ),
+        ];
+        for (profile, output) in profiles {
+            assert!(
+                output.status.success(),
+                "{name}/{profile}: exit={:?}, stderr='{}'",
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                expected,
+                "{name}/{profile}"
+            );
+        }
+    }
+}
+
+fn cps_control_outer_nonresumptive_crosses_inner_handle_program() -> &'static str {
+    r#"
+use std::io::print_line
+
+ability Stop {
+    op stop() -> String
+}
+
+// The effect is performed while this inner handler is active, but the inner
+// handler has no `Stop` arm. Its `do` marker must therefore not run when the
+// outer handler completes the operation without resume.
+fn perform_inside_inner() ->{Stop} String {
+    Stop::stop()
+}
+
+fn inner_boundary() ->{Stop} String {
+    handle perform_inside_inner() {
+        do value { "inner-do:" <> value }
+    }
+}
+
+fn outer_boundary() -> String {
+    handle inner_boundary() {
+        do value { "outer-do:" <> value }
+        op Stop::stop() { "outer-handler" }
+    }
+}
+
+fn main() {
+    print_line(outer_boundary())
+}
+"#
+}
+
+/// A non-resumptive outer handler must cross an inner, non-matching handler
+/// boundary without invoking either `do` arm.
+#[test]
+fn test_cps_control_outer_nonresumptive_bypasses_nested_do_arms() {
+    let source = cps_control_outer_nonresumptive_crosses_inner_handle_program();
+    let profiles = [
+        (
+            "production",
+            common::compile_and_run_native_with_stdin(
+                "cps_control_outer_nonresumptive_nested_handle_production.trb",
+                source,
+                b"",
+            ),
+        ),
+        (
+            "baseline",
+            common::compile_and_run_native_with_stdin_baseline_optimizations(
+                "cps_control_outer_nonresumptive_nested_handle_baseline.trb",
+                source,
+                b"",
+            ),
+        ),
+        (
+            "asan",
+            common::compile_and_run_native_with_stdin_asan(
+                "cps_control_outer_nonresumptive_nested_handle_asan.trb",
+                source,
+                b"",
+            ),
+        ),
+    ];
+    for (profile, output) in profiles {
+        assert!(
+            output.status.success(),
+            "{profile}: exit={:?}, stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "outer-handler\n",
+            "{profile}"
+        );
+    }
+}
+
+/// The nearest dynamically installed handler owns its Escape even when an
+/// outer handle installs an arm for the same ability. The inner `do` is
+/// bypassed, while the outer receives an ordinary source completion and runs
+/// its own `do` exactly once.
+#[test]
+fn test_cps_control_same_ability_nested_owner_is_nearest() {
+    assert_native_output(
+        "cps_control_same_ability_dynamic_owner.trb",
+        r#"
+use std::io::print_line
+
+ability Stop {
+    op stop() -> String
+}
+
+fn inner() -> String {
+    handle Stop::stop() {
+        do value { "inner-do:" <> value }
+        op Stop::stop() { "inner-handler" }
+    }
+}
+
+fn main() {
+    let value = handle inner() {
+        do result { "outer-do:" <> result }
+        op Stop::stop() { "outer-handler" }
+    }
+    print_line(value)
+}
+"#,
+        "outer-do:inner-handler",
+    );
+}
+
+/// Recursive re-entry executes the same syntactic `handle` site twice. Each
+/// dynamic activation receives its own runtime owner tag: the inner Escape is
+/// consumed by the inner activation, then the outer arm completes its own
+/// activation without either `do` marker running.
+#[test]
+fn test_cps_control_recursive_same_handle_site_uses_distinct_dynamic_owners() {
+    assert_native_output(
+        "cps_control_recursive_dynamic_owner.trb",
+        r#"
+use std::io::print_line
+
+ability Ping {
+    op ping() -> String
+}
+
+fn run(next: fn() -> String) -> String {
+    handle Ping::ping() {
+        do value { "do:" <> value }
+        op Ping::ping() { next() }
+    }
+}
+
+fn base() -> String { "base" }
+
+fn main() {
+    print_line(run(fn() { run(fn() { base() }) }))
+}
+"#,
+        "base",
+    );
+}
+
+/// A foreign Escape produced while resuming must not execute the resumed
+/// handler arm's strict suffix, its inner `do`, or the owning outer `do`.
+#[test]
+fn test_cps_control_foreign_escape_bypasses_resume_suffix() {
+    assert_native_output(
+        "cps_control_foreign_escape_resume_suffix.trb",
+        r#"
+use std::io::print_line
+
+ability First {
+    op first() -> String
+}
+
+ability Stop {
+    op stop() -> String
+}
+
+fn inner() ->{Stop} String {
+    handle {
+        let _ = First::first()
+        Stop::stop()
+    } {
+        do value { "inner-do:" <> value }
+        op First::first() {
+            let resumed = resume "first-value"
+            "resume-suffix:" <> resumed
+        }
+    }
+}
+
+fn main() {
+    let value = handle inner() {
+        do result { "outer-do:" <> result }
+        op Stop::stop() { "stop-handler" }
+    }
+    print_line(value)
+}
+"#,
+        "stop-handler",
+    );
+}
+
 // =============================================================================
 // Native Execution Tests
 // =============================================================================

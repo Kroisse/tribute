@@ -342,3 +342,33 @@ pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u
         None => Err(CompilationError::missing_attribute("u32")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::types::TypeDataBuilder;
+
+    #[test]
+    fn core_array_uses_nullable_abstract_array_value_type() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let array_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+                .param(i32_ty)
+                .build(),
+        );
+
+        assert_eq!(
+            type_to_valtype(&ctx, array_ty, &HashMap::new()).expect("core.array is supported"),
+            ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Array,
+                },
+            })
+        );
+    }
+}

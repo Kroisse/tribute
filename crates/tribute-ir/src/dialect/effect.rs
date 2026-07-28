@@ -7,6 +7,10 @@
 
 #[trunk_ir::dialect]
 mod effect {
+    /// Allocate the runtime-unique prompt token for one dynamic handler
+    /// installation. `resolve_evidence` lowers this before target lowering.
+    fn fresh_prompt_tag() -> result {}
+
     /// Extend the current evidence with a handler for one ability.
     ///
     /// Operands are semantic ABI values:

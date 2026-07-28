@@ -206,7 +206,20 @@ pub(super) fn lower_lambda<'db>(
     let result_ir_ty = abi.source_result;
 
     // Step 1: Analyze captures
-    let captures = analyze_captures(builder.ctx, builder.ir, params, body);
+    let mut captures = analyze_captures(builder.ctx, builder.ir, params, body);
+    // Owner tags are private lowering metadata, not AST locals. Preserve the
+    // active tag when a lambda created in a general arm can later lower a
+    // resume suffix after closure extraction.
+    if let Some(owner_tag) = builder.ctx.handler_owner_tag()
+        && !captures.iter().any(|capture| capture.value == owner_tag)
+    {
+        captures.push(CaptureInfo {
+            name: Symbol::new("__handler_owner"),
+            local_id: LocalId::UNRESOLVED,
+            ty: builder.ir.value_ty(owner_tag),
+            value: owner_tag,
+        });
+    }
 
     // Step 2: Build lambda body region.
     // Entry block has only the lambda's formal parameters — evidence/env are

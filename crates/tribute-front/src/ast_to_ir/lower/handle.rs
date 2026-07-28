@@ -19,7 +19,7 @@ use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use tribute_ir::dialect::{ability, closure};
+use tribute_ir::dialect::{ability, closure, effect};
 
 use crate::ast::{Expr, HandlerArm, HandlerKind, Pattern, ResolvedRef, TypedRef};
 
@@ -28,9 +28,9 @@ use super::IrBuilder;
 use super::case::bind_pattern_fields;
 use super::control::{
     ContinuationRef, ControlDomain, ControlResultRef, HandleAnswer, TailResume, control_from_abi,
-    emit_control_return, emit_control_yield, emit_tail_resume_yield, handle_answer_to_source,
-    identity_continuation, invoke_continuation, invoke_resume, resume_answer_to_source,
-    resume_from_abi,
+    cps_control_continuation, emit_control_return, emit_control_yield, emit_tail_resume_yield,
+    handle_answer_to_source, identity_continuation, invoke_continuation, resume_from_abi,
+    resume_into_current,
 };
 
 /// Lower a `fn` (tail-resumptive) ability operation call using `ability.call`.
@@ -82,13 +82,15 @@ pub(super) fn lower_ability_fn_call<'db>(
 ///    compatibility control answer through the `anyref` ABI.
 /// 2. The body closure is called to produce that answer.
 /// 3. `ability.handle_dispatch` dispatches on that answer.
-/// 4. Handler arms use `func.call_indirect` for continuation calls
-fn lower_handle_answer<'db>(
+/// 4. Handler arms use `func.call_indirect` for continuation calls and return
+///    owner-tagged private answers.
+fn lower_handle_answer<'db, D: ControlDomain>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     body: &Expr<TypedRef<'db>>,
     handlers: &[HandlerArm<TypedRef<'db>>],
-) -> Option<ControlResultRef<HandleAnswer>> {
+    completion: ContinuationRef<D>,
+) -> Option<ValueRef> {
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Generate a fresh prompt tag and build body inside the prompt scope.
@@ -120,9 +122,12 @@ fn lower_handle_answer<'db>(
         anyref_ty,
         anyref_ty,
         logical_result_ty,
+        completion,
     );
+    let escape_body =
+        build_escape_handler_region(builder.ctx, builder.ir, location, anyref_ty, completion);
 
-    // 3. Build handler_dispatch closure: (k, op_idx, value) -> anyref
+    // 3. Build handler_dispatch closure: (k, owner_tag, op_idx, value) -> anyref.
     let handler_fn_val =
         build_handler_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
 
@@ -131,27 +136,48 @@ fn lower_handle_answer<'db>(
     let tr_dispatch_fn_val =
         build_tr_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
 
-    // 4. Emit ability.handle_dispatch
+    // 4. Each dynamic installation receives a runtime-unique owner token.
+    // resolve_evidence lowers this target-independent request before either
+    // backend observes the handle boundary.
+    let i32_ty = builder.ctx.i32_type(builder.ir);
+    let owner_tag = effect::fresh_prompt_tag(builder.ir, location, i32_ty);
+    builder.ir.push_op(builder.block, owner_tag.op_ref());
+
+    // 5. Emit ability.handle_dispatch.
     let dispatch_op = ability::handle_dispatch(
         builder.ir,
         location,
         body_yr,
+        owner_tag.result(builder.ir),
         handler_fn_val,
         tr_dispatch_fn_val,
         anyref_ty,
         tag,
         anyref_ty,
         handler_dispatch_body,
+        escape_body,
     );
     builder.ir.push_op(builder.block, dispatch_op.op_ref());
-    Some(control_from_abi(dispatch_op.result(builder.ir)))
+    Some(dispatch_op.result(builder.ir))
 }
 
-/// Lower an already-normalized `handle` as a source-value delimiter.
-///
-/// This is deliberately the only handle-answer-to-source conversion.  The
-/// resulting source value may be consumed by a Direct parent or passed to a
-/// generic ambient/handler continuation, but the carrier itself never is.
+/// Lower an already-normalized handle through the current compositional CPS
+/// continuation. `ability.handle_dispatch` invokes that continuation for a
+/// normal result or a locally owned Escape and forwards foreign Escapes as the
+/// same proven private carrier.
+pub(super) fn lower_handle_comp<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    body: &Expr<TypedRef<'db>>,
+    handlers: &[HandlerArm<TypedRef<'db>>],
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    lower_handle_answer(builder, location, body, handlers, continuation).map(control_from_abi)
+}
+
+/// Close a completed handle only at a source/ambient delimiter. Nested
+/// handles in `HandleAnswer` use `lower_handle_comp` so a foreign Escape
+/// reaches its dynamic owner unchanged.
 pub(super) fn lower_handle_source<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -159,7 +185,8 @@ pub(super) fn lower_handle_source<'db>(
     body: &Expr<TypedRef<'db>>,
     handlers: &[HandlerArm<TypedRef<'db>>],
 ) -> Option<ValueRef> {
-    let answer = lower_handle_answer(builder, location, body, handlers)?;
+    let completion = identity_continuation::<HandleAnswer>(builder, location);
+    let answer = lower_handle_answer(builder, location, body, handlers, completion)?;
     let logical_ty = builder
         .ctx
         .get_node_type(expr_id)
@@ -167,7 +194,10 @@ pub(super) fn lower_handle_source<'db>(
         .map(|ty| builder.ctx.convert_type(builder.ir, ty))
         .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
     Some(handle_answer_to_source(
-        builder, location, answer, logical_ty,
+        builder,
+        location,
+        control_from_abi(answer),
+        logical_ty,
     ))
 }
 
@@ -181,16 +211,20 @@ pub(super) fn lower_resume_comp<'db, D: ControlDomain>(
 ) -> Option<ControlResultRef<D>> {
     let local_id = local_id?;
     let resume = resume_from_abi(builder.ctx.lookup_resume(local_id)?);
+    let owner_tag = builder
+        .ctx
+        .handler_owner_tag()
+        .expect("resume must be lowered inside an owner-tagged general handler arm");
     let arg = super::expr::lower_value_normalized(builder, arg)?;
-    let answer = invoke_resume(builder, location, resume, arg);
     let logical_ty = builder
         .ctx
         .get_node_type(expr_id)
         .copied()
         .map(|ty| builder.ctx.convert_type(builder.ir, ty))
         .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
-    let value = resume_answer_to_source(builder, location, answer, logical_ty);
-    Some(invoke_continuation(builder, location, current_k, value))
+    Some(resume_into_current(
+        builder, location, resume, arg, logical_ty, current_k, owner_tag,
+    ))
 }
 
 /// Build the handle body as a CPS closure and call it.
@@ -217,6 +251,16 @@ fn build_cps_body<'db>(
                 value,
             });
         }
+    }
+    if let Some(owner_tag) = builder.ctx.handler_owner_tag()
+        && !captures.iter().any(|capture| capture.value == owner_tag)
+    {
+        captures.push(super::super::context::CaptureInfo {
+            name: Symbol::new("__handler_owner"),
+            local_id: crate::ast::LocalId::UNRESOLVED,
+            ty: builder.ir.value_ty(owner_tag),
+            value: owner_tag,
+        });
     }
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
@@ -273,7 +317,10 @@ fn build_cps_body<'db>(
     builder.ir.push_op(builder.block, lambda_op.op_ref());
     let body_closure = lambda_op.result(builder.ir);
 
-    let done_k = identity_continuation::<HandleAnswer>(builder, location);
+    // This is the precise raw-to-private boundary for the body worker. Every
+    // raw normal completion reaches this `Normal` adapter; no source value is
+    // ever probed as a carrier.
+    let done_k = cps_control_continuation(builder, location);
     let call_op = func::call_indirect(
         builder.ir,
         location,
@@ -286,7 +333,8 @@ fn build_cps_body<'db>(
 }
 
 /// Build the handler dispatch body region with done and suspend ops (CPS version).
-fn build_cps_handler_dispatch_body<'db>(
+#[allow(clippy::too_many_arguments)]
+fn build_cps_handler_dispatch_body<'db, D: ControlDomain>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     location: Location,
@@ -294,6 +342,7 @@ fn build_cps_handler_dispatch_body<'db>(
     result_ty: TypeRef,
     _yr_ty: TypeRef,
     logical_result_ty: Option<TypeRef>,
+    completion: ContinuationRef<D>,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -321,6 +370,7 @@ fn build_cps_handler_dispatch_body<'db>(
         result_handler,
         result_ty,
         logical_result_ty,
+        completion,
     );
     let done_op = ability::done(ir, location, done_body);
     ir.push_op(block, done_op.op_ref());
@@ -353,13 +403,14 @@ fn build_cps_handler_dispatch_body<'db>(
 }
 
 /// Build the done handler region (normal completion handler).
-fn build_done_handler_region<'db>(
+fn build_done_handler_region<'db, D: ControlDomain>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     location: Location,
     result_handler: Option<&HandlerArm<TypedRef<'db>>>,
     result_ty: TypeRef,
     logical_result_ty: Option<TypeRef>,
+    completion: ContinuationRef<D>,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -394,15 +445,13 @@ fn build_done_handler_region<'db>(
         }
 
         let mut builder = IrBuilder::new(&mut scope, ir, block);
-        let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
-        super::expr::lower_comp_normalized(&mut builder, handler.body.clone(), continuation)
+        super::expr::lower_comp_normalized(&mut builder, handler.body.clone(), completion)
     } else {
         let mut builder = IrBuilder::new(ctx, ir, block);
-        let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
         Some(invoke_continuation(
             &mut builder,
             location,
-            continuation,
+            completion,
             done_value,
         ))
     };
@@ -412,13 +461,42 @@ fn build_done_handler_region<'db>(
         None => {
             let mut builder = IrBuilder::new(ctx, ir, block);
             let nil = builder.emit_nil(location);
-            let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
-            invoke_continuation(&mut builder, location, continuation, nil)
+            invoke_continuation(&mut builder, location, completion, nil)
         }
     };
     let mut builder = IrBuilder::new(ctx, ir, block);
     emit_control_yield(&mut builder, location, result);
 
+    ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
+
+/// Build the owner-matching Escape completion. It is a frontend-built region
+/// so closure lowering has already materialized the enclosing continuation
+/// before the final handle-dispatch pass inlines it.
+fn build_escape_handler_region<'db, D: ControlDomain>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    location: Location,
+    result_ty: TypeRef,
+    completion: ContinuationRef<D>,
+) -> trunk_ir::refs::RegionRef {
+    let block = ir.create_block(BlockData {
+        location,
+        args: vec![BlockArgData {
+            ty: result_ty,
+            attrs: Default::default(),
+        }],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let value = ir.block_arg(block, 0);
+    let mut builder = IrBuilder::new(ctx, ir, block);
+    let result = invoke_continuation(&mut builder, location, completion, value);
+    emit_control_yield(&mut builder, location, result);
     ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![block],
@@ -461,32 +539,21 @@ fn extract_ability_ref_and_op_name<'db>(
     (ability_ref_type, *op)
 }
 
-/// Build a CPS suspend handler region (effect handler).
+/// Build the legacy structured handler metadata region.
 ///
-/// In CPS mode, continuation calls use `func.call_indirect` instead of
-/// `ability.resume`, and handler arm results use the opaque compatibility
-/// control answer carried by the current `anyref` ABI.
+/// `resolve_evidence` reads the enclosing suspend/yield operation's ability
+/// attributes, while executable general-operation behavior lives exclusively
+/// in `handler_dispatch` below. Keeping this inert avoids a second lowering of
+/// the arm body and ensures this erased compatibility region cannot leak an
+/// owner-tag SSA value into backend code generation.
 fn build_cps_suspend_handler_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     location: Location,
-    handler: &HandlerArm<TypedRef<'db>>,
+    _handler: &HandlerArm<TypedRef<'db>>,
     _yr_ty: TypeRef,
 ) -> trunk_ir::refs::RegionRef {
-    let (params, resume_local_id) = match &handler.kind {
-        HandlerKind::Op {
-            params,
-            resume_local_id,
-            ..
-        } => (params, *resume_local_id),
-        HandlerKind::Fn { params, .. } => (params, None),
-        _ => unreachable!("build_cps_suspend_handler_region called with non-effect handler"),
-    };
-
     let any_ty = ctx.anyref_type(ir);
-
-    // Block args: [continuation (anyref), shift_value (anyref)]
-    // In CPS, continuation is a closure (anyref), not a cont.continuation type.
     let block = ir.create_block(BlockData {
         location,
         args: vec![
@@ -502,56 +569,9 @@ fn build_cps_suspend_handler_region<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let cont_value = ir.block_arg(block, 0);
     let shift_value = ir.block_arg(block, 1);
-
-    {
-        let mut scope = ctx.scope();
-
-        // Enable CPS handler mode so that continuation calls use func.call_indirect
-        let prev_cps_mode = scope.cps_handler_mode;
-        scope.cps_handler_mode = true;
-
-        // Bind resume continuation if this is an `op` arm with resume
-        if let Some(k_local_id) = resume_local_id {
-            scope.bind_resume(k_local_id, Symbol::new("resume"), cont_value);
-        }
-
-        // Bind params patterns
-        bind_handler_params(&mut scope, ir, block, location, shift_value, params, any_ty);
-
-        let mut builder = IrBuilder::new(&mut scope, ir, block);
-        match &handler.kind {
-            HandlerKind::Fn { .. } => {
-                let continuation = identity_continuation::<TailResume>(&mut builder, location);
-                let result = super::expr::lower_comp_normalized(
-                    &mut builder,
-                    handler.body.clone(),
-                    continuation,
-                )
-                .unwrap_or_else(|| {
-                    let nil = builder.emit_nil(location);
-                    invoke_continuation(&mut builder, location, continuation, nil)
-                });
-                emit_tail_resume_yield(&mut builder, location, result);
-            }
-            HandlerKind::Op { .. } => {
-                let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
-                let result = super::expr::lower_comp_normalized(
-                    &mut builder,
-                    handler.body.clone(),
-                    continuation,
-                )
-                .unwrap_or_else(|| {
-                    let nil = builder.emit_nil(location);
-                    invoke_continuation(&mut builder, location, continuation, nil)
-                });
-                emit_control_yield(&mut builder, location, result);
-            }
-            HandlerKind::Do { .. } => unreachable!(),
-        }
-        scope.cps_handler_mode = prev_cps_mode;
-    }
+    let yield_op = scf::r#yield(ir, location, [shift_value]);
+    ir.push_op(block, yield_op.op_ref());
 
     ir.create_region(RegionData {
         location,
@@ -601,13 +621,16 @@ fn build_handler_dispatch_closure<'db>(
         }
     }
 
-    // Build closure body: ^bb0(%cps_dk: anyref, %k: anyref, %op_idx: i32, %value: anyref)
-    // CPS convention: done_k is first param (unused in dispatch closure)
+    // Build closure body: ^bb0(%k: anyref, %owner: i32, %op_idx: i32, %value: anyref)
     let entry_block = builder.ir.create_block(BlockData {
         location,
         args: vec![
             BlockArgData {
                 ty: anyref_ty,
+                attrs: Default::default(),
+            },
+            BlockArgData {
+                ty: i32_ty,
                 attrs: Default::default(),
             },
             BlockArgData {
@@ -623,8 +646,9 @@ fn build_handler_dispatch_closure<'db>(
         parent_region: None,
     });
     let k_val = builder.ir.block_arg(entry_block, 0);
-    let op_idx_val = builder.ir.block_arg(entry_block, 1);
-    let value_val = builder.ir.block_arg(entry_block, 2);
+    let owner_tag = builder.ir.block_arg(entry_block, 1);
+    let op_idx_val = builder.ir.block_arg(entry_block, 2);
+    let value_val = builder.ir.block_arg(entry_block, 3);
 
     // Build dispatch chain: if-else on op_idx for each effect handler arm
     if effect_handlers.is_empty() {
@@ -639,6 +663,7 @@ fn build_handler_dispatch_closure<'db>(
             location,
             &effect_handlers,
             k_val,
+            owner_tag,
             op_idx_val,
             value_val,
             anyref_ty,
@@ -657,10 +682,11 @@ fn build_handler_dispatch_closure<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn(anyref, i32, anyref) -> opaque control answer (`anyref`).
-    let closure_func_ty = builder
-        .ctx
-        .func_type(builder.ir, &[anyref_ty, i32_ty, anyref_ty], yr_ty);
+    // Closure type: fn(anyref, i32, i32, anyref) -> private control answer.
+    let closure_func_ty =
+        builder
+            .ctx
+            .func_type(builder.ir, &[anyref_ty, i32_ty, i32_ty, anyref_ty], yr_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -951,6 +977,7 @@ fn build_handler_dispatch_chain<'db>(
     location: Location,
     effect_handlers: &[&HandlerArm<TypedRef<'db>>],
     k_val: ValueRef,
+    owner_tag: ValueRef,
     op_idx_val: ValueRef,
     value_val: ValueRef,
     anyref_ty: TypeRef,
@@ -972,7 +999,7 @@ fn build_handler_dispatch_chain<'db>(
 
     // Build handler arm body region
     let arm_region = build_handler_arm_for_dispatch(
-        ctx, ir, location, handler, k_val, value_val, anyref_ty, yr_ty,
+        ctx, ir, location, handler, k_val, owner_tag, value_val, anyref_ty, yr_ty,
     );
 
     if is_last {
@@ -1033,6 +1060,7 @@ fn build_handler_dispatch_chain<'db>(
             location,
             &effect_handlers[1..],
             k_val,
+            owner_tag,
             op_idx_val,
             value_val,
             anyref_ty,
@@ -1064,6 +1092,7 @@ fn build_handler_arm_for_dispatch<'db>(
     location: Location,
     handler: &HandlerArm<TypedRef<'db>>,
     k_val: ValueRef,
+    owner_tag: ValueRef,
     value_val: ValueRef,
     anyref_ty: TypeRef,
     _yr_ty: TypeRef,
@@ -1090,6 +1119,7 @@ fn build_handler_arm_for_dispatch<'db>(
 
         let prev_cps_mode = scope.cps_handler_mode;
         scope.cps_handler_mode = true;
+        scope.set_handler_owner_tag(owner_tag);
 
         // Bind resume continuation if this is an `op` arm with resume
         if let Some(k_local_id) = resume_local_id {
@@ -1117,7 +1147,9 @@ fn build_handler_arm_for_dispatch<'db>(
                 emit_tail_resume_yield(&mut builder, location, result);
             }
             HandlerKind::Op { .. } => {
-                let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+                let continuation = super::control::continuation_from_abi::<HandleAnswer>(
+                    super::create_cps_escape_done_k(&mut builder, location, owner_tag),
+                );
                 let result = super::expr::lower_comp_normalized(
                     &mut builder,
                     handler.body.clone(),

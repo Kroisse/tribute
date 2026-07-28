@@ -19,6 +19,26 @@ fn run_state() -> Int {
     }
 }
 
+// These independently lowered source handles make the baseline profile emit
+// multiple equivalent non-capturing identity helpers. The production profile
+// must share exactly one helper; the general-arm Escape closures are not part
+// of this optimization because they capture their dynamic owner tag.
+fn run_state_again() -> Int {
+    handle bump() {
+        do result { result }
+        op State::get() { resume +10 }
+        op State::set(value) { resume Nil }
+    }
+}
+
+fn run_state_once_more() -> Int {
+    handle bump() {
+        do result { result }
+        op State::get() { resume +10 }
+        op State::set(value) { resume Nil }
+    }
+}
+
 fn main() {
     __tribute_print_int(run_state())
 }

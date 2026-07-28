@@ -3,14 +3,15 @@ source: tests/active_pipeline_goldens.rs
 expression: ir_text
 ---
 core.module @direct_fn {
-  !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+  !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !"Result$T0$T1" = adt.enum() {name = @"Result$T0$T1", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !t2 = core.func(tribute_rt.anyref, tribute_rt.anyref)
   !t1 = closure.closure(!t2)
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   !"Result::map_err::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map_err::__clam_0::env"}
   !"Option::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Option::map::__clam_0::env"}
   !"Result::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map::__clam_0::env"}
@@ -58,38 +59,64 @@ core.module @direct_fn {
       func.return %2
   }
 
+  func.func @"direct_fn::__lambda_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      %3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+      func.return %3
+  }
+
   func.func @run() -> core.i32 attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = 0} : core.i32
       %1 = adt.array_new %0 {type = !t0} : !t0
       %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = func.constant {func_ref = @"run::__clam_0"} : !t2
+      %3 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
       %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
+      %6 = func.constant {func_ref = @"run::__clam_0"} : !t2
       %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
-      %8 = adt.ref_null {type = !t0} : !t0
-      %9 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
-      %10 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-      %11 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %12 = func.constant {func_ref = @"run::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)
-      %13 = adt.struct_new %12, %11 {type = !_closure} : !_closure
+      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %9 = func.constant {func_ref = @"direct_fn::__lambda_1"} : !t2
+      %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
+      %11 = adt.ref_null {type = !t0} : !t0
+      %12 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
+      %13 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
       %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %15 = func.constant {func_ref = @"run::__clam_2"} : core.func(tribute_rt.anyref, core.i32, tribute_rt.anyref)
+      %15 = func.constant {func_ref = @"run::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref)
       %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
-      %17 = func.call {callee = @__tribute_next_tag} : core.i32
-      %18 = effect.extend %1, %17, %16, %13 {ability_ref = core.ability_ref() {name = @Console}} : !t0
-      %19 = func.call_indirect %9, %18, %10, %7 : tribute_rt.anyref
-      %20 = core.unrealized_conversion_cast %19 : core.i32
-      %21 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %22 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
-      %23 = adt.struct_new %22, %21 {type = !_closure} : !_closure
-      %24 = core.unrealized_conversion_cast %20 : tribute_rt.anyref
-      %25 = adt.ref_null {type = !t0} : !t0
-      %26 = adt.struct_get %23 {field = 0, type = !_closure} : core.i32
-      %27 = adt.struct_get %23 {field = 1, type = !_closure} : tribute_rt.anyref
-      %28 = func.call_indirect %26, %18, %27, %24 : tribute_rt.anyref
-      %29 = core.unrealized_conversion_cast %28 : core.i32
-      func.return %29
+      %17 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %18 = func.constant {func_ref = @"run::__clam_2"} : core.func(tribute_rt.anyref, core.i32, tribute_rt.anyref)
+      %19 = adt.struct_new %18, %17 {type = !_closure} : !_closure
+      %20 = func.call {callee = @__tribute_next_tag} : core.i32
+      %21 = effect.extend %1, %20, %19, %16 {ability_ref = core.ability_ref() {name = @Console}} : !t0
+      %22 = func.call_indirect %12, %21, %13, %10 : tribute_rt.anyref
+      %23 = adt.variant_is %22 {tag = @Normal, type = !__tribute_cps_control} : core.i1
+      %24 = scf.if %23 : tribute_rt.anyref {
+          %25 = adt.variant_cast %22 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+          %26 = adt.variant_get %25 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+          %27 = core.unrealized_conversion_cast %26 : core.i32
+          %28 = core.unrealized_conversion_cast %27 : tribute_rt.anyref
+          %29 = adt.ref_null {type = !t0} : !t0
+          %30 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+          %31 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+          %32 = func.call_indirect %30, %21, %31, %28 : tribute_rt.anyref
+          scf.yield %32
+      } {
+          %33 = adt.variant_cast %22 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %34 = adt.variant_get %33 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
+          %35 = adt.variant_get %33 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %36 = arith.cmpi %34, %20 {predicate = @eq} : core.i1
+          %37 = scf.if %36 : tribute_rt.anyref {
+              %38 = adt.ref_null {type = !t0} : !t0
+              %39 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+              %40 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+              %41 = func.call_indirect %39, %38, %40, %35 : tribute_rt.anyref
+              scf.yield %41
+          } {
+              scf.yield %22
+          }
+          scf.yield %37
+      }
+      %42 = core.unrealized_conversion_cast %24 : core.i32
+      func.return %42
   }
 
   func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
@@ -109,37 +136,37 @@ core.module @direct_fn {
       func.return %9
   }
 
-  func.func @"run::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref, %3: core.i32, %4: tribute_rt.anyref) -> tribute_rt.anyref {
-      %5 = arith.const {value = 664197438} : core.i32
-      %6 = arith.cmpi %3, %5 {predicate = @eq} : core.i1
-      %7 = scf.if %6 : tribute_rt.anyref {
-          %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-          %9 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
-          %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
-          %11 = arith.const {value = 41} : core.i32
-          %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
-          %13 = adt.struct_get %10 {field = 0, type = !_closure} : core.i32
-          %14 = adt.struct_get %10 {field = 1, type = !_closure} : tribute_rt.anyref
-          %15 = func.call_indirect %13, %0, %14, %12 : tribute_rt.anyref
-          scf.yield %15
+  func.func @"run::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref, %3: core.i32, %4: core.i32, %5: tribute_rt.anyref) -> tribute_rt.anyref {
+      %6 = arith.const {value = 664197438} : core.i32
+      %7 = arith.cmpi %4, %6 {predicate = @eq} : core.i1
+      %8 = scf.if %7 : tribute_rt.anyref {
+          %9 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+          %10 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
+          %11 = adt.struct_new %10, %9 {type = !_closure} : !_closure
+          %12 = arith.const {value = 41} : core.i32
+          %13 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
+          %14 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
+          %15 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
+          %16 = func.call_indirect %14, %0, %15, %13 : tribute_rt.anyref
+          scf.yield %16
       } {
-          %16 = arith.const {value = 1} : core.i1
-          %17 = scf.if %16 : tribute_rt.anyref {
-              %18 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %19 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
-              %20 = adt.struct_new %19, %18 {type = !_closure} : !_closure
-              %21 = arith.const {value = unit} : core.nil
-              %22 = core.unrealized_conversion_cast %21 : tribute_rt.anyref
-              %23 = adt.struct_get %20 {field = 0, type = !_closure} : core.i32
-              %24 = adt.struct_get %20 {field = 1, type = !_closure} : tribute_rt.anyref
-              %25 = func.call_indirect %23, %0, %24, %22 : tribute_rt.anyref
-              scf.yield %25
+          %17 = arith.const {value = 1} : core.i1
+          %18 = scf.if %17 : tribute_rt.anyref {
+              %19 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+              %20 = func.constant {func_ref = @"direct_fn::__lambda_0"} : !t2
+              %21 = adt.struct_new %20, %19 {type = !_closure} : !_closure
+              %22 = arith.const {value = unit} : core.nil
+              %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
+              %24 = adt.struct_get %21 {field = 0, type = !_closure} : core.i32
+              %25 = adt.struct_get %21 {field = 1, type = !_closure} : tribute_rt.anyref
+              %26 = func.call_indirect %24, %0, %25, %23 : tribute_rt.anyref
+              scf.yield %26
           } {
               func.unreachable
           }
-          scf.yield %17
+          scf.yield %18
       }
-      func.return %7
+      func.return %8
   }
 
   func.func @"run::__clam_2"(%0: !t0, %1: tribute_rt.anyref, %2: core.i32, %3: tribute_rt.anyref) -> tribute_rt.anyref {

@@ -3,6 +3,7 @@ source: crates/tribute-front/tests/cps_lowering.rs
 expression: "run_ast_pipeline_with_ir(db, source)"
 ---
 core.module @test {
+  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
   !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
 
@@ -11,7 +12,8 @@ core.module @test {
       func.return %2
   }
   func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
+      %3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+      func.return %3
   }
   func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref {
@@ -21,84 +23,99 @@ core.module @test {
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %6 = closure.new %5 {func_ref = @"test::__lambda_0"} : !t0
       %7 = func.call_indirect %2, %6 : tribute_rt.anyref
-      %8 = closure.lambda(%9: tribute_rt.anyref, %10: core.i32, %11: tribute_rt.anyref) -> tribute_rt.anyref {
-          %12 = arith.const {value = 1} : core.i1
-          %13 = scf.if %12 : tribute_rt.anyref {
-              %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %15 = closure.new %14 {func_ref = @"test::__lambda_0"} : !t0
-              %16 = arith.const {value = true} : core.i1
-              %17 = arith.const {value = true} : core.i1
-              %18 = arith.cmpi %16, %17 {predicate = @eq} : core.i1
-              %19 = scf.if %18 : tribute_rt.anyref {
-                  %20 = closure.lambda(%21: tribute_rt.anyref) -> tribute_rt.anyref [%9, %15] {
-                      %22 = core.unrealized_conversion_cast %21 : core.i32
-                      %23 = core.unrealized_conversion_cast %9 : !t0
-                      %24 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
-                      %25 = func.call_indirect %23, %24 : tribute_rt.anyref
-                      %26 = func.call_indirect %15, %25 : tribute_rt.anyref
-                      func.return %26
-                  }
-                  %27 = func.call %0, %20 {callee = @read_log, tribute.calling_convention = 2} : tribute_rt.anyref
-                  scf.yield %27
-              } {
-                  %28 = arith.const {value = 0} : core.i32
-                  %29 = core.unrealized_conversion_cast %9 : !t0
-                  %30 = core.unrealized_conversion_cast %28 : tribute_rt.anyref
-                  %31 = func.call_indirect %29, %30 : tribute_rt.anyref
-                  %32 = func.call_indirect %15, %31 : tribute_rt.anyref
-                  scf.yield %32
+      %8 = closure.lambda(%9: tribute_rt.anyref, %10: core.i32, %11: core.i32, %12: tribute_rt.anyref) -> tribute_rt.anyref {
+          %13 = arith.const {value = 1} : core.i1
+          %14 = scf.if %13 : tribute_rt.anyref {
+              %15 = closure.lambda(%16: tribute_rt.anyref) -> tribute_rt.anyref [%10] {
+                  %17 = adt.variant_new %10, %16 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+                  func.return %17
               }
-              scf.yield %19
+              %18 = arith.const {value = true} : core.i1
+              %19 = arith.const {value = true} : core.i1
+              %20 = arith.cmpi %18, %19 {predicate = @eq} : core.i1
+              %21 = scf.if %20 : tribute_rt.anyref {
+                  %22 = closure.lambda(%23: tribute_rt.anyref) -> tribute_rt.anyref [%9, %15, %10] {
+                      %24 = core.unrealized_conversion_cast %23 : core.i32
+                      %25 = core.unrealized_conversion_cast %9 : !t0
+                      %26 = core.unrealized_conversion_cast %24 : tribute_rt.anyref
+                      %27 = func.call_indirect %25, %26 : tribute_rt.anyref
+                      %28 = adt.variant_is %27 {tag = @Normal, type = !__tribute_cps_control} : core.i1
+                      %29 = scf.if %28 : tribute_rt.anyref {
+                          %30 = adt.variant_cast %27 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                          %31 = adt.variant_get %30 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                          %32 = func.call_indirect %15, %31 : tribute_rt.anyref
+                          %33 = adt.variant_cast %32 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+                          %34 = adt.variant_get %33 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
+                          %35 = adt.variant_get %33 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+                          %36 = arith.cmpi %34, %10 {predicate = @eq} : core.i1
+                          %37 = scf.if %36 : tribute_rt.anyref {
+                              %38 = adt.variant_new %35 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                              scf.yield %38
+                          } {
+                              scf.yield %32
+                          }
+                          scf.yield %37
+                      } {
+                          scf.yield %27
+                      }
+                      func.return %29
+                  }
+                  %39 = func.call %0, %22 {callee = @read_log, tribute.calling_convention = 2} : tribute_rt.anyref
+                  scf.yield %39
+              } {
+                  %40 = arith.const {value = 0} : core.i32
+                  %41 = core.unrealized_conversion_cast %9 : !t0
+                  %42 = core.unrealized_conversion_cast %40 : tribute_rt.anyref
+                  %43 = func.call_indirect %41, %42 : tribute_rt.anyref
+                  %44 = adt.variant_is %43 {tag = @Normal, type = !__tribute_cps_control} : core.i1
+                  %45 = scf.if %44 : tribute_rt.anyref {
+                      %46 = adt.variant_cast %43 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                      %47 = adt.variant_get %46 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                      %48 = func.call_indirect %15, %47 : tribute_rt.anyref
+                      %49 = adt.variant_cast %48 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+                      %50 = adt.variant_get %49 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
+                      %51 = adt.variant_get %49 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+                      %52 = arith.cmpi %50, %10 {predicate = @eq} : core.i1
+                      %53 = scf.if %52 : tribute_rt.anyref {
+                          %54 = adt.variant_new %51 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
+                          scf.yield %54
+                      } {
+                          scf.yield %48
+                      }
+                      scf.yield %53
+                  } {
+                      scf.yield %43
+                  }
+                  scf.yield %45
+              }
+              scf.yield %21
           } {
               func.unreachable
           }
-          func.return %13
+          func.return %14
       }
-      %33 = arith.const {value = 0} : tribute_rt.anyref
-      %34 = ability.handle_dispatch %7, %8, %33 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %55 = arith.const {value = 0} : tribute_rt.anyref
+      %56 = effect.fresh_prompt_tag : core.i32
+      %57 = ability.handle_dispatch %7, %56, %8, %55 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb9(%35: tribute_rt.anyref):
-              %36 = core.unrealized_conversion_cast %35 : core.i32
-              %37 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %38 = closure.new %37 {func_ref = @"test::__lambda_0"} : !t0
-              %39 = core.unrealized_conversion_cast %36 : tribute_rt.anyref
-              %40 = func.call_indirect %38, %39 : tribute_rt.anyref
-              scf.yield %40
+            ^bb18(%58: tribute_rt.anyref):
+              %59 = core.unrealized_conversion_cast %58 : core.i32
+              %60 = core.unrealized_conversion_cast %1 : !t0
+              %61 = core.unrealized_conversion_cast %59 : tribute_rt.anyref
+              %62 = func.call_indirect %60, %61 : tribute_rt.anyref
+              scf.yield %62
           }
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb10(%41: tribute_rt.anyref, %42: tribute_rt.anyref):
-              %43 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %44 = closure.new %43 {func_ref = @"test::__lambda_0"} : !t0
-              %45 = arith.const {value = true} : core.i1
-              %46 = arith.const {value = true} : core.i1
-              %47 = arith.cmpi %45, %46 {predicate = @eq} : core.i1
-              %48 = scf.if %47 : tribute_rt.anyref {
-                  %49 = closure.lambda(%50: tribute_rt.anyref) -> tribute_rt.anyref [%41, %44] {
-                      %51 = core.unrealized_conversion_cast %50 : core.i32
-                      %52 = core.unrealized_conversion_cast %41 : !t0
-                      %53 = core.unrealized_conversion_cast %51 : tribute_rt.anyref
-                      %54 = func.call_indirect %52, %53 : tribute_rt.anyref
-                      %55 = func.call_indirect %44, %54 : tribute_rt.anyref
-                      func.return %55
-                  }
-                  %56 = func.call %0, %49 {callee = @read_log, tribute.calling_convention = 2} : tribute_rt.anyref
-                  scf.yield %56
-              } {
-                  %57 = arith.const {value = 0} : core.i32
-                  %58 = core.unrealized_conversion_cast %41 : !t0
-                  %59 = core.unrealized_conversion_cast %57 : tribute_rt.anyref
-                  %60 = func.call_indirect %58, %59 : tribute_rt.anyref
-                  %61 = func.call_indirect %44, %60 : tribute_rt.anyref
-                  scf.yield %61
-              }
-              scf.yield %48
+            ^bb19(%63: tribute_rt.anyref, %64: tribute_rt.anyref):
+              scf.yield %64
           }
+      } {
+        ^bb20(%65: tribute_rt.anyref):
+          %66 = core.unrealized_conversion_cast %1 : !t0
+          %67 = func.call_indirect %66, %65 : tribute_rt.anyref
+          scf.yield %67
       }
-      %62 = core.unrealized_conversion_cast %34 : core.i32
-      %63 = core.unrealized_conversion_cast %1 : !t0
-      %64 = core.unrealized_conversion_cast %62 : tribute_rt.anyref
-      %65 = func.call_indirect %63, %64 : tribute_rt.anyref
-      func.return %65
+      func.return %57
   }
   func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil

@@ -157,7 +157,7 @@ fn build_comp_arm_region<'db, D: ControlDomain>(
         bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
         let mut builder = IrBuilder::new(&mut scope, ir, block);
         if let Some(guard) = &arm.guard {
-            if super::expr::evaluation_control_class(builder.ctx, guard)
+            if super::expr::evaluation_control_class_in::<D>(builder.ctx, guard)
                 == super::expr::EvaluationControlClass::Direct
             {
                 let guard = super::expr::lower_value_normalized(&mut builder, guard.clone())?;
@@ -310,6 +310,11 @@ fn build_guard_continuation<'db, D: ControlDomain>(
         if !captures.contains(&value) {
             captures.push(value);
         }
+    }
+    if let Some(owner_tag) = builder.ctx.handler_owner_tag()
+        && !captures.contains(&owner_tag)
+    {
+        captures.push(owner_tag);
     }
 
     let block = builder.ir.create_block(BlockData {

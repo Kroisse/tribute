@@ -13,6 +13,58 @@ continuation chain의 결과를 되돌려 보내기 위해 사용하는 compatib
 향후 control lowering은 이를 true tail call의 `Never` 또는 trampoline의 `Step`으로
 대체할 수 있다.
 
+## Private CPS completion carrier (#815)
+
+Until #774 supplies a general logical/backend control-result separation, the
+narrow #815 compatibility protocol at a handle boundary is:
+
+```text
+__tribute_cps_control = Normal(anyref) | Escape(owner_tag: i32, payload: anyref)
+```
+
+This is neither a source type nor an ABI convention. Its physical ABI remains
+`anyref`; only lowering code that has constructed the carrier, or received it
+at a boundary documented to produce it, may use `adt.variant_is`,
+`adt.variant_cast`, or `adt.variant_get`. In particular, arbitrary source
+values, public ADTs, and in-band sentinels must never be tested as this carrier.
+`owner_tag` is the existing runtime-unique prompt tag allocated for each
+dynamic handler installation. It is an integer token, not a syntactic tag, a
+source value, a closure/reference identity, or a newly allocated owner object.
+
+The body of a handle receives a `Normal`-producing done continuation. Raw CPS
+producers are adapted to `Normal` only when that exact private continuation is
+passed to them. A general `op` handler arm that completes without resuming
+returns `Escape(owner_tag, value)`, where the tag is read from the evidence
+marker that selected that handler. `Normal(value)` alone continues through the
+performed computation's normal continuation and then the handle's `do` clause.
+
+The protocol composes through every nested handle answer:
+
+- `Normal(value)` runs that handle's `do` clause and then continues normally.
+- `Escape(owner, value)` at a non-owner handle is forwarded unchanged. It does
+  not run that handle's `do` clause, any source continuation, or a resumed
+  handler arm's strict suffix.
+- `Escape(owner, value)` at the matching dynamic owner completes that handle
+  with `value`, bypassing its `do` clause. Its parent receives this as an
+  ordinary normal completion.
+
+Consequently, a `HandleAnswer` remains an opaque, proven private carrier while
+it can cross a handle delimiter. The matching dynamic owner consumes an
+`Escape` before the final source cast; `Normal` has already run the selected
+handle's `do` clause. The final source boundary therefore receives the resolved
+logical value and performs no carrier probe or tag-specific unwrap. This
+preserves #817's compositional `lower_value`/`lower_comp` API: no AST
+containment scan, special case/short-circuit mode, duplicate raw lowering path,
+or source effect-row or worker-convention change is introduced.
+
+The shared evidence ABI threads the dynamic tag through `effect.extend`,
+`ability.handle_dispatch`, and the general handler-dispatch closure. Native
+and Wasm obtain the same tag from the selected evidence marker before invoking
+that closure. Shared lowering compares integer owner tags; it does not require
+target-independent reference equality or an owner allocation. This is a
+single private compatibility representation, not #818's `tribute.control`
+dialect and not #774's general backend carrier-selection policy.
+
 현재 compatibility representation에서 캡처 없는 identity `done_k`의 함수 본문은
 컴파일 단위 전체에서 동일하다. AST-to-IR lowering은 이 내부 함수 정의를 compilation
 root에 한 번만 만들고 모든 사용 지점에서 같은 함수 심볼을 참조한다. 다만 각 사용
@@ -82,10 +134,12 @@ tail-calls it:
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @State }
 %handler = adt.struct_get %marker, MarkerField::HandlerDispatch
+%owner_tag = adt.struct_get %marker, MarkerField::PromptTag
 %fn = adt.struct_get %handler, 0
 %env = adt.struct_get %handler, 1
 %op_idx = arith.const <hash(State, get)>
-%result = func.call_indirect %fn(%ev, %env, %continuation_anyref, %op_idx, %arg_anyref)
+%result = func.call_indirect %fn(
+  %ev, %env, %continuation_anyref, %owner_tag, %op_idx, %arg_anyref)
 func.return %result
 ```
 
@@ -190,16 +244,18 @@ scrutinee와 guard는 이 규칙을 따른다. 선택적 위치는 독립 evalua
 
 - `&&`/`||`의 RHS는 선택된 `scf.if` region 안에서만 lowering한다.
 - case arm과 guard는 scrutinee가 선택한 arm region 안에서만 lowering한다.
-- `handle`은 내부적으로는 CPS인 source-value delimiter다. 부모 evaluation
-  classification에서는 `Direct`로 취급한다. 이는 body나 handler arm이 pure라는
-  뜻이 아니다. 완성된 `HandleAnswer` compatibility carrier만 delimiter에서
-  source logical type으로 변환한 뒤, 바깥 strict evaluation을 계속한다.
-  Raw Direct/EvidenceDirect entry는 delimiter에서 handle 전체를 정확히 한 번
-  normalize하며, 이미 normalized CPS parent는 다시 normalize하지 않는다.
-- `resume`은 computation producer다. handler arm의 현재 continuation으로
-  돌아가기 전에, resume protocol이 돌려 준 delimited `HandleAnswer`만
-  source resume-result type으로 변환한다. 일반 ambient control carrier에는 이
-  변환이 없다.
+- `handle`은 source-value 위치에서는 `Direct`로 보이지만, lowering domain은
+  context-sensitive다. `Ambient` 또는 `HandleAnswer` parent에서는
+  `lower_handle_comp`가 private carrier를 유지해 nested non-owner `Escape`를
+  전달한다. 오직 source/ambient entry가 `lower_handle_source`를 사용하며,
+  dynamic owner가 control을 소비한 뒤 logical value를 cast한다. Raw
+  Direct/EvidenceDirect entry는 handle 전체를 정확히 한 번 normalize하고,
+  이미 normalized CPS parent는 다시 normalize하지 않는다.
+- `resume`은 computation producer다. resumed `Normal`만 arm의 strict suffix로
+  들어간다. suffix가 현재 owner의 `Escape`를 돌려 주면 enclosing `do`가 볼
+  `Normal`로 retag하고, foreign `Escape`는 suffix, `do`, source continuation을
+  건너뛰어 그대로 전달한다. resume does not cast a `HandleAnswer` to a source
+  result.
 - `handle` body와 handler arm은 설치된 evidence/handler boundary 안에서만
   lowering한다.
 - case guard는 pattern match 뒤 arm-local strict evaluation으로 lowering한다.
@@ -211,25 +267,27 @@ nested-call lifting과 반복 containment scan을 대체한다. 현재 AST에는
 expression variant가 없으므로 unary strict-child normalization은 적용 대상이
 아니다.
 
-`#816`은 현재 `anyref` compatibility carrier를 보존한다. resume하지 않는
-handler의 escape/continue answer protocol은 `#815`의 별도 작업이며, carrier
-policy와 representation selection은 `#774`이 소유한다. 이 구현은 그 후속 변경을
-선구현하지 않는다.
+`#816`은 현재 `anyref` compatibility carrier를 보존한다. #815 adds only the
+owner-tagged private escape protocol above. General logical/backend
+control-result selection remains #774 work, and a direct-style
+`tribute.control` dialect remains #818 work.
 
 Rust lowering은 sealed answer domain marker로 이 경계를 표현한다. `Ambient`는
 함수/바깥 CPS chain의 control answer, `HandleAnswer`는 handle delimiter 안의
 delimited answer, `TailResume`는 `fn` handler arm의 좁은 `ability.yield` endpoint다.
 `ContinuationRef<D>`와 `ControlResultRef<D>`는 marker가 다른 carrier를 섞을 수
-없게 하며, source value conversion은 handle delimiter와 resume protocol의
-sanctioned boundary에만 있다.
+없게 한다. source value conversion is only after the dynamic owner has consumed
+the private carrier at a source boundary; resume remains entirely in the
+private answer domains.
 
 ### `handle`: evidence extension + handler closures
 
 `handle` lowering은 두 종류의 dispatch closure를 만든다.
 
-- `handler_dispatch`: `(k, op_idx, value) -> anyref`
+- `handler_dispatch`: `(k, owner_tag, op_idx, value) -> anyref`
   - general `op` handlers용
-  - `resume`은 continuation closure 호출로 lowering된다.
+  - `owner_tag` is the selected Marker's dynamic prompt owner; `resume`은
+    continuation closure 호출로 lowering된다.
 - `tr_dispatch_fn`: `(op_idx, value) -> anyref`
   - `fn` handlers용
   - continuation 없이 handler 결과가 inline result가 된다.
