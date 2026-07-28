@@ -1,6 +1,12 @@
 use abilities::Throw
 use std::io::{Error as IoError, Io, print_line, read_line}
 
+enum Input {
+    Line(String),
+    EndOfInput,
+    InputFailure,
+}
+
 fn is_horizontal_space(byte: Nat) -> Bool {
     case byte == 32 {
         True -> True
@@ -100,30 +106,27 @@ fn execute(tokens: List(String)) ->{Io} Bool {
     }
 }
 
-fn next_input() ->{Io} String {
+fn next_input() ->{Io} Input {
     handle read_line() {
-        do line { line }
+        do line { Line(line) }
         op Throw::throw(error) {
             case error {
-                IoError::EndOfFile -> "\0eof"
-                IoError::InvalidEncoding -> "\0failure"
-                IoError::System(_) -> "\0failure"
+                IoError::EndOfFile -> EndOfInput
+                IoError::InvalidEncoding -> InputFailure
+                IoError::System(_) -> InputFailure
             }
         }
     }
 }
 
 fn read_commands() ->{Io} Nil {
-    let line = next_input()
-    case line == "\0eof" {
-        True -> Nil
-        False -> case line == "\0failure" {
-            True -> print_line("error: input failure")
-            False -> case execute(tokenize(line)) {
+    case next_input() {
+        Line(line) -> case execute(tokenize(line)) {
             True -> read_commands()
             False -> Nil
-            }
         }
+        EndOfInput -> Nil
+        InputFailure -> print_line("error: input failure")
     }
 }
 

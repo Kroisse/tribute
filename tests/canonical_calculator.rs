@@ -9,6 +9,10 @@ const SCRIPTED_STDIN: &[u8] = include_bytes!("fixtures/native_calculator_scripte
 const SCRIPTED_STDOUT: &[u8] = include_bytes!("expected/native_calculator_scripted.stdout");
 const EOF_STDIN: &[u8] = include_bytes!("fixtures/native_calculator_eof.stdin");
 const EOF_STDOUT: &[u8] = include_bytes!("expected/native_calculator_eof.stdout");
+const SENTINEL_LIKE_STDIN: &[u8] = b"\0eof\nquit\n";
+const SENTINEL_LIKE_STDOUT: &[u8] = b"error: expected 'add|sub|mul <int> <int>' or 'quit'\n";
+const INVALID_ENCODING_STDIN: &[u8] = b"\xff\n";
+const INPUT_FAILURE_STDOUT: &[u8] = b"error: input failure\n";
 
 fn compile_calculator(output: &Path, sanitize_address: bool) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tribute"));
@@ -61,13 +65,15 @@ fn assert_fixture(binary: &Path, stdin: &[u8], expected_stdout: &[u8]) {
 }
 
 #[test]
-fn canonical_calculator_cli_matches_scripted_and_eof_contracts() {
+fn canonical_calculator_cli_matches_all_input_contracts() {
     let temp_dir = tempfile::tempdir().expect("create calculator test directory");
     let binary = temp_dir.path().join("native-calculator");
     compile_calculator(&binary, false);
 
     assert_fixture(&binary, SCRIPTED_STDIN, SCRIPTED_STDOUT);
     assert_fixture(&binary, EOF_STDIN, EOF_STDOUT);
+    assert_fixture(&binary, SENTINEL_LIKE_STDIN, SENTINEL_LIKE_STDOUT);
+    assert_fixture(&binary, INVALID_ENCODING_STDIN, INPUT_FAILURE_STDOUT);
 }
 
 #[test]
