@@ -516,32 +516,26 @@ fn lower_case_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unresol
 }
 
 fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Arm<UnresolvedName>> {
-    // case_arm has pattern and body as positional named children, not fields
-    // Pattern is the first named child, body is the second
-    let mut cursor = node.walk();
-    let mut pattern_node = None;
-    let mut body_node = None;
-
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        if pattern_node.is_none() {
-            pattern_node = Some(child);
-        } else if body_node.is_none() {
-            body_node = Some(child);
-        }
-    }
-
-    let pattern_node = pattern_node?;
-    let body_node = body_node?;
+    let pattern_node = node.child_by_field_name("pattern")?;
+    let direct_value = node.child_by_field_name("value");
+    let guarded_branch = if direct_value.is_none() {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| child.kind() == "guarded_branch")
+    } else {
+        None
+    };
+    let guard = guarded_branch.and_then(|branch| {
+        branch
+            .child_by_field_name("guard")
+            .map(|guard| lower_expr(ctx, guard))
+    });
+    let body_node = direct_value
+        .or_else(|| guarded_branch.and_then(|branch| branch.child_by_field_name("value")))?;
 
     let id = ctx.fresh_id_with_span(&node);
     let pattern = lower_pattern(ctx, pattern_node);
     let body = lower_expr(ctx, body_node);
-
-    // TODO: guard
-    let guard = None;
 
     Some(Arm {
         id,

@@ -156,9 +156,15 @@ fn prescan_definition_conventions<'db>(
                     continue;
                 };
 
-                if func_decl.effects.is_none()
+                if (func_decl.effects.is_none() || is_root_main(prefix, func_decl.name))
                     && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
                 {
+                    // A root entrypoint is an ABI delimiter, not an ordinary
+                    // worker. Seed it from its concrete residual abilities so
+                    // an open callback's implementation convention cannot
+                    // turn a valid pure/Io entrypoint into Cps. Type checking
+                    // rejects any non-Io residual ability before this reaches
+                    // a backend.
                     let concrete = EffectRow::new(ctx.db, effect.effects(ctx.db).clone(), None);
                     convention = ctx.calling_convention_for_effect_row(concrete);
                 }
@@ -174,6 +180,70 @@ fn prescan_definition_conventions<'db>(
             _ => {}
         }
     }
+}
+
+/// Monotonically promote workers whose evaluated bodies can transfer control.
+///
+/// The concrete-effect prescan above deliberately seeds unannotated workers as
+/// Direct when their concrete row is empty.  That seed can be too weak once a
+/// body invokes an open-effect callback or a named worker promoted in a prior
+/// pass.  Re-evaluate every body against the current definition map until no
+/// worker changes; conventions only ever strengthen to Cps.
+fn promote_definition_conventions_to_fixed_point<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+) {
+    loop {
+        let mut changed = false;
+        promote_definition_conventions_pass(ctx, decls, prefix, &mut changed);
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn promote_definition_conventions_pass<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    changed: &mut bool,
+) {
+    for decl in decls {
+        match decl {
+            Decl::Function(func_decl) => {
+                let qualified = crate::qualified_symbol(prefix, func_decl.name);
+                let Some(convention) = ctx.function_calling_convention(qualified) else {
+                    continue;
+                };
+                // Root `main` closes implementation-level CPS evaluation at
+                // the frontend entry boundary. Nested `main` declarations are
+                // ordinary workers and remain eligible for promotion.
+                if is_root_main(prefix, func_decl.name) && convention != CallingConvention::Cps {
+                    continue;
+                }
+                if convention != CallingConvention::Cps
+                    && expr::evaluation_control_class(ctx, &func_decl.body)
+                        == expr::EvaluationControlClass::Cps
+                {
+                    ctx.register_definition_convention(qualified, CallingConvention::Cps);
+                    *changed = true;
+                }
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, module.name);
+                    promote_definition_conventions_pass(ctx, body, prefix, changed);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn is_root_main(prefix: &str, name: Symbol) -> bool {
+    prefix.is_empty() && name == Symbol::new("main")
 }
 
 impl<'db> TypedModule<'db> {
@@ -210,6 +280,7 @@ impl<'db> TypedModule<'db> {
         .with_options(options);
 
         prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
+        promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
 
         // Pre-scan: register all struct field orders before lowering any declarations.
         let mut well_known_types = WellKnownTypePrescan::new(well_known_types);
@@ -304,6 +375,7 @@ fn lower_function<'db>(
     let convention = ctx
         .function_calling_convention(qualified_name)
         .unwrap_or(semantic_convention);
+    let is_root_main = ctx.module_path().len() == 1 && func_name == Symbol::new("main");
     let anyref_ty = ctx.anyref_type(ir);
     let evidence_ty = ability::evidence_adt_type_ref(ir);
     let abi = CallableAbi::new(convention, param_ir_types.iter().copied(), return_ty);
@@ -382,21 +454,11 @@ fn lower_function<'db>(
             scope.done_k = Some(done_k_val);
 
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
-            let result = expr::lower_block_cps_for_body(&mut builder, func_decl.body);
-
-            if let Some((body_result, is_cps)) = result {
-                let result_anyref = builder.cast_if_needed(location, body_result, anyref_ty);
-                if is_cps {
-                    // CPS: effectful call returned; emit func.return with the result.
-                    // The callee already called done_k internally via continuation chain.
-                    let ret = func::r#return(builder.ir, location, [result_anyref]);
-                    builder.ir.push_op(builder.block, ret.op_ref());
-                } else {
-                    // Pure result: call done_k(result) instead of func.return
-                    super::emit_done_k_call(&mut builder, location, done_k_val, result_anyref);
-                }
+            let done_k =
+                super::control::continuation_from_abi::<super::control::Ambient>(done_k_val);
+            if let Some(result) = expr::lower_comp(&mut builder, func_decl.body, done_k) {
+                super::control::emit_control_return(&mut builder, location, result);
             }
-            // ability.perform → lower_ability_perform will add func.return
 
             scope.done_k = prev_done_k;
             scope.evidence = prev_evidence;
@@ -408,7 +470,27 @@ fn lower_function<'db>(
                 scope.evidence = Some(ir.block_arg(entry_block, 0));
             }
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
-            if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
+            let body_is_cps = expr::evaluation_control_class(builder.ctx, &func_decl.body)
+                == expr::EvaluationControlClass::Cps;
+            if is_root_main && body_is_cps {
+                // Root main is a frontend-only delimiter: the shared identity
+                // continuation closes an open-callback implementation ABI
+                // before this Direct/EvidenceDirect worker returns normally.
+                let done_k = super::control::identity_continuation::<super::control::Ambient>(
+                    &mut builder,
+                    location,
+                );
+                if let Some(answer) = expr::lower_comp(&mut builder, func_decl.body, done_k) {
+                    let result = super::control::root_main_answer_to_source(
+                        &mut builder,
+                        location,
+                        answer,
+                        return_ty,
+                    );
+                    let ret_op = func::r#return(builder.ir, location, [result]);
+                    builder.ir.push_op(builder.block, ret_op.op_ref());
+                }
+            } else if let Some(result) = expr::lower_value(&mut builder, func_decl.body) {
                 let result = builder.cast_if_needed(location, result, return_ty);
                 let ret_op = func::r#return(builder.ir, location, [result]);
                 builder.ir.push_op(builder.block, ret_op.op_ref());

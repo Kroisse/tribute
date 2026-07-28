@@ -1,7 +1,8 @@
 //! Handle expression and ability operation lowering.
 //!
 //! Lowers `handle` expressions using CPS-based effect handling:
-//! - Body is wrapped in a `closure.lambda` that returns `YieldResult`
+//! - Body is wrapped in a `closure.lambda` that returns an opaque compatibility
+//!   control answer through the `anyref` ABI
 //! - Handler dispatch uses `ability.handle_dispatch`
 //! - Continuation calls use `func.call_indirect` (not `ability.resume`)
 //!
@@ -25,12 +26,18 @@ use crate::ast::{Expr, HandlerArm, HandlerKind, Pattern, ResolvedRef, TypedRef};
 use super::super::context::IrLoweringCtx;
 use super::IrBuilder;
 use super::case::bind_pattern_fields;
+use super::control::{
+    ContinuationRef, ControlDomain, ControlResultRef, HandleAnswer, TailResume, control_from_abi,
+    emit_control_return, emit_control_yield, emit_tail_resume_yield, handle_answer_to_source,
+    identity_continuation, invoke_continuation, invoke_resume, resume_answer_to_source,
+    resume_from_abi,
+};
 
 /// Lower a `fn` (tail-resumptive) ability operation call using `ability.call`.
 ///
-/// Unlike `lower_ability_op_call`, this does NOT create a continuation closure
-/// or use CPS. The result flows inline — no `func.return` is inserted, and
-/// subsequent code continues normally.
+/// This does not create a continuation closure or use CPS. The result flows
+/// inline — no `func.return` is inserted, and subsequent code continues
+/// normally.
 pub(super) fn lower_ability_fn_call<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -69,87 +76,19 @@ pub(super) fn lower_ability_fn_call<'db>(
     Some(result)
 }
 
-/// Lower an ability operation call using CPS (`ability.perform`).
-///
-/// Creates an identity continuation that wraps the result in `YieldResult::Done`,
-/// then emits `ability.perform` with this continuation. The returned value is
-/// the `ability.perform` result (will become `YieldResult::Shift` after lowering).
-///
-/// Note: callers in expression position will have dead code after this op,
-/// since `lower_ability_perform` adds `func.return` before the caller's
-/// subsequent ops.
-pub(super) fn lower_ability_op_call<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    location: Location,
-    ability: Symbol,
-    op: Symbol,
-    args: Vec<ValueRef>,
-    _result_type: TypeRef,
-) -> Option<ValueRef> {
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-    let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability, &[]);
-
-    // Pack multiple arguments into a tuple if needed (with boxing)
-    let packed_args = super::expr::pack_ability_args(builder, location, args);
-
-    // Build identity continuation: fn(result) { result }
-    // Continuation closures are internal mechanism, not user lambdas.
-    let entry_block = builder.ir.create_block(trunk_ir::context::BlockData {
-        location,
-        args: vec![trunk_ir::context::BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        }],
-        ops: Default::default(),
-        parent_region: None,
-    });
-    let param_val = builder.ir.block_arg(entry_block, 0);
-    let ret = func::r#return(builder.ir, location, [param_val]);
-    builder.ir.push_op(entry_block, ret.op_ref());
-
-    let body_region = builder.ir.create_region(trunk_ir::context::RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![entry_block],
-        parent_op: None,
-    });
-    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let lambda_op = closure::lambda(
-        builder.ir,
-        location,
-        Vec::<ValueRef>::new(),
-        closure_ty,
-        body_region,
-    );
-    builder.ir.push_op(builder.block, lambda_op.op_ref());
-    let continuation = lambda_op.result(builder.ir);
-
-    // Emit ability.perform
-    let perform_op = ability::perform(
-        builder.ir,
-        location,
-        continuation,
-        packed_args,
-        anyref_ty,
-        ability_ref,
-        op,
-    );
-    builder.ir.push_op(builder.block, perform_op.op_ref());
-    Some(perform_op.result(builder.ir))
-}
-
 /// Lower a `handle` expression using CPS-based effect handling.
 ///
-/// 1. Body is wrapped in a `closure.lambda` that returns `YieldResult`
-/// 2. The body closure is called to produce a `YieldResult`
-/// 3. `ability.handle_dispatch` dispatches on the `YieldResult`
+/// 1. Body is wrapped in a `closure.lambda` that returns an opaque
+///    compatibility control answer through the `anyref` ABI.
+/// 2. The body closure is called to produce that answer.
+/// 3. `ability.handle_dispatch` dispatches on that answer.
 /// 4. Handler arms use `func.call_indirect` for continuation calls
-pub(super) fn lower_handle<'db>(
+fn lower_handle_answer<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     body: &Expr<TypedRef<'db>>,
     handlers: &[HandlerArm<TypedRef<'db>>],
-) -> Option<ValueRef> {
+) -> Option<ControlResultRef<HandleAnswer>> {
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Generate a fresh prompt tag and build body inside the prompt scope.
@@ -205,7 +144,53 @@ pub(super) fn lower_handle<'db>(
         handler_dispatch_body,
     );
     builder.ir.push_op(builder.block, dispatch_op.op_ref());
-    Some(dispatch_op.result(builder.ir))
+    Some(control_from_abi(dispatch_op.result(builder.ir)))
+}
+
+/// Lower an already-normalized `handle` as a source-value delimiter.
+///
+/// This is deliberately the only handle-answer-to-source conversion.  The
+/// resulting source value may be consumed by a Direct parent or passed to a
+/// generic ambient/handler continuation, but the carrier itself never is.
+pub(super) fn lower_handle_source<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr_id: crate::ast::NodeId,
+    body: &Expr<TypedRef<'db>>,
+    handlers: &[HandlerArm<TypedRef<'db>>],
+) -> Option<ValueRef> {
+    let answer = lower_handle_answer(builder, location, body, handlers)?;
+    let logical_ty = builder
+        .ctx
+        .get_node_type(expr_id)
+        .copied()
+        .map(|ty| builder.ctx.convert_type(builder.ir, ty))
+        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
+    Some(handle_answer_to_source(
+        builder, location, answer, logical_ty,
+    ))
+}
+
+pub(super) fn lower_resume_comp<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    expr_id: crate::ast::NodeId,
+    arg: Expr<TypedRef<'db>>,
+    local_id: Option<crate::ast::LocalId>,
+    current_k: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let local_id = local_id?;
+    let resume = resume_from_abi(builder.ctx.lookup_resume(local_id)?);
+    let arg = super::expr::lower_value_normalized(builder, arg)?;
+    let answer = invoke_resume(builder, location, resume, arg);
+    let logical_ty = builder
+        .ctx
+        .get_node_type(expr_id)
+        .copied()
+        .map(|ty| builder.ctx.convert_type(builder.ir, ty))
+        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
+    let value = resume_answer_to_source(builder, location, answer, logical_ty);
+    Some(invoke_continuation(builder, location, current_k, value))
 }
 
 /// Build the handle body as a CPS closure and call it.
@@ -234,21 +219,13 @@ fn build_cps_body<'db>(
         }
     }
 
-    // Check if the body contains effectful function calls that need CPS.
-    let body_needs_done_k = super::expr::contains_cps_call_in_evaluation(builder.ctx, body);
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    // Build body closure entry block.
-    // If body needs done_k: fn(done_k: anyref) -> anyref
-    // Otherwise: fn() -> anyref
-    let entry_block_args = if body_needs_done_k {
-        vec![BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        }]
-    } else {
-        vec![]
-    };
+    // The handle body always receives its delimited answer continuation.
+    let entry_block_args = vec![BlockArgData {
+        ty: anyref_ty,
+        attrs: Default::default(),
+    }];
 
     let entry_block = builder.ir.create_block(BlockData {
         location,
@@ -260,37 +237,19 @@ fn build_cps_body<'db>(
     {
         let mut scope = builder.ctx.scope();
 
-        let prev_done_k = scope.done_k;
-        if body_needs_done_k {
-            let done_k_val = builder.ir.block_arg(entry_block, 0);
-            scope.done_k = Some(done_k_val);
-        }
-
         let result = {
             let mut body_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-            super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
+            let continuation = super::control::continuation_from_abi::<HandleAnswer>(
+                body_builder.ir.block_arg(entry_block, 0),
+            );
+            super::expr::lower_comp_normalized(&mut body_builder, body.clone(), continuation)
         };
-        let Some((body_result, _is_cps)) = result else {
-            scope.done_k = prev_done_k;
-            return None;
-        };
+        let body_result = result?;
 
-        // Always add func.return to terminate the block.
-        // For ability.perform: lower_ability_perform removes dead code after it.
         {
-            let result = if builder.ir.value_ty(body_result) != result_ty {
-                let cast =
-                    core::unrealized_conversion_cast(builder.ir, location, body_result, result_ty);
-                builder.ir.push_op(entry_block, cast.op_ref());
-                cast.result(builder.ir)
-            } else {
-                body_result
-            };
-            let ret = func::r#return(builder.ir, location, [result]);
-            builder.ir.push_op(entry_block, ret.op_ref());
+            let mut body_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            emit_control_return(&mut body_builder, location, body_result);
         }
-
-        scope.done_k = prev_done_k;
     }
 
     let body_region = builder.ir.create_region(RegionData {
@@ -299,12 +258,7 @@ fn build_cps_body<'db>(
         parent_op: None,
     });
 
-    // Closure type depends on whether body needs done_k
-    let body_params: Vec<TypeRef> = if body_needs_done_k {
-        vec![anyref_ty]
-    } else {
-        vec![]
-    };
+    let body_params: Vec<TypeRef> = vec![anyref_ty];
     let closure_func_ty = builder.ctx.func_type(builder.ir, &body_params, result_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
@@ -319,27 +273,16 @@ fn build_cps_body<'db>(
     builder.ir.push_op(builder.block, lambda_op.op_ref());
     let body_closure = lambda_op.result(builder.ir);
 
-    // Call the body closure
-    if body_needs_done_k {
-        // Build an identity done_k: fn(result) { return result }
-        // Created at the handle expression level (sibling to body_closure,
-        // not nested inside it), so lower_closure_lambda lifts both correctly.
-        let done_k_val = super::create_identity_done_k(builder, location);
-
-        let call_op = func::call_indirect(
-            builder.ir,
-            location,
-            body_closure,
-            vec![done_k_val],
-            result_ty,
-        );
-        builder.ir.push_op(builder.block, call_op.op_ref());
-        Some(call_op.result(builder.ir))
-    } else {
-        let call_op = func::call_indirect(builder.ir, location, body_closure, vec![], result_ty);
-        builder.ir.push_op(builder.block, call_op.op_ref());
-        Some(call_op.result(builder.ir))
-    }
+    let done_k = identity_continuation::<HandleAnswer>(builder, location);
+    let call_op = func::call_indirect(
+        builder.ir,
+        location,
+        body_closure,
+        vec![super::control::continuation_abi(done_k)],
+        result_ty,
+    );
+    builder.ir.push_op(builder.block, call_op.op_ref());
+    Some(call_op.result(builder.ir))
 }
 
 /// Build the handler dispatch body region with done and suspend ops (CPS version).
@@ -451,22 +394,30 @@ fn build_done_handler_region<'db>(
         }
 
         let mut builder = IrBuilder::new(&mut scope, ir, block);
-        super::expr::lower_expr(&mut builder, handler.body.clone())
+        let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+        super::expr::lower_comp_normalized(&mut builder, handler.body.clone(), continuation)
     } else {
-        Some(done_value)
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+        Some(invoke_continuation(
+            &mut builder,
+            location,
+            continuation,
+            done_value,
+        ))
     };
 
-    let yield_val = match result {
-        Some(v) => v,
+    let result = match result {
+        Some(result) => result,
         None => {
-            let nil_ty = ctx.nil_type(ir);
-            let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
-            ir.push_op(block, op.op_ref());
-            op.result(ir)
+            let mut builder = IrBuilder::new(ctx, ir, block);
+            let nil = builder.emit_nil(location);
+            let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+            invoke_continuation(&mut builder, location, continuation, nil)
         }
     };
-    let yield_op = scf::r#yield(ir, location, [yield_val]);
-    ir.push_op(block, yield_op.op_ref());
+    let mut builder = IrBuilder::new(ctx, ir, block);
+    emit_control_yield(&mut builder, location, result);
 
     ir.create_region(RegionData {
         location,
@@ -513,8 +464,8 @@ fn extract_ability_ref_and_op_name<'db>(
 /// Build a CPS suspend handler region (effect handler).
 ///
 /// In CPS mode, continuation calls use `func.call_indirect` instead of
-/// `ability.resume`, and handler arm results are wrapped in `YieldResult::Done`
-/// if not already a `YieldResult`.
+/// `ability.resume`, and handler arm results use the opaque compatibility
+/// control answer carried by the current `anyref` ABI.
 fn build_cps_suspend_handler_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -554,7 +505,7 @@ fn build_cps_suspend_handler_region<'db>(
     let cont_value = ir.block_arg(block, 0);
     let shift_value = ir.block_arg(block, 1);
 
-    let body_result = {
+    {
         let mut scope = ctx.scope();
 
         // Enable CPS handler mode so that continuation calls use func.call_indirect
@@ -563,56 +514,44 @@ fn build_cps_suspend_handler_region<'db>(
 
         // Bind resume continuation if this is an `op` arm with resume
         if let Some(k_local_id) = resume_local_id {
-            scope.bind(k_local_id, Symbol::new("resume"), cont_value);
+            scope.bind_resume(k_local_id, Symbol::new("resume"), cont_value);
         }
 
         // Bind params patterns
         bind_handler_params(&mut scope, ir, block, location, shift_value, params, any_ty);
 
-        // Create identity done_k for the handler arm body.
-        // Handler arms may call effectful functions (e.g., run_state) that
-        // expect done_k. Since the handler arm's result flows to scf.yield,
-        // the identity done_k just returns the result through the call chain.
-        let prev_done_k = scope.done_k;
-        {
-            let mut dk_builder = IrBuilder::new(&mut scope, ir, block);
-            let identity_dk = super::create_identity_done_k(&mut dk_builder, location);
-            scope.done_k = Some(identity_dk);
+        let mut builder = IrBuilder::new(&mut scope, ir, block);
+        match &handler.kind {
+            HandlerKind::Fn { .. } => {
+                let continuation = identity_continuation::<TailResume>(&mut builder, location);
+                let result = super::expr::lower_comp_normalized(
+                    &mut builder,
+                    handler.body.clone(),
+                    continuation,
+                )
+                .unwrap_or_else(|| {
+                    let nil = builder.emit_nil(location);
+                    invoke_continuation(&mut builder, location, continuation, nil)
+                });
+                emit_tail_resume_yield(&mut builder, location, result);
+            }
+            HandlerKind::Op { .. } => {
+                let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+                let result = super::expr::lower_comp_normalized(
+                    &mut builder,
+                    handler.body.clone(),
+                    continuation,
+                )
+                .unwrap_or_else(|| {
+                    let nil = builder.emit_nil(location);
+                    invoke_continuation(&mut builder, location, continuation, nil)
+                });
+                emit_control_yield(&mut builder, location, result);
+            }
+            HandlerKind::Do { .. } => unreachable!(),
         }
-
-        // Evaluate the handler body
-        let body_result = {
-            let mut builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_block_cps_for_expr(&mut builder, handler.body.clone())
-                .map(|(value, _)| value)
-        };
-
-        scope.done_k = prev_done_k;
         scope.cps_handler_mode = prev_cps_mode;
-        body_result
-    };
-
-    let body_val = match body_result {
-        Some(v) => v,
-        None => {
-            let nil_ty = ctx.nil_type(ir);
-            let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
-            ir.push_op(block, op.op_ref());
-            op.result(ir)
-        }
-    };
-
-    // Cast to anyref if needed (no YieldResult wrapping — tail call CPS)
-    let result_val = if ir.value_ty(body_val) != any_ty {
-        let cast = core::unrealized_conversion_cast(ir, location, body_val, any_ty);
-        ir.push_op(block, cast.op_ref());
-        cast.result(ir)
-    } else {
-        body_val
-    };
-
-    let yield_op = scf::r#yield(ir, location, [result_val]);
-    ir.push_op(block, yield_op.op_ref());
+    }
 
     ir.create_region(RegionData {
         location,
@@ -623,8 +562,9 @@ fn build_cps_suspend_handler_region<'db>(
 
 /// Build the handler_dispatch closure for tail-call-based CPS.
 ///
-/// Creates a `closure.lambda` with signature `(k: anyref, op_idx: i32, value: anyref) -> YieldResult`
-/// that dispatches to the appropriate handler arm based on op_idx.
+/// Creates a `closure.lambda` with signature
+/// `(k: anyref, op_idx: i32, value: anyref) -> anyref`; its result is an
+/// opaque compatibility control answer that dispatches by `op_idx`.
 ///
 /// The closure captures variables from the enclosing scope that the handler
 /// arm bodies reference. `closure_lower` will later extract it to a top-level
@@ -717,7 +657,7 @@ fn build_handler_dispatch_closure<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn(anyref, i32, anyref) -> YieldResult
+    // Closure type: fn(anyref, i32, anyref) -> opaque control answer (`anyref`).
     let closure_func_ty = builder
         .ctx
         .func_type(builder.ir, &[anyref_ty, i32_ty, anyref_ty], yr_ty);
@@ -974,7 +914,7 @@ fn build_fn_handler_arm_for_dispatch<'db>(
         parent_region: None,
     });
 
-    let body_result = {
+    {
         let mut scope = ctx.scope();
 
         // No resume binding for fn handlers
@@ -984,35 +924,16 @@ fn build_fn_handler_arm_for_dispatch<'db>(
             &mut scope, ir, block, location, value_val, params, anyref_ty,
         );
 
-        // Evaluate the handler body
-        {
-            let mut inner_builder = IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_block_cps_for_expr(&mut inner_builder, handler.body.clone())
-                .map(|(value, _)| value)
-        }
-    };
-
-    let body_val = match body_result {
-        Some(v) => v,
-        None => {
-            let nil_ty = ctx.nil_type(ir);
-            let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
-            ir.push_op(block, op.op_ref());
-            op.result(ir)
-        }
-    };
-
-    // Cast to anyref if needed
-    let result_val = if ir.value_ty(body_val) != anyref_ty {
-        let cast = core::unrealized_conversion_cast(ir, location, body_val, anyref_ty);
-        ir.push_op(block, cast.op_ref());
-        cast.result(ir)
-    } else {
-        body_val
-    };
-
-    let yield_op = scf::r#yield(ir, location, [result_val]);
-    ir.push_op(block, yield_op.op_ref());
+        let mut builder = IrBuilder::new(&mut scope, ir, block);
+        let continuation = identity_continuation::<TailResume>(&mut builder, location);
+        let result =
+            super::expr::lower_comp_normalized(&mut builder, handler.body.clone(), continuation)
+                .unwrap_or_else(|| {
+                    let nil = builder.emit_nil(location);
+                    invoke_continuation(&mut builder, location, continuation, nil)
+                });
+        emit_tail_resume_yield(&mut builder, location, result);
+    }
 
     ir.create_region(RegionData {
         location,
@@ -1164,7 +1085,7 @@ fn build_handler_arm_for_dispatch<'db>(
         parent_region: None,
     });
 
-    let body_result = {
+    {
         let mut scope = ctx.scope();
 
         let prev_cps_mode = scope.cps_handler_mode;
@@ -1172,7 +1093,7 @@ fn build_handler_arm_for_dispatch<'db>(
 
         // Bind resume continuation if this is an `op` arm with resume
         if let Some(k_local_id) = resume_local_id {
-            scope.bind(k_local_id, Symbol::new("resume"), k_val);
+            scope.bind_resume(k_local_id, Symbol::new("resume"), k_val);
         }
 
         // Bind params patterns
@@ -1180,46 +1101,38 @@ fn build_handler_arm_for_dispatch<'db>(
             &mut scope, ir, block, location, value_val, params, anyref_ty,
         );
 
-        // Create identity done_k for effectful calls in handler arm body.
-        let prev_done_k = scope.done_k;
-        {
-            let mut dk_builder = super::IrBuilder::new(&mut scope, ir, block);
-            let identity_dk = super::create_identity_done_k(&mut dk_builder, location);
-            scope.done_k = Some(identity_dk);
+        let mut builder = super::IrBuilder::new(&mut scope, ir, block);
+        match &handler.kind {
+            HandlerKind::Fn { .. } => {
+                let continuation = identity_continuation::<TailResume>(&mut builder, location);
+                let result = super::expr::lower_comp_normalized(
+                    &mut builder,
+                    handler.body.clone(),
+                    continuation,
+                )
+                .unwrap_or_else(|| {
+                    let nil = builder.emit_nil(location);
+                    invoke_continuation(&mut builder, location, continuation, nil)
+                });
+                emit_tail_resume_yield(&mut builder, location, result);
+            }
+            HandlerKind::Op { .. } => {
+                let continuation = identity_continuation::<HandleAnswer>(&mut builder, location);
+                let result = super::expr::lower_comp_normalized(
+                    &mut builder,
+                    handler.body.clone(),
+                    continuation,
+                )
+                .unwrap_or_else(|| {
+                    let nil = builder.emit_nil(location);
+                    invoke_continuation(&mut builder, location, continuation, nil)
+                });
+                emit_control_yield(&mut builder, location, result);
+            }
+            HandlerKind::Do { .. } => unreachable!(),
         }
-
-        // Evaluate the handler body
-        let body_result = {
-            let mut inner_builder = super::IrBuilder::new(&mut scope, ir, block);
-            super::expr::lower_expr(&mut inner_builder, handler.body.clone())
-        };
-
-        scope.done_k = prev_done_k;
         scope.cps_handler_mode = prev_cps_mode;
-        body_result
-    };
-
-    let body_val = match body_result {
-        Some(v) => v,
-        None => {
-            let nil_ty = ctx.nil_type(ir);
-            let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
-            ir.push_op(block, op.op_ref());
-            op.result(ir)
-        }
-    };
-
-    // Cast to anyref if needed (no YieldResult wrapping — tail call CPS)
-    let result_val = if ir.value_ty(body_val) != anyref_ty {
-        let cast = core::unrealized_conversion_cast(ir, location, body_val, anyref_ty);
-        ir.push_op(block, cast.op_ref());
-        cast.result(ir)
-    } else {
-        body_val
-    };
-
-    let yield_op = scf::r#yield(ir, location, [result_val]);
-    ir.push_op(block, yield_op.op_ref());
+    }
 
     ir.create_region(RegionData {
         location,

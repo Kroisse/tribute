@@ -70,7 +70,10 @@ pub(super) fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut
             }
             collect_free_vars(value, free_vars);
         }
-        ExprKind::Record { fields, .. } => {
+        ExprKind::Record { fields, spread, .. } => {
+            if let Some(spread) = spread {
+                collect_free_vars(spread, free_vars);
+            }
             for (_, value) in fields {
                 collect_free_vars(value, free_vars);
             }
@@ -194,12 +197,13 @@ pub(super) fn lower_lambda<'db>(
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
     param_ir_types: &[TypeRef],
-    result_ir_ty: TypeRef,
-    convention: CallingConvention,
+    abi: CallableAbi<TypeRef>,
+    body_is_normalized: bool,
 ) -> Option<ValueRef> {
     let any_ty = builder.ctx.anyref_type(builder.ir);
     let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
-    let abi = CallableAbi::new(convention, param_ir_types.iter().copied(), result_ir_ty);
+    let convention = abi.convention;
+    let result_ir_ty = abi.source_result;
 
     // Step 1: Analyze captures
     let captures = analyze_captures(builder.ctx, builder.ir, params, body);
@@ -278,28 +282,18 @@ pub(super) fn lower_lambda<'db>(
             scope.done_k = Some(done_k_val);
 
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-            match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
-                Some((result, true)) => {
-                    // CPS result: effectful call happened; add func.return with the result.
-                    // The callee already handled done_k via its continuation chain.
-                    let anyref_ty = inner_builder.ctx.anyref_type(inner_builder.ir);
-                    let result = inner_builder.cast_if_needed(location, result, anyref_ty);
-                    let ret_op = func::r#return(inner_builder.ir, location, [result]);
-                    inner_builder
-                        .ir
-                        .push_op(inner_builder.block, ret_op.op_ref());
-                }
-                Some((result, false)) => {
-                    // Pure result: call done_k(result)
-                    let anyref_ty = inner_builder.ctx.anyref_type(inner_builder.ir);
-                    let result = inner_builder.cast_if_needed(location, result, anyref_ty);
-                    super::emit_done_k_call(&mut inner_builder, location, done_k_val, result);
-                }
-                None => {
-                    let nil = inner_builder.emit_nil(location);
-                    super::emit_done_k_call(&mut inner_builder, location, done_k_val, nil);
-                }
-            }
+            let done_k =
+                super::control::continuation_from_abi::<super::control::Ambient>(done_k_val);
+            let result = if body_is_normalized {
+                super::expr::lower_comp_normalized(&mut inner_builder, body.clone(), done_k)
+            } else {
+                super::expr::lower_comp(&mut inner_builder, body.clone(), done_k)
+            };
+            let result = result.unwrap_or_else(|| {
+                let nil = inner_builder.emit_nil(location);
+                super::control::invoke_continuation(&mut inner_builder, location, done_k, nil)
+            });
+            super::control::emit_control_return(&mut inner_builder, location, result);
             scope.done_k = prev_done_k;
             scope.evidence = prev_evidence;
         } else {
@@ -308,8 +302,12 @@ pub(super) fn lower_lambda<'db>(
                 scope.evidence = Some(builder.ir.block_arg(entry_block, 0));
             }
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-            let result = super::expr::lower_expr(&mut inner_builder, body.clone())
-                .unwrap_or_else(|| inner_builder.emit_nil(location));
+            let result = if body_is_normalized {
+                super::expr::lower_value_normalized(&mut inner_builder, body.clone())
+            } else {
+                super::expr::lower_value(&mut inner_builder, body.clone())
+            }
+            .unwrap_or_else(|| inner_builder.emit_nil(location));
             let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
             let ret_op = func::r#return(inner_builder.ir, location, [result]);
             inner_builder

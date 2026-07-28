@@ -3,7 +3,7 @@
 //! Manages state during AST-to-IR transformation.
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::closure;
@@ -51,6 +51,9 @@ pub struct IrLoweringCtx<'db> {
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
     scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
+    /// Scoped tags identifying locals whose SSA value is a suspended handler
+    /// continuation rather than a source value.
+    resume_scopes: Vec<HashSet<LocalId>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
     /// Ability-level calling-convention requirements.
@@ -123,6 +126,7 @@ impl<'db> IrLoweringCtx<'db> {
             options: AstToIrOptions::production(),
             span_map,
             scopes: vec![HashMap::new()],
+            resume_scopes: vec![HashSet::new()],
             function_types,
             ability_conventions,
             definition_conventions: HashMap::new(),
@@ -195,11 +199,13 @@ impl<'db> IrLoweringCtx<'db> {
     /// Enter a new scope (internal — use `scope()` guard instead).
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.resume_scopes.push(HashSet::new());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
     fn exit_scope(&mut self) {
         self.scopes.pop();
+        self.resume_scopes.pop();
     }
 
     /// Bind a local variable to an SSA value.
@@ -207,6 +213,22 @@ impl<'db> IrLoweringCtx<'db> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(local_id, (name, value));
         }
+    }
+
+    pub(crate) fn bind_resume(&mut self, local_id: LocalId, name: Symbol, value: ValueRef) {
+        self.bind(local_id, name, value);
+        if let Some(scope) = self.resume_scopes.last_mut() {
+            scope.insert(local_id);
+        }
+    }
+
+    pub(crate) fn lookup_resume(&self, local_id: LocalId) -> Option<ValueRef> {
+        self.resume_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(&local_id))
+            .then(|| self.lookup(local_id))
+            .flatten()
     }
 
     /// Look up a function's type scheme by name.
