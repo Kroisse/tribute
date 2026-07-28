@@ -221,8 +221,12 @@ impl<'db> TypeChecker<'db> {
         // Apply substitution and generalization to the function type.
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
 
-        // Validate that `main` returns Nil
-        if func.name == "main"
+        // Only the exact root `main` is an entrypoint. A nested-module
+        // function named `main` is an ordinary worker.
+        let is_root_main = func.name == "main" && self.current_prefix().is_empty();
+
+        // Validate that root `main` returns Nil.
+        if is_root_main
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil)
         {
@@ -235,12 +239,12 @@ impl<'db> TypeChecker<'db> {
             .accumulate(self.db());
         }
 
-        // Validate that `main` has no unhandled effects.
+        // Validate that root `main` has no unhandled effects.
         // We check body_effect_row (the accumulated effect from type-checking the body)
         // rather than the function signature's effect row, because effect inference
         // tracks effects in the context's current_effect rather than constraining
         // the function type's row variable.
-        if func.name == "main" {
+        if is_root_main {
             let resolved_effect = row_subst.apply(self.db(), body_effect_row);
             let unhandled = resolved_effect
                 .effects(self.db())
