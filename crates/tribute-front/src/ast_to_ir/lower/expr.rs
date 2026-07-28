@@ -15,13 +15,15 @@ use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::{BlockData, RegionData};
 
-use crate::ast::{
-    BinOpKind, Expr, ExprKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef,
-};
+use crate::ast::{BinOpKind, Expr, ExprKind, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 
 use tribute_ir::dialect::{ability, closure, list};
 
 use super::case::bind_pattern_fields;
+use super::control::{
+    ContinuationRef, ControlDomain, ControlResultRef, continuation_abi, control_from_abi,
+    emit_control_return, invoke_continuation,
+};
 use super::{
     IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, qualified_type_name,
     resolve_enum_type_attr_for_constructor,
@@ -58,10 +60,38 @@ fn cast_variant_args<'db>(
         .collect()
 }
 
-/// Lower an expression to arena TrunkIR.
-pub(super) fn lower_expr<'db>(
+/// Lower a source value after the computation entry point has established
+/// that evaluating it cannot transfer control.
+pub(super) fn lower_value<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    assert_eq!(
+        evaluation_control_class(builder.ctx, &expr),
+        EvaluationControlClass::Direct,
+        "ICE: lower_value received an expression that must be lowered through lower_comp"
+    );
+    lower_value_impl(builder, expr, false)
+}
+
+pub(super) fn lower_value_normalized<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    assert_eq!(
+        evaluation_control_class(builder.ctx, &expr),
+        EvaluationControlClass::Direct,
+        "ICE: normalized value lowering received a CPS expression"
+    );
+    lower_value_impl(builder, expr, true)
+}
+
+/// Raw direct-value emission. `nested_regions_normalized` distinguishes a raw
+/// Direct/EvidenceDirect entry from a value owned by the CPS normalizer.
+fn lower_value_impl<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
     let expr_node_id = expr.id;
     let location = builder.location(expr_node_id);
@@ -234,13 +264,18 @@ pub(super) fn lower_expr<'db>(
             // Short-circuit evaluation:
             //   a && b → scf.if(a, then={yield b}, else={yield false})
             //   a || b → scf.if(a, then={yield true}, else={yield b})
-            let lhs_val = lower_expr(builder, lhs)?;
+            let lhs_val = lower_value_impl(builder, lhs, nested_regions_normalized)?;
             let bool_ty = builder.ctx.bool_type(builder.ir);
 
             let (then_region, else_region) = match op {
                 BinOpKind::And => {
-                    let then_region =
-                        build_short_circuit_rhs_region(builder, location, bool_ty, rhs);
+                    let then_region = build_short_circuit_rhs_region(
+                        builder,
+                        location,
+                        bool_ty,
+                        rhs,
+                        nested_regions_normalized,
+                    );
                     let else_region =
                         build_short_circuit_const_region(builder.ir, location, bool_ty, false);
                     (then_region, else_region)
@@ -248,8 +283,13 @@ pub(super) fn lower_expr<'db>(
                 BinOpKind::Or => {
                     let then_region =
                         build_short_circuit_const_region(builder.ir, location, bool_ty, true);
-                    let else_region =
-                        build_short_circuit_rhs_region(builder, location, bool_ty, rhs);
+                    let else_region = build_short_circuit_rhs_region(
+                        builder,
+                        location,
+                        bool_ty,
+                        rhs,
+                        nested_regions_normalized,
+                    );
                     (then_region, else_region)
                 }
             };
@@ -266,11 +306,14 @@ pub(super) fn lower_expr<'db>(
             Some(if_op.result(builder.ir))
         }
 
-        ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
+        ExprKind::Block { stmts, value } => {
+            lower_block(builder, stmts, value, nested_regions_normalized)
+        }
 
         ExprKind::Call { callee, args } => {
             let arg_exprs = args;
-            let mut arg_values = builder.collect_args(arg_exprs.clone())?;
+            let mut arg_values =
+                lower_value_args(builder, arg_exprs.clone(), nested_regions_normalized)?;
 
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
@@ -478,13 +521,8 @@ pub(super) fn lower_expr<'db>(
                                 arg_values,
                                 result_ty,
                             ),
-                            OpDeclKind::Op => super::handle::lower_ability_op_call(
-                                builder,
-                                location,
-                                ability_name,
-                                *op,
-                                arg_values,
-                                result_ty,
+                            OpDeclKind::Op => unreachable!(
+                                "ICE: general ability operations must be lowered through lower_comp"
                             ),
                         }
                     }
@@ -493,7 +531,7 @@ pub(super) fn lower_expr<'db>(
                 _ => {
                     // General expression callee -> indirect call
                     let callee_node_id = callee.id;
-                    let callee_val = lower_expr(builder, callee)?;
+                    let callee_val = lower_value_impl(builder, callee, nested_regions_normalized)?;
                     let convention = builder
                         .ctx
                         .get_node_type(callee_node_id)
@@ -550,7 +588,7 @@ pub(super) fn lower_expr<'db>(
         }
 
         ExprKind::Cons { ctor, args } => {
-            let arg_values = builder.collect_args(args)?;
+            let arg_values = lower_value_args(builder, args, nested_regions_normalized)?;
 
             match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
@@ -578,7 +616,7 @@ pub(super) fn lower_expr<'db>(
         ExprKind::Tuple(elements) => {
             let values: Vec<_> = elements
                 .iter()
-                .map(|elem| lower_expr(builder, elem.clone()))
+                .map(|elem| lower_value_impl(builder, elem.clone(), nested_regions_normalized))
                 .collect::<Option<Vec<_>>>()?;
             let any_ty = builder.ctx.anyref_type(builder.ir);
             let (result_ty, type_attr) =
@@ -604,7 +642,11 @@ pub(super) fn lower_expr<'db>(
             let db = builder.db();
 
             let spread_val = match &spread {
-                Some(spread_expr) => Some(lower_expr(builder, spread_expr.clone())?),
+                Some(spread_expr) => Some(lower_value_impl(
+                    builder,
+                    spread_expr.clone(),
+                    nested_regions_normalized,
+                )?),
                 None => None,
             };
 
@@ -649,7 +691,7 @@ pub(super) fn lower_expr<'db>(
                     continue;
                 }
 
-                let val = lower_expr(builder, expr.clone())?;
+                let val = lower_value_impl(builder, expr.clone(), nested_regions_normalized)?;
                 field_map.insert(name, val);
             }
 
@@ -693,7 +735,7 @@ pub(super) fn lower_expr<'db>(
         }
 
         ExprKind::Case { scrutinee, arms } => {
-            let scrutinee_val = lower_expr(builder, scrutinee)?;
+            let scrutinee_val = lower_value_impl(builder, scrutinee, nested_regions_normalized)?;
             let any_ty = builder.ctx.anyref_type(builder.ir);
             let mut result_ty = builder
                 .ctx
@@ -713,7 +755,15 @@ pub(super) fn lower_expr<'db>(
             }
 
             let location = builder.location(expr_node_id);
-            super::case::lower_case_chain(builder, location, scrutinee_val, result_ty, &arms, false)
+            super::case::lower_case_chain(
+                builder,
+                location,
+                scrutinee_val,
+                result_ty,
+                &arms,
+                false,
+                nested_regions_normalized,
+            )
         }
 
         ExprKind::Lambda { params, body } => {
@@ -757,72 +807,40 @@ pub(super) fn lower_expr<'db>(
                 &params,
                 &body,
                 &param_ir_types,
-                result_ir_ty,
-                convention,
+                tribute_core::CallableAbi::new(
+                    convention,
+                    param_ir_types.iter().copied(),
+                    result_ir_ty,
+                ),
+                nested_regions_normalized,
             )
         }
 
         ExprKind::Handle { body, handlers } => {
-            let handle_val = super::handle::lower_handle(builder, location, &body, &handlers)?;
-            let node_ty = builder.ctx.get_node_type(expr_node_id).copied();
-            if let Some(ty) = node_ty {
-                let ir_ty = builder.ctx.convert_type(builder.ir, ty);
-                let any_ty = builder.ctx.anyref_type(builder.ir);
-                if ir_ty != any_ty {
-                    let cast_op =
-                        core::unrealized_conversion_cast(builder.ir, location, handle_val, ir_ty);
-                    builder.ir.push_op(builder.block, cast_op.op_ref());
-                    return Some(cast_op.result(builder.ir));
-                }
+            // A handle is internally CPS, but its delimiter turns its completed
+            // HandleAnswer into a source value.  A raw Direct/EvidenceDirect
+            // parent owns exactly one normalization traversal of the complete
+            // handle; a normalized CPS parent has already normalized these
+            // isolated regions and must not allocate another set of temps.
+            if !nested_regions_normalized {
+                let normalized = super::super::normalize::normalize_for_cps(
+                    builder.ctx,
+                    Expr::new(expr_node_id, ExprKind::Handle { body, handlers }),
+                );
+                return lower_value_impl(builder, normalized, true);
             }
-            Some(handle_val)
+            super::handle::lower_handle_source(builder, location, expr_node_id, &body, &handlers)
         }
 
-        ExprKind::Resume { arg, local_id } => {
-            // In CPS mode, `resume(value)` is lowered as a call to the
-            // continuation closure bound by the `op` handler arm.
-            let arg_val = lower_expr(builder, arg)?;
-            let Some(lid) = local_id else {
-                return builder.emit_unsupported(location, "resume without local_id");
-            };
-            let Some(k_val) = builder.ctx.lookup(lid) else {
-                return builder.emit_unsupported(location, "resume: continuation not bound");
-            };
-            let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-            // Cast arg to anyref if needed
-            let arg_cast = if builder.ir.value_ty(arg_val) != anyref_ty {
-                let cast =
-                    core::unrealized_conversion_cast(builder.ir, location, arg_val, anyref_ty);
-                builder.ir.push_op(builder.block, cast.op_ref());
-                cast.result(builder.ir)
-            } else {
-                arg_val
-            };
-
-            // Cast k_val from anyref to closure type so closure_lower can
-            // properly decompose it (extract fn_ptr + env and add evidence).
-            let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-            let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-            let k_cast = core::unrealized_conversion_cast(builder.ir, location, k_val, closure_ty);
-            builder.ir.push_op(builder.block, k_cast.op_ref());
-
-            let call_op = func::call_indirect(
-                builder.ir,
-                location,
-                k_cast.result(builder.ir),
-                vec![arg_cast],
-                anyref_ty,
-            );
-            builder.ir.push_op(builder.block, call_op.op_ref());
-            Some(call_op.result(builder.ir))
+        ExprKind::Resume { .. } => {
+            unreachable!("resume must be lowered through the current computation continuation")
         }
 
         ExprKind::List(elements) => {
             // Evaluate source elements before constructing the persistent
             // sequence so the reverse construction fold cannot reorder or
             // duplicate effects.
-            let values = builder.collect_args(elements)?;
+            let values = lower_value_args(builder, elements, nested_regions_normalized)?;
             let list_ast_ty = builder.ctx.get_node_type(expr_node_id).copied();
             let element_ast_ty = list_ast_ty.and_then(|ty| match ty.kind(builder.db()) {
                 TypeKind::Named { id, args, .. }
@@ -853,211 +871,244 @@ pub(super) fn lower_expr<'db>(
     }
 }
 
-fn evaluated_expr_any<'db>(
-    expr: &Expr<TypedRef<'db>>,
-    predicate: &mut impl FnMut(&Expr<TypedRef<'db>>) -> bool,
-) -> bool {
-    if predicate(expr) {
-        return true;
-    }
+/// Lower strict arguments without changing the caller's normalization
+/// ownership. Raw Direct/EvidenceDirect entries use raw value lowering;
+/// normalized computation regions keep their nested lambda/handle boundaries
+/// on the normalized entry path.
+fn lower_value_args<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    args: impl IntoIterator<Item = Expr<TypedRef<'db>>>,
+    nested_regions_normalized: bool,
+) -> Option<Vec<ValueRef>> {
+    args.into_iter()
+        .map(|arg| {
+            if nested_regions_normalized {
+                lower_value_normalized(builder, arg)
+            } else {
+                lower_value(builder, arg)
+            }
+        })
+        .collect()
+}
 
-    match &*expr.kind {
-        ExprKind::Call { callee, args } => {
-            evaluated_expr_any(callee, predicate)
-                || args.iter().any(|arg| evaluated_expr_any(arg, predicate))
+/// Lowering-only classification for the current evaluation domain.
+///
+/// This deliberately consumes the typed AST rather than introducing a second
+/// type-checker effect table: selected calling conventions and resolved callee
+/// identities already determine whether a source evaluation can transfer
+/// control.  It does not inspect lambda bodies, whose effects are latent until
+/// invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EvaluationControlClass {
+    Direct,
+    Cps,
+}
+
+impl EvaluationControlClass {
+    fn join(self, other: Self) -> Self {
+        if self == Self::Cps || other == Self::Cps {
+            Self::Cps
+        } else {
+            Self::Direct
         }
-        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
-            args.iter().any(|arg| evaluated_expr_any(arg, predicate))
-        }
-        ExprKind::Record { fields, spread, .. } => {
-            spread
-                .as_ref()
-                .is_some_and(|expr| evaluated_expr_any(expr, predicate))
-                || fields
-                    .iter()
-                    .any(|(_, expr)| evaluated_expr_any(expr, predicate))
-        }
-        ExprKind::Block { stmts, value } => {
-            stmts.iter().any(|stmt| match stmt {
-                Stmt::Let { value, .. } => evaluated_expr_any(value, predicate),
-                Stmt::Expr { expr, .. } => evaluated_expr_any(expr, predicate),
-            }) || evaluated_expr_any(value, predicate)
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            evaluated_expr_any(lhs, predicate) || evaluated_expr_any(rhs, predicate)
-        }
-        ExprKind::Case { scrutinee, arms } => {
-            evaluated_expr_any(scrutinee, predicate)
-                || arms.iter().any(|arm| {
-                    arm.guard
-                        .as_ref()
-                        .is_some_and(|guard| evaluated_expr_any(guard, predicate))
-                        || evaluated_expr_any(&arm.body, predicate)
-                })
-        }
-        ExprKind::Resume { arg, .. } => evaluated_expr_any(arg, predicate),
-        ExprKind::MethodCall { receiver, args, .. } => {
-            evaluated_expr_any(receiver, predicate)
-                || args.iter().any(|arg| evaluated_expr_any(arg, predicate))
-        }
-        // These introduce independently lowered evaluation domains.
-        ExprKind::Lambda { .. } | ExprKind::Handle { .. } => false,
-        _ => false,
     }
 }
 
-/// Check whether evaluating an expression can execute a call that needs CPS.
-///
-/// This does not descend into lambdas or handlers, which establish their own
-/// lowering domains.
-pub(super) fn contains_cps_call_in_evaluation<'db>(
+pub(super) fn evaluation_control_class<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
-) -> bool {
-    evaluated_expr_any(expr, &mut |expr| is_cps_call_expr(ctx, expr))
-}
+) -> EvaluationControlClass {
+    let children = |children: &[Expr<TypedRef<'db>>]| {
+        children
+            .iter()
+            .fold(EvaluationControlClass::Direct, |class, child| {
+                class.join(evaluation_control_class(ctx, child))
+            })
+    };
 
-/// Lower a function body expression with CPS transformation for effectful functions.
-///
-/// Like `lower_block_cps_for_expr`, but also handles top-level effectful function calls
-/// (not just ability ops) as CPS points.
-pub(super) fn lower_block_cps_for_body<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    expr: Expr<TypedRef<'db>>,
-) -> Option<(ValueRef, bool)> {
-    // Effectful call detection is already integrated into lower_block_cps.
-    lower_block_cps_for_expr(builder, expr)
-}
-
-/// CPS-lower an expression, using an empty statement list for non-block forms.
-///
-/// This keeps direct-call handling and nested-call lifting in the same block
-/// CPS state machine instead of maintaining a second expression-only path.
-pub(super) fn lower_block_cps_for_expr<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    expr: Expr<TypedRef<'db>>,
-) -> Option<(ValueRef, bool)> {
-    match *expr.kind {
-        ExprKind::Block { stmts, value } => lower_block_cps(builder, stmts, value),
-        _ => lower_block_cps(builder, vec![], expr),
+    match &*expr.kind {
+        ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
+        // A handle is a source-value delimiter: its body/arms can be CPS, but
+        // a completed HandleAnswer is converted only at that delimiter before
+        // its parent receives the source value.  Resume, in contrast, must
+        // compose the arm-local current continuation.
+        ExprKind::Handle { .. } => EvaluationControlClass::Direct,
+        ExprKind::Resume { .. } => EvaluationControlClass::Cps,
+        ExprKind::Call { callee, args } => {
+            let call = if is_cps_call_expr(ctx, expr) {
+                EvaluationControlClass::Cps
+            } else {
+                EvaluationControlClass::Direct
+            };
+            call.join(evaluation_control_class(ctx, callee))
+                .join(children(args))
+        }
+        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+            children(args)
+        }
+        ExprKind::Record { fields, spread, .. } => {
+            let spread = spread
+                .as_ref()
+                .map_or(EvaluationControlClass::Direct, |spread| {
+                    evaluation_control_class(ctx, spread)
+                });
+            fields.iter().fold(spread, |class, (_, field)| {
+                class.join(evaluation_control_class(ctx, field))
+            })
+        }
+        ExprKind::Block { stmts, value } => {
+            let statements = stmts
+                .iter()
+                .fold(EvaluationControlClass::Direct, |class, stmt| {
+                    let expr = match stmt {
+                        Stmt::Let { value, .. } => value,
+                        Stmt::Expr { expr, .. } => expr,
+                    };
+                    class.join(evaluation_control_class(ctx, expr))
+                });
+            statements.join(evaluation_control_class(ctx, value))
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            evaluation_control_class(ctx, lhs).join(evaluation_control_class(ctx, rhs))
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            arms.iter()
+                .fold(evaluation_control_class(ctx, scrutinee), |class, arm| {
+                    let guard = arm
+                        .guard
+                        .as_ref()
+                        .map_or(EvaluationControlClass::Direct, |guard| {
+                            evaluation_control_class(ctx, guard)
+                        });
+                    class
+                        .join(guard)
+                        .join(evaluation_control_class(ctx, &arm.body))
+                })
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            evaluation_control_class(ctx, receiver).join(children(args))
+        }
+        ExprKind::Var(_)
+        | ExprKind::NatLit(_)
+        | ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::Nil
+        | ExprKind::RuneLit(_)
+        | ExprKind::Error => EvaluationControlClass::Direct,
     }
 }
 
-/// Lower a block expression (let bindings + value).
-///
-/// Detects direct ability op calls in statements and applies CPS transformation:
-/// the remaining computation becomes a `closure.lambda` continuation, and the
-/// ability op is emitted as `ability.perform` with the continuation.
+/// Lower an unnormalized computation entry exactly once.
+pub(super) fn lower_comp<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let expr = super::super::normalize::normalize_for_cps(builder.ctx, expr);
+    lower_comp_normalized(builder, expr, continuation)
+}
+
+/// Lower an expression already owned by the normalizer traversal.
+pub(super) fn lower_comp_normalized<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    if evaluation_control_class(builder.ctx, &expr) == EvaluationControlClass::Direct {
+        let location = builder.location(expr.id);
+        let value = lower_value_normalized(builder, expr)?;
+        return Some(invoke_continuation(builder, location, continuation, value));
+    }
+
+    let location = builder.location(expr.id);
+    match *expr.kind {
+        ExprKind::Block { stmts, value } => {
+            lower_normalized_block(builder, stmts, value, continuation)
+        }
+        ExprKind::Call { callee, args } => {
+            lower_cps_call_expr(builder, location, expr.id, callee, args, continuation)
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            super::case::lower_case_comp(builder, location, scrutinee, arms, continuation)
+        }
+        ExprKind::BinOp { op, lhs, rhs } => {
+            lower_short_circuit_comp(builder, location, op, lhs, rhs, continuation)
+        }
+        ExprKind::Resume { arg, local_id } => super::handle::lower_resume_comp(
+            builder,
+            location,
+            expr.id,
+            arg,
+            local_id,
+            continuation,
+        ),
+        _ => panic!("ICE: non-normal CPS expression reached computation lowering"),
+    }
+}
+
+/// Consume one normalized block. Direct statements execute inline; the first
+/// CPS RHS receives a generated continuation for the owned remainder.
+pub(super) fn lower_normalized_block<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    stmts: Vec<Stmt<TypedRef<'db>>>,
+    value: Expr<TypedRef<'db>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let mut scope = builder.ctx.scope();
+    let builder = &mut IrBuilder::new(&mut scope, builder.ir, builder.block);
+    let mut stmts = stmts.into_iter();
+
+    while let Some(stmt) = stmts.next() {
+        let rhs = match &stmt {
+            Stmt::Let { value, .. } => value,
+            Stmt::Expr { expr, .. } => expr,
+        };
+        if evaluation_control_class(builder.ctx, rhs) == EvaluationControlClass::Direct {
+            lower_single_stmt(builder, stmt);
+            continue;
+        }
+
+        let remaining_stmts = stmts.collect();
+        let (receiver, rhs) = match stmt {
+            Stmt::Let { pattern, value, .. } => (ContinuationReceiver::Bind(pattern), value),
+            Stmt::Expr { expr, .. } => (ContinuationReceiver::Discard, expr),
+        };
+        let logical_ty = expression_ir_type(builder, &rhs);
+        let anyref_ty = builder.ctx.anyref_type(builder.ir);
+        let next = build_cps_continuation(
+            builder,
+            builder.location(rhs.id),
+            anyref_ty,
+            logical_ty,
+            ContinuationBody {
+                receiver,
+                remaining_stmts,
+                final_value: value,
+                outer_k: continuation,
+            },
+        )?;
+        return lower_comp_normalized(builder, rhs, next);
+    }
+
+    lower_comp_normalized(builder, value, continuation)
+}
+
+/// Lower a direct-only block expression without entering computation lowering.
 fn lower_block<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     stmts: Vec<Stmt<TypedRef<'db>>>,
     value: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
-    let (result, _is_cps) = lower_block_cps(builder, stmts, value)?;
-    Some(result)
-}
-
-/// Lower a block with CPS transformation.
-///
-/// Returns `(result_value, is_cps)`:
-/// - `(value, false)` if no ability ops were found — result is a pure value
-/// - `(value, true)` if the block ended with `ability.perform` — result will
-///   become `YieldResult::Shift` after downstream lowering
-fn lower_block_cps<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    stmts: Vec<Stmt<TypedRef<'db>>>,
-    value: Expr<TypedRef<'db>>,
-) -> Option<(ValueRef, bool)> {
     let mut scope = builder.ctx.scope();
-    // Reborrow builder fields through the scope guard.
     let builder = &mut IrBuilder::new(&mut scope, builder.ir, builder.block);
-
-    let mut stmts_iter = stmts.into_iter().peekable();
-
-    while let Some(stmt) = stmts_iter.peek() {
-        if can_lower_cps_call_in_current_context(builder.ctx)
-            && let Some((lifted_stmt, rebuilt_stmt)) =
-                lift_nested_cps_call_from_stmt(builder.ctx, stmt.clone())
-        {
-            let mut remaining = vec![rebuilt_stmt];
-            remaining.extend(stmts_iter.skip(1));
-            return if is_direct_ability_op_stmt(&lifted_stmt) {
-                lower_cps_ability_op(builder, lifted_stmt, remaining, value).map(|r| (r, true))
-            } else {
-                lower_cps_call(builder, lifted_stmt, remaining, value).map(|r| (r, true))
-            };
-        }
-
-        if is_direct_ability_op_stmt(stmt) {
-            let stmt = stmts_iter.next().unwrap();
-            let remaining: Vec<_> = stmts_iter.collect();
-            return lower_cps_ability_op(builder, stmt, remaining, value).map(|r| (r, true));
-        }
-
-        // CPS-transform calls whose selected convention is Cps when done_k is set.
-        // Skip in handler arm bodies (cps_handler_mode) — need scf.yield terminator.
-        if can_lower_cps_call_in_current_context(builder.ctx) && is_cps_call_stmt(builder.ctx, stmt)
-        {
-            let stmt = stmts_iter.next().unwrap();
-            let remaining: Vec<_> = stmts_iter.collect();
-            return lower_cps_call(builder, stmt, remaining, value).map(|r| (r, true));
-        }
-
-        let stmt = stmts_iter.next().unwrap();
-        lower_single_stmt(builder, stmt);
+    for stmt in stmts {
+        lower_single_stmt_with_mode(builder, stmt, nested_regions_normalized);
     }
-
-    // Check if the value expression is a direct ability op call
-    if let Some(result) = try_lower_value_ability_op(builder, &value) {
-        return Some((result, true));
-    }
-
-    // Check if the value expression is a named Cps function call with done_k.
-    // If so, treat it as a CPS call: done_k is passed to the callee, which will
-    // call it internally. The caller must NOT call done_k again (is_cps = true).
-    // Skip in handler arm context (cps_handler_mode) — result flows to scf.yield.
-    if can_lower_cps_call_in_current_context(builder.ctx)
-        && let ExprKind::Call { callee: c, .. } = &*value.kind
-        && let ExprKind::Var(tr) = &*c.kind
-        && !matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
-        && callee_requires_cps_by_definition(builder.ctx, tr)
-        && let Some(result) = try_lower_value_effectful_call(builder, value.clone())
-    {
-        return Some((result, true));
-    }
-    // Local closure calls only participate in the CPS chain when their row
-    // requires the CPS convention.
-    if can_lower_cps_call_in_current_context(builder.ctx)
-        && let ExprKind::Call { callee: c, .. } = &*value.kind
-        && let ExprKind::Var(tr) = &*c.kind
-        && matches!(&tr.resolved, ResolvedRef::Local { .. })
-        && !matches!(&tr.ty.kind(builder.db()), TypeKind::Continuation { .. })
-        && calling_convention_for_type(builder.ctx, tr.ty) == CallingConvention::Cps
-    {
-        let result = lower_expr(builder, value)?;
-        return Some((result, true));
-    }
-    if can_lower_cps_call_in_current_context(builder.ctx) && is_cps_call_expr(builder.ctx, &value) {
-        let result = lower_expr(builder, value)?;
-        return Some((result, true));
-    }
-
-    if can_lower_cps_call_in_current_context(builder.ctx)
-        && let Some((lifted_stmt, rebuilt_value)) =
-            lift_nested_cps_call(builder.ctx, value.clone(), false)
-    {
-        return if is_direct_ability_op_stmt(&lifted_stmt) {
-            lower_cps_ability_op(builder, lifted_stmt, vec![], rebuilt_value).map(|r| (r, true))
-        } else {
-            lower_cps_call(builder, lifted_stmt, vec![], rebuilt_value).map(|r| (r, true))
-        };
-    }
-
-    lower_expr(builder, value).map(|r| (r, false))
-}
-
-fn can_lower_cps_call_in_current_context(ctx: &super::super::context::IrLoweringCtx<'_>) -> bool {
-    ctx.done_k.is_some() && !ctx.cps_handler_mode
+    lower_value_impl(builder, value, nested_regions_normalized)
 }
 
 fn calling_convention_for_type<'db>(
@@ -1095,322 +1146,6 @@ fn is_cps_call_expr<'db>(
     }
 }
 
-fn make_lifted_call<'db>(
-    ctx: &mut super::super::context::IrLoweringCtx<'db>,
-    call: Expr<TypedRef<'db>>,
-) -> Option<(Stmt<TypedRef<'db>>, Expr<TypedRef<'db>>)> {
-    let ty = *ctx.get_node_type(call.id)?;
-    let local_id = ctx.next_local_id();
-    let name = Symbol::new("__cps_tmp");
-    let pattern = Pattern::new(
-        call.id,
-        PatternKind::Bind {
-            name,
-            local_id: Some(local_id),
-        },
-    );
-    let replacement = Expr::new(
-        call.id,
-        ExprKind::Var(TypedRef::new(ResolvedRef::local(local_id, name), ty)),
-    );
-    let stmt = Stmt::Let {
-        id: call.id,
-        pattern,
-        ty: None,
-        value: call,
-    };
-    Some((stmt, replacement))
-}
-
-fn lift_nested_cps_call_from_stmt<'db>(
-    ctx: &mut super::super::context::IrLoweringCtx<'db>,
-    stmt: Stmt<TypedRef<'db>>,
-) -> Option<(Stmt<TypedRef<'db>>, Stmt<TypedRef<'db>>)> {
-    match stmt {
-        Stmt::Let {
-            id,
-            pattern,
-            ty,
-            value,
-        } => {
-            let (lifted, value) = lift_nested_cps_call(ctx, value, false)?;
-            Some((
-                lifted,
-                Stmt::Let {
-                    id,
-                    pattern,
-                    ty,
-                    value,
-                },
-            ))
-        }
-        Stmt::Expr { id, expr } => {
-            let (lifted, expr) = lift_nested_cps_call(ctx, expr, false)?;
-            Some((lifted, Stmt::Expr { id, expr }))
-        }
-    }
-}
-
-fn lift_nested_cps_call<'db>(
-    ctx: &mut super::super::context::IrLoweringCtx<'db>,
-    expr: Expr<TypedRef<'db>>,
-    include_self: bool,
-) -> Option<(Stmt<TypedRef<'db>>, Expr<TypedRef<'db>>)> {
-    let id = expr.id;
-    let original = expr.clone();
-    let rebuilt = match *expr.kind {
-        ExprKind::Call { callee, mut args } => {
-            if let Some((lifted, callee)) = lift_nested_cps_call(ctx, callee.clone(), true) {
-                return Some((lifted, Expr::new(id, ExprKind::Call { callee, args })));
-            }
-            for index in 0..args.len() {
-                if let Some((lifted, arg)) = lift_nested_cps_call(ctx, args[index].clone(), true) {
-                    args[index] = arg;
-                    return Some((lifted, Expr::new(id, ExprKind::Call { callee, args })));
-                }
-            }
-            Expr::new(id, ExprKind::Call { callee, args })
-        }
-        ExprKind::Cons { ctor, mut args } => {
-            for index in 0..args.len() {
-                if let Some((lifted, arg)) = lift_nested_cps_call(ctx, args[index].clone(), true) {
-                    args[index] = arg;
-                    return Some((lifted, Expr::new(id, ExprKind::Cons { ctor, args })));
-                }
-            }
-            Expr::new(id, ExprKind::Cons { ctor, args })
-        }
-        ExprKind::Tuple(mut elements) => {
-            for index in 0..elements.len() {
-                if let Some((lifted, element)) =
-                    lift_nested_cps_call(ctx, elements[index].clone(), true)
-                {
-                    elements[index] = element;
-                    return Some((lifted, Expr::new(id, ExprKind::Tuple(elements))));
-                }
-            }
-            Expr::new(id, ExprKind::Tuple(elements))
-        }
-        ExprKind::Record {
-            type_name,
-            mut fields,
-            spread,
-        } => {
-            let mut spread = spread;
-            if let Some(spread_expr) = spread.clone()
-                && let Some((lifted, replacement)) = lift_nested_cps_call(ctx, spread_expr, true)
-            {
-                spread = Some(replacement);
-                return Some((
-                    lifted,
-                    Expr::new(
-                        id,
-                        ExprKind::Record {
-                            type_name,
-                            fields,
-                            spread,
-                        },
-                    ),
-                ));
-            }
-            for index in 0..fields.len() {
-                if let Some((lifted, field)) =
-                    lift_nested_cps_call(ctx, fields[index].1.clone(), true)
-                {
-                    fields[index].1 = field;
-                    return Some((
-                        lifted,
-                        Expr::new(
-                            id,
-                            ExprKind::Record {
-                                type_name,
-                                fields,
-                                spread,
-                            },
-                        ),
-                    ));
-                }
-            }
-            Expr::new(
-                id,
-                ExprKind::Record {
-                    type_name,
-                    fields,
-                    spread,
-                },
-            )
-        }
-        ExprKind::BinOp { op, lhs, rhs } => {
-            if let Some((lifted, lhs)) = lift_nested_cps_call(ctx, lhs.clone(), true) {
-                return Some((lifted, Expr::new(id, ExprKind::BinOp { op, lhs, rhs })));
-            }
-            Expr::new(id, ExprKind::BinOp { op, lhs, rhs })
-        }
-        ExprKind::Case { scrutinee, arms } => {
-            if let Some((lifted, scrutinee)) = lift_nested_cps_call(ctx, scrutinee.clone(), true) {
-                return Some((lifted, Expr::new(id, ExprKind::Case { scrutinee, arms })));
-            }
-            Expr::new(id, ExprKind::Case { scrutinee, arms })
-        }
-        _ => original.clone(),
-    };
-
-    if include_self && is_cps_call_expr(ctx, &rebuilt) {
-        make_lifted_call(ctx, rebuilt)
-    } else {
-        None
-    }
-}
-
-/// Try to CPS-transform a value expression that is a direct ability op call.
-///
-/// When the block's value expression is `State::get()`, creates a trivial
-/// continuation that wraps the result in `YieldResult::Done`.
-fn try_lower_value_ability_op<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    value: &Expr<TypedRef<'db>>,
-) -> Option<ValueRef> {
-    let ExprKind::Call { callee, .. } = &*value.kind else {
-        return None;
-    };
-    let ExprKind::Var(typed_ref) = &*callee.kind else {
-        return None;
-    };
-    let ResolvedRef::AbilityOp { ability, op, kind } = &typed_ref.resolved else {
-        return None;
-    };
-
-    // fn operations use direct call (no CPS), so they are not handled here.
-    if *kind == crate::ast::OpDeclKind::Fn {
-        return None;
-    }
-
-    let call_expr_id = value.id;
-    let location = builder.location(call_expr_id);
-
-    // Lower ability op arguments
-    let ExprKind::Call { args, .. } = *value.clone().kind else {
-        unreachable!();
-    };
-    let mut arg_values = builder.collect_args(args)?;
-
-    // Pack multiple arguments into a tuple if needed
-    arg_values = pack_ability_args(builder, location, arg_values);
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    // Build continuation for the value expression.
-    // If done_k is set (inside an effectful function), use done_k directly
-    // since there's nothing after this ability op call.
-    // Otherwise, build a trivial identity continuation: fn(done_k, result) { return result }
-    let continuation = if let Some(done_k) = builder.ctx.done_k {
-        done_k
-    } else {
-        super::create_identity_done_k(builder, location)
-    };
-
-    // Emit ability.perform
-    let ability_name = ability.qualified(builder.db());
-    let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
-
-    let perform_op = ability::perform(
-        builder.ir,
-        location,
-        continuation,
-        arg_values,
-        anyref_ty,
-        ability_ref,
-        *op,
-    );
-    builder.ir.push_op(builder.block, perform_op.op_ref());
-
-    Some(perform_op.result(builder.ir))
-}
-
-/// Try to lower a value expression that is an effectful function call.
-///
-/// When done_k is set (inside an effectful function), the effectful call receives
-/// done_k as its last argument, making it a CPS tail call.
-fn try_lower_value_effectful_call<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    expr: Expr<TypedRef<'db>>,
-) -> Option<ValueRef> {
-    let ExprKind::Call { callee, args } = *expr.kind else {
-        return None;
-    };
-    let ExprKind::Var(typed_ref) = *callee.kind else {
-        return None;
-    };
-    let callee_name = match &typed_ref.resolved {
-        ResolvedRef::Function { id } => id.qualified(builder.db()),
-        _ => return None,
-    };
-
-    let location = builder.location(expr.id);
-    let arg_exprs = args;
-    let mut arg_values = builder.collect_args(arg_exprs.clone())?;
-
-    // Insert casts for arguments using type scheme information
-    adapt_named_function_args(builder, location, callee_name, &arg_exprs, &mut arg_values);
-    cast_args_from_signature(builder, location, callee_name, &mut arg_values);
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    // Get evidence and done_k — the caller's evidence and continuation
-    let evidence = super::get_or_create_evidence(builder, location);
-    let done_k = builder.ctx.done_k?;
-    let mut cps_args = vec![evidence, done_k];
-    cps_args.append(&mut arg_values);
-
-    let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
-    set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
-    builder.ir.push_op(builder.block, call_op.op_ref());
-    let call_result = call_op.result(builder.ir);
-
-    Some(call_result)
-}
-
-/// Check if a statement contains a direct ability op call that requires CPS.
-///
-/// `fn` operations are excluded because they use direct calls (no CPS).
-fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
-    let call_expr = match stmt {
-        Stmt::Let { value, .. } => value,
-        Stmt::Expr { expr, .. } => expr,
-    };
-    let ExprKind::Call { callee, .. } = &*call_expr.kind else {
-        return false;
-    };
-    let ExprKind::Var(tr) = &*callee.kind else {
-        return false;
-    };
-    matches!(
-        &tr.resolved,
-        ResolvedRef::AbilityOp {
-            kind: crate::ast::OpDeclKind::Op,
-            ..
-        }
-    )
-}
-
-/// Check if a statement contains a call that needs CPS transformation.
-///
-/// This includes:
-/// - Named functions whose definition selects Cps
-/// - Local and computed closures whose function type selects Cps
-///
-/// Ability ops are excluded (handled separately by is_direct_ability_op_stmt).
-fn is_cps_call_stmt<'db>(
-    ctx: &super::super::context::IrLoweringCtx<'db>,
-    stmt: &Stmt<TypedRef<'db>>,
-) -> bool {
-    let call_expr = match stmt {
-        Stmt::Let { value, .. } => value,
-        Stmt::Expr { expr, .. } => expr,
-    };
-    is_cps_call_expr(ctx, call_expr) && !is_direct_ability_op_stmt(stmt)
-}
-
 /// Check whether a named callee's definition selects Cps.
 fn callee_requires_cps_by_definition<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
@@ -1429,6 +1164,14 @@ fn callee_requires_cps_by_definition<'db>(
 
 /// Lower a single non-CPS statement (let binding or expression statement).
 fn lower_single_stmt<'db>(builder: &mut IrBuilder<'_, 'db>, stmt: Stmt<TypedRef<'db>>) {
+    lower_single_stmt_with_mode(builder, stmt, true);
+}
+
+fn lower_single_stmt_with_mode<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    stmt: Stmt<TypedRef<'db>>,
+    nested_regions_normalized: bool,
+) {
     match stmt {
         Stmt::Let {
             id: _,
@@ -1436,12 +1179,12 @@ fn lower_single_stmt<'db>(builder: &mut IrBuilder<'_, 'db>, stmt: Stmt<TypedRef<
             ty: _,
             value,
         } => {
-            if let Some(val) = lower_expr(builder, value) {
+            if let Some(val) = lower_value_impl(builder, value, nested_regions_normalized) {
                 bind_stmt_pattern(builder, &pattern, val);
             }
         }
         Stmt::Expr { id: _, expr } => {
-            let _ = lower_expr(builder, expr);
+            let _ = lower_value_impl(builder, expr, nested_regions_normalized);
         }
     }
 }
@@ -1484,138 +1227,48 @@ fn bind_stmt_pattern<'db>(
     }
 }
 
-/// CPS-transform a statement containing a direct ability op call.
-///
-/// Emits `closure.lambda` (continuation for remaining computation) +
-/// `ability.perform` (the ability op with explicit continuation).
-fn lower_cps_ability_op<'db>(
+fn lower_cps_call_expr<'db, D: ControlDomain>(
     builder: &mut IrBuilder<'_, 'db>,
-    stmt: Stmt<TypedRef<'db>>,
-    remaining_stmts: Vec<Stmt<TypedRef<'db>>>,
-    value: Expr<TypedRef<'db>>,
-) -> Option<ValueRef> {
-    // Decompose the statement into pattern + call expression
-    let (pattern, call_expr) = match stmt {
-        Stmt::Let { pattern, value, .. } => (Some(pattern), value),
-        Stmt::Expr { expr, .. } => (None, expr),
-    };
-
-    let call_expr_id = call_expr.id;
-    let location = builder.location(call_expr_id);
-
-    let ExprKind::Call { callee, args } = *call_expr.kind else {
-        unreachable!("ICE: lower_cps_ability_op called with non-call expression");
-    };
-    let ExprKind::Var(typed_ref) = *callee.kind else {
-        unreachable!("ICE: lower_cps_ability_op called with non-var callee");
-    };
-    let ResolvedRef::AbilityOp { ability, op, .. } = &typed_ref.resolved else {
-        unreachable!("ICE: lower_cps_ability_op called with non-ability-op callee");
-    };
-
-    // Lower ability op arguments
-    let mut arg_values = builder.collect_args(args)?;
-
-    // Pack multiple arguments into a tuple if needed (matching lower_ability_op_call)
-    arg_values = pack_ability_args(builder, location, arg_values);
-
-    // Determine the logical result type of the ability op (for casting inside continuation)
-    let logical_result_ty = builder
-        .ctx
-        .get_node_type(call_expr_id)
-        .map(|t| builder.ctx.convert_type(builder.ir, *t))
-        .unwrap_or_else(|| builder.call_result_type(&typed_ref.ty));
-
-    // Continuation parameter type is always anyref — the effect handling
-    // runtime passes boxed values through handler dispatch, and types like
-    // core.nil are not representable in backends (Cranelift, WASM).
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    // Build continuation closure for remaining computation
-    let continuation = build_cps_continuation(
-        builder,
-        location,
-        pattern.as_ref(),
-        anyref_ty,
-        logical_result_ty,
-        remaining_stmts,
-        value,
-    )?;
-
-    // Emit ability.perform
-    let ability_name = ability.qualified(builder.db());
-    let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    let perform_op = ability::perform(
-        builder.ir,
-        location,
-        continuation,
-        arg_values,
-        anyref_ty,
-        ability_ref,
-        *op,
-    );
-    builder.ir.push_op(builder.block, perform_op.op_ref());
-
-    Some(perform_op.result(builder.ir))
-}
-
-/// CPS-transform a statement containing a Cps function call.
-///
-/// Similar to `lower_cps_ability_op`, but for regular function calls to effectful
-/// functions. Builds a continuation for the remaining computation and passes it
-/// as the first argument (done_k) to the callee function or closure.
-fn lower_cps_call<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    stmt: Stmt<TypedRef<'db>>,
-    remaining_stmts: Vec<Stmt<TypedRef<'db>>>,
-    value: Expr<TypedRef<'db>>,
-) -> Option<ValueRef> {
-    // Decompose statement into pattern + call expression
-    let (pattern, call_expr) = match stmt {
-        Stmt::Let { pattern, value, .. } => (Some(pattern), value),
-        Stmt::Expr { expr, .. } => (None, expr),
-    };
-
-    let call_expr_id = call_expr.id;
-    let location = builder.location(call_expr_id);
-
-    let ExprKind::Call { callee, args } = *call_expr.kind else {
-        unreachable!("ICE: lower_cps_call called with non-call expression");
-    };
+    location: Location,
+    _call_expr_id: crate::ast::NodeId,
+    callee: Expr<TypedRef<'db>>,
+    args: Vec<Expr<TypedRef<'db>>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
     let callee_id = callee.id;
     let callee_kind = *callee.kind;
-
-    // Lower arguments
     let arg_exprs = args;
-    let mut arg_values = builder.collect_args(arg_exprs.clone())?;
-
-    // Determine the logical result type of the function call
-    let logical_result_ty = builder
-        .ctx
-        .get_node_type(call_expr_id)
-        .map(|t| builder.ctx.convert_type(builder.ir, *t))
-        .unwrap_or_else(|| match &callee_kind {
-            ExprKind::Var(typed_ref) => builder.call_result_type(&typed_ref.ty),
-            _ => builder.ctx.anyref_type(builder.ir),
-        });
+    let mut arg_values = arg_exprs
+        .iter()
+        .cloned()
+        .map(|arg| lower_value_normalized(builder, arg))
+        .collect::<Option<Vec<_>>>()?;
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    // Build continuation closure for remaining computation
-    let continuation = build_cps_continuation(
-        builder,
-        location,
-        pattern.as_ref(),
-        anyref_ty,
-        logical_result_ty,
-        remaining_stmts,
-        value,
-    )?;
+    let continuation = continuation_abi(continuation);
 
     match callee_kind {
         ExprKind::Var(typed_ref) => match &typed_ref.resolved {
+            ResolvedRef::AbilityOp {
+                ability,
+                op,
+                kind: crate::ast::OpDeclKind::Op,
+            } => {
+                arg_values = pack_ability_args(builder, location, arg_values);
+                let ability_name = ability.qualified(builder.db());
+                let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
+                let perform = ability::perform(
+                    builder.ir,
+                    location,
+                    continuation,
+                    arg_values,
+                    anyref_ty,
+                    ability_ref,
+                    *op,
+                );
+                builder.ir.push_op(builder.block, perform.op_ref());
+                Some(control_from_abi(perform.result(builder.ir)))
+            }
             ResolvedRef::Function { id } => {
                 let callee_name = id.qualified(builder.db());
 
@@ -1637,7 +1290,7 @@ fn lower_cps_call<'db>(
                 let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
                 set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
                 builder.ir.push_op(builder.block, call_op.op_ref());
-                Some(call_op.result(builder.ir))
+                Some(control_from_abi(call_op.result(builder.ir)))
             }
             ResolvedRef::Local { id, .. } => {
                 let callee_val = builder.ctx.lookup(*id)?;
@@ -1672,13 +1325,13 @@ fn lower_cps_call<'db>(
                     func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
                 set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
                 builder.ir.push_op(builder.block, call_op.op_ref());
-                Some(call_op.result(builder.ir))
+                Some(control_from_abi(call_op.result(builder.ir)))
             }
             _ => unreachable!("ICE: lower_cps_call with unexpected callee kind"),
         },
         callee_kind => {
             let callee = Expr::new(callee_id, callee_kind);
-            let callee_val = lower_expr(builder, callee)?;
+            let callee_val = lower_value_normalized(builder, callee)?;
             let evidence = super::get_or_create_evidence(builder, location);
             let mut cps_param_types = vec![builder.ir.value_ty(evidence), anyref_ty];
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
@@ -1694,21 +1347,11 @@ fn lower_cps_call<'db>(
                 func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
             set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
             builder.ir.push_op(builder.block, call_op.op_ref());
-            Some(call_op.result(builder.ir))
+            Some(control_from_abi(call_op.result(builder.ir)))
         }
     }
 }
 
-/// Build a CPS continuation closure for the remaining computation after an
-/// ability op call.
-///
-/// The continuation is a `closure.lambda` whose body parameter is the ability
-/// op's result, bound to the given pattern. The body contains the remaining
-/// statements and value expression. Pure results are wrapped in
-/// `YieldResult::Done`; CPS results (from nested ability.perform) are
-/// returned directly.
-/// Add an internal context value (evidence or done_k) to the capture list
-/// if present and not already captured.
 /// Cast call arguments to match the callee's declared parameter types.
 ///
 /// Looks up the callee's TypeScheme and inserts `unrealized_conversion_cast`
@@ -1788,6 +1431,8 @@ fn cast_args_from_signature(
     }
 }
 
+/// Add an internal context value (evidence or done_k) to the capture list if
+/// present and not already captured.
 fn capture_ctx_value(
     captures: &mut Vec<super::super::context::CaptureInfo>,
     builder: &IrBuilder<'_, '_>,
@@ -1806,15 +1451,31 @@ fn capture_ctx_value(
     }
 }
 
-fn build_cps_continuation<'db>(
+enum ContinuationReceiver<'db> {
+    Bind(crate::ast::Pattern<TypedRef<'db>>),
+    Discard,
+}
+
+struct ContinuationBody<'db, D: ControlDomain> {
+    receiver: ContinuationReceiver<'db>,
+    remaining_stmts: Vec<Stmt<TypedRef<'db>>>,
+    final_value: Expr<TypedRef<'db>>,
+    outer_k: ContinuationRef<D>,
+}
+
+/// Build a CPS continuation closure for the remaining computation after a CPS
+/// producer.
+///
+/// The continuation's parameter is the CPS producer's source result, bound
+/// or discarded by `receiver`. Its body lowers the remaining computation and
+/// returns the opaque compatibility control answer through the `anyref` ABI.
+fn build_cps_continuation<'db, D: ControlDomain>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
-    pattern: Option<&crate::ast::Pattern<TypedRef<'db>>>,
     param_type: TypeRef,
     logical_type: TypeRef,
-    remaining_stmts: Vec<Stmt<TypedRef<'db>>>,
-    value: Expr<TypedRef<'db>>,
-) -> Option<ValueRef> {
+    body: ContinuationBody<'db, D>,
+) -> Option<ContinuationRef<D>> {
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Analyze captures: variables from current scope used in remaining computation
@@ -1822,20 +1483,15 @@ fn build_cps_continuation<'db>(
     let mut captures = super::lambda::analyze_continuation_captures(
         builder.ctx,
         builder.ir,
-        &remaining_stmts,
-        &value,
+        &body.remaining_stmts,
+        &body.final_value,
         &excluded_ids,
     );
-
-    // Inside effectful functions, capture done_k so it's available
-    // at the end of the continuation chain after lambda lifting.
-    // Evidence is NOT captured here — it's provided by the lifted function's
-    // own evidence parameter (added by lower_closure_lambda).
     capture_ctx_value(
         &mut captures,
         builder,
-        Symbol::new("__done_k"),
-        builder.ctx.done_k,
+        Symbol::new("__outer_k"),
+        Some(continuation_abi(body.outer_k)),
     );
 
     // Build body region with one parameter: the ability op result (anyref).
@@ -1864,39 +1520,24 @@ fn build_cps_continuation<'db>(
         } else {
             param_val
         };
-        if let Some(pattern) = pattern {
+        if let ContinuationReceiver::Bind(pattern) = &body.receiver {
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
             bind_stmt_pattern(&mut inner_builder, pattern, typed_param);
         }
 
-        // Lower remaining computation inside the continuation body
         let result = {
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-            lower_block_cps(&mut inner_builder, remaining_stmts, value)
+            lower_normalized_block(
+                &mut inner_builder,
+                body.remaining_stmts,
+                body.final_value,
+                body.outer_k,
+            )
+        }?;
+        {
+            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            emit_control_return(&mut inner_builder, location, result);
         };
-        let Some((body_result, is_cps)) = result else {
-            return None; // scope drops automatically
-        };
-
-        // Emit return: pass through result directly (no YieldResult wrapping)
-        let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-        if !is_cps {
-            let result_anyref = inner_builder.cast_if_needed(location, body_result, anyref_ty);
-            if let Some(done_k_val) = inner_builder.ctx.done_k {
-                // Inside an effectful function: call done_k(result) instead of func.return
-                super::emit_done_k_call(&mut inner_builder, location, done_k_val, result_anyref);
-            } else {
-                // Pure function: return as anyref
-                let ret = func::r#return(inner_builder.ir, location, [result_anyref]);
-                inner_builder.ir.push_op(inner_builder.block, ret.op_ref());
-            }
-        } else {
-            // CPS result: add func.return as block terminator.
-            // For ability.perform: lower_ability_perform removes dead code after it.
-            let result_anyref = inner_builder.cast_if_needed(location, body_result, anyref_ty);
-            let ret = func::r#return(inner_builder.ir, location, [result_anyref]);
-            inner_builder.ir.push_op(inner_builder.block, ret.op_ref());
-        }
     }
 
     let body_region = builder.ir.create_region(trunk_ir::context::RegionData {
@@ -1919,7 +1560,93 @@ fn build_cps_continuation<'db>(
         body_region,
     );
     builder.ir.push_op(builder.block, lambda_op.op_ref());
-    Some(lambda_op.result(builder.ir))
+    Some(super::control::continuation_from_abi(
+        lambda_op.result(builder.ir),
+    ))
+}
+
+fn expression_ir_type(builder: &mut IrBuilder<'_, '_>, expr: &Expr<TypedRef<'_>>) -> TypeRef {
+    builder
+        .ctx
+        .get_node_type(expr.id)
+        .copied()
+        .map(|ty| builder.ctx.convert_type(builder.ir, ty))
+        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir))
+}
+
+fn lower_short_circuit_comp<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    op: BinOpKind,
+    lhs: Expr<TypedRef<'db>>,
+    rhs: Expr<TypedRef<'db>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let lhs = lower_value_normalized(builder, lhs)?;
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+    let const_value = match op {
+        BinOpKind::And => false,
+        BinOpKind::Or => true,
+    };
+    let const_block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let const_result = {
+        let mut inner = IrBuilder::new(builder.ctx, builder.ir, const_block);
+        let bool_ty = inner.ctx.bool_type(inner.ir);
+        let constant = arith::r#const(inner.ir, location, bool_ty, Attribute::Bool(const_value));
+        inner.ir.push_op(inner.block, constant.op_ref());
+        let value = constant.result(inner.ir);
+        invoke_continuation(&mut inner, location, continuation, value)
+    };
+    {
+        let mut inner = IrBuilder::new(builder.ctx, builder.ir, const_block);
+        super::control::emit_control_yield(&mut inner, location, const_result);
+    }
+    let const_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![const_block],
+        parent_op: None,
+    });
+
+    let rhs_block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let rhs_result = {
+        let mut inner = IrBuilder::new(builder.ctx, builder.ir, rhs_block);
+        lower_comp_normalized(&mut inner, rhs, continuation)?
+    };
+    {
+        let mut inner = IrBuilder::new(builder.ctx, builder.ir, rhs_block);
+        super::control::emit_control_yield(&mut inner, location, rhs_result);
+    }
+    let rhs_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![rhs_block],
+        parent_op: None,
+    });
+
+    let (then_region, else_region) = match op {
+        BinOpKind::And => (rhs_region, const_region),
+        BinOpKind::Or => (const_region, rhs_region),
+    };
+    let if_op = scf::r#if(
+        builder.ir,
+        location,
+        lhs,
+        anyref_ty,
+        then_region,
+        else_region,
+    );
+    builder.ir.push_op(builder.block, if_op.op_ref());
+    Some(control_from_abi(if_op.result(builder.ir)))
 }
 
 /// Pack multiple ability op arguments into a single anyref tuple if needed.
@@ -1951,6 +1678,7 @@ fn build_short_circuit_rhs_region<'db>(
     location: Location,
     bool_ty: TypeRef,
     rhs: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> trunk_ir::refs::RegionRef {
     let block = builder.ir.create_block(BlockData {
         location,
@@ -1961,14 +1689,11 @@ fn build_short_circuit_rhs_region<'db>(
 
     let rhs_val = {
         let mut inner = IrBuilder::new(builder.ctx, builder.ir, block);
-        let outer_done_k = inner.ctx.done_k;
-        if outer_done_k.is_some() && contains_cps_call_in_evaluation(inner.ctx, &rhs) {
-            let identity_done_k = super::create_identity_done_k(&mut inner, location);
-            inner.ctx.done_k = Some(identity_done_k);
+        if nested_regions_normalized {
+            lower_value_normalized(&mut inner, rhs)
+        } else {
+            lower_value(&mut inner, rhs)
         }
-        let result = lower_block_cps_for_expr(&mut inner, rhs).map(|(value, _)| value);
-        inner.ctx.done_k = outer_done_k;
-        result
     };
 
     let yield_val = match rhs_val {

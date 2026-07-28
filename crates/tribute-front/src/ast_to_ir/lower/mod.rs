@@ -3,6 +3,7 @@
 //! Transforms AST declarations and expressions to arena TrunkIR operations.
 
 mod case;
+mod control;
 mod decl;
 mod expr;
 mod handle;
@@ -19,8 +20,8 @@ use trunk_ir::types::{Attribute, Location};
 use super::context::IrLoweringCtx;
 
 use crate::ast::{
-    CallingConvention, CtorId, Expr, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypedRef,
+    CallingConvention, CtorId, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation,
+    TypeAnnotationKind, TypeKind,
 };
 
 /// IR-level function signature extracted from a TypeScheme.
@@ -141,16 +142,6 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let cast_op = core::unrealized_conversion_cast(self.ir, location, value, target_ty);
         self.ir.push_op(self.block, cast_op.op_ref());
         cast_op.result(self.ir)
-    }
-
-    /// Lower arguments and propagate errors properly.
-    pub fn collect_args(
-        &mut self,
-        args: impl IntoIterator<Item = Expr<TypedRef<'db>>>,
-    ) -> Option<Vec<ValueRef>> {
-        args.into_iter()
-            .map(|a| expr::lower_expr(self, a))
-            .collect()
     }
 }
 

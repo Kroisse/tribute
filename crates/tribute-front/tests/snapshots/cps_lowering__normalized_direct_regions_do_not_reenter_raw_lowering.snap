@@ -1,0 +1,102 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: "run_ast_pipeline_with_ir(db, source)"
+---
+core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !Boxed = adt.enum() {name = @Boxed, variants = [[@Boxed, [tribute_rt.anyref]]]}
+
+  func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Flag}, op_name = @read} : tribute_rt.anyref
+      func.return %2
+  }
+  func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
+      func.return %2
+  }
+  func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
+          %4 = core.unrealized_conversion_cast %3 : core.nil
+          %5 = closure.lambda(%6: !t1, %7: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} {
+              %8 = arith.const {value = true} : core.i1
+              %9 = arith.const {value = true} : core.i1
+              %10 = arith.cmpi %8, %9 {predicate = @eq} : core.i1
+              %11 = scf.if %10 : core.i1 {
+                  %12 = arith.const {value = false} : core.i1
+                  %13 = scf.if %12 : core.i1 {
+                      %14 = arith.const {value = true} : core.i1
+                      scf.yield %14
+                  } {
+                      %15 = closure.lambda(%16: tribute_rt.anyref) -> tribute_rt.anyref {
+                          %17 = func.call %6, %16 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
+                          func.return %17
+                      }
+                      %18 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+                      %19 = closure.new %18 {func_ref = @"test::__lambda_0"} : !t0
+                      %20 = func.call_indirect %15, %19 : tribute_rt.anyref
+                      %21 = closure.lambda(%22: tribute_rt.anyref, %23: core.i32, %24: tribute_rt.anyref) -> tribute_rt.anyref {
+                          %25 = arith.const {value = 1} : core.i1
+                          %26 = scf.if %25 : tribute_rt.anyref {
+                              %27 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+                              %28 = closure.new %27 {func_ref = @"test::__lambda_0"} : !t0
+                              %29 = arith.const {value = true} : core.i1
+                              %30 = core.unrealized_conversion_cast %22 : !t0
+                              %31 = core.unrealized_conversion_cast %29 : tribute_rt.anyref
+                              %32 = func.call_indirect %30, %31 : tribute_rt.anyref
+                              %33 = func.call_indirect %28, %32 : tribute_rt.anyref
+                              scf.yield %33
+                          } {
+                              func.unreachable
+                          }
+                          func.return %26
+                      }
+                      %34 = arith.const {value = 0} : tribute_rt.anyref
+                      %35 = ability.handle_dispatch %20, %21, %34 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+                          ability.done {
+                            ^bb11(%36: tribute_rt.anyref):
+                              %37 = core.unrealized_conversion_cast %36 : core.i1
+                              %38 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+                              %39 = closure.new %38 {func_ref = @"test::__lambda_0"} : !t0
+                              %40 = core.unrealized_conversion_cast %37 : tribute_rt.anyref
+                              %41 = func.call_indirect %39, %40 : tribute_rt.anyref
+                              scf.yield %41
+                          }
+                          ability.suspend {ability_ref = core.ability_ref() {name = @Flag}, op_name = @read} {
+                            ^bb12(%42: tribute_rt.anyref, %43: tribute_rt.anyref):
+                              %44 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+                              %45 = closure.new %44 {func_ref = @"test::__lambda_0"} : !t0
+                              %46 = arith.const {value = true} : core.i1
+                              %47 = core.unrealized_conversion_cast %42 : !t0
+                              %48 = core.unrealized_conversion_cast %46 : tribute_rt.anyref
+                              %49 = func.call_indirect %47, %48 : tribute_rt.anyref
+                              %50 = func.call_indirect %45, %49 : tribute_rt.anyref
+                              scf.yield %50
+                          }
+                      }
+                      %51 = core.unrealized_conversion_cast %35 : core.i1
+                      scf.yield %51
+                  }
+                  scf.yield %13
+              } {
+                  %52 = arith.const {value = false} : core.i1
+                  scf.yield %52
+              }
+              %53 = core.unrealized_conversion_cast %7 : !t0
+              %54 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
+              %55 = func.call_indirect %53, %54 : tribute_rt.anyref
+              func.return %55
+          }
+          %56 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
+          %57 = adt.variant_new %56 {tag = @Boxed, type = !Boxed} : tribute_rt.anyref
+          %58 = core.unrealized_conversion_cast %1 : !t0
+          %59 = func.call_indirect %58, %57 : tribute_rt.anyref
+          func.return %59
+      }
+      %60 = ability.perform %2 {ability_ref = core.ability_ref() {name = @Trace}, op_name = @before} : tribute_rt.anyref
+      func.return %60
+  }
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}

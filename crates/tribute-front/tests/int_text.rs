@@ -55,10 +55,14 @@ fn format_box(value: Int) -> String {
         .split("func.func @format_box")
         .nth(1)
         .expect("format_box function must be lowered");
+    let cast = format_box
+        .find("core.unrealized_conversion_cast")
+        .expect("generic constructor must cast its Int payload to anyref");
+    let construct = format_box
+        .find("adt.variant_new")
+        .expect("generic constructor must construct Box");
     assert!(
-        format_box.contains(
-            "%1 = core.unrealized_conversion_cast %0 : tribute_rt.anyref\n      %2 = adt.variant_new %1 {tag = @Box, type = !Boxed}"
-        ),
+        cast < construct,
         "generic constructor must cast its Int payload before constructing Box:\n{format_box}"
     );
 }

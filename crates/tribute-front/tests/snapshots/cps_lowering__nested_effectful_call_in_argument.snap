@@ -19,9 +19,9 @@ core.module @test {
       %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
           %4 = core.unrealized_conversion_cast %3 : core.i32
           %5 = func.call %4 {callee = @add_one, tribute.calling_convention = 0} : core.i32
-          %6 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
-          %7 = core.unrealized_conversion_cast %1 : !t1
-          %8 = func.call_indirect %7, %6 : tribute_rt.anyref
+          %6 = core.unrealized_conversion_cast %1 : !t1
+          %7 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
+          %8 = func.call_indirect %6, %7 : tribute_rt.anyref
           func.return %8
       }
       %9 = func.call %0, %2 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref

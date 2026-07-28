@@ -240,6 +240,25 @@ fn main() {
     );
 }
 
+/// Root `main` closes the CPS implementation convention of an open callback
+/// worker while preserving the backend's Direct entry ABI.
+#[test]
+fn test_open_callback_root_main_executes() {
+    assert_native_output(
+        "open_callback_root_main.trb",
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() {
+    __tribute_print_int(apply(fn(value) { value + +1 }, +41))
+}
+"#,
+        "42",
+    );
+}
+
 /// Test nested function types.
 /// Function that takes a function returning a function.
 #[test]

@@ -67,3 +67,8 @@ pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
     name.with_str(|s| prefix.push_str(s));
     len
 }
+
+/// Whether a declaration is the exact root program entrypoint.
+pub(crate) fn is_root_main(name: Symbol, is_root_module: bool) -> bool {
+    is_root_module && name == Symbol::new("main")
+}

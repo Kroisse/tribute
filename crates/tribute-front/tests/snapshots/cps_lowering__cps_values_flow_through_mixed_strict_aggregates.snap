@@ -1,0 +1,66 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: "run_ast_pipeline_with_ir(db, source)"
+---
+core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !Point = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}
+  !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !Point_1 = adt.typeref() {name = @Point}
+  !__tuple_i32_i32 = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}
+  !Boxed = adt.enum() {name = @Boxed, variants = [[@Boxed, [tribute_rt.anyref]]]}
+
+  core.module @Point {
+    func.func @"Point::x"(%0: !Point_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+        func.return %1
+    }
+    func.func @"Point::y"(%0: !Point_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+        func.return %1
+    }
+  }
+  func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      func.return %2
+  }
+  func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %2 = arith.const {value = 0} : core.i32
+      %3 = arith.const {value = 0} : core.i32
+      %4 = adt.struct_new %2, %3 {type = !Point} : !Point_1
+      %5 = closure.lambda(%6: tribute_rt.anyref) -> tribute_rt.anyref [%4, %1] {
+          %7 = core.unrealized_conversion_cast %6 : core.i32
+          %8 = closure.lambda(%9: tribute_rt.anyref) -> tribute_rt.anyref [%4, %7, %1] {
+              %10 = core.unrealized_conversion_cast %9 : core.i32
+              %11 = adt.struct_new %7, %10 {type = !__tuple_i32_i32} : adt.typeref() {name = @__tuple_i32_i32}
+              %12 = closure.lambda(%13: tribute_rt.anyref) -> tribute_rt.anyref [%4, %1] {
+                  %14 = core.unrealized_conversion_cast %13 : core.i32
+                  %15 = adt.struct_get %4 {field = 1, type = !Point} : tribute_rt.anyref
+                  %16 = adt.struct_new %14, %15 {type = !Point} : !Point_1
+                  %17 = closure.lambda(%18: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
+                      %19 = core.unrealized_conversion_cast %18 : core.i32
+                      %20 = core.unrealized_conversion_cast %19 : tribute_rt.anyref
+                      %21 = adt.variant_new %20 {tag = @Boxed, type = !Boxed} : tribute_rt.anyref
+                      %22 = arith.const {value = 0} : core.i32
+                      %23 = core.unrealized_conversion_cast %1 : !t0
+                      %24 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
+                      %25 = func.call_indirect %23, %24 : tribute_rt.anyref
+                      func.return %25
+                  }
+                  %26 = func.call %0, %17 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
+                  func.return %26
+              }
+              %27 = func.call %0, %12 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
+              func.return %27
+          }
+          %28 = func.call %0, %8 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
+          func.return %28
+      }
+      %29 = func.call %0, %5 {callee = @read, tribute.calling_convention = 2} : tribute_rt.anyref
+      func.return %29
+  }
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}

@@ -92,34 +92,136 @@ func.return %result
 Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
 `ability.perform` 이후의 같은 function-body ops는 dead code가 된다.
 
-### 중첩 표현식의 CPS lifting
+### 값/계산 lowering 경계
 
-CPS 호출이 더 큰 표현식 안에 중첩된 경우 `ast_to_ir`는 호출을 직접
-lowering하지 않는다. 대신 현재 평가 영역 안에서 첫 CPS 호출을 synthetic
-let binding으로 끌어올린 뒤 기존 block CPS lowering을 적용한다.
+`ast_to_ir`는 lowering 직전에 작은 typed-AST A-normalization을 한 번 수행한다.
+이것은 새 HIR, source language phase, 또는 source effect 의미가 아니다. 기존
+`Expr<TypedRef>` / `Stmt<TypedRef>`만을 반환하는 target-independent administrative
+layer이며, CPS computation entry에서 strict child를 source 순서대로 fresh typed
+local에 bind한다. 따라서 block CPS lowering은 nested-call 문법 탐색이 아니라
+정상형 block만 소비한다.
+
+정규화는 CPS child만이 아니라 같은 strict sequence의 모든 non-atomic child를
+atomize한다. call의 computed callee와 arguments, constructor/tuple/list element,
+record spread/field는 source 순서로 처리한다. short-circuit RHS, case guard/arm,
+lambda body, handle body와 handler arm은 독립 region 안에서 재귀 정규화되며
+바깥으로 hoist하지 않는다.
+
+semantic lowering API는 다음 두 경계를 유지한다.
+
+```text
+lower_value(expr)       -> source ValueRef
+lower_comp(expr, k)     -> 현재 logical control result
+```
+
+`lower_value`는 source value를 만드는 직접 평가만 한다. 잠재적으로 `Cps`인
+expression을 받으면 raw lowering하지 않고 lowering invariant 위반으로 거부한다.
+lambda construction은 lambda body 또는 호출의 latent effect와 관계없이 이 경로에
+남는다. `Direct`,
+`EvidenceDirect`, `Cps`의 선택은 source effect row와 function-level convention에
+의해서만 결정되며, 이 경계가 source row 의미를 바꾸지 않는다.
+
+Worker convention selection starts from the concrete-effect prescan. Before
+lowering bodies, `ast_to_ir` monotonically promotes a `Direct` or
+`EvidenceDirect` definition to `Cps` when `evaluation_control_class(body)` is
+`Cps`, then repeats over all definitions until no convention changes. It never
+demotes a worker. This lets a promoted named callee and recursive call graph
+propagate Cps requirements while leaving a pure unannotated worker `Direct`.
+For example, an `Option::map`-style worker that invokes an open-effect callback
+is promoted to `Cps` even though its concrete declared effect row is empty.
+Lambda construction remains a direct expression. Its worker convention is
+already selected from the inferred lambda function type, whose open effect row
+conservatively selects `Cps`, so definition promotion does not need a separate
+lambda-specific pass.
+
+### Root `main` delimiter
+
+Root `main` is the one target-independent CPS delimiter. Its valid source
+residual-effect contract remains the existing pure-or-`Io` entry contract; a
+residual general effect is still diagnosed before backend lowering. The
+concrete-effect prescan therefore keeps the top-level root `main` worker at
+its `Direct` or `EvidenceDirect` seed even when evaluating its body must use
+`Cps` solely because it calls a generic/open callback worker. Nested-module
+functions named `main` are ordinary workers and are not this delimiter.
+
+When that root body is a computation, frontend lowering supplies the shared
+identity `done_k`, lowers with `lower_comp`, and converts the completed opaque
+compatibility result to the root source return type at this one sanctioned
+entry boundary before `func.return`. A Direct root creates empty evidence
+through the existing evidence placeholder path; an EvidenceDirect root uses
+its ABI evidence argument. This closes an implementation-level open callback
+convention without changing source effects or asking native/Wasm backends to
+accept a `Cps` `main`. Backend-ready conversion continues to reject genuine
+residual `effect.*` operations.
+
+The source entry contract returns `Nil`, so the delimiter materializes that
+`Nil` after the completed control chain and deliberately discards its opaque
+completion payload; it never exposes the carrier as a source value.
+
+`lower_comp`는 normalized top-level CPS producer (`op`, Cps named/local/computed
+call, structured case/short-circuit/resume)를 만났을 때 그 결과를 받는
+continuation으로 나머지 normalized block을 lowering한다. 결과는 compatibility
+`anyref` carrier를 감싼 opaque control result이며 `func.return`, `scf.yield`, CPS
+call/perform 같은 control sink에서만 소비한다. source cast, constructor, 또는
+source call argument로 사용할 수 없다.
+
+Convention metadata가 없는 synthetic compatibility continuation은
+creation-time evidence를 closure environment에 capture하지 않는다. Closure lowering은
+그 continuation의 가장 가까운 physical `func.func` entry 첫 argument가 evidence
+type일 때에만, 새 lifted entry의 injected evidence argument로 그 정확한 SSA value를
+remap한다. Explicit capture가 같은 value를 이미 소유하면 capture 의미를 우선한다.
+따라서 nested synthetic continuation도 invocation-time ABI evidence를 다음 lifted
+function으로 전달하며, 임의의 evidence-typed 외부 value를 type만으로 치환하지 않는다.
+
+Strict subexpression은 normalization에서 source 순서대로 atomized된 뒤 같은
+computation 안에서 이어진다.
 
 ```text
 consume(effectful(), pure_arg)
 
-→ let __cps_tmp = effectful()
-  consume(__cps_tmp, pure_arg)
+let __cps_tmp0 = effectful()
+let __cps_tmp1 = pure_arg
+consume(__cps_tmp0, __cps_tmp1)
 ```
 
-이 변환은 소스의 좌에서 우 평가 순서를 보존한다. 호출 callee와 arguments,
-tuple/constructor/record 요소, case scrutinee처럼 항상 평가되는 strict
-subexpression만 현재 영역으로 끌어올린다.
+callee와 argument, tuple/constructor/record 요소, unary/binary operand, case
+scrutinee와 guard는 이 규칙을 따른다. 선택적 위치는 독립 evaluation region을
+만들고 그 region의 continuation을 공유한다.
 
-다음 위치는 별도의 control-flow 또는 effect 경계이므로 바깥 영역으로
-hoist하지 않는다.
+- `&&`/`||`의 RHS는 선택된 `scf.if` region 안에서만 lowering한다.
+- case arm과 guard는 scrutinee가 선택한 arm region 안에서만 lowering한다.
+- `handle`은 내부적으로는 CPS인 source-value delimiter다. 부모 evaluation
+  classification에서는 `Direct`로 취급한다. 이는 body나 handler arm이 pure라는
+  뜻이 아니다. 완성된 `HandleAnswer` compatibility carrier만 delimiter에서
+  source logical type으로 변환한 뒤, 바깥 strict evaluation을 계속한다.
+  Raw Direct/EvidenceDirect entry는 delimiter에서 handle 전체를 정확히 한 번
+  normalize하며, 이미 normalized CPS parent는 다시 normalize하지 않는다.
+- `resume`은 computation producer다. handler arm의 현재 continuation으로
+  돌아가기 전에, resume protocol이 돌려 준 delimited `HandleAnswer`만
+  source resume-result type으로 변환한다. 일반 ambient control carrier에는 이
+  변환이 없다.
+- `handle` body와 handler arm은 설치된 evidence/handler boundary 안에서만
+  lowering한다.
+- case guard는 pattern match 뒤 arm-local strict evaluation으로 lowering한다.
+  handler arm의 `resume`은 arm-local computation의 continuation을 사용한다.
 
-- short-circuit 연산의 RHS
-- case arm과 guard
-- lambda body
-- handle body와 handler arm
+따라서 실행되지 않은 branch는 eager하게 실행되지 않고, CPS producer가 handler
+boundary 밖의 continuation을 캡처하지 않는다. 이 compositional path가 ad-hoc
+nested-call lifting과 반복 containment scan을 대체한다. 현재 AST에는 unary
+expression variant가 없으므로 unary strict-child normalization은 적용 대상이
+아니다.
 
-각 영역은 진입 시 자체적으로 같은 CPS lifting을 수행한다. 따라서 실행되지
-않을 branch의 effectful call이 미리 실행되거나, handler boundary 밖의
-continuation에 잘못 포함되어서는 안 된다.
+`#816`은 현재 `anyref` compatibility carrier를 보존한다. resume하지 않는
+handler의 escape/continue answer protocol은 `#815`의 별도 작업이며, carrier
+policy와 representation selection은 `#774`이 소유한다. 이 구현은 그 후속 변경을
+선구현하지 않는다.
+
+Rust lowering은 sealed answer domain marker로 이 경계를 표현한다. `Ambient`는
+함수/바깥 CPS chain의 control answer, `HandleAnswer`는 handle delimiter 안의
+delimited answer, `TailResume`는 `fn` handler arm의 좁은 `ability.yield` endpoint다.
+`ContinuationRef<D>`와 `ControlResultRef<D>`는 marker가 다른 carrier를 섞을 수
+없게 하며, source value conversion은 handle delimiter와 resume protocol의
+sanctioned boundary에만 있다.
 
 ### `handle`: evidence extension + handler closures
 

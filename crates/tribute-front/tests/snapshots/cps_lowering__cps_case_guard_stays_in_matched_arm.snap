@@ -1,0 +1,71 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: "run_ast_pipeline_with_ir(db, source)"
+---
+core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+
+  func.func @effectful(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Flag}, op_name = @read} : tribute_rt.anyref
+      func.return %2
+  }
+  func.func @run(%0: !t1, %1: tribute_rt.anyref, %2: core.i1) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
+      %3 = arith.const {value = true} : core.i1
+      %4 = arith.cmpi %2, %3 {predicate = @eq} : core.i1
+      %5 = scf.if %4 : tribute_rt.anyref {
+          %6 = closure.lambda(%7: tribute_rt.anyref) -> tribute_rt.anyref [%2, %1] {
+              %8 = core.unrealized_conversion_cast %7 : core.i1
+              %9 = scf.if %8 : tribute_rt.anyref {
+                  %10 = arith.const {value = 1} : core.i32
+                  %11 = core.unrealized_conversion_cast %1 : !t0
+                  %12 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
+                  %13 = func.call_indirect %11, %12 : tribute_rt.anyref
+                  scf.yield %13
+              } {
+                  %14 = arith.const {value = false} : core.i1
+                  %15 = arith.cmpi %2, %14 {predicate = @eq} : core.i1
+                  %16 = scf.if %15 : tribute_rt.anyref {
+                      %17 = arith.const {value = 0} : core.i32
+                      %18 = core.unrealized_conversion_cast %1 : !t0
+                      %19 = core.unrealized_conversion_cast %17 : tribute_rt.anyref
+                      %20 = func.call_indirect %18, %19 : tribute_rt.anyref
+                      scf.yield %20
+                  } {
+                      %21 = arith.const {value = 2} : core.i32
+                      %22 = core.unrealized_conversion_cast %1 : !t0
+                      %23 = core.unrealized_conversion_cast %21 : tribute_rt.anyref
+                      %24 = func.call_indirect %22, %23 : tribute_rt.anyref
+                      scf.yield %24
+                  }
+                  scf.yield %16
+              }
+              func.return %9
+          }
+          %25 = func.call %0, %6 {callee = @effectful, tribute.calling_convention = 2} : tribute_rt.anyref
+          scf.yield %25
+      } {
+          %26 = arith.const {value = false} : core.i1
+          %27 = arith.cmpi %2, %26 {predicate = @eq} : core.i1
+          %28 = scf.if %27 : tribute_rt.anyref {
+              %29 = arith.const {value = 0} : core.i32
+              %30 = core.unrealized_conversion_cast %1 : !t0
+              %31 = core.unrealized_conversion_cast %29 : tribute_rt.anyref
+              %32 = func.call_indirect %30, %31 : tribute_rt.anyref
+              scf.yield %32
+          } {
+              %33 = arith.const {value = 2} : core.i32
+              %34 = core.unrealized_conversion_cast %1 : !t0
+              %35 = core.unrealized_conversion_cast %33 : tribute_rt.anyref
+              %36 = func.call_indirect %34, %35 : tribute_rt.anyref
+              scf.yield %36
+          }
+          scf.yield %28
+      }
+      func.return %5
+  }
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}

@@ -166,6 +166,11 @@ fn lower_single_lambda(
 
     // === Build the lifted function ===
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let implicit_evidence = convention
+        .is_none()
+        .then(|| nearest_physical_evidence_arg(ctx, lambda_ref, evidence_ty))
+        .flatten()
+        .filter(|evidence| !captures.contains(evidence));
     let func_body_region = build_lifted_body(
         ctx,
         location,
@@ -177,6 +182,7 @@ fn lower_single_lambda(
             orig_param_types: &orig_param_types,
             convention,
             evidence_ty,
+            implicit_evidence,
             anyref_ty,
         },
     );
@@ -258,6 +264,7 @@ struct LiftBodyParams<'a> {
     orig_param_types: &'a [TypeRef],
     convention: Option<CallingConvention>,
     evidence_ty: TypeRef,
+    implicit_evidence: Option<ValueRef>,
     anyref_ty: TypeRef,
 }
 
@@ -275,6 +282,7 @@ fn build_lifted_body(
     let orig_param_types = params.orig_param_types;
     let convention = params.convention;
     let evidence_ty = params.evidence_ty;
+    let implicit_evidence = params.implicit_evidence;
     let anyref_ty = params.anyref_ty;
     let orig_blocks: Vec<BlockRef> = ctx.region(orig_body).blocks.to_vec();
     let orig_entry = orig_blocks[0];
@@ -330,6 +338,15 @@ fn build_lifted_body(
         };
         let new_arg = ctx.block_arg(new_entry, new_index as u32);
         mapping.map_value(old_arg, new_arg);
+    }
+
+    // Synthetic compatibility continuations receive evidence through their
+    // invocation ABI. Remap only the nearest physical function's exact entry
+    // value; an explicit capture has already taken precedence above.
+    if convention.is_none()
+        && let Some(outer_evidence) = implicit_evidence
+    {
+        mapping.map_value(outer_evidence, ctx.block_arg(new_entry, 0));
     }
 
     // Insert env extraction ops at the start of the new entry block.
@@ -417,6 +434,27 @@ fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
     "<anon>".to_string()
 }
 
+/// Return the nearest physical function's evidence entry argument when its
+/// first ABI parameter is exactly the shared evidence type.
+fn nearest_physical_evidence_arg(
+    ctx: &IrContext,
+    op: OpRef,
+    evidence_ty: TypeRef,
+) -> Option<ValueRef> {
+    let mut current_op = op;
+    while let Some(block) = ctx.op(current_op).parent_block {
+        let region = ctx.block(block).parent_region?;
+        let parent = ctx.region(region).parent_op?;
+        if let Ok(function) = func::Func::from_op(ctx, parent) {
+            let entry = *ctx.region(function.body(ctx)).blocks.first()?;
+            let evidence = ctx.block_args(entry).first().copied()?;
+            return (ctx.value_ty(evidence) == evidence_ty).then_some(evidence);
+        }
+        current_op = parent;
+    }
+    None
+}
+
 /// Generates unique lifted lambda names, scoped by parent function.
 struct LambdaNamer {
     counters: HashMap<String, u32>,
@@ -500,7 +538,7 @@ mod tests {
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
-    use trunk_ir::{Attribute, IrContext, OperationDataBuilder, Span};
+    use trunk_ir::{Attribute, IrContext, OperationDataBuilder, Span, validation};
 
     fn test_ctx() -> (IrContext, Location) {
         let ctx = IrContext::new();
@@ -644,6 +682,85 @@ mod tests {
         let lifted_ty_data = ctx.types.get(lifted_ty);
         // params[0] = return, params[1..] = param types
         assert_eq!(lifted_ty_data.params.len(), 3); // return + env + x
+    }
+
+    #[test]
+    fn test_synthetic_lambda_remaps_enclosing_evidence_to_its_abi_argument() {
+        let (mut ctx, loc) = test_ctx();
+        let (module, module_block) = make_module(&mut ctx, loc);
+        let anyref_ty = make_anyref_ty(&mut ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
+
+        // A synthetic compatibility continuation has no convention metadata
+        // and no explicit captures, but its body uses the enclosing physical
+        // function's invocation-time evidence.
+        let outer_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: evidence_ty,
+                attrs: make_bind_name_attrs("evidence"),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let outer_evidence = ctx.block_arg(outer_entry, 0);
+
+        let lambda_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let cast = core::unrealized_conversion_cast(&mut ctx, loc, outer_evidence, anyref_ty);
+        ctx.push_op(lambda_entry, cast.op_ref());
+        let cast_result = cast.result(&ctx);
+        let ret = func::r#return(&mut ctx, loc, [cast_result]);
+        ctx.push_op(lambda_entry, ret.op_ref());
+        let lambda_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![lambda_entry],
+            parent_op: None,
+        });
+
+        let lambda_func_ty = core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>());
+        let lambda_ty = closure::closure(&mut ctx, lambda_func_ty.as_type_ref()).as_type_ref();
+        let lambda = closure::lambda(
+            &mut ctx,
+            loc,
+            Vec::<ValueRef>::new(),
+            lambda_ty,
+            lambda_body,
+        );
+        ctx.push_op(outer_entry, lambda.op_ref());
+
+        let outer_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![outer_entry],
+            parent_op: None,
+        });
+        let outer_ty = core::func(&mut ctx, anyref_ty, [evidence_ty]).as_type_ref();
+        let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
+        ctx.push_op(module_block, outer.op_ref());
+
+        lower_closure_lambda(&mut ctx, module);
+
+        let validation = validation::validate_value_integrity(&ctx, module);
+        assert!(validation.is_ok(), "{validation}");
+
+        let lifted = func::Func::from_op(&ctx, module.ops(&ctx)[1]).unwrap();
+        let lifted_entry = ctx.region(lifted.body(&ctx)).blocks[0];
+        let lifted_cast = ctx
+            .block(lifted_entry)
+            .ops
+            .iter()
+            .copied()
+            .find(|op| core::UnrealizedConversionCast::matches(&ctx, *op))
+            .expect("lifted body must retain the evidence cast");
+        assert_eq!(
+            ctx.op_operands(lifted_cast)[0],
+            ctx.block_arg(lifted_entry, 0),
+            "synthetic evidence use must map to the lifted ABI argument"
+        );
     }
 
     #[test]

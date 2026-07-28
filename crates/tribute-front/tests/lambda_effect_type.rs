@@ -273,7 +273,9 @@ fn main() -> Int {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_shared_identity_done_k(&ir_text, 6);
+    // The root source `main` remains Direct and closes the CPS worker chain
+    // through its frontend-only identity delimiter.
+    assert_shared_identity_done_k(&ir_text, 7);
     assert_snapshot!(ir_text);
 }
 

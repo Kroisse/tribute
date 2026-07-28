@@ -4,7 +4,7 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
-use tribute_ir::dialect::list;
+use tribute_ir::dialect::{closure, list};
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
@@ -15,24 +15,25 @@ use trunk_ir::types::{Attribute, Location};
 use crate::ast::{Arm, Expr, LiteralPattern, Pattern, PatternKind, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
+use super::control::{
+    ContinuationRef, ControlDomain, ControlResultRef, continuation_abi, control_from_abi,
+    emit_control_return, emit_control_yield, invoke_continuation,
+};
 use super::{
     IrBuilder, get_or_create_tuple_type, is_irrefutable_pattern,
     resolve_enum_type_attr_for_constructor,
 };
 
-fn lower_case_region_expr_with_local_done_k<'db>(
+fn lower_case_region_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
-    location: Location,
     expr: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
-    let outer_done_k = builder.ctx.done_k;
-    if outer_done_k.is_some() && super::expr::contains_cps_call_in_evaluation(builder.ctx, &expr) {
-        let identity_done_k = super::create_identity_done_k(builder, location);
-        builder.ctx.done_k = Some(identity_done_k);
+    if nested_regions_normalized {
+        super::expr::lower_value_normalized(builder, expr)
+    } else {
+        super::expr::lower_value(builder, expr)
     }
-    let result = super::expr::lower_block_cps_for_expr(builder, expr).map(|(value, _)| value);
-    builder.ctx.done_k = outer_done_k;
-    result
 }
 
 /// Lower an arm body to the value yielded by its `scf.if` region.
@@ -43,8 +44,10 @@ fn lower_case_arm_body<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     expr: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
-    lower_case_region_expr_with_local_done_k(builder, location, expr)
+    let _ = location;
+    lower_case_region_expr(builder, expr, nested_regions_normalized)
 }
 
 /// Lower a guard condition inside the already-matched arm region.
@@ -52,10 +55,303 @@ fn lower_case_guard_condition<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     expr: Expr<TypedRef<'db>>,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
     let bool_ty = builder.ctx.bool_type(builder.ir);
-    let value = lower_case_region_expr_with_local_done_k(builder, location, expr)?;
+    let value = lower_case_region_expr(builder, expr, nested_regions_normalized)?;
     Some(builder.cast_if_needed(location, value, bool_ty))
+}
+
+pub(super) fn lower_case_comp<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: Expr<TypedRef<'db>>,
+    arms: Vec<Arm<TypedRef<'db>>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let scrutinee = super::expr::lower_value_normalized(builder, scrutinee)?;
+    lower_case_comp_chain(builder, location, scrutinee, &arms, continuation, false)
+}
+
+fn lower_case_comp_chain<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: ValueRef,
+    arms: &[Arm<TypedRef<'db>>],
+    continuation: ContinuationRef<D>,
+    is_else_chain: bool,
+) -> Option<ControlResultRef<D>> {
+    match arms {
+        [] => {
+            let unreachable = func::unreachable(builder.ir, location);
+            builder.ir.push_op(builder.block, unreachable.op_ref());
+            let nil = builder.emit_nil(location);
+            Some(invoke_continuation(builder, location, continuation, nil))
+        }
+        [last]
+            if last.guard.is_none() && (is_else_chain || is_irrefutable_pattern(&last.pattern)) =>
+        {
+            let mut scope = builder.ctx.scope();
+            bind_pattern_fields(
+                &mut scope,
+                builder.ir,
+                builder.block,
+                location,
+                scrutinee,
+                &last.pattern,
+            );
+            let mut inner = IrBuilder::new(&mut scope, builder.ir, builder.block);
+            super::expr::lower_comp_normalized(&mut inner, last.body.clone(), continuation)
+        }
+        [first, rest @ ..] => {
+            let condition = emit_pattern_check(builder, location, scrutinee, &first.pattern)?;
+            let then_region = build_comp_arm_region(
+                builder.ctx,
+                builder.ir,
+                location,
+                scrutinee,
+                first,
+                rest,
+                continuation,
+            )?;
+            let else_region = build_comp_else_region(
+                builder.ctx,
+                builder.ir,
+                location,
+                scrutinee,
+                rest,
+                continuation,
+            )?;
+            let anyref_ty = builder.ctx.anyref_type(builder.ir);
+            let if_op = scf::r#if(
+                builder.ir,
+                location,
+                condition,
+                anyref_ty,
+                then_region,
+                else_region,
+            );
+            builder.ir.push_op(builder.block, if_op.op_ref());
+            Some(control_from_abi(if_op.result(builder.ir)))
+        }
+    }
+}
+
+fn build_comp_arm_region<'db, D: ControlDomain>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    location: Location,
+    scrutinee: ValueRef,
+    arm: &Arm<TypedRef<'db>>,
+    rest: &[Arm<TypedRef<'db>>],
+    continuation: ContinuationRef<D>,
+) -> Option<trunk_ir::refs::RegionRef> {
+    let block = ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let result = {
+        let mut scope = ctx.scope();
+        bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
+        let mut builder = IrBuilder::new(&mut scope, ir, block);
+        if let Some(guard) = &arm.guard {
+            if super::expr::evaluation_control_class(builder.ctx, guard)
+                == super::expr::EvaluationControlClass::Direct
+            {
+                let guard = super::expr::lower_value_normalized(&mut builder, guard.clone())?;
+                lower_guard_selection(
+                    &mut builder,
+                    location,
+                    guard,
+                    scrutinee,
+                    arm,
+                    rest,
+                    continuation,
+                )?
+            } else {
+                let guard_k = build_guard_continuation(
+                    &mut builder,
+                    location,
+                    scrutinee,
+                    arm.clone(),
+                    rest.to_vec(),
+                    continuation,
+                )?;
+                super::expr::lower_comp_normalized(&mut builder, guard.clone(), guard_k)?
+            }
+        } else {
+            super::expr::lower_comp_normalized(&mut builder, arm.body.clone(), continuation)?
+        }
+    };
+    {
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        emit_control_yield(&mut builder, location, result);
+    }
+    Some(ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    }))
+}
+
+fn lower_guard_selection<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    guard: ValueRef,
+    scrutinee: ValueRef,
+    arm: &Arm<TypedRef<'db>>,
+    rest: &[Arm<TypedRef<'db>>],
+    continuation: ContinuationRef<D>,
+) -> Option<ControlResultRef<D>> {
+    let then_region = build_comp_body_region(
+        builder.ctx,
+        builder.ir,
+        location,
+        arm.body.clone(),
+        continuation,
+    )?;
+    let else_region = build_comp_else_region(
+        builder.ctx,
+        builder.ir,
+        location,
+        scrutinee,
+        rest,
+        continuation,
+    )?;
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let if_op = scf::r#if(
+        builder.ir,
+        location,
+        guard,
+        anyref_ty,
+        then_region,
+        else_region,
+    );
+    builder.ir.push_op(builder.block, if_op.op_ref());
+    Some(control_from_abi(if_op.result(builder.ir)))
+}
+
+fn build_comp_body_region<'db, D: ControlDomain>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    location: Location,
+    body: Expr<TypedRef<'db>>,
+    continuation: ContinuationRef<D>,
+) -> Option<trunk_ir::refs::RegionRef> {
+    let block = ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let result = {
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        super::expr::lower_comp_normalized(&mut builder, body, continuation)?
+    };
+    {
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        emit_control_yield(&mut builder, location, result);
+    }
+    Some(ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    }))
+}
+
+fn build_comp_else_region<'db, D: ControlDomain>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    location: Location,
+    scrutinee: ValueRef,
+    arms: &[Arm<TypedRef<'db>>],
+    continuation: ContinuationRef<D>,
+) -> Option<trunk_ir::refs::RegionRef> {
+    let block = ir.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let result = {
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        lower_case_comp_chain(&mut builder, location, scrutinee, arms, continuation, true)?
+    };
+    {
+        let mut builder = IrBuilder::new(ctx, ir, block);
+        emit_control_yield(&mut builder, location, result);
+    }
+    Some(ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    }))
+}
+
+fn build_guard_continuation<'db, D: ControlDomain>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    scrutinee: ValueRef,
+    arm: Arm<TypedRef<'db>>,
+    rest: Vec<Arm<TypedRef<'db>>>,
+    continuation: ContinuationRef<D>,
+) -> Option<ContinuationRef<D>> {
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let bool_ty = builder.ctx.bool_type(builder.ir);
+    let mut captures = Vec::new();
+    for value in builder
+        .ctx
+        .all_bindings()
+        .map(|(_, _, value)| value)
+        .chain([scrutinee, continuation_abi(continuation)])
+    {
+        if !captures.contains(&value) {
+            captures.push(value);
+        }
+    }
+
+    let block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![trunk_ir::context::BlockArgData {
+            ty: anyref_ty,
+            attrs: Default::default(),
+        }],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let result = {
+        let mut scope = builder.ctx.scope();
+        let param = builder.ir.block_arg(block, 0);
+        let mut inner = IrBuilder::new(&mut scope, builder.ir, block);
+        let guard = inner.cast_if_needed(location, param, bool_ty);
+        lower_guard_selection(
+            &mut inner,
+            location,
+            guard,
+            scrutinee,
+            &arm,
+            &rest,
+            continuation,
+        )?
+    };
+    {
+        let mut inner = IrBuilder::new(builder.ctx, builder.ir, block);
+        emit_control_return(&mut inner, location, result);
+    }
+    let region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    });
+    let function_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
+    let closure_ty = builder.ctx.closure_type(builder.ir, function_ty);
+    let lambda = closure::lambda(builder.ir, location, captures, closure_ty, region);
+    builder.ir.push_op(builder.block, lambda.op_ref());
+    Some(super::control::continuation_from_abi(
+        lambda.result(builder.ir),
+    ))
 }
 
 /// Lower a case expression as a chain of `scf.if` operations.
@@ -66,6 +362,7 @@ pub(super) fn lower_case_chain<'db>(
     result_ty: TypeRef,
     arms: &[Arm<TypedRef<'db>>],
     is_else_chain: bool,
+    nested_regions_normalized: bool,
 ) -> Option<ValueRef> {
     match arms {
         [] => {
@@ -91,7 +388,12 @@ pub(super) fn lower_case_chain<'db>(
                 &last.pattern,
             );
             let mut builder = IrBuilder::new(&mut scope, builder.ir, builder.block);
-            lower_case_arm_body(&mut builder, location, last.body.clone())
+            lower_case_arm_body(
+                &mut builder,
+                location,
+                last.body.clone(),
+                nested_regions_normalized,
+            )
         }
         [first, rest @ ..] => {
             // Multi-arm: pattern check → then/else regions → scf.if
@@ -110,6 +412,7 @@ pub(super) fn lower_case_chain<'db>(
                     guard_expr,
                     result_ty,
                     rest,
+                    nested_regions_normalized,
                 )
             } else {
                 build_arm_region(
@@ -119,6 +422,7 @@ pub(super) fn lower_case_chain<'db>(
                     scrutinee,
                     first,
                     result_ty,
+                    nested_regions_normalized,
                 )
             };
 
@@ -130,6 +434,7 @@ pub(super) fn lower_case_chain<'db>(
                 scrutinee,
                 result_ty,
                 rest,
+                nested_regions_normalized,
             );
 
             // 4. Emit scf.if in current block
@@ -493,6 +798,7 @@ fn build_guarded_arm_region<'db>(
     guard_expr: &Expr<TypedRef<'db>>,
     result_ty: TypeRef,
     rest: &[Arm<TypedRef<'db>>],
+    nested_regions_normalized: bool,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -509,7 +815,12 @@ fn build_guarded_arm_region<'db>(
         // 2. Evaluate guard condition
         let guard_cond = {
             let mut builder = IrBuilder::new(&mut scope, ir, block);
-            lower_case_guard_condition(&mut builder, location, guard_expr.clone())
+            lower_case_guard_condition(
+                &mut builder,
+                location,
+                guard_expr.clone(),
+                nested_regions_normalized,
+            )
         };
         let guard_cond = match guard_cond {
             Some(v) => v,
@@ -531,7 +842,12 @@ fn build_guarded_arm_region<'db>(
             });
             let result = {
                 let mut builder = IrBuilder::new(&mut scope, ir, inner_block);
-                let val = lower_case_arm_body(&mut builder, location, arm.body.clone());
+                let val = lower_case_arm_body(
+                    &mut builder,
+                    location,
+                    arm.body.clone(),
+                    nested_regions_normalized,
+                );
                 val.map(|v| builder.cast_if_needed(location, v, result_ty))
             };
             let yield_val = match result {
@@ -556,7 +872,15 @@ fn build_guarded_arm_region<'db>(
     };
 
     // 4. Build inner else region (fall through to remaining arms)
-    let inner_else_region = build_else_chain_region(ctx, ir, location, scrutinee, result_ty, rest);
+    let inner_else_region = build_else_chain_region(
+        ctx,
+        ir,
+        location,
+        scrutinee,
+        result_ty,
+        rest,
+        nested_regions_normalized,
+    );
 
     // 5. Emit inner scf.if for guard
     let inner_if_op = scf::r#if(
@@ -589,6 +913,7 @@ fn build_arm_region<'db>(
     scrutinee: ValueRef,
     arm: &Arm<TypedRef<'db>>,
     result_ty: TypeRef,
+    nested_regions_normalized: bool,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -602,7 +927,12 @@ fn build_arm_region<'db>(
         bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
 
         let mut builder = IrBuilder::new(&mut scope, ir, block);
-        let val = lower_case_arm_body(&mut builder, location, arm.body.clone());
+        let val = lower_case_arm_body(
+            &mut builder,
+            location,
+            arm.body.clone(),
+            nested_regions_normalized,
+        );
         val.map(|v| builder.cast_if_needed(location, v, result_ty))
     };
 
@@ -633,6 +963,7 @@ fn build_else_chain_region<'db>(
     scrutinee: ValueRef,
     result_ty: TypeRef,
     arms: &[Arm<TypedRef<'db>>],
+    nested_regions_normalized: bool,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -643,7 +974,15 @@ fn build_else_chain_region<'db>(
 
     let result = {
         let mut builder = IrBuilder::new(ctx, ir, block);
-        lower_case_chain(&mut builder, location, scrutinee, result_ty, arms, true)
+        lower_case_chain(
+            &mut builder,
+            location,
+            scrutinee,
+            result_ty,
+            arms,
+            true,
+            nested_regions_normalized,
+        )
     };
 
     let val = match result {

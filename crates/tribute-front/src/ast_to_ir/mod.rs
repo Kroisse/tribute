@@ -28,6 +28,7 @@
 
 mod context;
 mod lower;
+mod normalize;
 
 use std::collections::HashMap;
 

@@ -505,50 +505,44 @@ fn lower_case_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unresol
     // case_arm children are direct children of case_expression
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "case_arm"
-            && let Some(arm) = lower_case_arm(ctx, child)
-        {
-            arms.push(arm);
+        if child.kind() == "case_arm" {
+            arms.extend(lower_case_arm(ctx, child));
         }
     }
 
     ExprKind::Case { scrutinee, arms }
 }
 
-fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Arm<UnresolvedName>> {
-    // case_arm has pattern and body as positional named children, not fields
-    // Pattern is the first named child, body is the second
-    let mut cursor = node.walk();
-    let mut pattern_node = None;
-    let mut body_node = None;
+fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Arm<UnresolvedName>> {
+    let Some(pattern_node) = node.child_by_field_name("pattern") else {
+        return vec![];
+    };
+    let direct_value = node.child_by_field_name("value");
+    let pattern = lower_pattern(ctx, pattern_node);
 
-    for child in node.named_children(&mut cursor) {
-        if is_comment(child.kind()) {
-            continue;
-        }
-        if pattern_node.is_none() {
-            pattern_node = Some(child);
-        } else if body_node.is_none() {
-            body_node = Some(child);
-        }
+    if let Some(body_node) = direct_value {
+        return vec![Arm {
+            id: ctx.fresh_id_with_span(&node),
+            pattern,
+            guard: None,
+            body: lower_expr(ctx, body_node),
+        }];
     }
 
-    let pattern_node = pattern_node?;
-    let body_node = body_node?;
-
-    let id = ctx.fresh_id_with_span(&node);
-    let pattern = lower_pattern(ctx, pattern_node);
-    let body = lower_expr(ctx, body_node);
-
-    // TODO: guard
-    let guard = None;
-
-    Some(Arm {
-        id,
-        pattern,
-        guard,
-        body,
-    })
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|branch| branch.kind() == "guarded_branch")
+        .filter_map(|branch| {
+            let guard_node = branch.child_by_field_name("guard")?;
+            let body_node = branch.child_by_field_name("value")?;
+            Some(Arm {
+                id: ctx.fresh_id_with_span(&branch),
+                pattern: pattern.clone(),
+                guard: Some(lower_expr(ctx, guard_node)),
+                body: lower_expr(ctx, body_node),
+            })
+        })
+        .collect()
 }
 
 fn lower_lambda_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {

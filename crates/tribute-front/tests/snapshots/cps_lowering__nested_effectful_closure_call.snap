@@ -15,9 +15,9 @@ core.module @test {
           %8 = core.unrealized_conversion_cast %7 : core.i32
           %9 = arith.const {value = 1} : core.i32
           %10 = func.call %8, %9 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
-          %11 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
-          %12 = core.unrealized_conversion_cast %1 : !t1
-          %13 = func.call_indirect %12, %11 : tribute_rt.anyref
+          %11 = core.unrealized_conversion_cast %1 : !t1
+          %12 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
+          %13 = func.call_indirect %11, %12 : tribute_rt.anyref
           func.return %13
       }
       %14 = func.call_indirect %2, %0, %6 {tribute.calling_convention = 2} : tribute_rt.anyref
