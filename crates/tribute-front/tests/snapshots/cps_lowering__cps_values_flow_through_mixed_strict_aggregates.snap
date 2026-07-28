@@ -30,7 +30,7 @@ core.module @test {
       %4 = adt.struct_new %2, %3 {type = !Point} : !Point_1
       %5 = closure.lambda(%6: tribute_rt.anyref) -> tribute_rt.anyref [%4, %1] {
           %7 = core.unrealized_conversion_cast %6 : core.i32
-          %8 = closure.lambda(%9: tribute_rt.anyref) -> tribute_rt.anyref [%7, %4, %1] {
+          %8 = closure.lambda(%9: tribute_rt.anyref) -> tribute_rt.anyref [%4, %7, %1] {
               %10 = core.unrealized_conversion_cast %9 : core.i32
               %11 = adt.struct_new %7, %10 {type = !__tuple_i32_i32} : adt.typeref() {name = @__tuple_i32_i32}
               %12 = closure.lambda(%13: tribute_rt.anyref) -> tribute_rt.anyref [%4, %1] {

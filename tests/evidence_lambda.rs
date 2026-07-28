@@ -240,9 +240,9 @@ fn main() { }
 #[test]
 fn test_pure_toplevel_function_no_evidence() {
     let code = r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 
-fn run() -> Int {
+fn run() ->{} Int {
     apply(fn(n) { n + +1 }, +41)
 }
 

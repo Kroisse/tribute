@@ -449,12 +449,18 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Get all bindings visible in the current scope (for capture analysis).
-    /// Returns bindings from all scopes, innermost first.
+    ///
+    /// The stable local-ID order keeps generated closure capture lists and IR
+    /// snapshots deterministic; each local ID is unique even across scopes.
     pub fn all_bindings(&self) -> impl Iterator<Item = (LocalId, Symbol, ValueRef)> + '_ {
-        self.scopes
+        let mut bindings: Vec<_> = self
+            .scopes
             .iter()
             .rev()
             .flat_map(|scope| scope.iter().map(|(&id, &(name, value))| (id, name, value)))
+            .collect();
+        bindings.sort_unstable_by_key(|(local_id, _, _)| local_id.raw());
+        bindings.into_iter()
     }
 
     // =========================================================================

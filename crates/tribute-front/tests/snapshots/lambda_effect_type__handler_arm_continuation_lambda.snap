@@ -25,7 +25,7 @@ core.module @test {
           %17 = scf.if %16 : tribute_rt.anyref {
               %18 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
               %19 = closure.new %18 {func_ref = @"test::__lambda_0"} : !t0
-              %20 = closure.lambda(%21: !t1, %22: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%12, %3] {
+              %20 = closure.lambda(%21: !t1, %22: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%3, %12] {
                   %23 = core.unrealized_conversion_cast %12 : !t0
                   %24 = func.call_indirect %23, %3 : tribute_rt.anyref
                   %25 = core.unrealized_conversion_cast %22 : !t0
@@ -70,7 +70,7 @@ core.module @test {
             ^bb11(%48: tribute_rt.anyref, %49: tribute_rt.anyref):
               %50 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
               %51 = closure.new %50 {func_ref = @"test::__lambda_0"} : !t0
-              %52 = closure.lambda(%53: !t1, %54: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%48, %3] {
+              %52 = closure.lambda(%53: !t1, %54: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} [%3, %48] {
                   %55 = core.unrealized_conversion_cast %48 : !t0
                   %56 = func.call_indirect %55, %3 : tribute_rt.anyref
                   %57 = core.unrealized_conversion_cast %54 : !t0

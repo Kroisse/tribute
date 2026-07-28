@@ -138,7 +138,7 @@ core.module @mixed_nested {
       %5 = adt.struct_get %3 {field = 1, type = !"step::__clam_0::env"} : tribute_rt.anyref
       %6 = core.unrealized_conversion_cast %2 : core.i32
       %7 = arith.addi %6, %4 : core.i32
-      %8 = adt.struct_new %6, %4, %5 {type = !"step::__clam_0::__clam_0::env"} : !"step::__clam_0::__clam_0::env"
+      %8 = adt.struct_new %4, %6, %5 {type = !"step::__clam_0::__clam_0::env"} : !"step::__clam_0::__clam_0::env"
       %9 = func.constant {func_ref = @"step::__clam_0::__clam_0"} : !t1
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
@@ -276,10 +276,10 @@ core.module @mixed_nested {
       %5 = adt.struct_get %3 {field = 1, type = !"step::__clam_0::__clam_0::env"} : core.i32
       %6 = adt.struct_get %3 {field = 2, type = !"step::__clam_0::__clam_0::env"} : tribute_rt.anyref
       %7 = core.unrealized_conversion_cast %2 : core.nil
-      %8 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
+      %8 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
       %9 = effect.dispatch_tail %0, %8 {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : tribute_rt.anyref
       %10 = core.unrealized_conversion_cast %9 : core.nil
-      %11 = arith.addi %4, %5 : core.i32
+      %11 = arith.addi %5, %4 : core.i32
       %12 = core.unrealized_conversion_cast %6 : !t2
       %13 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
       %14 = adt.struct_get %12 {field = 0, type = !_closure} : core.i32

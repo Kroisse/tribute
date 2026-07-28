@@ -81,7 +81,7 @@ core.module @mixed_nested_native {
       %5 = adt.struct_get %3 {field = 1, type = !"step::__clam_0::env"} : tribute_rt.anyref
       %6 = tribute_rt.unbox_int %2 : core.i32
       %7 = arith.addi %6, %4 : core.i32
-      %8 = adt.struct_new %6, %4, %5 {type = !"step::__clam_0::__clam_0::env"} : !"step::__clam_0::__clam_0::env"
+      %8 = adt.struct_new %4, %6, %5 {type = !"step::__clam_0::__clam_0::env"} : !"step::__clam_0::__clam_0::env"
       %9 = func.constant {func_ref = @"step::__clam_0::__clam_0"} : !t0
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = tribute_rt.box_int %7 : tribute_rt.anyref
@@ -246,7 +246,7 @@ core.module @mixed_nested_native {
       %5 = adt.struct_get %3 {field = 1, type = !"step::__clam_0::__clam_0::env"} : core.i32
       %6 = adt.struct_get %3 {field = 2, type = !"step::__clam_0::__clam_0::env"} : tribute_rt.anyref
       %7 = core.unrealized_conversion_cast %2 : core.nil
-      %8 = tribute_rt.box_int %4 : tribute_rt.anyref
+      %8 = tribute_rt.box_int %5 : tribute_rt.anyref
       %9 = arith.const {value = 1361557906} : core.i32
       %10 = func.call %0, %9 {callee = @__tribute_evidence_lookup_tr} : core.ptr
       %11 = arith.const {value = 2110389019} : core.i32
@@ -254,7 +254,7 @@ core.module @mixed_nested_native {
       %13 = adt.struct_get %10 {field = 1, type = !_closure} : tribute_rt.anyref
       %14 = func.call_indirect %12, %0, %13, %11, %8 : tribute_rt.anyref
       %15 = core.unrealized_conversion_cast %14 : core.nil
-      %16 = arith.addi %4, %5 : core.i32
+      %16 = arith.addi %5, %4 : core.i32
       %17 = core.unrealized_conversion_cast %6 : !t2
       %18 = tribute_rt.box_int %16 : tribute_rt.anyref
       %19 = adt.struct_get %17 {field = 0, type = !_closure} : core.i32
