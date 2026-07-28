@@ -177,6 +177,43 @@ pub fn compile_and_run_native_with_stdin(
     )
 }
 
+/// Run with the baseline optimization profile and supplied stdin.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin_baseline_optimizations(
+    source_name: &str,
+    source_code: &str,
+    stdin: &[u8],
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        false,
+        NativeTestOptimizations {
+            done_continuation: DoneContinuationPolicy::PerUse,
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+        },
+        NativeStdin::Bytes(stdin),
+    )
+}
+
+/// Run the native binary with ASan and supplied stdin.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin_asan(
+    source_name: &str,
+    source_code: &str,
+    stdin: &[u8],
+) -> Output {
+    compile_and_run_native_impl(
+        source_name,
+        source_code,
+        true,
+        NativeTestOptimizations::production(),
+        NativeStdin::Bytes(stdin),
+    )
+}
+
 /// Compile and run Tribute source after closing native stdin.
 #[cfg(unix)]
 #[allow(dead_code)]
