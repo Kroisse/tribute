@@ -65,11 +65,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
 #[salsa::tracked]
-fn run_ast_pipeline_inner(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    lower_closures: bool,
-) -> String {
+fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -114,22 +110,6 @@ fn run_ast_pipeline_inner(
         well_known_types: result.well_known_types,
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    if lower_closures {
-        use trunk_ir::dialect::core;
-        use trunk_ir::ops::DialectOp;
-        use trunk_ir::pass::Pass;
-
-        let mut pass = tribute_passes::lower_closure_lambda::LowerClosureLambda;
-        let core_module =
-            core::Module::from_op(&ir, module.op()).expect("AST-to-IR must produce a core.module");
-        pass.run(&mut ir, core_module)
-            .expect("closure lowering should accept captures from AST-to-IR");
-        let validation = trunk_ir::validation::validate_value_integrity(&ir, core_module.into());
-        assert!(
-            validation.is_ok(),
-            "closure lowering must not leave cross-function SSA references:\n{validation}"
-        );
-    }
     print_module(&ir, module.op())
 }
 
@@ -362,15 +342,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
             .join("\n")
     );
 
-    run_ast_pipeline_inner(db, source, false)
-}
-
-/// Run the shared frontend pipeline followed by closure lowering.
-pub fn run_ast_pipeline_with_closure_lowering(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> String {
-    run_ast_pipeline_inner(db, source, true)
+    run_ast_pipeline_inner(db, source)
 }
 
 /// Run the full AST pipeline without returning IR text.

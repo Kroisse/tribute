@@ -1520,7 +1520,6 @@ dependencies = [
  "tree-sitter-tribute",
  "tribute-core",
  "tribute-ir",
- "tribute-passes",
  "trunk-ir",
 ]
 

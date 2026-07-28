@@ -25,4 +25,3 @@ trunk-ir = { workspace = true, features = ["salsa"] }
 insta.workspace = true
 proptest.workspace = true
 salsa-test-macros = { workspace = true }
-tribute-passes.workspace = true

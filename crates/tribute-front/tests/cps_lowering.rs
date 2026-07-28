@@ -8,9 +8,7 @@
 
 mod common;
 
-use self::common::{
-    ast_pipeline_error_messages, run_ast_pipeline_with_closure_lowering, run_ast_pipeline_with_ir,
-};
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -842,8 +840,9 @@ fn main() { }
     assert_snapshot!(run_ast_pipeline_with_ir(db, source));
 }
 
-/// Closure capture analysis must include a record spread base. The lambda is
-/// created after a CPS boundary so closure lowering receives the capture.
+/// Closure capture analysis must include a record spread base after a CPS
+/// boundary. Downstream closure-lowering compatibility is covered in the root
+/// integration suite.
 #[salsa_test]
 fn test_record_spread_capture_survives_cps_continuation(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -865,9 +864,7 @@ fn main() { }
 "#,
     );
 
-    let ir = run_ast_pipeline_with_closure_lowering(db, source);
-    assert!(!ir.contains("closure.lambda"));
-    assert_snapshot!(ir);
+    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
 }
 
 /// One compact aggregate regression covers CPS values in tuple, record, and
@@ -902,9 +899,6 @@ fn main() { }
 "#,
     );
 
-    // Exercise the continuation created after the first `read()` through
-    // closure lifting before retaining the AST-to-IR snapshot assertion.
-    let _ = run_ast_pipeline_with_closure_lowering(db, source);
     assert_snapshot!(run_ast_pipeline_with_ir(db, source));
 }
 
