@@ -35,6 +35,12 @@ fn main() {
 "#,
     );
 
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.iter().any(|error| error
+            == "type error at call site in function 'main': expected `Int`, found `fn() -> _`"),
+        "fixture must reach the diagnosed CPS-lowering recovery path: {errors:?}"
+    );
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let main = ir_text
         .split("func.func @main")
