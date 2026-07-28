@@ -115,6 +115,30 @@ fn main() ->{std::io::Io} Nil {
     expect_wasm_compilation_success(db, source, "Should compile function with params");
 }
 
+/// The target-independent root delimiter keeps an open-callback `main` on the
+/// Direct/EvidenceDirect entry ABI, so Wasm never receives a CPS entrypoint.
+#[salsa_test]
+fn test_compile_open_callback_root_main(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "open_callback_root_main.trb",
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() {
+    let _ = apply(fn(value) { value + +1 }, +41)
+}
+"#,
+    );
+    expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile a root main that closes an open callback worker",
+    );
+}
+
 #[salsa_test]
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
     let code = r#"

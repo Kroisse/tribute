@@ -19,9 +19,9 @@ core.module @test {
               %4 = core.unrealized_conversion_cast %3 : core.i32
               %5 = arith.const {value = 1} : core.i32
               %6 = func.call %4, %5 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
-              %7 = core.unrealized_conversion_cast %6 : tribute_rt.anyref
-              %8 = core.unrealized_conversion_cast %1 : !t0
-              %9 = func.call_indirect %8, %7 : tribute_rt.anyref
+              %7 = core.unrealized_conversion_cast %1 : !t0
+              %8 = core.unrealized_conversion_cast %6 : tribute_rt.anyref
+              %9 = func.call_indirect %7, %8 : tribute_rt.anyref
               func.return %9
           }
           %10 = adt.ref_null {type = !t1} : !t1
@@ -37,35 +37,41 @@ core.module @test {
               %21 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
               %22 = closure.new %21 {func_ref = @"test::__lambda_0"} : !t0
               %23 = arith.const {value = 41} : core.i32
-              %24 = core.unrealized_conversion_cast %23 : tribute_rt.anyref
-              %25 = core.unrealized_conversion_cast %16 : !t0
-              %26 = func.call_indirect %25, %24 : tribute_rt.anyref
-              scf.yield %26
+              %24 = core.unrealized_conversion_cast %16 : !t0
+              %25 = core.unrealized_conversion_cast %23 : tribute_rt.anyref
+              %26 = func.call_indirect %24, %25 : tribute_rt.anyref
+              %27 = func.call_indirect %22, %26 : tribute_rt.anyref
+              scf.yield %27
           } {
               func.unreachable
           }
           func.return %20
       }
-      %27 = arith.const {value = 0} : tribute_rt.anyref
-      %28 = ability.handle_dispatch %14, %15, %27 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %28 = arith.const {value = 0} : tribute_rt.anyref
+      %29 = ability.handle_dispatch %14, %15, %28 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb7(%29: tribute_rt.anyref):
-              %30 = core.unrealized_conversion_cast %29 : core.i32
-              scf.yield %30
+            ^bb7(%30: tribute_rt.anyref):
+              %31 = core.unrealized_conversion_cast %30 : core.i32
+              %32 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+              %33 = closure.new %32 {func_ref = @"test::__lambda_0"} : !t0
+              %34 = core.unrealized_conversion_cast %31 : tribute_rt.anyref
+              %35 = func.call_indirect %33, %34 : tribute_rt.anyref
+              scf.yield %35
           }
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb8(%31: tribute_rt.anyref, %32: tribute_rt.anyref):
-              %33 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-              %34 = closure.new %33 {func_ref = @"test::__lambda_0"} : !t0
-              %35 = arith.const {value = 41} : core.i32
-              %36 = core.unrealized_conversion_cast %35 : tribute_rt.anyref
-              %37 = core.unrealized_conversion_cast %31 : !t0
-              %38 = func.call_indirect %37, %36 : tribute_rt.anyref
-              scf.yield %38
+            ^bb8(%36: tribute_rt.anyref, %37: tribute_rt.anyref):
+              %38 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+              %39 = closure.new %38 {func_ref = @"test::__lambda_0"} : !t0
+              %40 = arith.const {value = 41} : core.i32
+              %41 = core.unrealized_conversion_cast %36 : !t0
+              %42 = core.unrealized_conversion_cast %40 : tribute_rt.anyref
+              %43 = func.call_indirect %41, %42 : tribute_rt.anyref
+              %44 = func.call_indirect %39, %43 : tribute_rt.anyref
+              scf.yield %44
           }
       }
-      %39 = core.unrealized_conversion_cast %28 : core.i32
-      func.return %39
+      %45 = core.unrealized_conversion_cast %29 : core.i32
+      func.return %45
   }
   func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
       %0 = arith.const {value = unit} : core.nil
