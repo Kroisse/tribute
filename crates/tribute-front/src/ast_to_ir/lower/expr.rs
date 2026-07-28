@@ -915,15 +915,33 @@ pub(super) fn evaluation_control_class<'db>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
 ) -> EvaluationControlClass {
+    evaluation_control_class_with_handle_propagation(ctx, expr, false)
+}
+
+/// Classify evaluation with an explicit nested-handle propagation policy.
+///
+/// Source convention selection treats handles as source delimiters. Ambient
+/// and `HandleAnswer` CPS domains instead retain the private carrier so a
+/// foreign Escape reaches its dynamic owner unchanged.
+fn evaluation_control_class_with_handle_propagation<'db>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    expr: &Expr<TypedRef<'db>>,
+    propagates_handles: bool,
+) -> EvaluationControlClass {
     let children = |children: &[Expr<TypedRef<'db>>]| {
         children
             .iter()
             .fold(EvaluationControlClass::Direct, |class, child| {
-                class.join(evaluation_control_class(ctx, child))
+                class.join(evaluation_control_class_with_handle_propagation(
+                    ctx,
+                    child,
+                    propagates_handles,
+                ))
             })
     };
 
     match &*expr.kind {
+        ExprKind::Handle { .. } if propagates_handles => EvaluationControlClass::Cps,
         ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
         // A source delimiter is Direct by default. The existing HandleAnswer
         // domain selects carrier propagation structurally below.
@@ -935,8 +953,12 @@ pub(super) fn evaluation_control_class<'db>(
             } else {
                 EvaluationControlClass::Direct
             };
-            call.join(evaluation_control_class(ctx, callee))
-                .join(children(args))
+            call.join(evaluation_control_class_with_handle_propagation(
+                ctx,
+                callee,
+                propagates_handles,
+            ))
+            .join(children(args))
         }
         ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
             children(args)
@@ -945,10 +967,18 @@ pub(super) fn evaluation_control_class<'db>(
             let spread = spread
                 .as_ref()
                 .map_or(EvaluationControlClass::Direct, |spread| {
-                    evaluation_control_class(ctx, spread)
+                    evaluation_control_class_with_handle_propagation(
+                        ctx,
+                        spread,
+                        propagates_handles,
+                    )
                 });
             fields.iter().fold(spread, |class, (_, field)| {
-                class.join(evaluation_control_class(ctx, field))
+                class.join(evaluation_control_class_with_handle_propagation(
+                    ctx,
+                    field,
+                    propagates_handles,
+                ))
             })
         }
         ExprKind::Block { stmts, value } => {
@@ -959,29 +989,48 @@ pub(super) fn evaluation_control_class<'db>(
                         Stmt::Let { value, .. } => value,
                         Stmt::Expr { expr, .. } => expr,
                     };
-                    class.join(evaluation_control_class(ctx, expr))
+                    class.join(evaluation_control_class_with_handle_propagation(
+                        ctx,
+                        expr,
+                        propagates_handles,
+                    ))
                 });
-            statements.join(evaluation_control_class(ctx, value))
+            statements.join(evaluation_control_class_with_handle_propagation(
+                ctx,
+                value,
+                propagates_handles,
+            ))
         }
         ExprKind::BinOp { lhs, rhs, .. } => {
-            evaluation_control_class(ctx, lhs).join(evaluation_control_class(ctx, rhs))
+            evaluation_control_class_with_handle_propagation(ctx, lhs, propagates_handles).join(
+                evaluation_control_class_with_handle_propagation(ctx, rhs, propagates_handles),
+            )
         }
-        ExprKind::Case { scrutinee, arms } => {
-            arms.iter()
-                .fold(evaluation_control_class(ctx, scrutinee), |class, arm| {
-                    let guard = arm
-                        .guard
-                        .as_ref()
-                        .map_or(EvaluationControlClass::Direct, |guard| {
-                            evaluation_control_class(ctx, guard)
-                        });
-                    class
-                        .join(guard)
-                        .join(evaluation_control_class(ctx, &arm.body))
-                })
-        }
+        ExprKind::Case { scrutinee, arms } => arms.iter().fold(
+            evaluation_control_class_with_handle_propagation(ctx, scrutinee, propagates_handles),
+            |class, arm| {
+                let guard = arm
+                    .guard
+                    .as_ref()
+                    .map_or(EvaluationControlClass::Direct, |guard| {
+                        evaluation_control_class_with_handle_propagation(
+                            ctx,
+                            guard,
+                            propagates_handles,
+                        )
+                    });
+                class
+                    .join(guard)
+                    .join(evaluation_control_class_with_handle_propagation(
+                        ctx,
+                        &arm.body,
+                        propagates_handles,
+                    ))
+            },
+        ),
         ExprKind::MethodCall { receiver, args, .. } => {
-            evaluation_control_class(ctx, receiver).join(children(args))
+            evaluation_control_class_with_handle_propagation(ctx, receiver, propagates_handles)
+                .join(children(args))
         }
         ExprKind::Var(_)
         | ExprKind::NatLit(_)
@@ -996,82 +1045,13 @@ pub(super) fn evaluation_control_class<'db>(
     }
 }
 
-/// Classify evaluation under a typed CPS answer domain. Ambient and
-/// `HandleAnswer` computations carry the opaque private result, so nested
-/// handles forward foreign Escapes to their dynamic owner. Source convention
-/// selection continues to use `evaluation_control_class` above, preserving
-/// #817's Direct/EvidenceDirect/Cps ordering.
+/// Classify evaluation under a typed CPS answer domain, preserving #817's
+/// Direct/EvidenceDirect/Cps ordering.
 pub(super) fn evaluation_control_class_in<'db, D: ControlDomain>(
     ctx: &super::super::context::IrLoweringCtx<'db>,
     expr: &Expr<TypedRef<'db>>,
 ) -> EvaluationControlClass {
-    let children = |children: &[Expr<TypedRef<'db>>]| {
-        children
-            .iter()
-            .fold(EvaluationControlClass::Direct, |class, child| {
-                class.join(evaluation_control_class_in::<D>(ctx, child))
-            })
-    };
-
-    match &*expr.kind {
-        ExprKind::Handle { .. } if D::PROPAGATES_HANDLES => EvaluationControlClass::Cps,
-        ExprKind::Lambda { .. } => EvaluationControlClass::Direct,
-        ExprKind::Call { callee, args } => {
-            let call = if is_cps_call_expr(ctx, expr) {
-                EvaluationControlClass::Cps
-            } else {
-                EvaluationControlClass::Direct
-            };
-            call.join(evaluation_control_class_in::<D>(ctx, callee))
-                .join(children(args))
-        }
-        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
-            children(args)
-        }
-        ExprKind::Record { fields, spread, .. } => {
-            let spread = spread
-                .as_ref()
-                .map_or(EvaluationControlClass::Direct, |spread| {
-                    evaluation_control_class_in::<D>(ctx, spread)
-                });
-            fields.iter().fold(spread, |class, (_, field)| {
-                class.join(evaluation_control_class_in::<D>(ctx, field))
-            })
-        }
-        ExprKind::Block { stmts, value } => {
-            let statements = stmts
-                .iter()
-                .fold(EvaluationControlClass::Direct, |class, stmt| {
-                    let expr = match stmt {
-                        Stmt::Let { value, .. } => value,
-                        Stmt::Expr { expr, .. } => expr,
-                    };
-                    class.join(evaluation_control_class_in::<D>(ctx, expr))
-                });
-            statements.join(evaluation_control_class_in::<D>(ctx, value))
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => evaluation_control_class_in::<D>(ctx, lhs)
-            .join(evaluation_control_class_in::<D>(ctx, rhs)),
-        ExprKind::Case { scrutinee, arms } => arms.iter().fold(
-            evaluation_control_class_in::<D>(ctx, scrutinee),
-            |class, arm| {
-                let guard = arm
-                    .guard
-                    .as_ref()
-                    .map_or(EvaluationControlClass::Direct, |guard| {
-                        evaluation_control_class_in::<D>(ctx, guard)
-                    });
-                class
-                    .join(guard)
-                    .join(evaluation_control_class_in::<D>(ctx, &arm.body))
-            },
-        ),
-        ExprKind::MethodCall { receiver, args, .. } => {
-            evaluation_control_class_in::<D>(ctx, receiver).join(children(args))
-        }
-        ExprKind::Resume { .. } => EvaluationControlClass::Cps,
-        _ => evaluation_control_class(ctx, expr),
-    }
+    evaluation_control_class_with_handle_propagation(ctx, expr, D::PROPAGATES_HANDLES)
 }
 
 /// Lower an unnormalized computation entry exactly once.
