@@ -19,44 +19,11 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     RewriteScope, TypeConverter,
 };
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Location, TypeDataBuilder};
 
 use tribute_ir::dialect::ability;
 
 const ABILITY_LOWERED_BOUNDARY: &str = "ability-lowered";
-
-const CPS_CONTROL_TYPE: &str = "__tribute_cps_control";
-const CPS_NORMAL: &str = "Normal";
-const CPS_ESCAPE: &str = "Escape";
-
-/// Recreate the frontend-only completion-carrier type. Its only consumers are
-/// `ability.handle_dispatch` operands, which the frontend constructs from the
-/// matching private done continuations. This is the proof boundary: no source
-/// value reaches the operations below.
-fn cps_control_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
-    let anyref_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let variants = Attribute::List(vec![
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new(CPS_NORMAL)),
-            Attribute::List(vec![Attribute::Type(anyref_ty)]),
-        ]),
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new(CPS_ESCAPE)),
-            Attribute::List(vec![Attribute::Type(i32_ty), Attribute::Type(anyref_ty)]),
-        ]),
-    ]);
-    ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-            .attr("name", Attribute::Symbol(Symbol::new(CPS_CONTROL_TYPE)))
-            .attr("variants", variants)
-            .build(),
-    )
-}
 
 fn anyref_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
     ctx.types
@@ -137,7 +104,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
         // arms construct `Escape`. Never apply these probes to a source SSA
         // value or a public ADT.
         let done_region = get_done_region(ctx, handler_body);
-        let control_ty = cps_control_type(ctx);
+        let control_ty = ability::cps_control_type_ref(ctx);
         let i1_ty = i1_type(ctx);
         let normal = adt::variant_is(
             ctx,
@@ -145,7 +112,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
             body_result,
             i1_ty,
             control_ty,
-            Symbol::new(CPS_NORMAL),
+            Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
         );
         rewriter.insert_op(normal.op_ref());
 
@@ -154,7 +121,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
             location,
             body_result,
             control_ty,
-            Symbol::new(CPS_NORMAL),
+            Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
             user_result_ty,
             done_region,
         );
@@ -217,13 +184,7 @@ fn completion_region(
     } else {
         payload
     };
-    let result = if ctx.value_ty(result) != user_result_ty {
-        let cast = core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
-        ctx.push_op(block, cast.op_ref());
-        cast.result(ctx)
-    } else {
-        result
-    };
+    let result = cast_result_if_needed(ctx, block, location, result, user_result_ty);
     let yield_op = scf::r#yield(ctx, location, [result]);
     ctx.push_op(block, yield_op.op_ref());
     ctx.create_region(RegionData {
@@ -260,7 +221,7 @@ fn escape_region(
         carrier,
         anyref_ty,
         control_ty,
-        Symbol::new(CPS_ESCAPE),
+        Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
     );
     ctx.push_op(block, cast.op_ref());
     let owner = adt::variant_get(
@@ -269,7 +230,7 @@ fn escape_region(
         cast.result(ctx),
         i32_ty,
         control_ty,
-        Symbol::new(CPS_ESCAPE),
+        Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
         0,
     );
     ctx.push_op(block, owner.op_ref());
@@ -279,7 +240,7 @@ fn escape_region(
         cast.result(ctx),
         anyref_ty,
         control_ty,
-        Symbol::new(CPS_ESCAPE),
+        Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
         1,
     );
     ctx.push_op(block, payload.op_ref());
@@ -575,10 +536,8 @@ mod tests {
         lower_handle_dispatch(&mut ctx, module).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
-        assert!(
-            ir_text.contains("scf.yield %2"),
-            "foreign branch must yield the carrier"
-        );
+        // The reviewed snapshot verifies that the foreign branch forwards the
+        // original Escape carrier rather than its payload or a done-arm result.
         assert_snapshot!(ir_text);
     }
 

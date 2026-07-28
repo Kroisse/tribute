@@ -414,16 +414,7 @@ pub(super) fn create_identity_done_k(
 /// Return the compiler-private completion carrier type used only by #815
 /// handle boundaries. Its values remain physically `anyref`.
 pub(super) fn cps_control_type(builder: &mut IrBuilder<'_, '_>) -> TypeRef {
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-    let i32_ty = builder.ctx.i32_type(builder.ir);
-    builder.ctx.adt_enum_type(
-        builder.ir,
-        Symbol::new("__tribute_cps_control"),
-        &[
-            (Symbol::new("Normal"), vec![anyref_ty]),
-            (Symbol::new("Escape"), vec![i32_ty, anyref_ty]),
-        ],
-    )
+    tribute_ir::dialect::ability::cps_control_type_ref(builder.ir)
 }
 
 /// Create a done continuation which constructs a private `Normal` completion.
@@ -449,7 +440,7 @@ pub(super) fn create_cps_control_done_k(
         .ctx
         .module_block()
         .expect("module block should be set");
-    let tag = Symbol::new("Normal");
+    let tag = Symbol::new(tribute_ir::dialect::ability::CPS_CONTROL_NORMAL_VARIANT);
 
     let create = |name| {
         let done_block = builder.ir.create_block(BlockData {
@@ -539,7 +530,7 @@ pub(super) fn create_cps_escape_done_k(
         [owner_tag, value],
         anyref_ty,
         control_ty,
-        Symbol::new("Escape"),
+        Symbol::new(tribute_ir::dialect::ability::CPS_CONTROL_ESCAPE_VARIANT),
     );
     builder.ir.push_op(block, escape.op_ref());
     let ret = func::r#return(builder.ir, location, [escape.result(builder.ir)]);

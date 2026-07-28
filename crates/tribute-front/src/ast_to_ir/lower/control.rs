@@ -10,6 +10,8 @@ use trunk_ir::dialect::{adt, func, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::Location;
 
+use tribute_ir::dialect::ability;
+
 use super::IrBuilder;
 
 mod private {
@@ -140,7 +142,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
         answer.0,
         bool_ty,
         control_ty,
-        trunk_ir::Symbol::new("Normal"),
+        trunk_ir::Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
     );
     builder.ir.push_op(builder.block, normal.op_ref());
 
@@ -160,7 +162,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             answer.0,
             anyref_ty,
             control_ty,
-            trunk_ir::Symbol::new("Normal"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
         );
         normal_builder.ir.push_op(normal_block, cast.op_ref());
         let payload = adt::variant_get(
@@ -169,7 +171,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             cast.result(normal_builder.ir),
             anyref_ty,
             control_ty,
-            trunk_ir::Symbol::new("Normal"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
             0,
         );
         normal_builder.ir.push_op(normal_block, payload.op_ref());
@@ -185,7 +187,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             after_arm.0,
             anyref_ty,
             control_ty,
-            trunk_ir::Symbol::new("Escape"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
         );
         normal_builder.ir.push_op(normal_block, escape.op_ref());
         let owner = adt::variant_get(
@@ -194,7 +196,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             escape.result(normal_builder.ir),
             i32_ty,
             control_ty,
-            trunk_ir::Symbol::new("Escape"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
             0,
         );
         normal_builder.ir.push_op(normal_block, owner.op_ref());
@@ -204,7 +206,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             escape.result(normal_builder.ir),
             anyref_ty,
             control_ty,
-            trunk_ir::Symbol::new("Escape"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_ESCAPE_VARIANT),
             1,
         );
         normal_builder.ir.push_op(normal_block, payload.op_ref());
@@ -231,7 +233,7 @@ pub(super) fn resume_into_current<D: ControlDomain>(
             vec![payload.result(normal_builder.ir)],
             anyref_ty,
             control_ty,
-            trunk_ir::Symbol::new("Normal"),
+            trunk_ir::Symbol::new(ability::CPS_CONTROL_NORMAL_VARIANT),
         );
         normal_builder.ir.push_op(own_block, retagged.op_ref());
         let own_yield = scf::r#yield(

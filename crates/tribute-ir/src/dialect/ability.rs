@@ -195,6 +195,47 @@ use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
+/// Compiler-private #815 completion carrier identity.
+///
+/// The carrier remains physically `anyref`; only frontend construction and
+/// `lower_handle_dispatch` may materialize or inspect this type.
+pub const CPS_CONTROL_TYPE_NAME: &str = "__tribute_cps_control";
+pub const CPS_CONTROL_NORMAL_VARIANT: &str = "Normal";
+pub const CPS_CONTROL_ESCAPE_VARIANT: &str = "Escape";
+
+/// Return the canonical private completion-carrier enum used by #815.
+///
+/// Keeping this constructor in `tribute-ir` preserves structural interning
+/// identity across frontend and shared-pass lowering without introducing a
+/// frontend-to-passes dependency.
+pub fn cps_control_type_ref(ctx: &mut IrContext) -> TypeRef {
+    let anyref_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let variants = Attribute::List(vec![
+        Attribute::List(vec![
+            Attribute::Symbol(Symbol::new(CPS_CONTROL_NORMAL_VARIANT)),
+            Attribute::List(vec![Attribute::Type(anyref_ty)]),
+        ]),
+        Attribute::List(vec![
+            Attribute::Symbol(Symbol::new(CPS_CONTROL_ESCAPE_VARIANT)),
+            Attribute::List(vec![Attribute::Type(i32_ty), Attribute::Type(anyref_ty)]),
+        ]),
+    ]);
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            .attr(
+                "name",
+                Attribute::Symbol(Symbol::new(CPS_CONTROL_TYPE_NAME)),
+            )
+            .attr("variants", variants)
+            .build(),
+    )
+}
+
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
