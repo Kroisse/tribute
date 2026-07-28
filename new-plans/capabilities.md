@@ -79,7 +79,7 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | General collection APIs beyond M1 list literals/patterns/prepend (`List` algorithms, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | The M1 public surface is intentionally limited to literals, `List::prepend`, and sequence patterns. No broader collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
 | `std::io::print` and `print_line` | **compile-only** | **native-run** | **wasm-run** | Native output behavior is tested in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm output execution is covered by the two execution tests in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The Wasm lowering implements `tribute_io.write` in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 | `std::io::read_line` | **compile-only** | **native-run** | **unsupported** | Native line endings, empty/partial input, EOF, invalid UTF-8, and system errors execute in the `test_native_std_io_read_line_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). Native lowering is in [`native/io.rs`](../crates/tribute-passes/src/native/io.rs). Wasm I/O lowering has only a `WritePattern` and rejects residual `tribute_io` operations in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
-| Canonical M1 calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). The same scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source also opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
+| Canonical M1 calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). That product test also executes NUL-leading valid UTF-8 malformed input and invalid UTF-8, requiring a clean exit and exactly one input-failure line. The scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
 
 The current **wasm-run** language-level claims in this table are String/Bytes
 output through `std::io::print_line` and byte-wise String equality. That
@@ -110,7 +110,8 @@ artifacts and their documentation:
 1. `lang-examples/native_calculator.trb` is the canonical M1 **native-run**
    example. Its scripted and EOF stdin/stdout contracts are checked in under
    `tests/fixtures/` and `tests/expected/`; the scripted session also has
-   AddressSanitizer and LSP protocol evidence.
+   AddressSanitizer and LSP protocol evidence. The product test additionally
+   covers NUL-leading valid UTF-8 malformed input and invalid UTF-8.
 2. `lang-examples/native_effects.trb` is a retained M0 **native-run** artifact.
    Its expected stdout is `Recovered: the failure was handled`.
 3. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**

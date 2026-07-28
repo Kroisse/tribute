@@ -34,7 +34,10 @@ diff -u \
 
 The scripted session covers multiple operations, a recoverable invalid integer,
 and `quit`; the EOF session proves quiet termination after its preceding result.
-On Ubuntu, CI also executes this identical scripted session with:
+The product regression also supplies a NUL-leading valid UTF-8 malformed line
+and invalid UTF-8, verifying respectively normal command recovery and exactly
+one terminal input-failure line. On Ubuntu, CI also executes this identical
+scripted session with AddressSanitizer:
 
 ```bash
 cargo run --locked -- compile --sanitize=address \
