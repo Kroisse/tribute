@@ -101,7 +101,16 @@ fn execute(tokens: List(String)) ->{Io} Bool {
             True -> False
             False -> invalid_command()
         }
-        [operator, left, right] -> execute_calculation(operator, left, right)
+        [operator, left, right] -> case operator == "add" {
+            True -> execute_calculation(operator, left, right)
+            False -> case operator == "sub" {
+                True -> execute_calculation(operator, left, right)
+                False -> case operator == "mul" {
+                    True -> execute_calculation(operator, left, right)
+                    False -> invalid_command()
+                }
+            }
+        }
         _ -> invalid_command()
     }
 }
