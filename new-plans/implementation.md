@@ -302,6 +302,15 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
 
+Root `main` is a frontend CPS delimiter, not a `Cps` backend entry ABI. Its
+valid source residual contract remains pure or `Io`. If its body only needs
+the stronger implementation convention because it calls a generic/open
+callback worker, AST-to-IR keeps root `main` at its Direct/EvidenceDirect
+seed, closes that computation with the shared identity continuation, and
+returns the recovered source value normally. A genuine residual general effect
+is still rejected before the backend entrypoint; nested-module `main` is not
+special.
+
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
 `tribute_io.read_line` operation으로 바꾼다. 이 boundary는 rope 표현 대신 `Bytes`와
