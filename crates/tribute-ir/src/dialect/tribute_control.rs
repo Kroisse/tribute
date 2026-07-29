@@ -2473,6 +2473,38 @@ mod tests {
             .join("\n")
     }
 
+    fn append_module_op(ctx: &mut IrContext, module: Module, op: OpRef) {
+        let body = module.body(ctx).expect("module body");
+        let body_block = ctx.region(body).blocks[0];
+        ctx.push_op(body_block, op);
+    }
+
+    fn assert_diagnostics(result: &ValidationResult, expected: &[&str]) {
+        let messages = messages(result);
+        for expected in expected {
+            assert!(
+                messages.contains(expected),
+                "missing diagnostic `{expected}`:\n{result}"
+            );
+        }
+    }
+
+    fn assert_op_diagnostics(result: &ValidationResult, op: OpRef, expected: &[&str]) {
+        let messages = result
+            .errors
+            .iter()
+            .filter(|error| error.op == Some(op))
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in expected {
+            assert!(
+                messages.contains(expected),
+                "operation {op} is missing diagnostic `{expected}`:\n{result}"
+            );
+        }
+    }
+
     #[test]
     fn callable_codes_and_resume_token_accessors_are_exact() {
         let mut ctx = IrContext::new();
@@ -2564,7 +2596,13 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
         let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let direct = callable(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
+        let direct = callable(
+            &mut ctx,
+            i32_ty,
+            [i32_ty, i32_ty],
+            CallingConvention::Direct,
+        )
+        .as_type_ref();
         let evidence = callable(
             &mut ctx,
             i32_ty,
@@ -2581,18 +2619,28 @@ mod tests {
         );
         let identity = identity_func(&mut ctx, loc, "identity", evidence, i32_ty);
 
-        let outer_entry = block(&mut ctx, loc, &[i32_ty]);
+        let outer_entry = block(&mut ctx, loc, &[i32_ty, i32_ty]);
         let captured = ctx.block_arg(outer_entry, 0);
+        let captured_second = ctx.block_arg(outer_entry, 1);
 
-        let captured_body_block = block(&mut ctx, loc, &[i32_ty]);
+        let captured_body_block = block(&mut ctx, loc, &[i32_ty, i32_ty]);
         let captured_return = r#return(&mut ctx, loc, captured);
         ctx.push_op(captured_body_block, captured_return.op_ref());
         let captured_body = region(&mut ctx, loc, captured_body_block);
-        let captured_lambda = lambda(&mut ctx, loc, [captured], direct, captured_body);
+        let captured_lambda = lambda(
+            &mut ctx,
+            loc,
+            [captured, captured_second],
+            direct,
+            captured_body,
+        );
         ctx.op_mut(captured_lambda.op_ref()).attributes.insert(
             Symbol::new("debug_name"),
             Attribute::String("apply".to_owned()),
         );
+        ctx.op_mut(captured_lambda.op_ref())
+            .attributes
+            .insert(Symbol::new("inline_hint"), Attribute::Bool(true));
         ctx.push_op(outer_entry, captured_lambda.op_ref());
 
         let empty_body_block = block(&mut ctx, loc, &[]);
@@ -2616,14 +2664,13 @@ mod tests {
         );
         let printed = assert_round_trip(&ctx, module);
         assert!(printed.contains(
-            "tribute_control.func @decl(%arg0: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}"
+            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}"
         ));
         assert!(printed.contains("convention(evidence_direct)"));
         assert!(printed.contains("convention(cps) captures []"));
-        assert!(
-            printed
-                .contains("convention(direct) captures [%0] attributes {debug_name = \"apply\"}")
-        );
+        assert!(printed.contains("convention(direct) captures [%0, %1] attributes {"));
+        assert!(printed.contains("debug_name = \"apply\""));
+        assert!(printed.contains("inline_hint = true"));
         assert!(!printed.contains("^bb"));
     }
 
@@ -2916,6 +2963,386 @@ mod tests {
         assert!(messages.contains("requires a callable callee operand"));
     }
 
+    #[test]
+    fn local_validator_reports_distinct_malformed_operation_contracts() {
+        let mut ctx = IrContext::new();
+        let loc = location(&mut ctx);
+        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let bool_ty = simple_type(&mut ctx, "core", "bool");
+        let ability = ability_type(&mut ctx, "State");
+        let direct = callable(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
+        let module = module(&mut ctx, loc, &[]);
+
+        let i32_constant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let i32_value = i32_constant.result(&ctx);
+        let bool_constant = arith::r#const(&mut ctx, loc, bool_ty, Attribute::Bool(true));
+        let bool_value = bool_constant.result(&ctx);
+
+        let missing_func = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("func"),
+        )
+        .operand(i32_value)
+        .build(&mut ctx);
+        let missing_func = ctx.create_op(missing_func);
+        append_module_op(&mut ctx, module, missing_func);
+
+        let first_body_block = block(&mut ctx, loc, &[]);
+        let first_body = region(&mut ctx, loc, first_body_block);
+        let second_body_block = block(&mut ctx, loc, &[]);
+        let second_body = region(&mut ctx, loc, second_body_block);
+        let bad_func = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("func"),
+        )
+        .attr("sym_name", Attribute::Symbol(Symbol::new("bad_func")))
+        .attr("type", Attribute::Type(i32_ty))
+        .region(first_body)
+        .region(second_body)
+        .build(&mut ctx);
+        let bad_func = ctx.create_op(bad_func);
+        append_module_op(&mut ctx, module, bad_func);
+
+        let lambda_body_block = block(&mut ctx, loc, &[]);
+        let lambda_body = region(&mut ctx, loc, lambda_body_block);
+        let bad_lambda = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("lambda"),
+        )
+        .result(i32_ty)
+        .region(lambda_body)
+        .build(&mut ctx);
+        let bad_lambda = ctx.create_op(bad_lambda);
+        append_module_op(&mut ctx, module, bad_lambda);
+
+        let bad_func_ref = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("func_ref"),
+        )
+        .operand(i32_value)
+        .results([i32_ty, bool_ty])
+        .attr("func_ref", Attribute::Symbol(Symbol::new("bad_func")))
+        .attr("unexpected", Attribute::Int(1))
+        .build(&mut ctx);
+        let bad_func_ref = ctx.create_op(bad_func_ref);
+        append_module_op(&mut ctx, module, bad_func_ref);
+
+        let call_region_block = block(&mut ctx, loc, &[]);
+        let call_region = region(&mut ctx, loc, call_region_block);
+        let bad_call = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("call"),
+        )
+        .results([i32_ty, bool_ty])
+        .attr("unexpected", Attribute::Int(1))
+        .region(call_region)
+        .build(&mut ctx);
+        let bad_call = ctx.create_op(bad_call);
+        append_module_op(&mut ctx, module, bad_call);
+
+        let non_callable_indirect = call_indirect(&mut ctx, loc, i32_value, [bool_value], i32_ty);
+        append_module_op(&mut ctx, module, non_callable_indirect.op_ref());
+
+        let callable_value = func_ref(&mut ctx, loc, direct, Symbol::new("bad_func")).result(&ctx);
+        let mismatched_indirect =
+            call_indirect(&mut ctx, loc, callable_value, [bool_value], bool_ty);
+        append_module_op(&mut ctx, module, mismatched_indirect.op_ref());
+
+        let bad_perform = perform(
+            &mut ctx,
+            loc,
+            [i32_value],
+            i32_ty,
+            ability,
+            Symbol::new("get"),
+            Symbol::new("bogus"),
+        );
+        append_module_op(&mut ctx, module, bad_perform.op_ref());
+
+        let bad_handler = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("handler"),
+        )
+        .attr("ability_ref", Attribute::Type(ability))
+        .attr("op_name", Attribute::Symbol(Symbol::new("get")))
+        .attr("kind", Attribute::Symbol(Symbol::new("bogus")))
+        .attr("operation_result_type", Attribute::Type(i32_ty))
+        .build(&mut ctx);
+        let bad_handler = ctx.create_op(bad_handler);
+        append_module_op(&mut ctx, module, bad_handler);
+
+        let bad_resume = resume(&mut ctx, loc, i32_value, bool_value, bool_ty);
+        append_module_op(&mut ctx, module, bad_resume.op_ref());
+
+        let token_ty = resume_token(&mut ctx, i32_ty, i32_ty).as_type_ref();
+        let token_producer =
+            trunk_ir::OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("token"))
+                .result(token_ty)
+                .build(&mut ctx);
+        let token_producer = ctx.create_op(token_producer);
+        let token_value = ctx.op_result(token_producer, 0);
+        let mismatched_resume = resume(&mut ctx, loc, token_value, bool_value, bool_ty);
+        append_module_op(&mut ctx, module, mismatched_resume.op_ref());
+
+        let unknown = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("tribute_control"),
+            Symbol::new("unknown"),
+        )
+        .build(&mut ctx);
+        let unknown = ctx.create_op(unknown);
+        append_module_op(&mut ctx, module, unknown);
+
+        let result = validate_local(&ctx, module);
+        assert_op_diagnostics(
+            &result,
+            missing_func,
+            &[
+                "expects 0 operand(s), found 1",
+                "requires 'sym_name' attribute",
+                "requires 'type' attribute",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_func,
+            &[
+                "type attribute must be tribute_control.callable",
+                "expects zero or one body region, found 2",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_lambda,
+            &["result must have tribute_control.callable type"],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_func_ref,
+            &[
+                "expects 0 operand(s), found 1",
+                "expects 1 result(s), found 2",
+                "has unsupported attribute 'unexpected'",
+                "result must have tribute_control.callable type",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_call,
+            &[
+                "expects 1 result(s), found 2",
+                "expects 0 region(s), found 1",
+                "requires 'callee' attribute",
+                "has unsupported attribute 'unexpected'",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            non_callable_indirect.op_ref(),
+            &["callee operand must have tribute_control.callable type"],
+        );
+        assert_op_diagnostics(
+            &result,
+            mismatched_indirect.op_ref(),
+            &[
+                "argument types do not match the logical signature",
+                "result types do not match the logical signature",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_perform.op_ref(),
+            &["operation_kind must be @fn or @op, found @bogus"],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_handler,
+            &[
+                "kind must be @fn or @op, found @bogus",
+                "expects 1 region(s), found 0",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            bad_resume.op_ref(),
+            &["first operand must have tribute_control.resume_token type"],
+        );
+        assert_op_diagnostics(
+            &result,
+            mismatched_resume.op_ref(),
+            &["resume input/result types do not match the token input/answer types"],
+        );
+        assert_op_diagnostics(
+            &result,
+            unknown,
+            &["unsupported tribute_control operation 'unknown'"],
+        );
+
+        let unattached_return = r#return(&mut ctx, loc, i32_value);
+        let mut return_errors = Vec::new();
+        validate_local_operation(&ctx, unattached_return.op_ref(), &mut return_errors);
+        let return_result = ValidationResult {
+            errors: return_errors,
+        };
+        assert_op_diagnostics(
+            &return_result,
+            unattached_return.op_ref(),
+            &[
+                "must be attached to a block",
+                "must terminate a tribute_control.func or lambda body",
+            ],
+        );
+
+        let unattached_yield = r#yield(&mut ctx, loc, i32_value);
+        let mut yield_errors = Vec::new();
+        validate_local_operation(&ctx, unattached_yield.op_ref(), &mut yield_errors);
+        let yield_result = ValidationResult {
+            errors: yield_errors,
+        };
+        assert_op_diagnostics(
+            &yield_result,
+            unattached_yield.op_ref(),
+            &[
+                "must be attached to a block",
+                "must terminate a handle body/completion or handler body",
+            ],
+        );
+    }
+
+    #[test]
+    fn local_validator_checks_handle_and_handler_region_contracts() {
+        let mut fixture = valid_fixture();
+        let loc = location(&mut fixture.ctx);
+        let i32_ty = fixture.declarations[0].result_type;
+        let bool_ty = simple_type(&mut fixture.ctx, "core", "bool");
+
+        let [body_region, completion_region, handlers_region] =
+            *fixture.ctx.op(fixture.handle).regions.as_slice()
+        else {
+            panic!("valid handle regions");
+        };
+        let body_block = fixture.ctx.region(body_region).blocks[0];
+        fixture.ctx.add_block_arg(
+            body_block,
+            BlockArgData {
+                ty: i32_ty,
+                attrs: AttributeMap::new(),
+            },
+        );
+
+        let completion_block = fixture.ctx.region(completion_region).blocks[0];
+        fixture.ctx.set_block_arg_type(completion_block, 0, bool_ty);
+        fixture.ctx.add_block_arg(
+            completion_block,
+            BlockArgData {
+                ty: i32_ty,
+                attrs: AttributeMap::new(),
+            },
+        );
+
+        let handlers_block = fixture.ctx.region(handlers_region).blocks[0];
+        let table_value = arith::r#const(&mut fixture.ctx, loc, i32_ty, Attribute::Int(0));
+        fixture.ctx.push_op(handlers_block, table_value.op_ref());
+
+        let handler_body = fixture.ctx.op(fixture.handler).regions[0];
+        let handler_block = fixture.ctx.region(handler_body).blocks[0];
+        let wrong_value = arith::r#const(&mut fixture.ctx, loc, bool_ty, Attribute::Bool(false));
+        fixture
+            .ctx
+            .insert_op_before(handler_block, fixture.handler_yield, wrong_value.op_ref());
+        fixture
+            .ctx
+            .set_op_operand(fixture.handler_yield, 0, wrong_value.result(&fixture.ctx));
+        let wrong_token = resume_token(&mut fixture.ctx, bool_ty, bool_ty).as_type_ref();
+        let token_index = u32::try_from(fixture.ctx.block_args(handler_block).len() - 1).unwrap();
+        fixture
+            .ctx
+            .set_block_arg_type(handler_block, token_index, wrong_token);
+
+        let local = validate_local(&fixture.ctx, fixture.module);
+        assert_diagnostics(
+            &local,
+            &[
+                "body block must not have arguments",
+                "completion block must have exactly one argument",
+                "completion argument type must match the body yield type",
+                "completion yield type must match handle result type",
+                "handlers block may contain only tribute_control.handler",
+                "general handler yield type must match enclosing handle result type",
+                "resume token input/answer types do not match operation and handle results",
+                "general handler yield type must match handle result type",
+            ],
+        );
+
+        let mut fn_fixture = valid_fixture();
+        let bool_ty = simple_type(&mut fn_fixture.ctx, "core", "bool");
+        fn_fixture
+            .ctx
+            .op_mut(fn_fixture.handler)
+            .attributes
+            .insert(Symbol::new("kind"), Attribute::Symbol(Symbol::new("fn")));
+        fn_fixture.ctx.op_mut(fn_fixture.handler).attributes.insert(
+            Symbol::new("operation_result_type"),
+            Attribute::Type(bool_ty),
+        );
+        let local = validate_local(&fn_fixture.ctx, fn_fixture.module);
+        assert_diagnostics(
+            &local,
+            &[
+                "fn and op -> core.never handlers must not receive a resume token",
+                "handler yield type does not match its kind-specific result",
+            ],
+        );
+
+        let mut ctx = IrContext::new();
+        let loc = location(&mut ctx);
+        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let module = module(&mut ctx, loc, &[]);
+        for malformed in 0..3 {
+            let mut regions = Vec::new();
+            for index in 0..3 {
+                if index == malformed {
+                    regions.push(ctx.create_region(RegionData {
+                        location: loc,
+                        blocks: Default::default(),
+                        parent_op: None,
+                    }));
+                } else {
+                    let region_block = block(&mut ctx, loc, &[]);
+                    regions.push(region(&mut ctx, loc, region_block));
+                }
+            }
+            let malformed_handle = trunk_ir::OperationDataBuilder::new(
+                loc,
+                Symbol::new("tribute_control"),
+                Symbol::new("handle"),
+            )
+            .result(i32_ty)
+            .region(regions[0])
+            .region(regions[1])
+            .region(regions[2])
+            .build(&mut ctx);
+            let malformed_handle = ctx.create_op(malformed_handle);
+            append_module_op(&mut ctx, module, malformed_handle);
+        }
+
+        let local = validate_local(&ctx, module);
+        assert_diagnostics(
+            &local,
+            &[
+                "body region expects exactly one block, found 0",
+                "completion region expects exactly one block, found 0",
+                "handlers region expects exactly one block, found 0",
+            ],
+        );
+    }
+
     fn capture_fixture(include_capture: bool, use_capture: bool) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
@@ -2956,6 +3383,136 @@ mod tests {
         let (excess_ctx, excess_module) = capture_fixture(true, false);
         let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
         assert!(messages(&excess).contains("capture list contains unused external value"));
+    }
+
+    #[test]
+    fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
+        let mut fixture = valid_fixture();
+        let loc = location(&mut fixture.ctx);
+        let i32_ty = fixture.declarations[0].result_type;
+        let bool_ty = simple_type(&mut fixture.ctx, "core", "bool");
+        let direct = callable(
+            &mut fixture.ctx,
+            i32_ty,
+            [i32_ty],
+            CallingConvention::Direct,
+        )
+        .as_type_ref();
+        let cps =
+            callable(&mut fixture.ctx, i32_ty, [i32_ty], CallingConvention::Cps).as_type_ref();
+        let different =
+            callable(&mut fixture.ctx, bool_ty, [], CallingConvention::Direct).as_type_ref();
+
+        let duplicate = func_declaration(&mut fixture.ctx, loc, Symbol::new("id"), direct);
+        append_module_op(&mut fixture.ctx, fixture.module, duplicate.op_ref());
+
+        let cps_target = identity_func(&mut fixture.ctx, loc, "cps_target", cps, i32_ty);
+        append_module_op(&mut fixture.ctx, fixture.module, cps_target.op_ref());
+        let weak_ref = func_ref(&mut fixture.ctx, loc, direct, Symbol::new("cps_target"));
+        append_module_op(&mut fixture.ctx, fixture.module, weak_ref.op_ref());
+
+        let mismatched_ref = func_ref(&mut fixture.ctx, loc, different, Symbol::new("id"));
+        append_module_op(&mut fixture.ctx, fixture.module, mismatched_ref.op_ref());
+        let unresolved_ref = func_ref(&mut fixture.ctx, loc, direct, Symbol::new("missing"));
+        append_module_op(&mut fixture.ctx, fixture.module, unresolved_ref.op_ref());
+
+        let unresolved_call = call(&mut fixture.ctx, loc, [], i32_ty, Symbol::new("missing"));
+        append_module_op(&mut fixture.ctx, fixture.module, unresolved_call.op_ref());
+        let bool_constant = arith::r#const(&mut fixture.ctx, loc, bool_ty, Attribute::Bool(false));
+        append_module_op(&mut fixture.ctx, fixture.module, bool_constant.op_ref());
+        let bool_value = bool_constant.result(&fixture.ctx);
+        let bad_call = call(
+            &mut fixture.ctx,
+            loc,
+            [bool_value],
+            bool_ty,
+            Symbol::new("id"),
+        );
+        append_module_op(&mut fixture.ctx, fixture.module, bad_call.op_ref());
+
+        let duplicate_declaration = fixture.declarations[0].clone();
+        fixture.declarations.push(duplicate_declaration);
+        let unknown_perform = perform(
+            &mut fixture.ctx,
+            loc,
+            [],
+            i32_ty,
+            fixture.declarations[0].ability_ref,
+            Symbol::new("missing"),
+            Symbol::new("op"),
+        );
+        append_module_op(&mut fixture.ctx, fixture.module, unknown_perform.op_ref());
+        let mismatched_perform = perform(
+            &mut fixture.ctx,
+            loc,
+            [bool_value],
+            bool_ty,
+            fixture.declarations[0].ability_ref,
+            fixture.declarations[0].op_name,
+            Symbol::new("fn"),
+        );
+        append_module_op(
+            &mut fixture.ctx,
+            fixture.module,
+            mismatched_perform.op_ref(),
+        );
+
+        let module_body = fixture.module.body(&fixture.ctx).expect("module body");
+        let mut fixture_lambda = None;
+        walk_region_ops(&fixture.ctx, module_body, &mut |op| {
+            if fixture_lambda.is_none() && is_control_op(&fixture.ctx, op, "lambda") {
+                fixture_lambda = Some(op);
+            }
+        });
+        let fixture_lambda = fixture_lambda.expect("fixture lambda");
+        let duplicate_capture = fixture.ctx.op_operands(fixture_lambda)[0];
+        fixture
+            .ctx
+            .push_op_operand(fixture_lambda, duplicate_capture);
+
+        let token_ty = fixture.ctx.value_ty(fixture.token);
+        let token_producer = trunk_ir::OperationDataBuilder::new(
+            loc,
+            Symbol::new("test"),
+            Symbol::new("token_result"),
+        )
+        .result(token_ty)
+        .build(&mut fixture.ctx);
+        let token_producer = fixture.ctx.create_op(token_producer);
+        append_module_op(&mut fixture.ctx, fixture.module, token_producer);
+
+        let first_func = fixture.module.ops(&fixture.ctx)[0];
+        let first_body = fixture.ctx.op(first_func).regions[0];
+        let first_entry = fixture.ctx.region(first_body).blocks[0];
+        fixture.ctx.add_block_arg(
+            first_entry,
+            BlockArgData {
+                ty: token_ty,
+                attrs: AttributeMap::new(),
+            },
+        );
+
+        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        assert_diagnostics(
+            &result,
+            &[
+                "duplicate function symbol @id",
+                "func_ref result convention must be at least as strong as its target",
+                "func_ref result source signature does not match its target",
+                "unresolved function symbol @missing",
+                "unresolved callee @missing",
+                "call argument types do not match the logical signature",
+                "call result types do not match the logical signature",
+                "capture list contains duplicate values",
+                "duplicate operation declaration",
+                "no resolved operation declaration",
+                "operation_kind does not match the resolved declaration",
+                "operation argument types do not match the logical signature",
+                "operation result type does not match the resolved declaration",
+                "resume_token must not be produced as an operation result",
+                "resume_token block arguments are allowed only as the final handler argument",
+            ],
+        );
     }
 
     #[test]
@@ -3010,6 +3567,102 @@ mod tests {
 
         let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
         assert!(messages(&result).contains("more than one tribute_control.resume"));
+    }
+
+    #[test]
+    fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
+        let mut fixture = valid_fixture();
+        replace_direct_resume_with_transitive_carrier(&mut fixture);
+        let handler_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
+        let loc = location(&mut fixture.ctx);
+        let i32_ty = fixture.declarations[0].result_type;
+        let carrier_ty =
+            callable(&mut fixture.ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
+        let wrapper = fixture
+            .ctx
+            .block(handler_block)
+            .ops
+            .iter()
+            .copied()
+            .filter(|op| is_control_op(&fixture.ctx, *op, "lambda"))
+            .last()
+            .expect("transitive wrapper lambda");
+        let wrapper_value = fixture.ctx.op_result(wrapper, 0);
+
+        let escaping_call = call(
+            &mut fixture.ctx,
+            loc,
+            [wrapper_value],
+            i32_ty,
+            Symbol::new("id"),
+        );
+        fixture
+            .ctx
+            .insert_op_before(handler_block, fixture.handler_yield, escaping_call.op_ref());
+
+        for _ in 0..2 {
+            let body_block = block(&mut fixture.ctx, loc, &[]);
+            let invocation = call_indirect(&mut fixture.ctx, loc, wrapper_value, [], i32_ty);
+            fixture.ctx.push_op(body_block, invocation.op_ref());
+            let invocation_result = invocation.result(&fixture.ctx);
+            let returned = r#return(&mut fixture.ctx, loc, invocation_result);
+            fixture.ctx.push_op(body_block, returned.op_ref());
+            let body = region(&mut fixture.ctx, loc, body_block);
+            let capture = lambda(&mut fixture.ctx, loc, [wrapper_value], carrier_ty, body);
+            fixture
+                .ctx
+                .insert_op_before(handler_block, fixture.handler_yield, capture.op_ref());
+        }
+
+        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        assert_diagnostics(
+            &result,
+            &[
+                "resume-token carrier escapes through",
+                "resume-token carrier branches into multiple lambda captures",
+                "resume-token carrier call is outside its single capture path",
+            ],
+        );
+    }
+
+    #[test]
+    fn whole_ir_rejects_sibling_token_capture_paths() {
+        let mut fixture = valid_fixture();
+        let handler_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
+        let loc = location(&mut fixture.ctx);
+        let i32_ty = fixture.declarations[0].result_type;
+        let carrier_ty =
+            callable(&mut fixture.ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
+        let operation_arg = fixture.ctx.block_arg(handler_block, 0);
+
+        for _ in 0..2 {
+            let body_block = block(&mut fixture.ctx, loc, &[]);
+            let resumed = resume(&mut fixture.ctx, loc, fixture.token, operation_arg, i32_ty);
+            fixture.ctx.push_op(body_block, resumed.op_ref());
+            let resumed_result = resumed.result(&fixture.ctx);
+            let returned = r#return(&mut fixture.ctx, loc, resumed_result);
+            fixture.ctx.push_op(body_block, returned.op_ref());
+            let body = region(&mut fixture.ctx, loc, body_block);
+            let capture = lambda(
+                &mut fixture.ctx,
+                loc,
+                [fixture.token, operation_arg],
+                carrier_ty,
+                body,
+            );
+            fixture
+                .ctx
+                .insert_op_before(handler_block, fixture.handler_yield, capture.op_ref());
+        }
+
+        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        assert_diagnostics(
+            &result,
+            &[
+                "resume token is copied into multiple capture paths",
+                "resume token capture does not form a single path to resume",
+            ],
+        );
     }
 
     #[test]
