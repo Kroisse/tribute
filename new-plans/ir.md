@@ -62,12 +62,21 @@ partial verification을 조합해 post-CPS helper를 구현할 수 있다. Full 
 unknown operation이 legal하지 않으므로 frontend 적합성 target과 backend full
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
-`core.func`/`closure.closure`와 post-CPS의 `tribute_control.callable`/
-`resume_token`을 별도로 거부한다. 이 walk는 operand/result, block argument,
-type attribute와 nested type parameter를 재귀적으로 검사한다. Region 소유
+`core.func`/`closure.closure`와 post-CPS의
+`tribute_control.callable`/`resume_token`을 별도로 거부한다. 같은 walk는
+`tribute-backend-ready-native`와 `tribute-backend-ready-wasm`에서도 필수이며
+남은 두 `tribute_control` type을 거부한다. 함수·호출 signature, operand/result,
+block argument, type attribute와 nested type parameter를 재귀적으로 검사하며,
+operation 적법성 검사와 모두 통과해야 named boundary가 성립한다. Region 소유
 operation을 recursively legal로 표시해서 nested illegal operation을 가려서는
 안 된다. Generic `trunk-ir`의 Cranelift 경계는 Tribute에 독립적으로 유지하며,
-그 전에 Tribute pipeline이 high-level dialect를 거부한다.
+그 전에 Tribute pipeline이 high-level dialect와 type을 거부한다.
+
+최종 native/Wasm 경계는 `tribute.calling_convention = 2` (`Cps`)인 worker와 생성된
+continuation/`done_k`/handler-dispatch의 result가 비어 있는지도 검사한다.
+CPS control result 역할의 `anyref`, nominal `__tribute_cps_control` enum과
+result-producing CPS dispatch는 illegal이다. Boxed source value, effect payload,
+closure environment와 dispatch field의 일반 `anyref` 사용은 허용한다.
 
 하나의 rewrite 도중에는 source `tribute_control.*`과 새
 `ability.*`/`effect.*` 결과가 일시적으로 공존할 수 있다. 이는 partial
@@ -155,8 +164,10 @@ resolution을 검사하며 physical `core.func`나 `closure.closure`를 componen
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-`func.tail_call`, `func.constant`, `func.unreachable`의 logical 복제는 없다. Tail
-형상은 legalization 결과이고 named function value는 `func_ref`가 표현한다.
+`func.tail_call`, `func.tail_call_indirect`, `func.constant`, `func.unreachable`의
+logical 복제는 없다. Tail 형상은 legalization 결과이고 named function value는
+`func_ref`가 표현한다. Legalization은 알려진 target에 `func.tail_call`, closure,
+continuation과 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
 `func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은
 reject adapter 같은 compiler helper 안에서만 legalization 뒤에 사용한다.
 
@@ -169,6 +180,47 @@ canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 `resume_token`도 노출하지 않는다. Verifier가 erased type을 추측하지 않고
 non-resumptive case를 식별해야 하므로 현재 legacy frontend의 `Never`용 `anyref`
 placeholder는 이 새 경계에서 valid하지 않다.
+
+### 사용자 정의 어셈블리 형식
+
+`tribute_control.func`와 `tribute_control.lambda`만 custom parse/print를 요구한다.
+간결한 convention 문법은 `convention(direct)`,
+`convention(evidence_direct)`, `convention(cps)`이며 각각 callable type의
+`tribute.calling_convention = 0`, `1`, `2`로 round trip한다. Parser는 signature와
+keyword로 `tribute_control.callable`을 만들고 convention을 type에만 저장한다.
+출력기도 type attribute만 읽으며 body에서 추론하거나 operation에 중복
+attribute를 쓰지 않는다. 추가 operation attribute에
+`tribute.calling_convention`을 다시 적으면 parser 또는 verifier가 거부한다.
+
+```text
+tribute_control.func @f(%x: T) -> R convention(cps)
+    attributes {visibility = @private} {
+  ...
+}
+
+tribute_control.func @decl(%x: T) -> R convention(direct)
+
+%f = tribute_control.lambda(%x: T) -> R convention(cps)
+    captures [%captured] attributes {debug_name = "apply"} {
+  ...
+}
+
+%g = tribute_control.lambda() -> R convention(direct)
+    captures [] {
+  ...
+}
+```
+
+`func` 형식은 `func.func`처럼 symbol, 분해된 logical parameter/result, 선택적
+추가 attribute와 선택적 body를 출력한다. Body가 있으면 entry block label을
+생략하고 signature parameter를 entry argument로 복원하며 declaration은 body가
+없다. `lambda` 형식은 `closure.lambda`처럼 SSA result, 분해된 source
+parameter/result, 필수 convention, 명시적 `captures [...]`, 선택적 추가
+attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`는 capture가
+없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
+선택적 attributes, body다. `func_ref`, `call`, `call_indirect`, `return`은 현재
+generic assembly가 모든 정보를 손실 없이 표현하므로 custom format을 만들지
+않는다.
 
 #### `tribute_control.func`
 
@@ -343,8 +395,8 @@ Callable operation의 physical lowering은
 - **피연산자:** 없다. 실행 가능한 region이 capture하는 값은 일반 enclosing SSA
   visibility를 사용한다.
 - **결과:** logical handle result 하나만 만든다.
-- **속성:** 필수 attribute는 없다. Dynamic prompt/owner tag와 backend
-  carrier 선택은 의도적으로 포함하지 않는다.
+- **속성:** 필수 attribute는 없다. Dynamic prompt/owner tag와 physical tail-call
+  표현은 이 operation의 의미 attribute가 아니라 legalization 계약이다.
 - **영역:** 고정된 `body`, `completion`, `handlers` 순서로 정확히 세 개다.
 - **Block argument:** `body`는 argument가 없는 block 하나다. `completion`은
   argument가 정확히 하나인 block 하나이며, 그 type은 `body`가 yield한 value의
@@ -402,13 +454,17 @@ tribute_control.handler {
   type이 `operation_result_type`과 같고 자동으로 resume한다. `op`에서는 yield
   type이 token의 `answer` type과 같으며, arm이 `resume`을 통해 control을
   넘기지 않고 완료되면 enclosing handle result가 된다.
+  `operation_result_type`이 source `Never`인 `op`에는 token이 없고 yield type은
+  enclosing `tribute_control.handle` result type과 같아야 한다.
 - **지역 검증:** 필수 attribute와 domain, block 하나, 마지막
   terminator, token 위치/parameter, 위 yield 규칙을 확인한다.
   `operation_result_type`이 `Never`인 general handler는 token argument가 없어야
   하며 nested region을 포함한 body 어디에도 `tribute_control.resume`이 없어야
-  한다. Parent placement, uniqueness, enclosing handle result와의 equality는
-  containing handle의 local verifier가 확인한다. Symbol-aware frontend 적합성
-  검사는 참조된 declaration의 `kind`, argument type,
+  한다. Parent placement, uniqueness와 `op -> Never` yield를 포함한 enclosing
+  handle result와의 equality는 containing handle의 local verifier가 확인하고,
+  converter도 rewrite 전에 같은 equality와 resume 부재를 검사해 위반을
+  conversion failure로 보고한다. Symbol-aware frontend 적합성 검사는 참조된
+  declaration의 `kind`, argument type,
   `operation_result_type`도 동일한지 확인하며, 어떤 verifier도 body 형상으로
   general `op`을 재분류하지 않는다.
 - **소유권과 값 흐름:** 마지막 token argument가 있으면 affine이다.
@@ -558,6 +614,10 @@ make these attributes round-trip explicitly.
 
 `func.*` represents function definitions, direct calls, indirect calls, function
 references, returns, tail calls, and unreachable control flow.
+`func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
+terminator다. Shared verifier는 callee `core.func`와 enclosing caller의 result가
+모두 `core.never`인지 검사한다. Native/Wasm signature lowering은 이를 empty result
+vector로 바꾸고 각각 indirect return-call로 낮춘다.
 
 `scf.*` represents structured control flow, including pattern/case regions and
 region yields. Loop-like forms may be introduced by optimization passes such as
@@ -627,10 +687,10 @@ Important stage invariants:
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
 | AST-to-IR | `tribute_control.callable`과 callable/control operation, valid SSA use chain |
-| Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`를 사용하며 `tribute_control` operation/type이 남지 않음 |
+| Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
-| Backend lowering | Backend-ready target verification succeeds and no `effect.*` operations remain |
+| Backend lowering | Backend-ready 검증이 성공하고 `effect.*` 및 compatibility CPS carrier가 남지 않음 |
 
 ## Type Model
 
@@ -646,5 +706,3 @@ representation.
 - Final closure environment representation for each backend.
 - Reusable conversion targets for effect ABI lowering boundaries.
 - Debug/source-map representation.
-- WasmGC reactivation strategy for lowering shared tail-call CPS IR into
-  closure, table, and evidence representations.

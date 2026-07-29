@@ -39,16 +39,15 @@ type과 source parameter/result만 사용하며 evidence, environment, `done_k`�
 Issue #823은 closure extraction 전에 전체 callable graph를 하나의 단위로
 변환한다:
 
-| Convention | #823 이후 physical parameter | 현재 physical result |
+| Convention | #823 이후 physical parameter | result |
 | ---- | ---- | ---- |
 | `Direct` | 소스 parameter | 소스 result |
 | `EvidenceDirect` | evidence 뒤 소스 parameter | 소스 result |
-| `Cps` | evidence, `done_k`, source parameter 순서 | 현재 opaque compatibility control result |
+| `Cps` | evidence, `done_k`, source parameter 순서 | logical `core.never`, physical empty result |
 
 Parameter 순서는 기존 `CallableAbi` 순서다. `Cps`의 `done_k`는 source result를
-받고 worker와 같은 opaque control-result type을 반환한다. 현재 physical type은
-compatibility `anyref`를 유지할 수 있지만, 이는 영구 logical result나 #774의
-향후 `Never`/`Step` 정책이 아니다.
+받고 logical `core.never`를 반환한다. Control lowering 뒤 worker와 continuation은
+result vector가 비어 있으며 제어 값을 반환하지 않는다.
 
 Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref`,
 direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
@@ -65,13 +64,23 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   worker에 전달하므로 named function도 다른 closure와 같은 `call_indirect` ABI를
   갖는다. 기존 closure lowering은 이 `closure.new`를 `func.constant`와 physical
   closure struct로 바꾼다.
-- `tribute_control.call`과 `call_indirect`는 각각 physical `func.call`과
-  `func.call_indirect`가 된다. 현재 evidence와 `Cps` suffix continuation을
-  `CallableAbi` 순서로 삽입하고, indirect call의 environment는 후속 closure
-  lowering이 삽입한다.
+- `Direct`/`EvidenceDirect`의 `tribute_control.call`과 `call_indirect`는 각각
+  physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
+  `done_k`로 전달하고 named target에는 `func.tail_call`, dynamic target에는
+  `func.tail_call_indirect`를 쓴다. Evidence와 environment는 `CallableAbi`
+  순서로 삽입한다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
-  `Cps`에서는 `done_k(value)`를 호출하고 compatibility control result를
-  `func.return`한다.
+  `Cps`에서는 `done_k(value)`로 `func.tail_call_indirect`하며 뒤에
+  `func.return`이나 result가 없다.
+
+알려진 CPS target으로의 최종 이전은 `func.tail_call`, closure, continuation,
+`done_k`처럼 동적인 target으로의 이전은 `func.tail_call_indirect`를 사용한다.
+Shared IR의 caller/callee result는 `core.never`이고 target signature의 result
+vector는 비어 있어야 한다. `Step`, trampoline 또는 반환되는 control value는
+이 경로에 없다.
+생성한 continuation, `done_k`, handler-dispatch function에도
+`tribute.calling_convention = 2`를 붙여 backend-ready verifier가 semantic role을
+식별하게 한다.
 
 기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
 adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
@@ -86,10 +95,11 @@ Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추
 builder를 재사용하되 `tribute_control` 전용 graph pattern은 #823이 구현한다.
 
 같은 #823 legalization에서 각 `tribute_control.perform`을 typecheck된
-`operation_kind`에 따라 변환한다. `@fn`은 suffix를 capture하지 않고 기존
-`ability.call`/tail-dispatch 경로를 만들며, `@op`은 기존
-`ability.perform`/CPS 경로를 만든다. 이 결정은 `CallableAbi`에 encode하지 않으며
-pass가 operation kind를 추론하거나 변경해서는 안 된다.
+`operation_kind`에 따라 변환한다. `@fn`은 suffix를 capture하지 않고
+`ability.call`을, `@op`은 `ability.perform`과 필요한 `ability.handle_dispatch`
+표면을 만든다. #823은 `effect.dispatch_*`나 `effect.extend`를 만들지 않는다.
+이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
+변경해서는 안 된다.
 
 Root `main` delimiter와 external ABI 조합 책임은
 [implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
@@ -106,11 +116,12 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
   suffix continuation을 공급한다. `Direct`와 `EvidenceDirect` call result는
   일반 suffix로 흐른다.
 - `tribute_control.perform`은 검증된 `operation_kind`만으로 분기한다. `@fn`이면
-  suffix를 capture하지 않고 기존 `ability.call`/`effect.dispatch_tail` 경로를
-  만들며 반환된 operation result가 일반 suffix로 흐른다. `@op`이면 현재
-  suffix와 일치하는 dynamic handle boundary까지 선택된 모든 enclosing
-  structured exit를 capture한 뒤 기존 `ability.perform`/`effect.dispatch_cps`
-  경로를 만든다. Operand packing은 이 lower 경계에서만 수행한다.
+  suffix를 capture하지 않고 `ability.call`을 만들며 반환된 operation result가
+  일반 suffix로 흐른다. `@op`이면 현재 suffix와 일치하는 dynamic handle
+  boundary까지 선택된 모든 enclosing structured exit를 capture한 뒤
+  `ability.perform`을 만든다. 후속 `lower_ability_perform`이 각각
+  `effect.dispatch_tail`과 `effect.dispatch_cps`로 낮춘다. Operand packing은
+  이 lower 경계에서만 수행한다.
   `op -> Never`에는 suffix를 capture하지 않고 기존 필수 ABI operand에 실제
   zero-capture reject continuation을 공급한다.
 - `tribute_control.yield value`는 region의 `exit_k(value)`를 호출한다.
@@ -122,14 +133,16 @@ source 순서로 한 번만 평가하며 선택된 branch, guard, 오른쪽 항�
 
 `tribute_control.handle`은 delimiter를 만든다:
 
-1. Normal body yield는 completion region에 정확히 한 번 들어가며 completion
+1. 정상 body yield는 completion region에 정확히 한 번 들어가며 completion
    yield는 enclosing `exit_k`를 계속 실행한다.
 2. Dynamic하게 설치된 handler 중 가장 가까운 일치 handler가 operation
    argument를 받는다. `fn` arm은 operation result를 yield하고 자동으로 resume한다.
 3. Resumptive general `op` arm은 affine resumption을 받는다.
    `tribute_control.resume`은 수행된 operation result를 공급하고 capture한 body
    continuation을 실행한 뒤, 반환된 handle answer로 arm-local suffix를 실행한다.
-   Source `op -> Never` arm은 resumption을 받지 않고 `resume`을 포함할 수 없다.
+   Source `op -> Never` arm은 resumption을 받지 않고 `resume`을 포함할 수 없으며
+   yield type은 enclosing handle result type과 같아야 한다. Converter는 rewrite
+   전에 verifier와 같은 조건을 확인한다.
 4. Resume하지 않고 yield하는 general arm은 해당 handle을 직접 완료한다. 포기된
    performed-computation suffix와 completion region을 건너뛴다.
 5. Nested handle은 같은 delimiter를 재귀적으로 만든다. Resumed path는 perform과
@@ -167,78 +180,44 @@ named pre-CPS boundary가 아니다.
 `tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
 `tribute_control` operation 또는 `callable`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
-`func.*`/`closure.*`/`core.func` graph와 lowered ability/effect operation만
-남는다. Native와 Wasm의 backend-ready Tribute boundary는 남은
-`tribute_control.*`, `ability.*`, `effect.*`를 각각 독립적으로 거부한다.
+`func.*`/`closure.*`/`core.func` graph와 logical `ability.*` dispatch 표면만
+남는다. 이후 기존 `lower_closure_lambda`, `prepare_closure_lowering`,
+`lower_closures_in_func`가 closure 표면을 소비하고, `lower_ability_perform`,
+`resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지
+낮춘다. Native와 Wasm의 evidence pass가 `effect.*`를 backend ABI로 제거한다.
+Backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
+`effect.*`를 각각 독립적으로 거부한다.
 
 논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 `done_k`의
-인자로 전달되고 함수와 continuation의 control result는 `Never`다. 아래 예시의
-`anyref` result와 `func.return %result`는 현재 구현이 true tail call 대신
-continuation chain의 결과를 되돌려 보내기 위해 사용하는 compatibility carrier다.
-향후 control lowering은 이를 true tail call의 `Never` 또는 trampoline의 `Step`으로
-대체할 수 있다.
+인자로만 전달되고 logical control result는 `core.never`다. Physical control
+lowering은 이를 empty-result 함수와 proper tail transfer로 바꾸며 반환되는
+control value를 만들지 않는다. Resume하지 않는 handler arm도
+`Escape`를 반환하는 대신 해당 handle의 exit continuation으로 직접 tail
+transfer하므로 completion region과 포기한 suffix를 구조적으로 건너뛴다.
 
-## 현재 비공개 CPS 완료 전달체 (#815)
+Final native/Wasm backend-ready 경계는 `Cps` worker, continuation, `done_k`,
+handler-dispatch의 result vector가 비어 있고 모든 CPS transfer가
+`func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한다.
+`Step`, trampoline, CPS control-result 역할의 `anyref`와
+`__tribute_cps_control` private enum은 거부한다. Boxed source value, erased effect
+payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`는 이
+검사의 대상이 아니다.
 
-Until #774 supplies a general logical/backend control-result separation, the
-narrow #815 compatibility protocol at a handle boundary is:
+## 현재 마이그레이션 호환 전달체
+
+현재 live pipeline은 잠시 다음 owner-tagged private carrier를 사용할 수 있다:
 
 ```text
 __tribute_cps_control = Normal(anyref) | Escape(owner_tag: i32, payload: anyref)
 ```
 
-This is neither a source type nor an ABI convention. Its physical ABI remains
-`anyref`; only lowering code that has constructed the carrier, or received it
-at a boundary documented to produce it, may use `adt.variant_is`,
-`adt.variant_cast`, or `adt.variant_get`. In particular, arbitrary source
-values, public ADTs, and in-band sentinels must never be tested as this carrier.
-`owner_tag` is the existing runtime-unique prompt tag allocated for each
-dynamic handler installation. It is an integer token, not a syntactic tag, a
-source value, a closure/reference identity, or a newly allocated owner object.
-
-The body of a handle receives a `Normal`-producing done continuation. Raw CPS
-producers are adapted to `Normal` only when that exact private continuation is
-passed to them. A general `op` handler arm that completes without resuming
-returns `Escape(owner_tag, value)`, where the tag is read from the evidence
-marker that selected that handler. `Normal(value)` alone continues through the
-performed computation's normal continuation and then the handle's `do` clause.
-
-The protocol composes through every nested handle answer:
-
-- `Normal(value)` runs that handle's `do` clause and then continues normally.
-- `Escape(owner, value)` at a non-owner handle is forwarded unchanged. It does
-  not run that handle's `do` clause, any source continuation, or a resumed
-  handler arm's strict suffix.
-- `Escape(owner, value)` at the matching dynamic owner completes that handle
-  with `value`, bypassing its `do` clause. Its parent receives this as an
-  ordinary normal completion.
-
-Consequently, a `HandleAnswer` remains an opaque, proven private carrier while
-it can cross a handle delimiter. The matching dynamic owner consumes an
-`Escape` before the final source cast; `Normal` has already run the selected
-handle's `do` clause. The final source boundary therefore receives the resolved
-logical value and performs no carrier probe or tag-specific unwrap. This
-preserves #817's compositional `lower_value`/`lower_comp` API: no AST
-containment scan, special case/short-circuit mode, duplicate raw lowering path,
-or source effect-row or worker-convention change is introduced.
-
-The shared evidence ABI threads the dynamic tag through `effect.extend`,
-`ability.handle_dispatch`, and the general handler-dispatch closure. Native
-and Wasm obtain the same tag from the selected evidence marker before invoking
-that closure. Shared lowering compares integer owner tags; it does not require
-target-independent reference equality or an owner allocation. 이는 하나의
-private compatibility representation일 뿐 logical
-`tribute_control` semantic contract도, #774의 general backend carrier-selection
-정책도 아니다.
-
-현재 compatibility representation에서 캡처 없는 identity `done_k`의 함수 본문은
-컴파일 단위 전체에서 동일하다. AST-to-IR lowering은 이 내부 함수 정의를 compilation
-root에 한 번만 만들고 모든 사용 지점에서 같은 함수 심볼을 참조한다. 다만 각 사용
-지점의 null environment와 `closure.new`는 SSA 영역 가시성을 지키기 위해 해당 영역에
-각각 생성한다. 독립적으로 codegen되는 compilation unit은 자체 정의를 가지며, 향후
-separate compilation이 도입되면 backend의 link-once 정책으로 합칠 수 있다.
-이 deduplication은 독립적으로 끌 수 있어야 하며, 동일한 frontend IR
-경계에서 enabled/disabled snapshot과 native 실행 결과를 비교한다.
+이 값은 source type이나 영구 ABI가 아니다. 생성 또는 수신이 증명된 값만
+`adt.variant_is`/`cast`/`get`으로 검사할 수 있고, 임의의 source ADT, `anyref`,
+in-band sentinel은 검사할 수 없다. `Normal`은 해당 handle의 completion을
+실행하고, 일치하지 않는 owner의 `Escape`는 전달하며, 일치하는 owner만 handle을
+완료한다. 이 protocol은 #826에서 제거할 migration detail이다. #774는
+logical/physical control 분리의 관련 배경으로 남지만, 이 migration의 최종
+carrier는 tail-call-only로 이미 결정되었다.
 
 ## 핵심 설계
 
@@ -281,7 +260,7 @@ and indirect-call representation:
 suffix에서 continuation closure를 구성해 `ability.perform`으로 내린다.
 
 ```text
-%result = ability.perform %continuation, %arg
+ability.perform %continuation, %arg
   { ability_ref = @State, op_name = @get }
 ```
 
@@ -290,7 +269,7 @@ Shared lowering converts it to a target-independent effect ABI operation:
 ```text
 %payload = cast %arg to anyref
 %cont = cast %continuation to anyref
-%result = effect.dispatch_cps %ev, %cont, %payload
+effect.dispatch_cps %ev, %cont, %payload
   { ability_ref = @State, op_name = @get }
 ```
 
@@ -300,13 +279,11 @@ tail-calls it:
 ```text
 %marker = ability.evidence_lookup %ev { ability_ref = @State }
 %handler = adt.struct_get %marker, MarkerField::HandlerDispatch
-%owner_tag = adt.struct_get %marker, MarkerField::PromptTag
 %fn = adt.struct_get %handler, 0
 %env = adt.struct_get %handler, 1
 %op_idx = arith.const <hash(State, get)>
-%result = func.call_indirect %fn(
-  %ev, %env, %continuation_anyref, %owner_tag, %op_idx, %arg_anyref)
-func.return %result
+func.tail_call_indirect %fn(
+  %ev, %env, %continuation_anyref, %op_idx, %arg_anyref)
 ```
 
 Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
@@ -342,7 +319,7 @@ semantic lowering API는 다음 두 경계를 유지한다.
 
 ```text
 lower_value(expr)       -> source ValueRef
-lower_comp(expr, k)     -> 현재 logical control result
+lower_comp(expr, k)     -> logical core.never
 ```
 
 `lower_value`는 source value를 만드는 직접 평가만 한다. 잠재적으로 `Cps`인
@@ -367,42 +344,31 @@ lambda-specific pass.
 
 ### Root `main` delimiter
 
-Root `main` is the one target-independent CPS delimiter. Its valid source
-residual-effect contract remains the existing pure-or-`Io` entry contract; a
-residual general effect is still diagnosed before backend lowering. The
-concrete-effect prescan therefore keeps the top-level root `main` worker at
-its `Direct` or `EvidenceDirect` seed even when evaluating its body must use
-`Cps` solely because it calls a generic/open callback worker. Nested-module
-functions named `main` are ordinary workers and are not this delimiter.
+Root `main`은 하나뿐인 target-independent CPS delimiter다. Source residual-effect
+계약은 기존 pure-or-`Io` entry를 유지하며 residual general effect는 backend 전에
+거부한다. Nested module의 `main`은 일반 worker다.
 
-When that root body is a computation, frontend lowering supplies the shared
-identity `done_k`, lowers with `lower_comp`, and converts the completed opaque
-compatibility result to the root source return type at this one sanctioned
-entry boundary before `func.return`. A Direct root creates empty evidence
-through the existing evidence placeholder path; an EvidenceDirect root uses
-its ABI evidence argument. This closes an implementation-level open callback
-convention without changing source effects or asking native/Wasm backends to
-accept a `Cps` `main`. Backend-ready conversion continues to reject genuine
-residual `effect.*` operations.
+Target-independent 경계는 Direct/EvidenceDirect export wrapper가 source result
+type의 completion cell과 이를 capture한 root `done_k`를 소유한다는 추상 조합
+계약만 정한다. Shared IR에서 CPS entry와 `done_k`의 result는 `core.never`이며,
+`func.tail_call`과 `func.tail_call_indirect` verifier도 caller/callee의
+`core.never` 일치를 검사한다.
 
-The source entry contract returns `Nil`, so the delimiter materializes that
-`Nil` after the completed control chain and deliberately discards its opaque
-completion payload; it never exposes the carrier as a source value.
+Issue #825는 native/Wasm signature lowering에서 이 CPS signature를 target의 empty-result
+signature로 바꾼 뒤 실제 wrapper와 ordinary call을 합성한다. Wasm에서는 현재
+nil/void machinery처럼 target이 지원하는 표현을 사용한다. Root `done_k`는 source
+result를 cell에 정확히 한 번 쓰고 target empty result로 반환하며, wrapper는
+proper-tail-call chain이 끝난 뒤 cell을 읽어 source result로 반환한다. Shared
+`core.func<Return, ...>`와 `func.call`의 단일 logical result 계약을 유지하고 새
+zero-result call 형상을 요구하지 않으며 두 번째 control carrier도 도입하지
+않는다. 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
+control carrier가 아니다.
 
-`lower_comp`는 normalized top-level CPS producer (`op`, Cps named/local/computed
-call, structured case/short-circuit/resume)를 만났을 때 그 결과를 받는
-continuation으로 나머지 normalized block을 lowering한다. 결과는 compatibility
-`anyref` carrier를 감싼 opaque control result이며 `func.return`, `scf.yield`, CPS
-call/perform 같은 control sink에서만 소비한다. source cast, constructor, 또는
-source call argument로 사용할 수 없다.
-
-Convention metadata가 없는 synthetic compatibility continuation은
-creation-time evidence를 closure environment에 capture하지 않는다. Closure lowering은
-그 continuation의 가장 가까운 physical `func.func` entry 첫 argument가 evidence
-type일 때에만, 새 lifted entry의 injected evidence argument로 그 정확한 SSA value를
-remap한다. Explicit capture가 같은 value를 이미 소유하면 capture 의미를 우선한다.
-따라서 nested synthetic continuation도 invocation-time ABI evidence를 다음 lifted
-function으로 전달하며, 임의의 evidence-typed 외부 value를 type만으로 치환하지 않는다.
+`lower_comp(expr, k)`는 normalized CPS producer와 남은 suffix를 연결하고 logical
+`core.never` control만 만든다. Source value를 반환하거나 cast·constructor·source
+call argument로 전달할 control result는 없다. Synthetic continuation은
+invocation-time evidence를 ABI parameter로 전달하며, closure lowering은 가장
+가까운 physical entry의 정확한 evidence SSA value만 remap한다.
 
 Strict subexpression은 normalization에서 source 순서대로 atomized된 뒤 같은
 computation 안에서 이어진다.
@@ -421,18 +387,13 @@ scrutinee와 guard는 이 규칙을 따른다. 선택적 위치는 독립 evalua
 
 - `&&`/`||`의 RHS는 선택된 `scf.if` region 안에서만 lowering한다.
 - case arm과 guard는 scrutinee가 선택한 arm region 안에서만 lowering한다.
-- `handle`은 source-value 위치에서는 `Direct`로 보이지만, lowering domain은
-  context-sensitive다. `Ambient` 또는 `HandleAnswer` parent에서는
-  `lower_handle_comp`가 private carrier를 유지해 nested non-owner `Escape`를
-  전달한다. 오직 source/ambient entry가 `lower_handle_source`를 사용하며,
-  dynamic owner가 control을 소비한 뒤 logical value를 cast한다. Raw
-  Direct/EvidenceDirect entry는 handle 전체를 정확히 한 번 normalize하고,
-  이미 normalized CPS parent는 다시 normalize하지 않는다.
-- `resume`은 computation producer다. resumed `Normal`만 arm의 strict suffix로
-  들어간다. suffix가 현재 owner의 `Escape`를 돌려 주면 enclosing `do`가 볼
-  `Normal`로 retag하고, foreign `Escape`는 suffix, `do`, source continuation을
-  건너뛰어 그대로 전달한다. resume does not cast a `HandleAnswer` to a source
-  result.
+- `handle`은 body completion, resumptive suffix, non-resuming handle exit에 서로
+  다른 continuation을 준다. Non-resuming arm은 handle exit로 tail transfer하여
+  completion과 포기한 suffix를 건너뛴다. Raw Direct/EvidenceDirect entry는 handle
+  전체를 정확히 한 번 변환하고 이미 변환한 CPS parent는 다시 변환하지 않는다.
+- `resume`은 수행 지점 continuation으로 tail transfer한다. Resumed result는
+  arm-local strict suffix로 들어가며 그 suffix도 다음 continuation으로 tail
+  transfer한다. Source result로 변환되는 중간 control value는 없다.
 - `handle` body와 handler arm은 설치된 evidence/handler boundary 안에서만
   lowering한다.
 - case guard는 pattern match 뒤 arm-local strict evaluation으로 lowering한다.
@@ -444,30 +405,21 @@ nested-call lifting과 반복 containment scan을 대체한다. 현재 AST에는
 expression variant가 없으므로 unary strict-child normalization은 적용 대상이
 아니다.
 
-`#816`은 현재 `anyref` compatibility carrier를 보존한다. #815는 위의
-owner-tagged private escape protocol만 추가한다. General logical/backend
-control-result 선택은 계속 #774의 작업이다. 직접형 `tribute_control` contract는
-위에서 확정했으며 구현과 migration은 Issues #822부터 #826까지가 담당한다.
-
-Rust lowering은 sealed answer domain marker로 이 경계를 표현한다. `Ambient`는
-함수/바깥 CPS chain의 control answer, `HandleAnswer`는 handle delimiter 안의
-delimited answer, `TailResume`는 `fn` handler arm의 좁은 `ability.yield` endpoint다.
-`ContinuationRef<D>`와 `ControlResultRef<D>`는 marker가 다른 carrier를 섞을 수
-없게 한다. source value conversion is only after the dynamic owner has consumed
-the private carrier at a source boundary; resume remains entirely in the
-private answer domains.
+현재 #815/#816의 sealed answer-domain marker와 owner-tagged carrier는 migration
+동안만 proof-only inspection을 강제한다. #823-#825가 proper tail transfer를
+구성하고 #826이 이 carrier와 전용 result marker를 제거한다.
 
 ### `handle`: evidence extension + handler closures
 
 `handle` lowering은 두 종류의 dispatch closure를 만든다.
 
-- `handler_dispatch`: `(k, owner_tag, op_idx, value) -> anyref`
+- `handler_dispatch`: `(k, op_idx, value) -> ()`
   - general `op` handlers용
-  - `owner_tag` is the selected Marker's dynamic prompt owner; `resume`은
-    continuation closure 호출로 lowering된다.
+  - closure environment가 handle exit를 소유하며 `resume`과 non-resuming exit는
+    각 continuation으로 indirect tail transfer한다.
 - `tr_dispatch_fn`: `(op_idx, value) -> anyref`
   - `fn` handlers용
-  - continuation 없이 handler 결과가 inline result가 된다.
+  - `anyref`는 erased source result이며 CPS control carrier가 아니다.
 
 `resolve_evidence`는 handler boundary에서 새 marker를 만들어 evidence를
 확장한다.
@@ -571,8 +523,8 @@ representation을 갖는 effectful function과 closure를 만든다. 이는 현�
 설명이지 영구 ownership boundary가 아니다. 계획한 target은 기존 ability/effect
 pass 앞에 `tribute_control` CPS legalization을 삽입한다. #824 뒤에는 frontend가
 continuation을 구성하지 않고 #826이 대체된 path를 제거한다. Shared lowering은
-계속 같은 `effect.*` ABI operation을 emit하며 backend가 이를 evidence runtime
-call, closure decomposition, target-specific indirect call로 lower한다.
+`effect.*` ABI를 emit하며 backend가 이를 evidence runtime call, closure
+decomposition과 proper tail transfer로 lower한다.
 
 ## Effect ABI Boundary
 
@@ -585,7 +537,7 @@ Initial operations:
   { ability_ref } -> evidence`
 - `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
 - `effect.dispatch_cps(evidence, continuation, payload)
-  { ability_ref, op_name } -> result`
+  { ability_ref, op_name } -> ()`
 
 Rules:
 
@@ -593,6 +545,8 @@ Rules:
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before
   backend-specific effect ABI lowering.
+- `effect.dispatch_cps`는 control result를 만들지 않으며 backend lowering은
+  handler-dispatch closure로 proper indirect tail transfer한다.
 - Backend-ready conversion targets must reject residual `effect.*` operations.
 - Shared passes must not inspect Marker field numbers, handler-table storage
   layout, closure field positions, or backend function-pointer representation.
@@ -616,12 +570,13 @@ WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
 `effect.extend`를 marker construction + `__tribute_evidence_extend` helper
 call로 낮추고, `effect.dispatch_tail` / `effect.dispatch_cps`는
 `__tribute_evidence_lookup`, marker closure field access, closure
-table-index/env unpacking, and `wasm.call_indirect`로 낮춘다.
+table-index/env unpacking으로 낮춘다. CPS control transfer는
+`func.tail_call_indirect`를 거쳐 `wasm.return_call_indirect`가 된다. Source data를
+반환하는 일반 indirect call은 계속 `wasm.call_indirect`를 사용할 수 있다.
 
 현재 WasmGC backend에는 이전 yield bubbling/trampoline 설계의 builtin 타입
-(`Step`, `Continuation`, `ResumeWrapper`)이 남아 있다. 이 타입들은 active effect
-ABI의 의미론적 기준이 아니며, WasmGC backend 우선순위를 올리기 전에 실제 필요
-여부를 정리해야 한다.
+(`Step`, `Continuation`, `ResumeWrapper`)이 남아 있지만 #826 완료 뒤에는 모두
+제거되어야 한다.
 
 ## 폐기된 접근
 
