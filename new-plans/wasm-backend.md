@@ -4,9 +4,8 @@
 
 ## Overview
 
-Tribute의 Wasm backend는 WasmGC (Wasm 3.0) 표현을 emit한다. 현재 주요 구현
-경로는 native이지만, Wasm backend도 같은 shared middle-end와 effect ABI를
-입력으로 받는다. 백엔드는 다음 원칙을 따른다:
+Tribute의 Wasm backend는 WasmGC (Wasm 3.0) 표현을 emit하고 native와 같은 shared
+middle-end와 effect ABI를 입력으로 받는다. 백엔드는 다음 원칙을 따른다:
 
 1. **타겟 독립적 IR 유지**: trunk-ir는 특정 타겟에 종속되지 않음
 2. **Backend-specific 타입 처리**: WasmGC 타입 정의는 백엔드에서 처리
@@ -106,8 +105,8 @@ boundary described in [io.md](io.md), not in backend entrypoint lowering.
 CPS root가 필요한 export는
 [직접형 wrapper와 completion cell](cps-effects.md#root-main-delimiter)을 사용한다.
 Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계약만
-보존한다. #825가 CPS signature를 Wasm empty-result signature로 내린 뒤 현재
-nil/void machinery에 맞는 wrapper와 ordinary call을 합성한다. Wrapper는 root
+보존한다. Wasm signature lowering이 CPS signature를 empty-result signature로
+내린 뒤 nil/void machinery에 맞는 wrapper와 ordinary call을 합성한다. Wrapper는 root
 `done_k`가 typed cell을 쓴 뒤 call이 돌아오면 이를 읽는다. Shared `func.call`에
 zero-result 형상을 추가하지 않으며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
@@ -149,9 +148,9 @@ the standard-library I/O wrapper explicitly converts them to `Bytes`.
 WasmGC must lower the same representation-independent `list.*` sequence
 operations to a target-private GC layout and eliminate them before the
 backend-ready boundary. It is not required to share native's linked-node/null
-layout. The M1 native implementation and compile-only shared frontend evidence
-do not by themselves establish Wasm compilation or execution support; capability
-claims require focused Wasm evidence.
+layout. Native implementation and shared frontend evidence do not by themselves
+establish Wasm compilation or execution support; capability claims require
+focused Wasm evidence.
 
 ---
 
@@ -173,26 +172,22 @@ claims require focused Wasm evidence.
 
 ### Type Section 생성
 
-수집된 타입 정보로 WasmGC type section을 생성한다. 다음 표는 migration 전 현재
-고정 layout이며 user-defined type은 그 뒤에 배치된다:
+수집된 타입 정보로 WasmGC type section을 생성한다. Builtin layout은 다음과 같고
+user-defined type은 그 뒤에 배치된다:
 
 | Index | Type |
 | ---: | --- |
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `Step` legacy trampoline struct |
-| 4 | `_closure { table_idx: i32, env: anyref }` |
-| 5 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }` |
-| 6 | `Evidence` array |
-| 7 | `Continuation` legacy trampoline struct |
-| 8 | `ResumeWrapper` legacy trampoline struct |
-| 9+ | user-defined structs, arrays, variants, closures |
+| 3 | `_closure { table_idx: i32, env: anyref }` |
+| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }` |
+| 5 | `Evidence` array |
+| 6+ | user-defined structs, arrays, variants, closures |
 
-Issue #826 완료 시 `Step`, `Continuation`, `ResumeWrapper`를 삭제하고 builtin/user index를
-다시 계산한다. 최종 layout은 이 세 index를 예약하거나 호환 placeholder를
-남겨서는 안 된다. `_closure` environment와 Marker의 dispatch closure field는
-일반 reference erasure이므로 계속 `anyref`를 사용할 수 있다.
+Builtin layout은 CPS control carrier나 trampoline placeholder index를 예약하지
+않는다. `_closure` environment와 Marker의 dispatch closure field는 일반 reference
+erasure이므로 계속 `anyref`를 사용할 수 있다.
 
 ```wasm
 ;; 생성된 type section 예시
@@ -236,29 +231,17 @@ wasm dialect는 WasmGC 인스턴스 연산만 포함:
 
 타입 정의 (type section)는 백엔드가 이 연산들에서 추론하여 생성한다.
 
-### tribute-wasm-backend 제거
+### 크레이트 역할 분담
 
-별도 `tribute-wasm-backend` 크레이트는 현재 사용하지 않는다. 역할 분담은 다음과
-같다:
+역할 분담은 다음과 같다:
 
 - Lowering → tribute-passes
 - Emission → trunk-ir-wasm-backend
 - 조율 → tribute main crate
 
----
-
-## 선택한 마이그레이션 작업
-
-- #823은 generic `func.tail_call_indirect`와 empty-result verifier contract를
-  제공한다.
-- #825는 `wasm.return_call_indirect` operation, func-to-Wasm rewrite와
-  `Instruction::ReturnCallIndirect` emission을 구현한다.
-- #826은 `Step`, `Continuation`, `ResumeWrapper` 및 compatibility control carrier
-  관련 type/emission path를 삭제한다.
-- 최종 Wasm emission boundary는 residual `tribute_control.*`, `ability.*`,
-  `effect.*`, compatibility carrier와 result-producing CPS transfer를 거부한다.
-- `effect.extend`, `effect.dispatch_tail`, `effect.dispatch_cps`와 direct/indirect
-  tail-call fixture를 함께 유지해 native/Wasm 경로의 drift를 막는다.
+최종 Wasm emission boundary는 residual `tribute_control.*`, `ability.*`,
+`effect.*`, CPS control carrier, trampoline과 result-producing CPS transfer를
+거부한다.
 
 ---
 

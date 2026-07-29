@@ -48,7 +48,7 @@ Partial conversion may leave unknown operations for later passes. Full
 conversion boundaries, such as backend-ready native IR, must reject unknown
 operations.
 
-직접형 제어 마이그레이션은 다음과 같은 이름의 경계를 사용한다:
+직접형 제어 pipeline은 다음과 같은 이름의 경계를 사용한다:
 
 | 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
@@ -57,8 +57,9 @@ operations.
 | `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
 | `tribute-backend-ready-wasm` | 기존 emission-ready 검사 전에 high-level operation을 partial 방식으로 거부 | backend-ready Wasm IR 전에 `tribute_control`, `ability`, `effect`를 명시적으로 illegal로 지정하며, emission 전에는 `wasm_gc`도 illegal이다. |
 
-현재 API에서는 `ConversionTarget::new().illegal_dialect("tribute_control")`와
-partial verification을 조합해 post-CPS helper를 구현할 수 있다. Full mode에서는
+Post-CPS helper는
+`ConversionTarget::new().illegal_dialect("tribute_control")`와 partial
+verification을 조합한다. Full mode에서는
 unknown operation이 legal하지 않으므로 frontend 적합성 target과 backend full
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
@@ -178,8 +179,8 @@ type, callable ABI, backend carrier가 아니며 continuation representation을
 검사할 권한도 아니다. Logical result가 `Never`인 source general operation은
 canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 `resume_token`도 노출하지 않는다. Verifier가 erased type을 추측하지 않고
-non-resumptive case를 식별해야 하므로 현재 legacy frontend의 `Never`용 `anyref`
-placeholder는 이 새 경계에서 valid하지 않다.
+non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는 이
+경계에서 valid하지 않다.
 
 ### 사용자 정의 어셈블리 형식
 
@@ -218,7 +219,7 @@ tribute_control.func @decl(%x: T) -> R convention(direct)
 parameter/result, 필수 convention, 명시적 `captures [...]`, 선택적 추가
 attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`는 capture가
 없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
-선택적 attributes, body다. `func_ref`, `call`, `call_indirect`, `return`은 현재
+선택적 attributes, body다. `func_ref`, `call`, `call_indirect`, `return`은
 generic assembly가 모든 정보를 손실 없이 표현하므로 custom format을 만들지
 않는다.
 
@@ -526,6 +527,8 @@ Frontend output은 모든 실행 가능한 region 내부에서 strict ANF다. St
 왼쪽에서 오른쪽으로 정확히 한 번 평가한다. 선택된 case/conditional arm, case
 guard, short-circuit 오른쪽 항은 선택된 `scf.*` region 안에 남고 hoist하지
 않는다. Handler body와 nested handle body는 독립적인 실행 region이다.
+일반 structured control은 기존 `scf.*` dialect에 남으며
+`tribute_control_to_cps`가 그 region과 suffix를 재귀적으로 변환한다.
 
 Shared CPS conversion은 남은 operation과 enclosing region exit를 위한 명시적인
 logical continuation으로 region을 lower한다:
@@ -572,7 +575,7 @@ native uses function pointers plus heap environments.
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
 
-`list.*` represents the opaque canonical `List(a)` sequence contract. M1 uses
+`list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
 These operations carry element/result types but no variant tags, node field
 indices, allocation sizes, or target layout metadata. `list.prepend` is
@@ -690,7 +693,7 @@ Important stage invariants:
 | Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
-| Backend lowering | Backend-ready 검증이 성공하고 `effect.*` 및 compatibility CPS carrier가 남지 않음 |
+| Backend lowering | Backend-ready 검증이 성공하고 `effect.*`, CPS control carrier, trampoline이 남지 않음 |
 
 ## Type Model
 
