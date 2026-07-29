@@ -2270,7 +2270,7 @@ mod tests {
     use super::*;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
-    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::dialect::core;
     use trunk_ir::parser::parse_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::types::AttributeMap;
@@ -2349,11 +2349,9 @@ mod tests {
         declarations: Vec<OperationDeclaration>,
         handle: OpRef,
         handler: OpRef,
-        token: ValueRef,
-        handler_yield: OpRef,
     }
 
-    fn valid_fixture() -> ValidFixture {
+    fn builder_fixture() -> ValidFixture {
         let mut ctx = IrContext::new();
         let loc = location(&mut ctx);
         let i32_ty = simple_type(&mut ctx, "core", "i32");
@@ -2449,8 +2447,106 @@ mod tests {
             declarations,
             handle: handle.op_ref(),
             handler: handler.op_ref(),
-            token,
-            handler_yield: handler_yield.op_ref(),
+        }
+    }
+
+    const VALID_CONTROL_MODULE: &str = r#"core.module @test {
+  !callable = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @control(%value: core.i32) -> core.i32 convention(direct) {
+    %function = tribute_control.func_ref {func_ref = @id} : !callable
+    %direct = tribute_control.call %value {callee = @id} : core.i32
+    %indirect = tribute_control.call_indirect %function, %value : core.i32
+    %closure = tribute_control.lambda() -> core.i32 convention(direct) captures [%value] {
+      tribute_control.return %value
+    }
+    %handled = tribute_control.handle : core.i32 {
+      %performed = tribute_control.perform %value {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      tribute_control.yield %performed
+    } {
+      ^completion(%completed: core.i32):
+        tribute_control.yield %completed
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^handler(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.yield %resumed
+      }
+    }
+    tribute_control.return %handled
+  }
+}"#;
+
+    fn parse_fixture(input: &str) -> (IrContext, Module) {
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input)
+            .unwrap_or_else(|error| panic!("failed to parse fixture:\n{error}\n\n{input}"));
+        let module = Module::new(&ctx, root).expect("core.module fixture");
+        (ctx, module)
+    }
+
+    fn control_ops(ctx: &IrContext, module: Module, name: &str) -> Vec<OpRef> {
+        let mut matches = Vec::new();
+        let body = module.body(ctx).expect("module body");
+        walk_region_ops(ctx, body, &mut |op| {
+            if is_control_op(ctx, op, name) {
+                matches.push(op);
+            }
+        });
+        matches
+    }
+
+    fn control_op(ctx: &IrContext, module: Module, name: &str) -> OpRef {
+        let matches = control_ops(ctx, module, name);
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one tribute_control.{name}"
+        );
+        matches[0]
+    }
+
+    fn valid_fixture() -> ValidFixture {
+        let (ctx, module) = parse_fixture(VALID_CONTROL_MODULE);
+        let handle = control_op(&ctx, module, "handle");
+        let handler = control_op(&ctx, module, "handler");
+        let handler_body = ctx.op(handler).regions[0];
+        let handler_block = ctx.region(handler_body).blocks[0];
+        let handler_data = ctx.op(handler);
+        let ability_ref = handler_data
+            .attributes
+            .get_type("ability_ref")
+            .expect("handler ability");
+        let op_name = handler_data
+            .attributes
+            .get_symbol("op_name")
+            .expect("handler operation name");
+        let kind = handler_data
+            .attributes
+            .get_symbol("kind")
+            .expect("handler kind");
+        let result_type = handler_data
+            .attributes
+            .get_type("operation_result_type")
+            .expect("handler operation result");
+        let parameter_types = block_arg_types(&ctx, handler_block);
+        let declarations = vec![OperationDeclaration::new(
+            ability_ref,
+            op_name,
+            kind,
+            parameter_types[..parameter_types.len() - 1].iter().copied(),
+            result_type,
+        )];
+
+        ValidFixture {
+            ctx,
+            module,
+            declarations,
+            handle,
+            handler,
         }
     }
 
@@ -2538,24 +2634,27 @@ mod tests {
 
     #[test]
     fn callable_wrapper_rejects_missing_result_component() {
-        let mut ctx = IrContext::new();
-        let loc = location(&mut ctx);
-        let malformed = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("callable"))
-                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
-                .build(),
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !malformed = tribute_control.callable() {tribute.calling_convention = 0}
+}"#,
         );
+        let malformed = ctx
+            .types
+            .iter()
+            .find_map(|(ty, _)| Callable::matches(&ctx, ty).then_some(ty))
+            .expect("malformed callable type");
         assert!(Callable::from_type_ref(&ctx, malformed).is_none());
 
-        let declaration = func_declaration(&mut ctx, loc, Symbol::new("malformed"), malformed);
-        let module = module(&mut ctx, loc, &[declaration.op_ref()]);
         let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("requires one result type"));
     }
 
     #[test]
     fn all_operations_construct_with_typed_accessors_and_preserve_locations() {
-        let fixture = valid_fixture();
+        // This is intentionally builder-based: it verifies every public
+        // constructor/accessor and preservation of caller-provided locations.
+        let fixture = builder_fixture();
         let ctx = &fixture.ctx;
         let mut names = HashSet::new();
         let body = fixture.module.body(ctx).expect("module body");
@@ -2593,75 +2692,23 @@ mod tests {
 
     #[test]
     fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
-        let mut ctx = IrContext::new();
-        let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let direct = callable(
-            &mut ctx,
-            i32_ty,
-            [i32_ty, i32_ty],
-            CallingConvention::Direct,
-        )
-        .as_type_ref();
-        let evidence = callable(
-            &mut ctx,
-            i32_ty,
-            [i32_ty],
-            CallingConvention::EvidenceDirect,
-        )
-        .as_type_ref();
-        let no_params = callable(&mut ctx, i32_ty, [], CallingConvention::Cps).as_type_ref();
-
-        let decl = func_declaration(&mut ctx, loc, Symbol::new("decl"), direct);
-        ctx.op_mut(decl.op_ref()).attributes.insert(
-            Symbol::new("visibility"),
-            Attribute::Symbol(Symbol::new("private")),
-        );
-        let identity = identity_func(&mut ctx, loc, "identity", evidence, i32_ty);
-
-        let outer_entry = block(&mut ctx, loc, &[i32_ty, i32_ty]);
-        let captured = ctx.block_arg(outer_entry, 0);
-        let captured_second = ctx.block_arg(outer_entry, 1);
-
-        let captured_body_block = block(&mut ctx, loc, &[i32_ty, i32_ty]);
-        let captured_return = r#return(&mut ctx, loc, captured);
-        ctx.push_op(captured_body_block, captured_return.op_ref());
-        let captured_body = region(&mut ctx, loc, captured_body_block);
-        let captured_lambda = lambda(
-            &mut ctx,
-            loc,
-            [captured, captured_second],
-            direct,
-            captured_body,
-        );
-        ctx.op_mut(captured_lambda.op_ref()).attributes.insert(
-            Symbol::new("debug_name"),
-            Attribute::String("apply".to_owned()),
-        );
-        ctx.op_mut(captured_lambda.op_ref())
-            .attributes
-            .insert(Symbol::new("inline_hint"), Attribute::Bool(true));
-        ctx.push_op(outer_entry, captured_lambda.op_ref());
-
-        let empty_body_block = block(&mut ctx, loc, &[]);
-        let constant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        ctx.push_op(empty_body_block, constant.op_ref());
-        let constant_value = constant.result(&ctx);
-        let empty_return = r#return(&mut ctx, loc, constant_value);
-        ctx.push_op(empty_body_block, empty_return.op_ref());
-        let empty_body = region(&mut ctx, loc, empty_body_block);
-        let empty_lambda = lambda(&mut ctx, loc, [], no_params, empty_body);
-        ctx.push_op(outer_entry, empty_lambda.op_ref());
-        let outer_return = r#return(&mut ctx, loc, captured);
-        ctx.push_op(outer_entry, outer_return.op_ref());
-        let outer_body = region(&mut ctx, loc, outer_entry);
-        let outer = func(&mut ctx, loc, Symbol::new("outer"), direct, outer_body);
-
-        let module = module(
-            &mut ctx,
-            loc,
-            &[decl.op_ref(), identity.op_ref(), outer.op_ref()],
-        );
+        let input = r#"core.module @test {
+  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}
+  tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @outer(%first: core.i32, %second: core.i32) -> core.i32 convention(direct) {
+    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
+      tribute_control.return %first
+    }
+    %empty = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
+      %constant = arith.const {value = 1} : core.i32
+      tribute_control.return %constant
+    }
+    tribute_control.return %first
+  }
+}"#;
+        let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
         assert!(printed.contains(
             "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}"
@@ -2731,26 +2778,13 @@ mod tests {
 
     #[test]
     fn validator_rejects_invalid_convention_and_duplicate_op_metadata() {
-        let mut fixture = valid_fixture();
-        let i32_ty = simple_type(&mut fixture.ctx, "core", "i32");
-        let bad_ty = fixture.ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("callable"))
-                .param(i32_ty)
-                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(3))
-                .build(),
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !bad = tribute_control.callable(core.i32) {tribute.calling_convention = 3}
+  %call = tribute_control.call {callee = @missing, tribute.calling_convention = 0} : core.i32
+}"#,
         );
-        let loc = location(&mut fixture.ctx);
-        let bad_decl = func_declaration(&mut fixture.ctx, loc, Symbol::new("bad"), bad_ty);
-        fixture
-            .ctx
-            .op_mut(bad_decl.op_ref())
-            .attributes
-            .insert(Symbol::new(CALLING_CONVENTION_ATTR), Attribute::Int(0));
-        let body = fixture.module.body(&fixture.ctx).expect("module body");
-        let module_block = fixture.ctx.region(body).blocks[0];
-        fixture.ctx.push_op(module_block, bad_decl.op_ref());
-
-        let result = validate_local(&fixture.ctx, fixture.module);
+        let result = validate_local(&ctx, module);
         let messages = messages(&result);
         assert!(messages.contains("unsupported tribute.calling_convention code 3"));
         assert!(messages.contains("belongs only on tribute_control.callable"));
@@ -2758,139 +2792,96 @@ mod tests {
 
     #[test]
     fn validator_rejects_wrong_required_attribute_types() {
-        let mut fixture = valid_fixture();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let callable_ty = fixture
-            .ctx
-            .op(fixture.module.ops(&fixture.ctx)[0])
+        let (mut ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !callable = tribute_control.callable(core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @malformed() -> core.i32 convention(direct)
+  %ref = tribute_control.func_ref {func_ref = 1} : !callable
+  %call = tribute_control.call {callee = 1} : core.i32
+  %perform = tribute_control.perform {ability_ref = 1, op_name = 2, operation_kind = 3} : core.i32
+  tribute_control.handler {ability_ref = 1, op_name = 2, kind = 3, operation_result_type = 4} {
+    %constant = arith.const {value = 0} : core.i32
+    tribute_control.yield %constant
+  }
+}"#,
+        );
+
+        // The custom func parser derives and hides sym_name/type, so malformed
+        // values for those two required attributes are not text-representable.
+        let malformed_func = control_op(&ctx, module, "func");
+        ctx.op_mut(malformed_func)
             .attributes
-            .get_type("type")
-            .expect("fixture function type");
+            .insert(Symbol::new("sym_name"), Attribute::Int(1));
+        ctx.op_mut(malformed_func)
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Int(2));
 
-        let malformed = [
-            trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("func"),
-            )
-            .attr("sym_name", Attribute::Int(1))
-            .attr("type", Attribute::Int(2))
-            .build(&mut fixture.ctx),
-            trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("func_ref"),
-            )
-            .result(callable_ty)
-            .attr("func_ref", Attribute::Int(1))
-            .build(&mut fixture.ctx),
-            trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("call"),
-            )
-            .result(i32_ty)
-            .attr("callee", Attribute::Int(1))
-            .build(&mut fixture.ctx),
-            trunk_ir::OperationDataBuilder::new(
-                loc,
-                Symbol::new("tribute_control"),
-                Symbol::new("perform"),
-            )
-            .result(i32_ty)
-            .attr("ability_ref", Attribute::Int(1))
-            .attr("op_name", Attribute::Int(2))
-            .attr("operation_kind", Attribute::Int(3))
-            .build(&mut fixture.ctx),
-        ];
-        let module_body = fixture.module.body(&fixture.ctx).expect("module body");
-        let module_block = fixture.ctx.region(module_body).blocks[0];
-        for data in malformed {
-            let op = fixture.ctx.create_op(data);
-            fixture.ctx.push_op(module_block, op);
-        }
-
-        let handler_block = block(&mut fixture.ctx, loc, &[]);
-        let constant = arith::r#const(&mut fixture.ctx, loc, i32_ty, Attribute::Int(0));
-        fixture.ctx.push_op(handler_block, constant.op_ref());
-        let constant_value = constant.result(&fixture.ctx);
-        let yielded = r#yield(&mut fixture.ctx, loc, constant_value);
-        fixture.ctx.push_op(handler_block, yielded.op_ref());
-        let handler_body = region(&mut fixture.ctx, loc, handler_block);
-        let malformed_handler = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("handler"),
-        )
-        .attr("ability_ref", Attribute::Int(1))
-        .attr("op_name", Attribute::Int(2))
-        .attr("kind", Attribute::Int(3))
-        .attr("operation_result_type", Attribute::Int(4))
-        .region(handler_body)
-        .build(&mut fixture.ctx);
-        let malformed_handler = fixture.ctx.create_op(malformed_handler);
-        fixture.ctx.push_op(module_block, malformed_handler);
-
-        let result = validate_local(&fixture.ctx, fixture.module);
-        let messages = messages(&result);
-        for expected in [
-            "attribute 'sym_name' must be Symbol",
-            "attribute 'type' must be Type",
-            "attribute 'func_ref' must be Symbol",
-            "attribute 'callee' must be Symbol",
-            "attribute 'ability_ref' must be Type",
-            "attribute 'op_name' must be Symbol",
-            "attribute 'operation_kind' must be Symbol",
-            "attribute 'kind' must be Symbol",
-            "attribute 'operation_result_type' must be Type",
-        ] {
-            assert!(messages.contains(expected), "{expected}\n{messages}");
-        }
+        let result = validate_local(&ctx, module);
+        assert_op_diagnostics(
+            &result,
+            malformed_func,
+            &[
+                "attribute 'sym_name' must be Symbol",
+                "attribute 'type' must be Type",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            control_op(&ctx, module, "func_ref"),
+            &["attribute 'func_ref' must be Symbol"],
+        );
+        assert_op_diagnostics(
+            &result,
+            control_op(&ctx, module, "call"),
+            &["attribute 'callee' must be Symbol"],
+        );
+        assert_op_diagnostics(
+            &result,
+            control_op(&ctx, module, "perform"),
+            &[
+                "attribute 'ability_ref' must be Type",
+                "attribute 'op_name' must be Symbol",
+                "attribute 'operation_kind' must be Symbol",
+            ],
+        );
+        assert_op_diagnostics(
+            &result,
+            control_op(&ctx, module, "handler"),
+            &[
+                "attribute 'ability_ref' must be Type",
+                "attribute 'op_name' must be Symbol",
+                "attribute 'kind' must be Symbol",
+                "attribute 'operation_result_type' must be Type",
+            ],
+        );
     }
 
     #[test]
     fn validator_rejects_nested_unresolved_call_and_perform_types() {
-        let mut fixture = valid_fixture();
-        let loc = location(&mut fixture.ctx);
-        let unresolved = simple_type(&mut fixture.ctx, "type", "var");
-        let wrapper = core::tuple(&mut fixture.ctx, [unresolved]).as_type_ref();
-        let never = simple_type(&mut fixture.ctx, "core", "never");
-        assert!(!contains_unresolved_type(
-            &fixture.ctx,
-            never,
-            &mut HashSet::new()
-        ));
-        let value = arith::r#const(&mut fixture.ctx, loc, wrapper, Attribute::Int(0));
-        let value_result = value.result(&fixture.ctx);
-        let unresolved_call = call(
-            &mut fixture.ctx,
-            loc,
-            [value_result],
-            wrapper,
-            Symbol::new("id"),
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !wrapper = core.tuple(type.var)
+  !never = core.never
+  %value = arith.const {value = 0} : !wrapper
+  %call = tribute_control.call %value {callee = @id} : !wrapper
+  %perform = tribute_control.perform %value {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : !wrapper
+}"#,
         );
-        let declaration = fixture.declarations[0].clone();
-        let unresolved_perform = perform(
-            &mut fixture.ctx,
-            loc,
-            [value_result],
-            wrapper,
-            declaration.ability_ref,
-            declaration.op_name,
-            declaration.kind,
-        );
+        let never = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
+                    .then_some(ty)
+            })
+            .expect("core.never");
+        assert!(!contains_unresolved_type(&ctx, never, &mut HashSet::new()));
 
-        let module_body = fixture.module.body(&fixture.ctx).expect("module body");
-        let module_block = fixture.ctx.region(module_body).blocks[0];
-        fixture.ctx.push_op(module_block, value.op_ref());
-        fixture.ctx.push_op(module_block, unresolved_call.op_ref());
-        fixture
-            .ctx
-            .push_op(module_block, unresolved_perform.op_ref());
-
-        let result = validate_local(&fixture.ctx, fixture.module);
-        for op in [unresolved_call.op_ref(), unresolved_perform.op_ref()] {
+        let result = validate_local(&ctx, module);
+        for op in [
+            control_op(&ctx, module, "call"),
+            control_op(&ctx, module, "perform"),
+        ] {
             assert_eq!(
                 result
                     .errors
@@ -2910,53 +2901,39 @@ mod tests {
 
     #[test]
     fn validator_rejects_handlers_table_block_arguments() {
-        let mut fixture = valid_fixture();
-        let handlers_region = fixture.ctx.op(fixture.handle).regions[2];
-        let handlers_block = fixture.ctx.region(handlers_region).blocks[0];
-        let i32_ty = fixture.declarations[0].result_type;
-        fixture.ctx.add_block_arg(
-            handlers_block,
-            BlockArgData {
-                ty: i32_ty,
-                attrs: AttributeMap::new(),
-            },
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    ^handlers(%unexpected: core.i32):
+  }
+}"#,
         );
 
-        let result = validate_local(&fixture.ctx, fixture.module);
+        let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("handlers table block must not have arguments"));
     }
 
     #[test]
     fn validator_rejects_structure_arity_type_and_terminator_errors() {
-        let mut fixture = valid_fixture();
-        fixture.ctx.op_mut(fixture.handle).regions.pop();
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+  } {
+  }
+  tribute_control.func @unterminated(%value: core.i32) -> core.i32 convention(direct) {
+    %unused = arith.const {value = 0} : core.i32
+  }
+  %indirect = tribute_control.call_indirect : core.i32
+}"#,
+        );
 
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = simple_type(&mut fixture.ctx, "core", "i32");
-        let entry = block(&mut fixture.ctx, loc, &[i32_ty]);
-        let body = region(&mut fixture.ctx, loc, entry);
-        let ty = callable(
-            &mut fixture.ctx,
-            i32_ty,
-            [i32_ty],
-            CallingConvention::Direct,
-        )
-        .as_type_ref();
-        let unterminated = func(&mut fixture.ctx, loc, Symbol::new("unterminated"), ty, body);
-        let malformed = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("call_indirect"),
-        )
-        .result(i32_ty)
-        .build(&mut fixture.ctx);
-        let malformed = fixture.ctx.create_op(malformed);
-        let module_body = fixture.module.body(&fixture.ctx).expect("module body");
-        let module_block = fixture.ctx.region(module_body).blocks[0];
-        fixture.ctx.push_op(module_block, unterminated.op_ref());
-        fixture.ctx.push_op(module_block, malformed);
-
-        let result = validate_local(&fixture.ctx, fixture.module);
+        let result = validate_local(&ctx, module);
         let messages = messages(&result);
         assert!(messages.contains("expects 3 region(s), found 2"));
         assert!(messages.contains("must terminate with tribute_control.return"));
@@ -2965,19 +2942,56 @@ mod tests {
 
     #[test]
     fn local_validator_reports_distinct_malformed_operation_contracts() {
-        let mut ctx = IrContext::new();
+        let (mut ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !token = tribute_control.resume_token(core.i32, core.i32)
+  %integer = arith.const {value = 1} : core.i32
+  %boolean = arith.const {value = true} : core.bool
+
+  tribute_control.func @bad_func() -> core.i32 convention(direct) {
+    tribute_control.return %integer
+  }
+  %bad_lambda = tribute_control.lambda() -> core.i32 convention(direct) captures [%integer] {
+    tribute_control.return %integer
+  }
+  %bad_ref0, %bad_ref1 = tribute_control.func_ref %integer {func_ref = @bad_func, unexpected = 1} : core.i32, core.bool
+  %bad_call0, %bad_call1 = tribute_control.call {unexpected = 1} : core.i32, core.bool {
+  }
+  %non_callable = tribute_control.call_indirect %integer, %boolean : core.i32
+  %callable = tribute_control.func_ref {func_ref = @bad_func} : !direct
+  %mismatched = tribute_control.call_indirect %callable, %boolean : core.bool
+  %bad_perform = tribute_control.perform %integer {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @bogus} : core.i32
+  tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, op_name = @get, kind = @bogus, operation_result_type = core.i32}
+  %bad_resume = tribute_control.resume %integer, %boolean : core.bool
+  %token = test.token : !token
+  %mismatched_resume = tribute_control.resume %token, %boolean : core.bool
+  tribute_control.unknown
+}"#,
+        );
         let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let bool_ty = simple_type(&mut ctx, "core", "bool");
-        let ability = ability_type(&mut ctx, "State");
-        let direct = callable(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
-        let module = module(&mut ctx, loc, &[]);
+        let i32_ty = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let i32_value = module
+            .ops(&ctx)
+            .iter()
+            .copied()
+            .find(|op| {
+                ctx.op(*op).dialect == Symbol::new("arith")
+                    && ctx.op(*op).name == Symbol::new("const")
+                    && ctx.op_result_types(*op) == [i32_ty]
+            })
+            .map(|op| ctx.op_result(op, 0))
+            .unwrap();
 
-        let i32_constant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let i32_value = i32_constant.result(&ctx);
-        let bool_constant = arith::r#const(&mut ctx, loc, bool_ty, Attribute::Bool(true));
-        let bool_value = bool_constant.result(&ctx);
-
+        // Custom func assembly requires its symbol and callable type, so the
+        // parser cannot represent their simultaneous absence.
         let missing_func = trunk_ir::OperationDataBuilder::new(
             loc,
             Symbol::new("tribute_control"),
@@ -2988,116 +3002,43 @@ mod tests {
         let missing_func = ctx.create_op(missing_func);
         append_module_op(&mut ctx, module, missing_func);
 
-        let first_body_block = block(&mut ctx, loc, &[]);
-        let first_body = region(&mut ctx, loc, first_body_block);
-        let second_body_block = block(&mut ctx, loc, &[]);
-        let second_body = region(&mut ctx, loc, second_body_block);
-        let bad_func = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("func"),
-        )
-        .attr("sym_name", Attribute::Symbol(Symbol::new("bad_func")))
-        .attr("type", Attribute::Type(i32_ty))
-        .region(first_body)
-        .region(second_body)
-        .build(&mut ctx);
-        let bad_func = ctx.create_op(bad_func);
-        append_module_op(&mut ctx, module, bad_func);
+        let bad_func = control_ops(&ctx, module, "func")
+            .into_iter()
+            .find(|op| {
+                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("bad_func"))
+            })
+            .unwrap();
+        // Custom assembly always derives a callable type and permits at most one
+        // body. Mutate only those parser-enforced fields.
+        ctx.op_mut(bad_func)
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(i32_ty));
+        let extra_block = block(&mut ctx, loc, &[]);
+        let extra_region = region(&mut ctx, loc, extra_block);
+        ctx.op_mut(bad_func).regions.push(extra_region);
+        ctx.region_mut(extra_region).parent_op = Some(bad_func);
 
-        let lambda_body_block = block(&mut ctx, loc, &[]);
-        let lambda_body = region(&mut ctx, loc, lambda_body_block);
-        let bad_lambda = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("lambda"),
-        )
-        .result(i32_ty)
-        .region(lambda_body)
-        .build(&mut ctx);
-        let bad_lambda = ctx.create_op(bad_lambda);
-        append_module_op(&mut ctx, module, bad_lambda);
+        let bad_lambda = control_op(&ctx, module, "lambda");
+        ctx.set_op_result_type(bad_lambda, 0, i32_ty);
 
-        let bad_func_ref = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("func_ref"),
-        )
-        .operand(i32_value)
-        .results([i32_ty, bool_ty])
-        .attr("func_ref", Attribute::Symbol(Symbol::new("bad_func")))
-        .attr("unexpected", Attribute::Int(1))
-        .build(&mut ctx);
-        let bad_func_ref = ctx.create_op(bad_func_ref);
-        append_module_op(&mut ctx, module, bad_func_ref);
-
-        let call_region_block = block(&mut ctx, loc, &[]);
-        let call_region = region(&mut ctx, loc, call_region_block);
-        let bad_call = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("call"),
-        )
-        .results([i32_ty, bool_ty])
-        .attr("unexpected", Attribute::Int(1))
-        .region(call_region)
-        .build(&mut ctx);
-        let bad_call = ctx.create_op(bad_call);
-        append_module_op(&mut ctx, module, bad_call);
-
-        let non_callable_indirect = call_indirect(&mut ctx, loc, i32_value, [bool_value], i32_ty);
-        append_module_op(&mut ctx, module, non_callable_indirect.op_ref());
-
-        let callable_value = func_ref(&mut ctx, loc, direct, Symbol::new("bad_func")).result(&ctx);
-        let mismatched_indirect =
-            call_indirect(&mut ctx, loc, callable_value, [bool_value], bool_ty);
-        append_module_op(&mut ctx, module, mismatched_indirect.op_ref());
-
-        let bad_perform = perform(
-            &mut ctx,
-            loc,
-            [i32_value],
-            i32_ty,
-            ability,
-            Symbol::new("get"),
-            Symbol::new("bogus"),
-        );
-        append_module_op(&mut ctx, module, bad_perform.op_ref());
-
-        let bad_handler = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("handler"),
-        )
-        .attr("ability_ref", Attribute::Type(ability))
-        .attr("op_name", Attribute::Symbol(Symbol::new("get")))
-        .attr("kind", Attribute::Symbol(Symbol::new("bogus")))
-        .attr("operation_result_type", Attribute::Type(i32_ty))
-        .build(&mut ctx);
-        let bad_handler = ctx.create_op(bad_handler);
-        append_module_op(&mut ctx, module, bad_handler);
-
-        let bad_resume = resume(&mut ctx, loc, i32_value, bool_value, bool_ty);
-        append_module_op(&mut ctx, module, bad_resume.op_ref());
-
-        let token_ty = resume_token(&mut ctx, i32_ty, i32_ty).as_type_ref();
-        let token_producer =
-            trunk_ir::OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("token"))
-                .result(token_ty)
-                .build(&mut ctx);
-        let token_producer = ctx.create_op(token_producer);
-        let token_value = ctx.op_result(token_producer, 0);
-        let mismatched_resume = resume(&mut ctx, loc, token_value, bool_value, bool_ty);
-        append_module_op(&mut ctx, module, mismatched_resume.op_ref());
-
-        let unknown = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("tribute_control"),
-            Symbol::new("unknown"),
-        )
-        .build(&mut ctx);
-        let unknown = ctx.create_op(unknown);
-        append_module_op(&mut ctx, module, unknown);
+        let bad_func_ref = control_ops(&ctx, module, "func_ref")
+            .into_iter()
+            .find(|op| {
+                ctx.op(*op)
+                    .attributes
+                    .contains_key(Symbol::new("unexpected"))
+            })
+            .unwrap();
+        let bad_call = control_op(&ctx, module, "call");
+        let indirects = control_ops(&ctx, module, "call_indirect");
+        let non_callable_indirect = indirects[0];
+        let mismatched_indirect = indirects[1];
+        let bad_perform = control_op(&ctx, module, "perform");
+        let bad_handler = control_op(&ctx, module, "handler");
+        let resumes = control_ops(&ctx, module, "resume");
+        let bad_resume = resumes[0];
+        let mismatched_resume = resumes[1];
+        let unknown = control_op(&ctx, module, "unknown");
 
         let result = validate_local(&ctx, module);
         assert_op_diagnostics(
@@ -3144,12 +3085,12 @@ mod tests {
         );
         assert_op_diagnostics(
             &result,
-            non_callable_indirect.op_ref(),
+            non_callable_indirect,
             &["callee operand must have tribute_control.callable type"],
         );
         assert_op_diagnostics(
             &result,
-            mismatched_indirect.op_ref(),
+            mismatched_indirect,
             &[
                 "argument types do not match the logical signature",
                 "result types do not match the logical signature",
@@ -3157,7 +3098,7 @@ mod tests {
         );
         assert_op_diagnostics(
             &result,
-            bad_perform.op_ref(),
+            bad_perform,
             &["operation_kind must be @fn or @op, found @bogus"],
         );
         assert_op_diagnostics(
@@ -3170,12 +3111,12 @@ mod tests {
         );
         assert_op_diagnostics(
             &result,
-            bad_resume.op_ref(),
+            bad_resume,
             &["first operand must have tribute_control.resume_token type"],
         );
         assert_op_diagnostics(
             &result,
-            mismatched_resume.op_ref(),
+            mismatched_resume,
             &["resume input/result types do not match the token input/answer types"],
         );
         assert_op_diagnostics(
@@ -3217,55 +3158,26 @@ mod tests {
 
     #[test]
     fn local_validator_checks_handle_and_handler_region_contracts() {
-        let mut fixture = valid_fixture();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let bool_ty = simple_type(&mut fixture.ctx, "core", "bool");
-
-        let [body_region, completion_region, handlers_region] =
-            *fixture.ctx.op(fixture.handle).regions.as_slice()
-        else {
-            panic!("valid handle regions");
-        };
-        let body_block = fixture.ctx.region(body_region).blocks[0];
-        fixture.ctx.add_block_arg(
-            body_block,
-            BlockArgData {
-                ty: i32_ty,
-                attrs: AttributeMap::new(),
-            },
+        let (ctx, handle_module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    ^body(%unexpected: core.i32):
+      %body_value = arith.const {value = 0} : core.i32
+      tribute_control.yield %body_value
+  } {
+    ^completion(%value: core.bool, %extra: core.i32):
+      tribute_control.yield %value
+  } {
+    %not_a_handler = arith.const {value = 0} : core.i32
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.bool, core.bool)):
+        %wrong = arith.const {value = false} : core.bool
+        tribute_control.yield %wrong
+    }
+  }
+}"#,
         );
-
-        let completion_block = fixture.ctx.region(completion_region).blocks[0];
-        fixture.ctx.set_block_arg_type(completion_block, 0, bool_ty);
-        fixture.ctx.add_block_arg(
-            completion_block,
-            BlockArgData {
-                ty: i32_ty,
-                attrs: AttributeMap::new(),
-            },
-        );
-
-        let handlers_block = fixture.ctx.region(handlers_region).blocks[0];
-        let table_value = arith::r#const(&mut fixture.ctx, loc, i32_ty, Attribute::Int(0));
-        fixture.ctx.push_op(handlers_block, table_value.op_ref());
-
-        let handler_body = fixture.ctx.op(fixture.handler).regions[0];
-        let handler_block = fixture.ctx.region(handler_body).blocks[0];
-        let wrong_value = arith::r#const(&mut fixture.ctx, loc, bool_ty, Attribute::Bool(false));
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, wrong_value.op_ref());
-        fixture
-            .ctx
-            .set_op_operand(fixture.handler_yield, 0, wrong_value.result(&fixture.ctx));
-        let wrong_token = resume_token(&mut fixture.ctx, bool_ty, bool_ty).as_type_ref();
-        let token_index = u32::try_from(fixture.ctx.block_args(handler_block).len() - 1).unwrap();
-        fixture
-            .ctx
-            .set_block_arg_type(handler_block, token_index, wrong_token);
-
-        let local = validate_local(&fixture.ctx, fixture.module);
+        let local = validate_local(&ctx, handle_module);
         assert_diagnostics(
             &local,
             &[
@@ -3280,18 +3192,23 @@ mod tests {
             ],
         );
 
-        let mut fn_fixture = valid_fixture();
-        let bool_ty = simple_type(&mut fn_fixture.ctx, "core", "bool");
-        fn_fixture
-            .ctx
-            .op_mut(fn_fixture.handler)
-            .attributes
-            .insert(Symbol::new("kind"), Attribute::Symbol(Symbol::new("fn")));
-        fn_fixture.ctx.op_mut(fn_fixture.handler).attributes.insert(
-            Symbol::new("operation_result_type"),
-            Attribute::Type(bool_ty),
+        let (ctx, fn_module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body_value = arith.const {value = 0} : core.i32
+    tribute_control.yield %body_value
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @fn, op_name = @get, operation_result_type = core.bool} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        tribute_control.yield %argument
+    }
+  }
+}"#,
         );
-        let local = validate_local(&fn_fixture.ctx, fn_fixture.module);
+        let local = validate_local(&ctx, fn_module);
         assert_diagnostics(
             &local,
             &[
@@ -3304,6 +3221,8 @@ mod tests {
         let loc = location(&mut ctx);
         let i32_ty = simple_type(&mut ctx, "core", "i32");
         let module = module(&mut ctx, loc, &[]);
+        // Textual regions always receive an implicit entry block, so zero-block
+        // regions require direct in-memory construction.
         for malformed in 0..3 {
             let mut regions = Vec::new();
             for index in 0..3 {
@@ -3343,156 +3262,98 @@ mod tests {
         );
     }
 
-    fn capture_fixture(include_capture: bool, use_capture: bool) -> (IrContext, Module) {
-        let mut ctx = IrContext::new();
-        let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let lambda_ty = callable(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
-        let outer_ty =
-            callable(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
-        let outer_block = block(&mut ctx, loc, &[i32_ty]);
-        let outer_arg = ctx.block_arg(outer_block, 0);
-        let lambda_block = block(&mut ctx, loc, &[]);
-        let value = if use_capture {
-            outer_arg
-        } else {
-            let constant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
-            ctx.push_op(lambda_block, constant.op_ref());
-            constant.result(&ctx)
-        };
-        let lambda_return = r#return(&mut ctx, loc, value);
-        ctx.push_op(lambda_block, lambda_return.op_ref());
-        let lambda_body = region(&mut ctx, loc, lambda_block);
-        let captures = include_capture.then_some(outer_arg);
-        let lambda = lambda(&mut ctx, loc, captures, lambda_ty, lambda_body);
-        ctx.push_op(outer_block, lambda.op_ref());
-        let outer_return = r#return(&mut ctx, loc, outer_arg);
-        ctx.push_op(outer_block, outer_return.op_ref());
-        let outer_body = region(&mut ctx, loc, outer_block);
-        let outer = func(&mut ctx, loc, Symbol::new("outer"), outer_ty, outer_body);
-        let module = module(&mut ctx, loc, &[outer.op_ref()]);
-        (ctx, module)
-    }
-
     #[test]
     fn whole_ir_rejects_missing_and_excess_lambda_captures() {
-        let (missing_ctx, missing_module) = capture_fixture(false, true);
+        let (missing_ctx, missing_module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @outer(%external: core.i32) -> core.i32 convention(direct) {
+    %closure = tribute_control.lambda() -> core.i32 convention(direct) captures [] {
+      tribute_control.return %external
+    }
+    tribute_control.return %external
+  }
+}"#,
+        );
         let missing = validate_whole_ir(&missing_ctx, missing_module, &[]);
         assert!(messages(&missing).contains("capture list is missing external value"));
 
-        let (excess_ctx, excess_module) = capture_fixture(true, false);
+        let (excess_ctx, excess_module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @outer(%external: core.i32) -> core.i32 convention(direct) {
+    %closure = tribute_control.lambda() -> core.i32 convention(direct) captures [%external] {
+      %constant = arith.const {value = 0} : core.i32
+      tribute_control.return %constant
+    }
+    tribute_control.return %external
+  }
+}"#,
+        );
         let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
         assert!(messages(&excess).contains("capture list contains unused external value"));
     }
 
     #[test]
     fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
-        let mut fixture = valid_fixture();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let bool_ty = simple_type(&mut fixture.ctx, "core", "bool");
-        let direct = callable(
-            &mut fixture.ctx,
-            i32_ty,
-            [i32_ty],
-            CallingConvention::Direct,
-        )
-        .as_type_ref();
-        let cps =
-            callable(&mut fixture.ctx, i32_ty, [i32_ty], CallingConvention::Cps).as_type_ref();
-        let different =
-            callable(&mut fixture.ctx, bool_ty, [], CallingConvention::Direct).as_type_ref();
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  !different = tribute_control.callable(core.bool) {tribute.calling_convention = 0}
+  !token = tribute_control.resume_token(core.i32, core.i32)
 
-        let duplicate = func_declaration(&mut fixture.ctx, loc, Symbol::new("id"), direct);
-        append_module_op(&mut fixture.ctx, fixture.module, duplicate.op_ref());
-
-        let cps_target = identity_func(&mut fixture.ctx, loc, "cps_target", cps, i32_ty);
-        append_module_op(&mut fixture.ctx, fixture.module, cps_target.op_ref());
-        let weak_ref = func_ref(&mut fixture.ctx, loc, direct, Symbol::new("cps_target"));
-        append_module_op(&mut fixture.ctx, fixture.module, weak_ref.op_ref());
-
-        let mismatched_ref = func_ref(&mut fixture.ctx, loc, different, Symbol::new("id"));
-        append_module_op(&mut fixture.ctx, fixture.module, mismatched_ref.op_ref());
-        let unresolved_ref = func_ref(&mut fixture.ctx, loc, direct, Symbol::new("missing"));
-        append_module_op(&mut fixture.ctx, fixture.module, unresolved_ref.op_ref());
-
-        let unresolved_call = call(&mut fixture.ctx, loc, [], i32_ty, Symbol::new("missing"));
-        append_module_op(&mut fixture.ctx, fixture.module, unresolved_call.op_ref());
-        let bool_constant = arith::r#const(&mut fixture.ctx, loc, bool_ty, Attribute::Bool(false));
-        append_module_op(&mut fixture.ctx, fixture.module, bool_constant.op_ref());
-        let bool_value = bool_constant.result(&fixture.ctx);
-        let bad_call = call(
-            &mut fixture.ctx,
-            loc,
-            [bool_value],
-            bool_ty,
-            Symbol::new("id"),
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct)
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct)
+  tribute_control.func @cps_target(%value: core.i32) -> core.i32 convention(cps) {
+    tribute_control.return %value
+  }
+  %weak = tribute_control.func_ref {func_ref = @cps_target} : !direct
+  %wrong_signature = tribute_control.func_ref {func_ref = @id} : !different
+  %missing_ref = tribute_control.func_ref {func_ref = @missing} : !direct
+  %missing_call = tribute_control.call {callee = @missing} : core.i32
+  %false = arith.const {value = false} : core.bool
+  %bad_call = tribute_control.call %false {callee = @id} : core.bool
+  %unknown_perform = tribute_control.perform {ability_ref = core.ability_ref() {name = @State}, op_name = @missing, operation_kind = @op} : core.i32
+  %bad_perform = tribute_control.perform %false {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @fn} : core.bool
+  %duplicate_capture = tribute_control.lambda() -> core.bool convention(direct) captures [%false, %false] {
+    tribute_control.return %false
+  }
+  %token_result = test.token_result : !token
+  tribute_control.func @token_param(%token_arg: !token) -> core.i32 convention(direct) {
+    %zero = arith.const {value = 0} : core.i32
+    tribute_control.return %zero
+  }
+}"#,
         );
-        append_module_op(&mut fixture.ctx, fixture.module, bad_call.op_ref());
-
-        let duplicate_declaration = fixture.declarations[0].clone();
-        fixture.declarations.push(duplicate_declaration);
-        let unknown_perform = perform(
-            &mut fixture.ctx,
-            loc,
-            [],
-            i32_ty,
-            fixture.declarations[0].ability_ref,
-            Symbol::new("missing"),
-            Symbol::new("op"),
-        );
-        append_module_op(&mut fixture.ctx, fixture.module, unknown_perform.op_ref());
-        let mismatched_perform = perform(
-            &mut fixture.ctx,
-            loc,
-            [bool_value],
-            bool_ty,
-            fixture.declarations[0].ability_ref,
-            fixture.declarations[0].op_name,
-            Symbol::new("fn"),
-        );
-        append_module_op(
-            &mut fixture.ctx,
-            fixture.module,
-            mismatched_perform.op_ref(),
-        );
-
-        let module_body = fixture.module.body(&fixture.ctx).expect("module body");
-        let mut fixture_lambda = None;
-        walk_region_ops(&fixture.ctx, module_body, &mut |op| {
-            if fixture_lambda.is_none() && is_control_op(&fixture.ctx, op, "lambda") {
-                fixture_lambda = Some(op);
-            }
-        });
-        let fixture_lambda = fixture_lambda.expect("fixture lambda");
-        let duplicate_capture = fixture.ctx.op_operands(fixture_lambda)[0];
-        fixture
-            .ctx
-            .push_op_operand(fixture_lambda, duplicate_capture);
-
-        let token_ty = fixture.ctx.value_ty(fixture.token);
-        let token_producer = trunk_ir::OperationDataBuilder::new(
-            loc,
-            Symbol::new("test"),
-            Symbol::new("token_result"),
-        )
-        .result(token_ty)
-        .build(&mut fixture.ctx);
-        let token_producer = fixture.ctx.create_op(token_producer);
-        append_module_op(&mut fixture.ctx, fixture.module, token_producer);
-
-        let first_func = fixture.module.ops(&fixture.ctx)[0];
-        let first_body = fixture.ctx.op(first_func).regions[0];
-        let first_entry = fixture.ctx.region(first_body).blocks[0];
-        fixture.ctx.add_block_arg(
-            first_entry,
-            BlockArgData {
-                ty: token_ty,
-                attrs: AttributeMap::new(),
-            },
-        );
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        let i32_ty = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .expect("core.i32");
+        let ability_ref = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core")
+                    && data.name == Symbol::new("ability_ref")
+                    && data.attrs.get(Symbol::new("name"))
+                        == Some(&Attribute::Symbol(Symbol::new("State"))))
+                .then_some(ty)
+            })
+            .expect("State ability reference");
+        // Operation declarations are semantic validation inputs rather than IR
+        // operations, so they have no textual TrunkIR representation.
+        let declaration = OperationDeclaration {
+            ability_ref,
+            op_name: Symbol::new("get"),
+            kind: Symbol::new("op"),
+            parameter_types: vec![i32_ty],
+            result_type: i32_ty,
+        };
+        let declarations = [declaration.clone(), declaration];
+        let result = validate_whole_ir(&ctx, module, &declarations);
         assert_diagnostics(
             &result,
             &[
@@ -3517,36 +3378,46 @@ mod tests {
 
     #[test]
     fn whole_ir_rejects_duplicate_and_declaration_mismatched_handlers() {
-        let mut fixture = valid_fixture();
-        let handlers_region = fixture.ctx.op(fixture.handle).regions[2];
-        let handlers_block = fixture.ctx.region(handlers_region).blocks[0];
-        let original_body = fixture.ctx.op(fixture.handler).regions[0];
-        let original_block = fixture.ctx.region(original_body).blocks[0];
-        let arg_types = block_arg_types(&fixture.ctx, original_block);
-        let loc = location(&mut fixture.ctx);
-        let duplicate_block = block(&mut fixture.ctx, loc, &arg_types);
-        let arg = fixture.ctx.block_arg(duplicate_block, 0);
-        let token = fixture.ctx.block_arg(duplicate_block, 1);
-        let resumed = resume(&mut fixture.ctx, loc, token, arg, arg_types[0]);
-        fixture.ctx.push_op(duplicate_block, resumed.op_ref());
-        let resumed_value = resumed.result(&fixture.ctx);
-        let yielded = r#yield(&mut fixture.ctx, loc, resumed_value);
-        fixture.ctx.push_op(duplicate_block, yielded.op_ref());
-        let duplicate_body = region(&mut fixture.ctx, loc, duplicate_block);
-        let declaration = fixture.declarations[0].clone();
-        let duplicate = handler(
-            &mut fixture.ctx,
-            loc,
-            declaration.ability_ref,
-            declaration.op_name,
-            declaration.kind,
-            declaration.result_type,
-            duplicate_body,
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %input = arith.const {value = 0} : core.i32
+    %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+    tribute_control.yield %performed
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^first(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
+    }
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^duplicate(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
+    }
+  }
+}"#,
         );
-        fixture.ctx.push_op(handlers_block, duplicate.op_ref());
-
-        fixture.declarations[0].kind = Symbol::new("fn");
-        let result = validate(&fixture.ctx, fixture.module, &fixture.declarations);
+        let handler = control_ops(&ctx, module, "handler")[0];
+        let handler_data = ctx.op(handler);
+        // The declaration table is semantic verifier input, not textual IR.
+        let declarations = [OperationDeclaration::new(
+            handler_data.attributes.get_type("ability_ref").unwrap(),
+            handler_data.attributes.get_symbol("op_name").unwrap(),
+            Symbol::new("fn"),
+            [handler_data
+                .attributes
+                .get_type("operation_result_type")
+                .unwrap()],
+            handler_data
+                .attributes
+                .get_type("operation_result_type")
+                .unwrap(),
+        )];
+        let result = validate(&ctx, module, &declarations);
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -3555,66 +3426,66 @@ mod tests {
 
     #[test]
     fn whole_ir_rejects_multiple_resume_token_paths() {
-        let mut fixture = valid_fixture();
-        let block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let argument = fixture.ctx.block_arg(block, 0);
-        let duplicate_resume = resume(&mut fixture.ctx, loc, fixture.token, argument, i32_ty);
-        fixture
-            .ctx
-            .insert_op_before(block, fixture.handler_yield, duplicate_resume.op_ref());
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %first = tribute_control.resume %token, %argument : core.i32
+        %second = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %first
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(messages(&result).contains("more than one tribute_control.resume"));
     }
 
     #[test]
     fn whole_ir_rejects_branching_and_escape_at_each_affine_carrier() {
-        let mut fixture = valid_fixture();
-        replace_direct_resume_with_transitive_carrier(&mut fixture);
-        let handler_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let carrier_ty =
-            callable(&mut fixture.ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
-        let wrapper = fixture
-            .ctx
-            .block(handler_block)
-            .ops
-            .iter()
-            .copied()
-            .filter(|op| is_control_op(&fixture.ctx, *op, "lambda"))
-            .last()
-            .expect("transitive wrapper lambda");
-        let wrapper_value = fixture.ctx.op_result(wrapper, 0);
-
-        let escaping_call = call(
-            &mut fixture.ctx,
-            loc,
-            [wrapper_value],
-            i32_ty,
-            Symbol::new("id"),
-        );
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, escaping_call.op_ref());
-
-        for _ in 0..2 {
-            let body_block = block(&mut fixture.ctx, loc, &[]);
-            let invocation = call_indirect(&mut fixture.ctx, loc, wrapper_value, [], i32_ty);
-            fixture.ctx.push_op(body_block, invocation.op_ref());
-            let invocation_result = invocation.result(&fixture.ctx);
-            let returned = r#return(&mut fixture.ctx, loc, invocation_result);
-            fixture.ctx.push_op(body_block, returned.op_ref());
-            let body = region(&mut fixture.ctx, loc, body_block);
-            let capture = lambda(&mut fixture.ctx, loc, [wrapper_value], carrier_ty, body);
-            fixture
-                .ctx
-                .insert_op_before(handler_block, fixture.handler_yield, capture.op_ref());
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.return %resumed
         }
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        %wrapper = tribute_control.lambda() -> core.i32 convention(direct) captures [%inner] {
+          %called = tribute_control.call_indirect %inner : core.i32
+          tribute_control.return %called
+        }
+        %escape = tribute_control.call %wrapper {callee = @id} : core.i32
+        %first_capture = tribute_control.lambda() -> core.i32 convention(direct) captures [%wrapper] {
+          %called = tribute_control.call_indirect %wrapper : core.i32
+          tribute_control.return %called
+        }
+        %second_capture = tribute_control.lambda() -> core.i32 convention(direct) captures [%wrapper] {
+          %called = tribute_control.call_indirect %wrapper : core.i32
+          tribute_control.return %called
+        }
+        %first = tribute_control.call_indirect %wrapper : core.i32
+        %second = tribute_control.call_indirect %wrapper : core.i32
+        tribute_control.yield %first
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert_diagnostics(
             &result,
             &[
@@ -3627,35 +3498,31 @@ mod tests {
 
     #[test]
     fn whole_ir_rejects_sibling_token_capture_paths() {
-        let mut fixture = valid_fixture();
-        let handler_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let carrier_ty =
-            callable(&mut fixture.ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
-        let operation_arg = fixture.ctx.block_arg(handler_block, 0);
-
-        for _ in 0..2 {
-            let body_block = block(&mut fixture.ctx, loc, &[]);
-            let resumed = resume(&mut fixture.ctx, loc, fixture.token, operation_arg, i32_ty);
-            fixture.ctx.push_op(body_block, resumed.op_ref());
-            let resumed_result = resumed.result(&fixture.ctx);
-            let returned = r#return(&mut fixture.ctx, loc, resumed_result);
-            fixture.ctx.push_op(body_block, returned.op_ref());
-            let body = region(&mut fixture.ctx, loc, body_block);
-            let capture = lambda(
-                &mut fixture.ctx,
-                loc,
-                [fixture.token, operation_arg],
-                carrier_ty,
-                body,
-            );
-            fixture
-                .ctx
-                .insert_op_before(handler_block, fixture.handler_yield, capture.op_ref());
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %first = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.return %resumed
         }
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        %second = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.return %resumed
+        }
+        tribute_control.yield %argument
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert_diagnostics(
             &result,
             &[
@@ -3667,22 +3534,45 @@ mod tests {
 
     #[test]
     fn validators_reject_resume_token_escape_and_never_clause_capability() {
-        let mut escaped = valid_fixture();
-        escaped
-            .ctx
-            .set_op_operand(escaped.handler_yield, 0, escaped.token);
-        let local = validate_local(&escaped.ctx, escaped.module);
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        tribute_control.yield %token
+    }
+  }
+}"#,
+        );
+        let local = validate_local(&ctx, module);
         assert!(messages(&local).contains("must not yield a resume token"));
-        let whole = validate_whole_ir(&escaped.ctx, escaped.module, &escaped.declarations);
+        let whole = validate_whole_ir(&ctx, module, &[]);
         assert!(messages(&whole).contains("forbidden use"));
 
-        let mut never = valid_fixture();
-        let never_ty = simple_type(&mut never.ctx, "core", "never");
-        never.ctx.op_mut(never.handler).attributes.insert(
-            Symbol::new("operation_result_type"),
-            Attribute::Type(never_ty),
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.never} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %resumed = tribute_control.resume %token, %argument : core.i32
+        tribute_control.yield %resumed
+    }
+  }
+}"#,
         );
-        let result = validate_local(&never.ctx, never.module);
+        let result = validate_local(&ctx, module);
         let messages = messages(&result);
         assert!(messages.contains("must not receive a resume token"));
         assert!(messages.contains("must not contain tribute_control.resume"));
@@ -3690,13 +3580,13 @@ mod tests {
 
     #[test]
     fn resume_token_components_are_checked_recursively() {
-        let mut ctx = IrContext::new();
-        let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let physical = core::func(&mut ctx, i32_ty, []).as_type_ref();
-        let wrapper = core::tuple(&mut ctx, [physical]).as_type_ref();
-        let _token = resume_token(&mut ctx, wrapper, i32_ty);
-        let module = module(&mut ctx, loc, &[]);
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !physical = core.func(core.i32)
+  !wrapper = core.tuple(!physical)
+  !token = tribute_control.resume_token(!wrapper, core.i32)
+}"#,
+        );
 
         let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("is not a resolved logical value type"));
@@ -3704,29 +3594,19 @@ mod tests {
 
     #[test]
     fn validator_reports_malformed_resume_token_uses_without_panicking() {
-        let mut fixture = valid_fixture();
-        let i32_ty = fixture.declarations[0].result_type;
-        let malformed = fixture.ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("resume_token"))
-                .param(i32_ty)
-                .build(),
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !malformed = tribute_control.resume_token(core.i32)
+  tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+    ^clause(%value: core.i32, %token: !malformed):
+      %resumed = tribute_control.resume %token, %value : core.i32
+      tribute_control.yield %resumed
+  }
+}"#,
         );
-        let handler_body = fixture.ctx.op(fixture.handler).regions[0];
-        let handler_block = fixture.ctx.region(handler_body).blocks[0];
-        let token_index = u32::try_from(fixture.ctx.block_args(handler_block).len() - 1).unwrap();
-        fixture
-            .ctx
-            .set_block_arg_type(handler_block, token_index, malformed);
-        let resume = fixture
-            .ctx
-            .block(handler_block)
-            .ops
-            .iter()
-            .copied()
-            .find(|op| is_control_op(&fixture.ctx, *op, "resume"))
-            .expect("fixture resume");
-
-        let result = validate_local(&fixture.ctx, fixture.module);
+        let handler = control_op(&ctx, module, "handler");
+        let resume = control_op(&ctx, module, "resume");
+        let result = validate_local(&ctx, module);
         assert!(
             result.errors.iter().any(|error| {
                 error.op.is_none()
@@ -3738,7 +3618,7 @@ mod tests {
         );
         assert!(
             result.errors.iter().any(|error| {
-                error.op == Some(fixture.handler)
+                error.op == Some(handler)
                     && error
                         .message
                         .contains("requires a final resume_token block argument")
@@ -3756,80 +3636,35 @@ mod tests {
         );
     }
 
-    fn replace_direct_resume_with_transitive_carrier(fixture: &mut ValidFixture) {
-        let handler_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
-        let loc = location(&mut fixture.ctx);
-        let i32_ty = fixture.declarations[0].result_type;
-        let operation_arg = fixture.ctx.block_arg(handler_block, 0);
-        let original_value = fixture.ctx.op_operands(fixture.handler_yield)[0];
-        let trunk_ir::ValueDef::OpResult(original_resume, _) =
-            fixture.ctx.value_def(original_value)
-        else {
-            panic!("fixture yield should consume resume result");
-        };
-
-        let carrier_ty =
-            callable(&mut fixture.ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
-        let inner_block = block(&mut fixture.ctx, loc, &[]);
-        let resumed = resume(&mut fixture.ctx, loc, fixture.token, operation_arg, i32_ty);
-        fixture.ctx.push_op(inner_block, resumed.op_ref());
-        let resumed_value = resumed.result(&fixture.ctx);
-        let inner_return = r#return(&mut fixture.ctx, loc, resumed_value);
-        fixture.ctx.push_op(inner_block, inner_return.op_ref());
-        let inner_body = region(&mut fixture.ctx, loc, inner_block);
-        let inner = lambda(
-            &mut fixture.ctx,
-            loc,
-            [fixture.token, operation_arg],
-            carrier_ty,
-            inner_body,
-        );
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, inner.op_ref());
-        let inner_value = inner.result(&fixture.ctx);
-
-        let wrapper_block = block(&mut fixture.ctx, loc, &[]);
-        let inner_call = call_indirect(&mut fixture.ctx, loc, inner_value, [], i32_ty);
-        fixture.ctx.push_op(wrapper_block, inner_call.op_ref());
-        let inner_call_value = inner_call.result(&fixture.ctx);
-        let wrapper_return = r#return(&mut fixture.ctx, loc, inner_call_value);
-        fixture.ctx.push_op(wrapper_block, wrapper_return.op_ref());
-        let wrapper_body = region(&mut fixture.ctx, loc, wrapper_block);
-        let wrapper = lambda(
-            &mut fixture.ctx,
-            loc,
-            [inner_value],
-            carrier_ty,
-            wrapper_body,
-        );
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, wrapper.op_ref());
-        let wrapper_value = wrapper.result(&fixture.ctx);
-
-        let first = call_indirect(&mut fixture.ctx, loc, wrapper_value, [], i32_ty);
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, first.op_ref());
-        let second = call_indirect(&mut fixture.ctx, loc, wrapper_value, [], i32_ty);
-        fixture
-            .ctx
-            .insert_op_before(handler_block, fixture.handler_yield, second.op_ref());
-        let first_value = first.result(&fixture.ctx);
-        fixture
-            .ctx
-            .set_op_operand(fixture.handler_yield, 0, first_value);
-        fixture.ctx.detach_op(original_resume);
-        fixture.ctx.remove_op(original_resume);
-    }
-
     #[test]
     fn whole_ir_rejects_branch_after_transitive_lambda_transfer() {
-        let mut fixture = valid_fixture();
-        replace_direct_resume_with_transitive_carrier(&mut fixture);
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %inner = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.return %resumed
+        }
+        %wrapper = tribute_control.lambda() -> core.i32 convention(direct) captures [%inner] {
+          %called = tribute_control.call_indirect %inner : core.i32
+          tribute_control.return %called
+        }
+        %first = tribute_control.call_indirect %wrapper : core.i32
+        %second = tribute_control.call_indirect %wrapper : core.i32
+        tribute_control.yield %first
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("multiple static indirect-call uses"),
             "{result}"
@@ -3838,79 +3673,35 @@ mod tests {
 
     #[test]
     fn whole_ir_rejects_outer_token_resumed_in_nested_handler() {
-        let mut fixture = valid_fixture();
-        let outer_block = fixture.ctx.op(fixture.handler_yield).parent_block.unwrap();
-        let loc = location(&mut fixture.ctx);
-        let declaration = fixture.declarations[0].clone();
-        let i32_ty = declaration.result_type;
-        let operation_arg = fixture.ctx.block_arg(outer_block, 0);
-        let original_value = fixture.ctx.op_operands(fixture.handler_yield)[0];
-        let trunk_ir::ValueDef::OpResult(original_resume, _) =
-            fixture.ctx.value_def(original_value)
-        else {
-            panic!("fixture yield should consume resume result");
-        };
-
-        let nested_body_block = block(&mut fixture.ctx, loc, &[]);
-        let nested_body_yield = r#yield(&mut fixture.ctx, loc, operation_arg);
-        fixture
-            .ctx
-            .push_op(nested_body_block, nested_body_yield.op_ref());
-        let nested_body = region(&mut fixture.ctx, loc, nested_body_block);
-
-        let nested_completion_block = block(&mut fixture.ctx, loc, &[i32_ty]);
-        let nested_completed = fixture.ctx.block_arg(nested_completion_block, 0);
-        let nested_completion_yield = r#yield(&mut fixture.ctx, loc, nested_completed);
-        fixture
-            .ctx
-            .push_op(nested_completion_block, nested_completion_yield.op_ref());
-        let nested_completion = region(&mut fixture.ctx, loc, nested_completion_block);
-
-        let inner_handler_block = block(&mut fixture.ctx, loc, &[i32_ty]);
-        let inner_arg = fixture.ctx.block_arg(inner_handler_block, 0);
-        let crossed_resume = resume(&mut fixture.ctx, loc, fixture.token, inner_arg, i32_ty);
-        fixture
-            .ctx
-            .push_op(inner_handler_block, crossed_resume.op_ref());
-        let crossed_value = crossed_resume.result(&fixture.ctx);
-        let inner_yield = r#yield(&mut fixture.ctx, loc, crossed_value);
-        fixture
-            .ctx
-            .push_op(inner_handler_block, inner_yield.op_ref());
-        let inner_handler_body = region(&mut fixture.ctx, loc, inner_handler_block);
-        let inner_handler = handler(
-            &mut fixture.ctx,
-            loc,
-            declaration.ability_ref,
-            declaration.op_name,
-            Symbol::new("fn"),
-            i32_ty,
-            inner_handler_body,
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %outer = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^outer_clause(%argument: core.i32, %outer_token: tribute_control.resume_token(core.i32, core.i32)):
+        %nested = tribute_control.handle : core.i32 {
+          tribute_control.yield %argument
+        } {
+          ^nested_completion(%value: core.i32):
+            tribute_control.yield %value
+        } {
+          tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @fn, op_name = @get, operation_result_type = core.i32} {
+            ^inner_clause(%inner_argument: core.i32):
+              %crossed = tribute_control.resume %outer_token, %inner_argument : core.i32
+              tribute_control.yield %crossed
+          }
+        }
+        tribute_control.yield %nested
+    }
+  }
+}"#,
         );
-        let nested_handlers_block = block(&mut fixture.ctx, loc, &[]);
-        fixture
-            .ctx
-            .push_op(nested_handlers_block, inner_handler.op_ref());
-        let nested_handlers = region(&mut fixture.ctx, loc, nested_handlers_block);
-        let nested_handle = handle(
-            &mut fixture.ctx,
-            loc,
-            i32_ty,
-            nested_body,
-            nested_completion,
-            nested_handlers,
-        );
-        fixture
-            .ctx
-            .insert_op_before(outer_block, fixture.handler_yield, nested_handle.op_ref());
-        let nested_result = nested_handle.result(&fixture.ctx);
-        fixture
-            .ctx
-            .set_op_operand(fixture.handler_yield, 0, nested_result);
-        fixture.ctx.detach_op(original_resume);
-        fixture.ctx.remove_op(original_resume);
-
-        let result = validate_whole_ir(&fixture.ctx, fixture.module, &fixture.declarations);
+        let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
             messages(&result).contains("crosses into a different handler"),
             "{result}"
@@ -3919,18 +3710,14 @@ mod tests {
 
     #[test]
     fn local_validator_rejects_external_reference_in_isolated_func() {
-        let mut ctx = IrContext::new();
-        let loc = location(&mut ctx);
-        let i32_ty = simple_type(&mut ctx, "core", "i32");
-        let callable_ty = callable(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
-        let constant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let entry = block(&mut ctx, loc, &[]);
-        let external = constant.result(&ctx);
-        let ret = r#return(&mut ctx, loc, external);
-        ctx.push_op(entry, ret.op_ref());
-        let body = region(&mut ctx, loc, entry);
-        let invalid = func(&mut ctx, loc, Symbol::new("invalid"), callable_ty, body);
-        let module = module(&mut ctx, loc, &[constant.op_ref(), invalid.op_ref()]);
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %external = arith.const {value = 1} : core.i32
+  tribute_control.func @invalid() -> core.i32 convention(direct) {
+    tribute_control.return %external
+  }
+}"#,
+        );
 
         let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("references external value"));
