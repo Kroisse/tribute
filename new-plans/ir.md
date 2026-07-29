@@ -21,7 +21,7 @@ Infrastructure
 High-level
   tribute   unresolved or source-level frontend constructs
   tribute_control
-            target-independent direct-style effect control
+            Tribute-specific source-logical callables and direct-style control
   ability   evidence and handler dispatch semantics
   effect    target-independent effect ABI
   closure   closure construction and decomposition
@@ -48,24 +48,26 @@ Partial conversion may leave unknown operations for later passes. Full
 conversion boundaries, such as backend-ready native IR, must reject unknown
 operations.
 
-직접형 control 마이그레이션은 다음과 같은 이름의 경계를 사용한다:
+직접형 제어 마이그레이션은 다음과 같은 이름의 경계를 사용한다:
 
 | 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
-| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 마이그레이션 pass 조합 중에는 partial | `tribute_control.*`은 `core`, `func`, `scf`, `arith`, `adt`, `list`, `closure`, `tribute_rt`, `tribute_io`와 공존할 수 있다. 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
-| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect 전체가 illegal이다. 기존 `ability.perform`, `ability.call`, handler/evidence operation, `effect.*`, `closure.*`, 일반 dialect는 이후 shared pass를 위해 공존할 수 있다. |
+| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
+| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
 | `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
 | `tribute-backend-ready-wasm` | 기존 emission-ready 검사 전에 high-level operation을 partial 방식으로 거부 | backend-ready Wasm IR 전에 `tribute_control`, `ability`, `effect`를 명시적으로 illegal로 지정하며, emission 전에는 `wasm_gc`도 illegal이다. |
 
 현재 API에서는 `ConversionTarget::new().illegal_dialect("tribute_control")`와
 partial verification을 조합해 post-CPS helper를 구현할 수 있다. Full mode에서는
 unknown operation이 legal하지 않으므로 frontend 적합성 target과 backend full
-target이 legal dialect와 operation을 열거해야 한다. `func.func`,
-`closure.lambda` 또는 다른 region 소유 container를 recursively legal로
-표시해서는 안 된다. 그렇게 하면 nested region의 illegal control operation이
-가려진다. Generic `trunk-ir`의 Cranelift 경계는 Tribute에 독립적으로 유지한다.
-이를 호출하기 전에 Tribute 전용 high-level dialect를 명시적으로 거부하는 책임은
-Tribute pipeline에 있다.
+target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
+operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
+`core.func`/`closure.closure`와 post-CPS의 `tribute_control.callable`/
+`resume_token`을 별도로 거부한다. 이 walk는 operand/result, block argument,
+type attribute와 nested type parameter를 재귀적으로 검사한다. Region 소유
+operation을 recursively legal로 표시해서 nested illegal operation을 가려서는
+안 된다. Generic `trunk-ir`의 Cranelift 경계는 Tribute에 독립적으로 유지하며,
+그 전에 Tribute pipeline이 high-level dialect를 거부한다.
 
 하나의 rewrite 도중에는 source `tribute_control.*`과 새
 `ability.*`/`effect.*` 결과가 일시적으로 공존할 수 있다. 이는 partial
@@ -111,7 +113,7 @@ resolution, type checking, TDNR, and AST-to-IR lowering.
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control"></a>
 
-### 직접형 제어
+### 직접형 호출 대상과 제어
 
 `tribute_control.*`은 typed frontend lowering과 shared CPS conversion 사이의
 target-independent 직접형 경계다. Dialect identifier는 정확히
@@ -119,32 +121,44 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 `<dialect>.<operation>` 쌍으로 parse하므로 dialect identifier 안에 점을 넣는
 등 separator를 하나 더 사용하는 표기는 invalid이다.
 
-이 dialect는 CPS pass가 변환해야 하는 control construct만 모델링한다. ANF는
-input invariant이지 dialect의 정체성이 아니다. 산술, 일반 direct/indirect call,
-ADT/list/tuple/record 구성, closure, structured selection은 기존 dialect에
-남는다. 특히 `tribute_control.invoke`는 없다. `func.call`,
-`func.call_indirect`, `closure.lambda`가 이미 callable type과 shared
-conversion에 필요한 `Direct < EvidenceDirect < Cps` convention metadata를
-운반한다. 새 invocation operation을 추가하면 control fact를 더하지 못한 채
-기존 operation만 중복한다.
+이 dialect는 CPS legalization 전의 Tribute 고유 callable과 effect-control
+의미를 함께 소유한다. ANF는 input invariant이지 dialect의 정체성이 아니다.
+산술, ADT/list/tuple/record 구성과 structured selection은 기존 dialect에 남지만,
+`func.*`, `closure.*`, `core.func`는 physical 표현이므로 이 경계에 나타나지
+않는다.
 
-pre-CPS 경계에서 모든 `func.func`, `closure.lambda`, `func.call`,
-`func.call_indirect` signature는 convention과 무관하게 source-logical 형상을
-유지한다. Source parameter를 받고 source result를 내며 hidden evidence나
-`done_k` operand가 없다. Definition/lambda와 해당 callable type에는 convention
-metadata가 필수다. Shared conversion은 definition과 모든 direct/indirect call
-site를 기존 `CallableAbi`에 맞춰 함께 rewrite한다. 전체 규칙은
+논리 callable type은
+`tribute_control.callable(Result, Params...) {tribute.calling_convention = N}`이다.
+`Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
+`EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. 이 metadata는 typechecking
+결과를 복사한 것으로 body에서 추론하지 않는다. Legalization은 이를 기존
+`CallableAbi`와 physical `core.func`, `closure.closure` 및
+`tribute.calling_convention` operation attribute로 바꾼다. Type verifier는
+result 하나와 parameter 0개 이상, convention domain, 모든 component type의
+resolution을 검사하며 physical `core.func`나 `closure.closure`를 component로
+허용하지 않는다. 전체 규칙은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에 있다.
 
 최소 operation 집합은 다음과 같다:
 
 | Operation | 용도 |
 | ---- | ---- |
+| `tribute_control.func` | named source callable의 선언 또는 정의 |
+| `tribute_control.lambda` | capture를 가진 source lambda와 callable value 생성 |
+| `tribute_control.func_ref` | named function을 first-class callable value로 참조 |
+| `tribute_control.call` | named source callable 직접 호출 |
+| `tribute_control.call_indirect` | source callable value 간접 호출 |
+| `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
 | `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
 | `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
+
+`func.tail_call`, `func.constant`, `func.unreachable`의 logical 복제는 없다. Tail
+형상은 legalization 결과이고 named function value는 `func_ref`가 표현한다.
+`func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은
+reject adapter 같은 compiler helper 안에서만 legalization 뒤에 사용한다.
 
 이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
 소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는
@@ -155,6 +169,104 @@ canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 `resume_token`도 노출하지 않는다. Verifier가 erased type을 추측하지 않고
 non-resumptive case를 식별해야 하므로 현재 legacy frontend의 `Never`용 `anyref`
 placeholder는 이 새 경계에서 valid하지 않다.
+
+#### `tribute_control.func`
+
+```text
+tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
+```
+
+- **형상:** 피연산자와 결과는 없다. `sym_name: Symbol`과
+  `type: tribute_control.callable(Result, Params...)`가 필수다. 선언은 region이
+  없고 정의는 source parameter만 block argument로 받는 single-block `body`
+  하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
+  attribute는 보존한다.
+- **의미:** source named function의 logical signature와 typechecking이 선택한
+  convention을 정의하며 hidden evidence, environment, `done_k`를 포함하지 않는다.
+- **검증:** local verifier는 attribute, region, block argument, return type을
+  callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness를 검사한다.
+- **소유권과 값 흐름:** body는 isolated-from-above다. Source local과 parameter만
+  block argument로 들어온다.
+- **위치:** source function 또는 extern declaration 전체 span이다.
+
+#### `tribute_control.lambda`
+
+```text
+%f = tribute_control.lambda [%capture0, ...] : !Callable { ... }
+```
+
+- **형상:** 피연산자는 typechecking된 capture를 source 순서로 나열한다. 결과는
+  `tribute_control.callable` 하나이고 필수 attribute는 없다. Single-block body는
+  source parameter만 block argument로 받으며 `tribute_control.return`으로 끝난다.
+- **의미:** source lambda를 만들며 body는 lexical capture와 parameter를 사용한다.
+- **검증:** local verifier는 result signature, block argument, return type을
+  맞춘다. Whole-IR verifier는 body의 외부 SSA reference와 capture 집합이 정확히
+  일치하는지 검사한다.
+- **소유권과 값 흐름:** capture는 일반 SSA use이며 다른 hidden operand는 없다.
+- **위치:** source lambda 전체 span이다.
+
+#### `tribute_control.func_ref`
+
+```text
+%f = tribute_control.func_ref {func_ref = @id} : !Callable
+```
+
+- **형상:** 피연산자와 region은 없고 terminator가 아니다. `func_ref: Symbol`이
+  필수이며 결과는 `tribute_control.callable` 하나다.
+- **의미:** named function을 first-class source value로 만든다. Source가 named
+  function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
+  같은 source signature이며 convention은 대상 worker와 같거나 더 강할 수 있다.
+- **검증:** local verifier는 attribute와 result 형상을 검사한다. Whole-IR
+  verifier는 symbol resolution, source signature 일치와 convention 순서를
+  검사한다.
+- **소유권과 값 흐름:** 결과는 일반 SSA value다.
+- **위치:** named function을 값으로 사용한 source reference span이다.
+
+#### `tribute_control.call`
+
+```text
+%result = tribute_control.call %arg0, ... {callee = @f} : Result
+```
+
+- **형상:** declaration 순서의 source argument, source-logical result 하나,
+  `callee: Symbol`을 가지며 region이 없는 non-terminator다.
+- **의미:** named source callable을 직접 호출한다.
+- **검증:** local verifier는 attribute와 resolved operand/result를 검사한다.
+  Whole-IR verifier는 callee `tribute_control.func`의 arity/type을 맞춘다.
+- **소유권과 값 흐름:** argument/result는 일반 SSA value이고 hidden operand는
+  없다.
+- **위치:** callee와 argument를 포함한 source call span이다.
+
+#### `tribute_control.call_indirect`
+
+```text
+%result = tribute_control.call_indirect %callee, %arg0, ... : Result
+```
+
+- **형상:** `tribute_control.callable` callee, source argument, callee type의
+  source-logical result 하나를 가지며 attribute/region이 없는 non-terminator다.
+- **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
+- **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
+- **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
+  evidence, `done_k`는 없다.
+- **위치:** callee와 argument를 포함한 source indirect-call span이다.
+
+#### `tribute_control.return`
+
+```text
+tribute_control.return %value
+```
+
+- **형상:** source-logical result 하나를 받고 결과/attribute/region은 없다.
+  `tribute_control.func` 또는 `lambda` body의 terminator이며 다른 위치에서는
+  invalid이다.
+- **의미:** enclosing callable의 logical result를 반환한다.
+- **지역 검증:** enclosing callable result와 operand type을 맞춘다.
+- **소유권과 값 흐름:** 일반 SSA value를 소비한다.
+- **위치:** source return 또는 implicit body-result expression span이다.
+
+Callable operation의 physical lowering은
+[cps-effects.md](cps-effects.md#pre-cps-callable-shape)에만 정의한다.
 
 #### `tribute_control.perform`
 
@@ -499,7 +611,7 @@ source
   -> name resolution
   -> type checking
   -> TDNR
-  -> AST-to-IR (source-logical callable + tribute_control IR)
+  -> AST-to-IR (tribute_control callable/control + ordinary value IR)
   -> shared CPS legalization
   -> shared lowering and optimization
   -> Wasm or native lowering
@@ -514,8 +626,8 @@ Important stage invariants:
 | Resolution | Names, constructors, and variable references are resolved |
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
-| AST-to-IR | Source-logical callable signature, 검증된 `tribute_control` 구조, valid SSA use chain |
-| Shared CPS legalization | Callable signature과 모든 call site가 physical `CallableAbi`를 사용하며 `tribute_control.*`이 남지 않음 |
+| AST-to-IR | `tribute_control.callable`과 callable/control operation, valid SSA use chain |
+| Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
 | Backend lowering | Backend-ready target verification succeeds and no `effect.*` operations remain |

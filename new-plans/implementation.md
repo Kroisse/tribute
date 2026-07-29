@@ -56,40 +56,39 @@ tribute        -> tribute-front + tribute-passes
 `tribute-front`는 `tribute-passes`에 의존하지 않는다. 각 계층의 책임은 다음과
 같다:
 
-- `tribute-front`는 source-logical callable signature를 유지하고, 모든 `fn`/`op`
-  invocation을 typecheck된 `operation_kind = @fn | @op`를 가진
-  `tribute_control.perform`으로 emit한다. Dispatch 전략이나 continuation
-  representation은 선택하지 않는다.
-- `tribute-passes`는 #823의 `CallableAbi` signature conversion, kind-directed
-  `perform` lowering, region/suffix conversion, post-CPS legality를 소유한다.
+- `tribute-front`는 [논리 callable/control 계약](ir.md#direct-style-control)을
+  emit하고 `func.*`, `closure.*`, `core.func` 또는 dispatch representation을
+  만들지 않는다.
+- `tribute-passes`는
+  [atomic callable/control conversion](cps-effects.md#pre-cps-callable-shape)과
+  post-CPS legality를 소유한다.
 - Root `tribute` crate는 frontend emission과 shared conversion을 조합한다. Root
   `main`의 external Direct/EvidenceDirect ABI를 유지하면서 internal terminal
   continuation과 empty/inserted evidence를 구성하는 책임도 이 계층과 #823에 있다.
 
 검증 책임은 구현 계층과 분리한다:
 
-- `tribute-ir`는 `tribute_control` typed wrapper, parser/printer round trip,
-  operation-local verifier를 소유한다. 현재 TrunkIR에는 dialect callback registry가
-  없으므로 #822가 Tribute 전용 validator를 노출하고 frontend 경계가 generic
-  SSA/use-chain validation과 함께 호출한다.
-- Containing `tribute_control.handle` verifier는 handler placement, uniqueness,
-  region 형상, block argument, terminator, type agreement를 검사한다.
-- Whole-IR verifier는 SSA visibility와 `resume_token`의 single static ownership
-  path를 검사한다. Closure capture 뒤의 동적 재호출은 증명할 수 없으므로
-  converted resumption이 runtime one-shot state로 두 번째 호출을 거부하거나
-  trap한다.
+- `tribute-ir`는 dialect type/operation, parser/printer, local verifier와
+  Tribute-specific whole-IR verifier를 소유한다. 현재 TrunkIR에는 dialect
+  callback registry가 없으므로 #822가 validator를 노출하고 frontend 경계가
+  generic SSA/use-chain validation과 함께 호출한다. 세부 검증 계약은
+  [ir.md](ir.md#direct-style-control)를 따른다.
+- Whole-IR verifier는 static affine path를, converted resumption runtime은
+  closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
 - `tribute-passes`와 backend pipeline은 각각 post-CPS 및 backend-ready target을
-  검증한다. 성공한 경계에는 residual `tribute_control.*`이 없고 backend-ready
-  경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
+  검증한다. 성공한 경계에는 residual `tribute_control` operation/type이 없고
+  backend-ready 경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
 
 구현 순서는 다음과 같다:
 
-1. #822가 `tribute-ir`에 dialect와 local verifier를 구현한다.
-2. #823이 `tribute-passes`에 conversion과 legality를 구현한다.
-3. #824가 `tribute-front`를 직접형 emission으로 전환한다.
+1. #822가 `tribute-ir`에 callable/control type과 operation, verifier를 구현한다.
+2. #823이 `tribute-passes`에 atomic callable/control conversion과 legality를
+   구현한다.
+3. #824가 `tribute-front`를 `tribute_control` callable/control emission으로
+   전환한다.
 4. #825가 root pipeline에 conversion과 backend residual 검사를 조합한다.
-5. #826이 migrated coverage를 확인한 뒤 frontend-owned CPS normalization과
-   continuation 구성, 중복 compatibility lowering을 제거한다.
+5. #826이 migrated coverage를 확인한 뒤 frontend-owned physical callable ABI,
+   CPS normalization과 continuation 구성, 중복 compatibility lowering을 제거한다.
 
 Issue #823과 #824의 준비 작업은 #822 뒤에 병행할 수 있지만, 두 계약이 합의되고 #825가
 조합하기 전에는 새 경계가 live라고 주장할 수 없다. Partial rewrite 내부의
@@ -805,10 +804,10 @@ WASM:   → lower_to_wasm [includes evidence_to_wasm] → emit_wasm
 Native: → evidence_to_native → lower_to_clif → emit_native
 ```
 
-계획한 직접형 target은 continuation-dependent closure/effect lowering 전에 검증된
-`tribute_control` emission과 shared CPS legalization을 삽입한다. #823과 #824가
-합의한 뒤 정확한 pipeline splice는 #825가 소유한다. 이 문서는 해당 splice가
-이미 구현되었다고 주장하지 않는다.
+계획한 직접형 target은 physical callable/closure/effect lowering 전에 검증된
+`tribute_control` callable/control emission과 shared CPS legalization을 삽입한다.
+Issue #823과 #824가 합의한 뒤 정확한 pipeline splice는 #825가 소유한다. 이 문서는 해당
+splice가 이미 구현되었다고 주장하지 않는다.
 
 ---
 
@@ -900,8 +899,8 @@ live pipeline이 아니다:
 ```text
 source
   -> parse / merge prelude / resolve / typecheck / TDNR
-  -> tribute-front emits verified tribute_control + ordinary TrunkIR
-  -> tribute-passes legalizes tribute_control to CPS
+  -> tribute-front emits verified tribute_control callable/control + ordinary value IR
+  -> tribute-passes atomically legalizes callable/control to physical CPS IR
   -> existing closure / ability / evidence / effect ABI passes
   -> canonicalize / DCE / resolve casts
   -> native or Wasm lowering
@@ -925,8 +924,8 @@ Migrated coverage가 #826의 frontend-owned CPS 구성 제거를 허용할 때�
 | | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
 | | `lower_closures_in_func` | closure.new | func.call_indirect + evidence arg | function-anchored |
 | | `tdnr` | x.method() | Type::method(x) | |
-| **직접형 제어 (계획)** | `ast_to_ir` | typed AST | typecheck된 operation kind를 갖는 검증된 `tribute_control` + 일반 IR | frontend, #824 계획 |
-| | `tribute_control_to_cps` | `tribute_control` + operation-kind/convention metadata | kind-directed ability/effect/closure CPS IR | shared, #823 계획 |
+| **직접형 제어 (계획)** | `ast_to_ir` | typed AST | 검증된 `tribute_control` callable/control + 일반 value IR | frontend, #824 계획 |
+| | `tribute_control_to_cps` | logical callable/control + typechecked metadata | atomic physical func/closure graph + kind-directed ability/effect CPS IR | shared, #823 계획 |
 | **Ability (현재 compatibility)** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
 | | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
 | | `resolve_evidence` | handler evidence setup | effect.extend | module-wide setup before function-local lowering |

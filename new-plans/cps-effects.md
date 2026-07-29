@@ -12,13 +12,13 @@ lowering은 현재 경로가 아니다.
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="direct-style-control-boundary"></a>
 
-## 직접형 제어 경계
+## 직접형 호출 대상과 제어 경계
 
 모든 ability operation invocation은 typechecking이 확정한
-`operation_kind = @fn | @op`를 가진 `tribute_control.perform`이다. 일반
-direct/indirect call은 기존 operation과 callable convention metadata를 사용한다.
-Operation kind는 source 의미이고 callable convention과 별개이므로 frontend나
-conversion이 body 형상에서 이를 추론하거나 재분류하지 않는다.
+`operation_kind = @fn | @op`를 가진 `tribute_control.perform`이다. 일반 callable도
+`tribute_control.func`, `lambda`, `func_ref`, `call`, `call_indirect`, `return`을
+사용한다. Operation kind와 callable convention은 typechecking 결과이며
+frontend나 conversion이 body 형상에서 추론하거나 재분류하지 않는다.
 
 ```text
 Direct < EvidenceDirect < Cps
@@ -29,34 +29,15 @@ Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌�
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
 
-### Pre-CPS 호출 대상 형상
+### CPS 변환 전 호출 대상 형상
 
-`tribute-control-pre-cps` 경계에서는 모든 convention이 source-logical callable
-signature를 사용한다:
+입력 형상은 [ir.md](ir.md#direct-style-control)의 operation/type 계약을 따른다.
+모든 callable은 exact `tribute.calling_convention` code 0/1/2를 가진 logical
+type과 source parameter/result만 사용하며 evidence, environment, `done_k`는
+아직 없다.
 
-- `func.func` entry block argument는 정확히 source parameter이며 result는 source
-  result다.
-- `closure.lambda` block argument와 `closure<func<...>>` result type도 같은
-  source-logical parameter와 result를 사용한다.
-- `func.call`과 `func.call_indirect`는 source argument만 전달하고 source
-  result를 만든다.
-- Definition, lambda, function/closure type, call site는 기존
-  `CallingConvention` metadata를 운반한다. Operand를 미리 삽입해서 convention을
-  encode하지 않는다.
-
-따라서 이 경계에서 `EvidenceDirect`와 `Cps`에는 hidden evidence parameter가
-없고 `Cps`에도 frontend가 만든 `done_k`가 없다. Typing/convention analysis가
-convention metadata를 이미 확정하며, `tribute-front`는 physical ABI를 구성하지
-않고 그 metadata를 보존한다.
-
-같은 경계에서 `tribute-front`는 모든 ability invocation을
-`tribute_control.perform`으로 emit하고 typecheck된 declaration kind를
-`operation_kind`에 복사한다. `ability.call`, `ability.perform`,
-`effect.dispatch_*`를 emit하거나, handler body에서 kind를 추론하거나, tail/CPS
-dispatch를 선택하지 않는다.
-
-Issue #823은 closure extraction 전에 definition과 일치하는 모든
-direct/indirect call site를 함께 signature-convert한다:
+Issue #823은 closure extraction 전에 전체 callable graph를 하나의 단위로
+변환한다:
 
 | Convention | #823 이후 physical parameter | 현재 physical result |
 | ---- | ---- | ---- |
@@ -69,14 +50,40 @@ Parameter 순서는 기존 `CallableAbi` 순서다. `Cps`의 `done_k`는 source 
 compatibility `anyref`를 유지할 수 있지만, 이는 영구 logical result나 #774의
 향후 `Never`/`Step` 정책이 아니다.
 
-Conversion은 TrunkIR의 `TypeConverter`와 signature-conversion 지원을 사용한다.
-변환 대상은 `func.func` entry argument, `core.func` type, closure type,
-`closure.lambda` entry, direct/indirect call site를 일관되게 rewrite한다. 현재
-evidence value를 `EvidenceDirect`와 `Cps` call에 전달한다. Compatibility
-representation에서 `Cps` body의 `func.return value`를
-`return done_k(value)`로 바꾸고, 직접형 control point와 structured-region
-yield를 동일한 body continuation으로 변환한다. Metadata와 callable type이
-불일치하는 call은 conversion failure이며 hidden operand를 추측할 이유가 아니다.
+Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref`,
+direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
+계획한 뒤 함께 rewrite한다:
+
+- `tribute_control.func`는 `func.func`와 physical `core.func`를 만든다.
+- `tribute_control.lambda`는 physical `closure.lambda`와
+  `closure.closure<core.func<...>>`를 만든다. 이 단계의 signature에는
+  `CallableAbi` hidden parameter가 있지만 environment는 없으며, 기존 closure
+  lowering이 environment를 interpose한다.
+- `tribute_control.func_ref`는 빈 environment의 `closure.new`와 env-bearing
+  adapter `func.func`를 만든다. Adapter는 result callable의 같거나 더 강한
+  convention을 사용하고 필요한 hidden operand와 source argument를 대상 physical
+  worker에 전달하므로 named function도 다른 closure와 같은 `call_indirect` ABI를
+  갖는다. 기존 closure lowering은 이 `closure.new`를 `func.constant`와 physical
+  closure struct로 바꾼다.
+- `tribute_control.call`과 `call_indirect`는 각각 physical `func.call`과
+  `func.call_indirect`가 된다. 현재 evidence와 `Cps` suffix continuation을
+  `CallableAbi` 순서로 삽입하고, indirect call의 environment는 후속 closure
+  lowering이 삽입한다.
+- `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
+  `Cps`에서는 `done_k(value)`를 호출하고 compatibility control result를
+  `func.return`한다.
+
+기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
+adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
+`EvidenceDirect`에서 `evidence, environment, source...`, `Cps`에서
+`evidence, environment, done_k, source...`다. `call_indirect`도 같은 순서로
+environment를 삽입한다.
+
+생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
+type의 convention을 기존 `tribute.calling_convention` attribute로 복사한다.
+Metadata/type/symbol 불일치는 conversion failure이며 hidden operand를 추측하지
+않는다. 현재 TrunkIR의 `TypeConverter`, function signature conversion, dialect
+builder를 재사용하되 `tribute_control` 전용 graph pattern은 #823이 구현한다.
 
 같은 #823 legalization에서 각 `tribute_control.perform`을 typecheck된
 `operation_kind`에 따라 변환한다. `@fn`은 suffix를 capture하지 않고 기존
@@ -84,9 +91,8 @@ yield를 동일한 body continuation으로 변환한다. Metadata와 callable ty
 `ability.perform`/CPS 경로를 만든다. 이 결정은 `CallableAbi`에 encode하지 않으며
 pass가 operation kind를 추론하거나 변경해서는 안 된다.
 
-별도 `tribute_control.invoke`는 필요하지 않다. Root `main` delimiter와 external
-ABI 조합 책임은 [implementation.md](implementation.md#직접형-제어-소유권)을
-따른다.
+Root `main` delimiter와 external ABI 조합 책임은
+[implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
 
 ### 논리적 CPS 적법화
 
@@ -95,10 +101,10 @@ Shared conversion은 실행 가능한 region 하나를
 logical continuation이며 선택된 backend carrier가 아니다. Conversion은
 operation을 왼쪽에서 오른쪽으로 소비한다:
 
-- 일반 direct operation은 기존 dialect에 남고 그 result는 남은 suffix로 흐른다.
-- `Cps` `func.call` 또는 `func.call_indirect`는 기존 convention metadata와 함께
-  변환된 callable type을 사용한다. Conversion은 `CallableAbi` 순서로 evidence와
-  suffix continuation을 공급한다.
+- 일반 value operation은 기존 dialect에 남고 그 result는 남은 suffix로 흐른다.
+- `tribute_control.call` 또는 `call_indirect`의 convention이 `Cps`이면 현재
+  suffix continuation을 공급한다. `Direct`와 `EvidenceDirect` call result는
+  일반 suffix로 흐른다.
 - `tribute_control.perform`은 검증된 `operation_kind`만으로 분기한다. `@fn`이면
   suffix를 capture하지 않고 기존 `ability.call`/`effect.dispatch_tail` 경로를
   만들며 반환된 operation result가 일반 suffix로 흐른다. `@op`이면 현재
@@ -150,18 +156,20 @@ sentinel, 임의의 `anyref`는 대체할 수 없으며 호출되면 trap한다.
 ### 적법화 경계
 
 `tribute-control-pre-cps` named boundary는 검증된 `tribute_control.*`과 일반
-high-level/mid-level dialect의 공존을 허용한다. Frontend 적합성 검사는 기존
-`ability.*`, `effect.*`, legacy CPS-dispatch operation을 모두 illegal로 만든다.
-Issue #823의 partial rewrite 도중에는 source operation과 lowered operation이
-일시적으로 공존할 수 있지만 이 상태는 named pre-CPS boundary가 아니다.
+value/structured dialect만 허용한다. Frontend 적합성 검사는 `func.*`,
+`closure.*`, `core.func`, `closure.closure`, 기존 `ability.*`, `effect.*`,
+legacy CPS-dispatch operation을 모두 거부한다. Issue #823의 partial rewrite
+도중에는 logical/physical operation이 일시적으로 공존할 수 있지만 이 상태는
+named pre-CPS boundary가 아니다.
 
 성공한 shared conversion은 defining rule이
 `illegal_dialect("tribute_control")`인 partial
-`tribute-control-post-cps` target을 검증한다. 남은 direct-control operation은
-source location에서 conversion failure가 된다. 이후 shared pass는
-`ability.*`, `effect.*`, `closure.*`를 계속 소비할 수 있다. Native와 Wasm의
-backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
-`effect.*`를 각각 독립적으로 거부하며 앞선 pass 실행 여부에만 의존하지 않는다.
+`tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
+`tribute_control` operation 또는 `callable`/`resume_token` type은 source
+location에서 conversion failure가 된다. 이 경계에는 일관된 physical
+`func.*`/`closure.*`/`core.func` graph와 lowered ability/effect operation만
+남는다. Native와 Wasm의 backend-ready Tribute boundary는 남은
+`tribute_control.*`, `ability.*`, `effect.*`를 각각 독립적으로 거부한다.
 
 논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 `done_k`의
 인자로 전달되고 함수와 continuation의 control result는 `Never`다. 아래 예시의
