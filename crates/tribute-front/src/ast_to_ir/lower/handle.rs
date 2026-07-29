@@ -3,11 +3,11 @@
 //! Lowers `handle` expressions using CPS-based effect handling:
 //! - Body is wrapped in a `closure.lambda` that returns an opaque compatibility
 //!   control answer through the `anyref` ABI
-//! - Handler dispatch uses `ability.handle_dispatch`
+//! - Handler dispatch uses the explicit `ability.legacy_handle_dispatch` shim
 //! - Continuation calls use `func.call_indirect` (not `ability.resume`)
 //!
-//! Ability operation calls are lowered to `ability.perform` with CPS
-//! continuations.
+//! Ability operation calls use the explicit legacy compatibility forms until
+//! the frontend/pipeline migration is complete.
 
 use std::collections::HashSet;
 
@@ -33,7 +33,7 @@ use super::control::{
     resume_into_current,
 };
 
-/// Lower a `fn` (tail-resumptive) ability operation call using `ability.call`.
+/// Lower a `fn` operation through the explicit legacy compatibility form.
 ///
 /// This does not create a continuation closure or use CPS. The result flows
 /// inline — no `func.return` is inserted, and subsequent code continues
@@ -52,8 +52,8 @@ pub(super) fn lower_ability_fn_call<'db>(
     // Pack multiple arguments into a tuple if needed (with boxing)
     let packed_args = super::expr::pack_ability_args(builder, location, args);
 
-    // Emit ability.call (direct call, no continuation)
-    let call_op = ability::call(
+    // Emit the legacy direct call (no continuation).
+    let call_op = ability::legacy_call(
         builder.ir,
         location,
         packed_args,
@@ -144,7 +144,7 @@ fn lower_handle_answer<'db, D: ControlDomain>(
     builder.ir.push_op(builder.block, owner_tag.op_ref());
 
     // 5. Emit ability.handle_dispatch.
-    let dispatch_op = ability::handle_dispatch(
+    let dispatch_op = ability::legacy_handle_dispatch(
         builder.ir,
         location,
         body_yr,

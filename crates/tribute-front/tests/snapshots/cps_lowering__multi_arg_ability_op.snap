@@ -11,7 +11,7 @@ core.module @test {
       %3 = core.unrealized_conversion_cast %1 : tribute_rt.anyref
       %4 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
       %5 = adt.struct_new %3, %4 {type = !__ability_args_tuple} : tribute_rt.anyref
-      %6 = ability.call %5 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref
+      %6 = ability.legacy_call %5 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref
       %7 = core.unrealized_conversion_cast %6 : core.nil
       func.return %7
   }

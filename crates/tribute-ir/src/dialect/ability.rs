@@ -34,7 +34,13 @@ mod ability {
     #[attr(ability_ref: Type, op_name: Symbol)]
     fn perform(continuation: (), #[rest] values: ()) -> result {}
 
-    /// Handler dispatch over a proven private CPS answer.
+    /// Legacy frontend form using the carrier pipeline's null-or-single-value
+    /// payload convention until the frontend/pipeline migration is complete.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn legacy_perform(continuation: (), #[rest] values: ()) -> result {}
+
+    /// Legacy carrier-based handler dispatch retained only for the production
+    /// frontend path until that path migrates to `tribute_control`.
     ///
     /// Runs the `Normal` path or a matching-owner `Escape` path and forwards
     /// a foreign `Escape` unchanged through the escape region.
@@ -61,10 +67,31 @@ mod ability {
     ///   body { ... handler arms ... }
     /// ```
     #[attr(tag: u32, result_type: Type)]
-    fn handle_dispatch(value: (), owner_tag: (), handler_fn: (), tr_dispatch_fn: ()) -> result {
+    fn legacy_handle_dispatch(
+        value: (),
+        owner_tag: (),
+        handler_fn: (),
+        tr_dispatch_fn: (),
+    ) -> result {
         #[region(body)]
         {}
         #[region(escape)]
+        {}
+    }
+
+    /// Resultless proper-tail handler delimiter emitted by
+    /// `tribute_control_to_cps`.
+    ///
+    /// `ability_refs` is ordered to match pairs in `dispatchers`. Each pair is
+    /// `(tr_dispatch_fn, handler_dispatch)`, using typed reject closures when a
+    /// handled ability has no operation of that kind. `resolve_evidence`
+    /// allocates one runtime-unique prompt identity for the delimiter and
+    /// shares it across every pair. The body entry block receives the extended
+    /// evidence. Every body path ends in a proper tail transfer or
+    /// `func.unreachable`.
+    #[attr(ability_refs: any)]
+    fn handle_dispatch(evidence: (), #[rest] dispatchers: ()) {
+        #[region(body)]
         {}
     }
 
@@ -101,6 +128,11 @@ mod ability {
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
     #[attr(ability_ref: Type, op_name: Symbol)]
     fn call(#[rest] values: ()) -> result {}
+
+    /// Legacy frontend form using the carrier pipeline's null-or-single-value
+    /// payload convention until the frontend/pipeline migration is complete.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn legacy_call(#[rest] values: ()) -> result {}
 }
 
 // === Hash-Based Dispatch ===
@@ -119,6 +151,43 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
     op_name.hash(&mut hasher);
 
     (hasher.finish() % 0x7FFFFFFF) as u32
+}
+
+/// Canonical target-independent payload product for one ability operation.
+///
+/// A product is used even for zero and one operand so the effect ABI never
+/// needs a null or another in-band sentinel for an empty payload.
+pub fn operation_payload_type_ref(
+    ctx: &mut trunk_ir::IrContext,
+    ability_ref: trunk_ir::TypeRef,
+    op_name: Symbol,
+    fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
+) -> trunk_ir::TypeRef {
+    use trunk_ir::types::{Attribute, TypeDataBuilder};
+
+    let ability_name = ctx.types.get(ability_ref).attrs.get_symbol("name");
+    let op_idx = compute_op_idx(ability_name, Some(op_name));
+    let fields = fields
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::from_dynamic(&format!("arg{index}"))),
+                Attribute::Type(ty),
+            ])
+        })
+        .collect();
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr(
+                "name",
+                Attribute::Symbol(Symbol::from_dynamic(&format!(
+                    "__tribute_ability_payload_{op_idx:08x}"
+                ))),
+            )
+            .attr("fields", Attribute::List(fields))
+            .build(),
+    )
 }
 
 /// Compute the stable runtime ability ID for an ability reference type.
@@ -195,7 +264,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-/// Compiler-private #815 completion carrier identity.
+/// Compiler-private legacy completion carrier identity.
 ///
 /// The carrier remains physically `anyref`; only frontend construction and
 /// `lower_handle_dispatch` may materialize or inspect this type.
@@ -203,7 +272,7 @@ pub const CPS_CONTROL_TYPE_NAME: &str = "__tribute_cps_control";
 pub const CPS_CONTROL_NORMAL_VARIANT: &str = "Normal";
 pub const CPS_CONTROL_ESCAPE_VARIANT: &str = "Escape";
 
-/// Return the canonical private completion-carrier enum used by #815.
+/// Return the canonical private legacy completion-carrier enum.
 ///
 /// Keeping this constructor in `tribute-ir` preserves structural interning
 /// identity across frontend and shared-pass lowering without introducing a

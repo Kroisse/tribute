@@ -1,10 +1,9 @@
-//! Lower `ability.handle_dispatch` to inline done-handler application.
+//! Lower final and legacy `ability.*handle_dispatch` delimiters.
 //!
-//! In the tail-call CPS design, effect operations are handled via tail calls
-//! to handler_dispatch closures (see `lower_ability_perform`). By the time
-//! `ability.handle_dispatch` is reached, the body result is already the final
-//! value. This pass applies the done handler to the body result and, as the
-//! final shared ability conversion, establishes the `ability-lowered` boundary.
+//! The final resultless form is structurally spliced after evidence resolution.
+//! The explicitly named legacy form retains the carrier-based done/escape
+//! compatibility path until the frontend/pipeline migration is complete. As the final shared ability
+//! conversion, this pass establishes the `ability-lowered` boundary.
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
@@ -45,7 +44,7 @@ pub fn ability_lowered_target() -> ConversionTarget {
     ConversionTarget::new().illegal_dialect("ability")
 }
 
-/// Lower all `ability.handle_dispatch` ops and establish the ability boundary.
+/// Lower final and legacy handle delimiters and establish the ability boundary.
 ///
 /// The final partial conversion rejects every residual `ability.*` operation
 /// while allowing unknown operations owned by later lowering stages.
@@ -75,7 +74,7 @@ impl Pass for LowerHandleDispatch {
     }
 }
 
-/// Pattern: `ability.handle_dispatch` → inline done handler body.
+/// Lower the resultless final delimiter or the legacy carrier delimiter.
 struct LowerHandleDispatchPattern;
 
 impl RewritePattern for LowerHandleDispatchPattern {
@@ -85,13 +84,40 @@ impl RewritePattern for LowerHandleDispatchPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) else {
+        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
+            let body = dispatch_op.body(ctx);
+            let blocks = ctx.region(body).blocks.to_vec();
+            let [body_block] = blocks.as_slice() else {
+                return false;
+            };
+
+            // `resolve_evidence` has already replaced the body's evidence
+            // argument. The final delimiter is resultless, so exhausting it is
+            // a structural splice only: no carrier inspection and no returned
+            // control value are involved.
+            if ctx
+                .block_args(*body_block)
+                .iter()
+                .any(|arg| !ctx.uses(*arg).is_empty())
+            {
+                return false;
+            }
+            let body_ops = ctx.block(*body_block).ops.to_vec();
+            for body_op in body_ops {
+                ctx.detach_op(body_op);
+                rewriter.insert_op(body_op);
+            }
+            rewriter.erase_op(vec![]);
+            return true;
+        }
+
+        let Ok(dispatch_op) = ability::LegacyHandleDispatch::from_op(ctx, op) else {
             return false;
         };
 
         let location = ctx.op(op).location;
         // operand[0] = body result and is proven by frontend construction to
-        // be the private #815 carrier. owner_tag is a dynamic i32 token, never
+        // be the private legacy carrier. owner_tag is a dynamic i32 token, never
         // a source value or a syntactic prompt tag.
         let body_result = ctx.op_operands(op)[0];
         let owner_tag = dispatch_op.owner_tag(ctx);
@@ -99,7 +125,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
         let handler_body = dispatch_op.body(ctx);
         let escape_body = dispatch_op.escape(ctx);
 
-        // The frontend proves that this operand is the private #815 carrier:
+        // The frontend proves that this operand is the private legacy carrier:
         // the body normal continuation constructs `Normal`, and general op
         // arms construct `Escape`. Never apply these probes to a source SSA
         // value or a public ADT.
@@ -149,7 +175,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
 }
 
 /// Build the Normal branch. Its carrier proof comes from the matching
-/// `ability.handle_dispatch` operand and the preceding private variant test.
+/// `ability.legacy_handle_dispatch` operand and the preceding private variant test.
 fn completion_region(
     ctx: &mut IrContext,
     location: Location,
@@ -403,7 +429,7 @@ mod tests {
     %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
@@ -442,7 +468,7 @@ mod tests {
     %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = core.i32} : core.i32 {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = core.i32} : core.i32 {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           %one = arith.const {value = 1} : core.i32
@@ -481,7 +507,7 @@ mod tests {
     %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: tribute_rt.anyref, %sv: tribute_rt.anyref):
           scf.yield %k
@@ -518,7 +544,7 @@ mod tests {
     %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
@@ -570,7 +596,7 @@ mod tests {
     %owner = arith.const {value = 1} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
@@ -587,7 +613,7 @@ mod tests {
     %owner = arith.const {value = 2} : core.i32
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %tr_dispatch_fn = arith.const {value = 0} : tribute_rt.anyref
-    %result = ability.handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 2, result_type = tribute_rt.anyref} : tribute_rt.anyref {
+    %result = ability.legacy_handle_dispatch %body, %owner, %handler_fn, %tr_dispatch_fn {tag = 2, result_type = tribute_rt.anyref} : tribute_rt.anyref {
       ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
@@ -610,7 +636,7 @@ mod tests {
         lower_handle_dispatch(&mut ctx, selected).unwrap();
 
         let ir_text = print_module(&ctx, module.op());
-        assert_eq!(ir_text.matches("ability.handle_dispatch").count(), 1);
+        assert_eq!(ir_text.matches("ability.legacy_handle_dispatch").count(), 1);
         assert!(ir_text.contains("func.func @untouched"));
         assert!(ir_text.contains("tag = 2"));
     }
@@ -636,5 +662,41 @@ mod tests {
         assert_eq!(error.operations()[0].dialect, Symbol::new("ability"));
         assert_eq!(error.operations()[0].name, Symbol::new("perform"));
         assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
+    }
+
+    #[test]
+    fn malformed_final_delimiters_are_not_structurally_spliced() {
+        let malformed = [
+            r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^first(%inner: !evidence):
+        func.unreachable
+      ^second:
+        func.unreachable
+    }"#,
+            r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^body(%inner: !evidence):
+        test.consume %inner
+        func.unreachable
+    }"#,
+        ];
+        for operation in malformed {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}}
+  !evidence = core.array(!marker)
+  func.func @run(%ev: !evidence) -> core.never {{
+    {operation}
+  }}
+}}"#
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+            let error = lower_handle_dispatch(&mut ctx, module).unwrap_err();
+            assert_eq!(error.boundary(), "ability-lowered");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
     }
 }

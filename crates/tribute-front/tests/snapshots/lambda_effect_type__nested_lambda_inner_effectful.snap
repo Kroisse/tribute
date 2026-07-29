@@ -69,7 +69,7 @@ core.module @test {
       }
       %39 = arith.const {value = 0} : tribute_rt.anyref
       %40 = effect.fresh_prompt_tag : core.i32
-      %41 = ability.handle_dispatch %13, %40, %14, %39 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %41 = ability.legacy_handle_dispatch %13, %40, %14, %39 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb11(%42: tribute_rt.anyref):
               %43 = core.unrealized_conversion_cast %42 : core.i32
@@ -99,7 +99,7 @@ core.module @test {
       %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : !t1
       %2 = closure.lambda(%3: !t0, %4: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} {
           %5 = closure.lambda(%6: !t0) -> core.i32 {tribute.calling_convention = 1} {
-              %7 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+              %7 = ability.legacy_call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
               %8 = core.unrealized_conversion_cast %7 : core.i32
               func.return %8
           }

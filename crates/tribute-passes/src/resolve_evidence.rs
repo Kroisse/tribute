@@ -10,6 +10,8 @@
 //! first parameter.
 
 use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt;
 
 use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::effect;
@@ -32,6 +34,180 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
+
+#[derive(Debug)]
+pub(crate) struct ResolveEvidenceError {
+    op: OpRef,
+    source_location: String,
+    message: String,
+}
+
+impl ResolveEvidenceError {
+    pub(crate) fn op(&self) -> OpRef {
+        self.op
+    }
+}
+
+impl fmt::Display for ResolveEvidenceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} at {}: {}",
+            self.op, self.source_location, self.message
+        )
+    }
+}
+
+impl Error for ResolveEvidenceError {}
+
+struct FinalHandleDispatchShape {
+    evidence: ValueRef,
+    dispatcher_pairs: Vec<(TypeRef, ValueRef, ValueRef)>,
+    body: RegionRef,
+    body_evidence: ValueRef,
+}
+
+fn final_handle_dispatch_shape(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<FinalHandleDispatchShape, ResolveEvidenceError> {
+    let data = ctx.op(op);
+    let error = |message: String| ResolveEvidenceError {
+        op,
+        source_location: format!(
+            "{}:{}:{}",
+            ctx.paths.get(data.location.path),
+            data.location.span.start,
+            data.location.span.end
+        ),
+        message,
+    };
+    let operands = ctx.op_operands(op);
+    if !ctx.op_result_types(op).is_empty() {
+        return Err(error(
+            "final ability.handle_dispatch must be resultless".into(),
+        ));
+    }
+    let Some((&evidence, dispatchers)) = operands.split_first() else {
+        return Err(error(
+            "final ability.handle_dispatch requires an evidence operand".into(),
+        ));
+    };
+    if !dispatchers.len().is_multiple_of(2) {
+        return Err(error(
+            "final ability.handle_dispatch dispatcher operands must form exact pairs".into(),
+        ));
+    }
+    let Some(Attribute::List(ability_refs)) = data.attributes.get("ability_refs") else {
+        return Err(error(
+            "final ability.handle_dispatch requires an ability_refs list".into(),
+        ));
+    };
+    if ability_refs.len() * 2 != dispatchers.len() {
+        return Err(error(format!(
+            "ability_refs cardinality {} does not match {} dispatcher operands",
+            ability_refs.len(),
+            dispatchers.len()
+        )));
+    }
+    let mut dispatcher_pairs = Vec::with_capacity(ability_refs.len());
+    for (ability_ref, pair) in ability_refs.iter().zip(dispatchers.chunks_exact(2)) {
+        let Attribute::Type(ability_ref) = ability_ref else {
+            return Err(error("every ability_refs entry must be a type".into()));
+        };
+        let ty = ctx.types.get(*ability_ref);
+        if ty.dialect != Symbol::new("core") || ty.name != Symbol::new("ability_ref") {
+            return Err(error(
+                "every ability_refs entry must be a core.ability_ref type".into(),
+            ));
+        }
+        dispatcher_pairs.push((*ability_ref, pair[0], pair[1]));
+    }
+    let [body] = data.regions.as_slice() else {
+        return Err(error(
+            "final ability.handle_dispatch requires exactly one body region".into(),
+        ));
+    };
+    let [body_block] = ctx.region(*body).blocks.as_slice() else {
+        return Err(error(
+            "final ability.handle_dispatch body must have exactly one block".into(),
+        ));
+    };
+    let [body_evidence] = ctx.block_args(*body_block) else {
+        return Err(error(
+            "final ability.handle_dispatch body must have one evidence argument".into(),
+        ));
+    };
+    if ctx.value_ty(*body_evidence) != ctx.value_ty(evidence)
+        || !ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence))
+    {
+        return Err(error(
+            "final ability.handle_dispatch evidence operand and body argument must have the evidence type"
+                .into(),
+        ));
+    }
+    let Some(&terminator) = ctx.block(*body_block).ops.last() else {
+        return Err(error(
+            "final ability.handle_dispatch body must end in a proper tail transfer".into(),
+        ));
+    };
+    let terminator_data = ctx.op(terminator);
+    let proper_tail = (terminator_data.dialect == Symbol::new("func")
+        && matches!(
+            terminator_data
+                .name
+                .with_str(|name| name.to_owned())
+                .as_str(),
+            "tail_call" | "tail_call_indirect" | "unreachable"
+        ))
+        || (terminator_data.dialect == Symbol::new("ability")
+            && matches!(
+                terminator_data
+                    .name
+                    .with_str(|name| name.to_owned())
+                    .as_str(),
+                "perform" | "handle_dispatch"
+            ))
+        || (terminator_data.dialect == Symbol::new("scf")
+            && matches!(
+                terminator_data
+                    .name
+                    .with_str(|name| name.to_owned())
+                    .as_str(),
+                "if" | "switch"
+            ));
+    if !proper_tail {
+        return Err(error(
+            "final ability.handle_dispatch body must end in a proper tail transfer".into(),
+        ));
+    }
+    Ok(FinalHandleDispatchShape {
+        evidence,
+        dispatcher_pairs,
+        body: *body,
+        body_evidence: *body_evidence,
+    })
+}
+
+pub(crate) fn validate_final_handle_dispatches(
+    ctx: &IrContext,
+    module: Module,
+) -> Result<(), ResolveEvidenceError> {
+    fn visit(ctx: &IrContext, op: OpRef) -> Result<(), ResolveEvidenceError> {
+        if ability::HandleDispatch::matches(ctx, op) {
+            final_handle_dispatch_shape(ctx, op)?;
+        }
+        for region in ctx.op(op).regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for child in ctx.block(block).ops.iter().copied() {
+                    visit(ctx, child)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    visit(ctx, module.op())
 }
 
 // ============================================================================
@@ -232,7 +408,9 @@ fn collect_handler_root_functions(
 fn region_contains_handle_dispatch(ctx: &IrContext, region: RegionRef) -> bool {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
-            if ability::HandleDispatch::from_op(ctx, op).is_ok() {
+            if ability::LegacyHandleDispatch::from_op(ctx, op).is_ok()
+                || ability::HandleDispatch::from_op(ctx, op).is_ok()
+            {
                 return true;
             }
             for &nested in ctx.op(op).regions.iter() {
@@ -252,7 +430,7 @@ fn collect_handled_abilities_by_tag(
 ) -> HashMap<u32, Vec<TypeRef>> {
     let mut map = HashMap::new();
     for &op in ctx.block(block).ops.iter() {
-        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
+        if let Ok(dispatch_op) = ability::LegacyHandleDispatch::from_op(ctx, op) {
             let tag = dispatch_op.tag(ctx);
             let abilities = collect_abilities_from_body_region(ctx, dispatch_op.body(ctx));
             map.insert(tag, abilities);
@@ -299,7 +477,7 @@ fn transform_handler_roots(
     module: Module,
     handler_root_fns: &HashSet<Symbol>,
     fns_with_evidence: &mut HashSet<Symbol>,
-) -> HashSet<Symbol> {
+) -> Result<HashSet<Symbol>, ResolveEvidenceError> {
     let func_ops: Vec<OpRef> = module.ops(ctx);
 
     // Phase 1: Add evidence params to effect-polymorphic handler roots.
@@ -384,7 +562,7 @@ fn transform_handler_roots(
             &handled_by_tag,
             fns_with_evidence,
             prepend_evidence,
-        );
+        )?;
 
         for &block in blocks.iter().skip(1) {
             let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
@@ -395,11 +573,11 @@ fn transform_handler_roots(
                 &handled_by_tag,
                 fns_with_evidence,
                 prepend_evidence,
-            );
+            )?;
         }
     }
 
-    polymorphic_roots
+    Ok(polymorphic_roots)
 }
 
 /// Update call sites across the module to pass evidence to newly-evidenced
@@ -512,7 +690,7 @@ fn transform_shifts_in_module(
     ctx: &mut IrContext,
     module: Module,
     fns_with_evidence: &HashSet<Symbol>,
-) {
+) -> Result<(), ResolveEvidenceError> {
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
         let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
@@ -550,9 +728,10 @@ fn transform_shifts_in_module(
                 &handled_by_tag,
                 fns_with_evidence,
                 false, // replace evidence (already present as first arg)
-            );
+            )?;
         }
     }
+    Ok(())
 }
 
 /// Transform shifts in a single block.
@@ -574,13 +753,57 @@ fn transform_shifts_in_block(
     handled_by_tag: &HashMap<u32, Vec<TypeRef>>,
     fns_with_evidence: &HashSet<Symbol>,
     prepend_evidence: bool,
-) {
+) -> Result<(), ResolveEvidenceError> {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
     for op in ops {
+        // Final resultless delimiter. Its operands are explicit and typed:
+        // [evidence, tr_dispatch_0, handler_dispatch_0, ...].
+        // The ability_refs list has exactly one entry per dispatch pair.
+        if ability::HandleDispatch::from_op(ctx, op).is_ok() {
+            let location = ctx.op(op).location;
+            let shape = final_handle_dispatch_shape(ctx, op)?;
+            let mut current_ev = shape.evidence;
+            let i32_ty = i32_type_ref(ctx);
+            let prompt = func::call(
+                ctx,
+                location,
+                std::iter::empty::<ValueRef>(),
+                i32_ty,
+                Symbol::new("__tribute_next_tag"),
+            );
+            let prompt_tag = prompt.result(ctx);
+            ctx.insert_op_before(block, op, prompt.op_ref());
+            let evidence_ty = ability::evidence_adt_type_ref(ctx);
+            for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
+                let extend = effect::extend(
+                    ctx,
+                    location,
+                    current_ev,
+                    prompt_tag,
+                    tr_dispatch,
+                    handler_dispatch,
+                    evidence_ty,
+                    ability_ref,
+                );
+                current_ev = extend.result(ctx);
+                ctx.insert_op_before(block, op, extend.op_ref());
+            }
+
+            ctx.replace_all_uses(shape.body_evidence, current_ev);
+            transform_shifts_in_region(
+                ctx,
+                shape.body,
+                current_ev,
+                fns_with_evidence,
+                prepend_evidence,
+            )?;
+            continue;
+        }
+
         // Handle ability.handle_dispatch — extend evidence before
         // the body closure call and transform the handler body region.
-        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
+        if let Ok(dispatch_op) = ability::LegacyHandleDispatch::from_op(ctx, op) {
             let loc = ctx.op(op).location;
             let tag = dispatch_op.tag(ctx);
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
@@ -693,7 +916,7 @@ fn transform_shifts_in_block(
                 current_ev,
                 fns_with_evidence,
                 prepend_evidence,
-            );
+            )?;
             continue;
         }
 
@@ -805,9 +1028,10 @@ fn transform_shifts_in_block(
         // Recursively transform nested regions
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
-            transform_shifts_in_region(ctx, region, ev_value, fns_with_evidence, prepend_evidence);
+            transform_shifts_in_region(ctx, region, ev_value, fns_with_evidence, prepend_evidence)?;
         }
     }
+    Ok(())
 }
 
 /// Transform shifts in a region.
@@ -817,7 +1041,7 @@ fn transform_shifts_in_region(
     ev_value: ValueRef,
     fns_with_evidence: &HashSet<Symbol>,
     prepend_evidence: bool,
-) {
+) -> Result<(), ResolveEvidenceError> {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
         let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
@@ -828,8 +1052,9 @@ fn transform_shifts_in_region(
             &handled_by_tag,
             fns_with_evidence,
             prepend_evidence,
-        );
+        )?;
     }
+    Ok(())
 }
 
 // ============================================================================
@@ -841,7 +1066,12 @@ fn transform_shifts_in_region(
 /// Transforms `ability.evidence_lookup` and `ability.handle_dispatch`
 /// into evidence-based dispatch using runtime function calls. This enables
 /// proper handler dispatch at runtime.
-pub(crate) fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
+pub(crate) fn resolve_evidence_dispatch(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), ResolveEvidenceError> {
+    validate_final_handle_dispatches(ctx, module)?;
+
     // Ensure runtime helpers exist
     ensure_runtime_functions(ctx, module);
 
@@ -851,7 +1081,7 @@ pub(crate) fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
     // Transform handler-root functions first
     let handler_root_fns = collect_handler_root_functions(ctx, module, &fns_with_evidence);
     let newly_evidenced = if !handler_root_fns.is_empty() {
-        transform_handler_roots(ctx, module, &handler_root_fns, &mut fns_with_evidence)
+        transform_handler_roots(ctx, module, &handler_root_fns, &mut fns_with_evidence)?
     } else {
         HashSet::new()
     };
@@ -871,9 +1101,10 @@ pub(crate) fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
             .copied()
             .collect();
         if !non_root_evidence_fns.is_empty() {
-            transform_shifts_in_module(ctx, module, &non_root_evidence_fns);
+            transform_shifts_in_module(ctx, module, &non_root_evidence_fns)?;
         }
     }
+    Ok(())
 }
 
 /// PassManager-friendly wrapper for [`resolve_evidence_dispatch`].
@@ -887,8 +1118,7 @@ impl Pass for ResolveEvidenceDispatch {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        resolve_evidence_dispatch(ctx, target.into());
-        Ok(())
+        resolve_evidence_dispatch(ctx, target.into()).map_err(Into::into)
     }
 }
 
@@ -899,7 +1129,11 @@ impl Pass for ResolveEvidenceDispatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::ControlFlow;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
     use trunk_ir::types::TypeDataBuilder;
+    use trunk_ir::walk::{WalkAction, walk_op};
 
     #[test]
     fn test_compute_ability_id() {
@@ -958,6 +1192,181 @@ mod tests {
 
         // Same ability name but different type params should produce different IDs
         assert_ne!(id_with_params, id_no_params);
+    }
+
+    fn final_dispatch_fixture(operation: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}}
+  !evidence = core.array(!marker)
+  func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %handler: core.ptr, %tr2: core.ptr, %handler2: core.ptr) -> core.never {{
+    {operation}
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
+        let input = final_dispatch_fixture(
+            r#"ability.handle_dispatch %ev, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref() {name = @State}, core.ability_ref() {name = @Console}]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+        let resolved = print_module(&ctx, module.op());
+        assert_eq!(resolved.matches("effect.extend").count(), 2);
+        assert_eq!(resolved.matches("func.call").count(), 1);
+        assert!(resolved.contains("__tribute_next_tag"));
+        assert!(resolved.contains("ability.handle_dispatch"));
+        let mut extensions = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if effect::Extend::from_op(&ctx, op).is_ok() {
+                extensions.push(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert_eq!(extensions.len(), 2);
+        assert_eq!(
+            ctx.op_operands(extensions[0])[1],
+            ctx.op_operands(extensions[1])[1],
+            "all abilities in one delimiter must share one runtime prompt tag"
+        );
+        crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).unwrap();
+        let lowered = print_module(&ctx, module.op());
+        assert!(!lowered.contains("ability."));
+        assert!(!lowered.contains("__tribute_cps_control"));
+        assert!(lowered.contains("func.unreachable"));
+
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &lowered);
+    }
+
+    #[test]
+    fn malformed_final_handle_dispatches_fail_before_mutation() {
+        let malformed = [
+            (
+                r#"%result = ability.handle_dispatch %ev {ability_refs = []} : core.i32 {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "must be resultless",
+            ),
+            (
+                r#"ability.handle_dispatch {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "requires an evidence operand",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "must form exact pairs",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "requires an ability_refs list",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "cardinality",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = [1]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "entry must be a type",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = [core.i32]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "core.ability_ref type",
+            ),
+            (
+                r#"ability.handle_dispatch %prompt {ability_refs = []} {
+      ^body(%inner: core.i32):
+        func.unreachable
+    }"#,
+                "must have the evidence type",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {ability_refs = []} {
+    }"#,
+                "exactly one block",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^first(%inner: !evidence):
+        func.unreachable
+      ^second:
+        func.unreachable
+    }"#,
+                "exactly one block",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^body:
+        func.unreachable
+    }"#,
+                "one evidence argument",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^body(%inner: !evidence):
+    }"#,
+                "must end in a proper tail transfer",
+            ),
+            (
+                r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.return
+    }"#,
+                "proper tail transfer",
+            ),
+        ];
+        for (operation, expected) in malformed {
+            let input = final_dispatch_fixture(operation);
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &input);
+            let before = print_module(&ctx, module.op());
+            let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(error.to_string().contains("textual-ir:0:0"), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn structured_final_delimiter_is_a_valid_proper_tail_body() {
+        let input = final_dispatch_fixture(
+            r#"ability.handle_dispatch %ev {ability_refs = []} {
+      ^body(%inner: !evidence):
+        %choice = arith.const {value = 0} : core.i32
+        scf.switch %choice {
+          scf.default {
+            func.unreachable
+          }
+        }
+    }"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+        validate_final_handle_dispatches(&ctx, module).unwrap();
     }
 
     // Note: CPS-specific evidence resolution (ability.evidence_lookup,

@@ -36,7 +36,7 @@ core.module @test {
           %17 = func.call_indirect %15, %16 : tribute_rt.anyref
           func.return %17
       }
-      %18 = ability.perform %3 {ability_ref = core.ability_ref() {name = @Trace}, op_name = @before} : tribute_rt.anyref
+      %18 = ability.legacy_perform %3 {ability_ref = core.ability_ref() {name = @Trace}, op_name = @before} : tribute_rt.anyref
       func.return %18
   }
   func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {

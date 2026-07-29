@@ -9,11 +9,11 @@ core.module @test {
   !t2 = closure.closure(core.func(tribute_rt.anyref, !t1, tribute_rt.anyref))
 
   func.func @counter(%0: !t1) -> core.i32 attributes {tribute.calling_convention = 1} {
-      %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %1 = ability.legacy_call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       %2 = core.unrealized_conversion_cast %1 : core.i32
       %3 = arith.const {value = 1} : core.i32
       %4 = func.call %2, %3 {callee = @"Int::+", tribute.calling_convention = 0} : core.i32
-      %5 = ability.call %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+      %5 = ability.legacy_call %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
       %6 = core.unrealized_conversion_cast %5 : core.nil
       func.return %2
   }
@@ -110,7 +110,7 @@ core.module @test {
       }
       %65 = arith.const {value = 0} : tribute_rt.anyref
       %66 = effect.fresh_prompt_tag : core.i32
-      %67 = ability.handle_dispatch %10, %66, %11, %65 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %67 = ability.legacy_handle_dispatch %10, %66, %11, %65 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb20(%68: tribute_rt.anyref):
               %69 = core.unrealized_conversion_cast %1 : !t0

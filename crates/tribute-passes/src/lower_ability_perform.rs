@@ -9,14 +9,16 @@
 //!   { ability_ref: @State, op_name: @get }
 //!
 //! // Output:
-//! %payload = cast %args to anyref (or null)
+//! %payload = pack %args into the canonical operation product
 //! %cont = cast %continuation to anyref
 //! %result = effect.dispatch_cps %evidence, %cont, %payload
 //!   { ability_ref: @State, op_name: @get }
 //! func.return %result
 //! ```
 //!
-//! Uses `PatternApplicator` for declarative op-level rewriting. This is an
+//! The explicitly named legacy operations retain the old null-or-single-value
+//! carrier payload ABI until the frontend/pipeline migration is complete. Uses
+//! `PatternApplicator` for declarative op-level rewriting. This is an
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
@@ -88,13 +90,17 @@ impl RewritePattern for LowerPerformPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(perform_op) = ability::Perform::from_op(ctx, op) else {
+        let legacy = if ability::Perform::from_op(ctx, op).is_ok() {
+            false
+        } else if ability::LegacyPerform::from_op(ctx, op).is_ok() {
+            true
+        } else {
             return false;
         };
 
         let location = ctx.op(op).location;
-        let ability_ref_type = perform_op.ability_ref(ctx);
-        let op_name_sym = perform_op.op_name(ctx);
+        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
+        let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
 
         // Operands: [continuation, ...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
@@ -113,21 +119,19 @@ impl RewritePattern for LowerPerformPattern {
             return false;
         };
 
-        // === 2. Build payload (pack args or null) ===
-        assert!(
-            value_operands.len() <= 1,
-            "ability.perform expects at most 1 value operand (multi-arg should be tuple-packed), \
-             got {}",
-            value_operands.len()
-        );
-        let shift_value_val = if let Some(&sv) = value_operands.first() {
-            let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
-            rewriter.insert_op(cast.op_ref());
-            cast.result(ctx)
+        // === 2. Build the canonical payload product. ===
+        let shift_value_val = if legacy {
+            pack_legacy_payload(ctx, rewriter, location, value_operands, t.anyref)
         } else {
-            let null_op = adt::ref_null(ctx, location, t.anyref, t.anyref);
-            rewriter.insert_op(null_op.op_ref());
-            null_op.result(ctx)
+            pack_payload(
+                ctx,
+                rewriter,
+                location,
+                ability_ref_type,
+                op_name_sym,
+                value_operands,
+                t.anyref,
+            )
         };
 
         // === 3. Cast continuation closure to anyref ===
@@ -211,13 +215,17 @@ impl RewritePattern for LowerCallPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = ability::Call::from_op(ctx, op) else {
+        let legacy = if ability::Call::from_op(ctx, op).is_ok() {
+            false
+        } else if ability::LegacyCall::from_op(ctx, op).is_ok() {
+            true
+        } else {
             return false;
         };
 
         let location = ctx.op(op).location;
-        let ability_ref_type = call_op.ability_ref(ctx);
-        let op_name_sym = call_op.op_name(ctx);
+        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
+        let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
 
         // Operands: [...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
@@ -235,21 +243,19 @@ impl RewritePattern for LowerCallPattern {
             return false;
         };
 
-        // === 2. Build payload (pack args or null) ===
-        assert!(
-            value_operands.len() <= 1,
-            "ability.call expects at most 1 value operand (multi-arg should be tuple-packed), \
-             got {}",
-            value_operands.len()
-        );
-        let shift_value_val = if let Some(&sv) = value_operands.first() {
-            let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
-            rewriter.insert_op(cast.op_ref());
-            cast.result(ctx)
+        // === 2. Build the canonical payload product. ===
+        let shift_value_val = if legacy {
+            pack_legacy_payload(ctx, rewriter, location, value_operands, t.anyref)
         } else {
-            let null_op = adt::ref_null(ctx, location, t.anyref, t.anyref);
-            rewriter.insert_op(null_op.op_ref());
-            null_op.result(ctx)
+            pack_payload(
+                ctx,
+                rewriter,
+                location,
+                ability_ref_type,
+                op_name_sym,
+                value_operands,
+                t.anyref,
+            )
         };
 
         // === 3. Dispatch through target-independent effect ABI ===
@@ -274,6 +280,59 @@ impl RewritePattern for LowerCallPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+fn pack_payload(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    location: trunk_ir::types::Location,
+    ability_ref: TypeRef,
+    op_name: Symbol,
+    values: &[ValueRef],
+    anyref: TypeRef,
+) -> ValueRef {
+    let payload_type = ability::operation_payload_type_ref(
+        ctx,
+        ability_ref,
+        op_name,
+        values
+            .iter()
+            .map(|value| ctx.value_ty(*value))
+            .collect::<Vec<_>>(),
+    );
+    let payload = adt::struct_new(
+        ctx,
+        location,
+        values.iter().copied(),
+        payload_type,
+        payload_type,
+    );
+    rewriter.insert_op(payload.op_ref());
+    let erased = core::unrealized_conversion_cast(ctx, location, payload.result(ctx), anyref);
+    rewriter.insert_op(erased.op_ref());
+    erased.result(ctx)
+}
+
+fn pack_legacy_payload(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    location: trunk_ir::types::Location,
+    values: &[ValueRef],
+    anyref: TypeRef,
+) -> ValueRef {
+    assert!(
+        values.len() <= 1,
+        "legacy ability payloads must already be tuple-packed"
+    );
+    if let Some(&value) = values.first() {
+        let erased = core::unrealized_conversion_cast(ctx, location, value, anyref);
+        rewriter.insert_op(erased.op_ref());
+        erased.result(ctx)
+    } else {
+        let null = adt::ref_null(ctx, location, anyref, anyref);
+        rewriter.insert_op(null.op_ref());
+        null.result(ctx)
+    }
+}
 
 /// Check if a TypeRef is `core.nil` (void return type in Cranelift).
 fn is_nil_type(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
@@ -419,6 +478,39 @@ mod tests {
 
         let ir_text = print_module(&ctx, module.op());
         assert_snapshot!(ir_text);
+    }
+
+    #[test]
+    fn legacy_operations_keep_the_carrier_payload_abi() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @legacy_perform(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %k = arith.const {{value = 0}} : tribute_rt.anyref
+    %result = ability.legacy_perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
+    func.return %result
+  }}
+  func.func @legacy_call(%ev: {ev_ty}, %value: core.i32) -> tribute_rt.anyref {{
+    %result = ability.legacy_call %value {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
+    func.return %result
+  }}
+}}"#
+            ),
+        );
+
+        lower_ability_perform(&mut ctx, module);
+
+        let ir = print_module(&ctx, module.op());
+        assert!(!ir.contains("ability.legacy_"));
+        assert!(!ir.contains("__tribute_ability_payload_"));
+        assert!(ir.contains("adt.ref_null"));
+        assert_eq!(ir.matches("effect.dispatch_").count(), 2);
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &ir);
     }
 
     #[test]

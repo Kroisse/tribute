@@ -325,10 +325,87 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
         validate_arith_cmpf_predicate(ctx, op, &mut errors);
         validate_scf_if_structure(ctx, op, &mut errors);
+        validate_func_tail_call_indirect(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
 
     ValidationResult { errors }
+}
+
+fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let data = ctx.op(op);
+    if data.dialect != Symbol::new("func") || data.name != Symbol::new("tail_call_indirect") {
+        return;
+    }
+    if !ctx.op_results(op).is_empty() {
+        errors.push(operation_verifier_error(ctx, op, "must be resultless"));
+    }
+    let Some((&callee, args)) = ctx.op_operands(op).split_first() else {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "requires a callee operand",
+        ));
+        return;
+    };
+    let callee_ty = ctx.types.get(ctx.value_ty(callee));
+    let func_ty = if callee_ty.dialect == Symbol::new("closure")
+        && callee_ty.name == Symbol::new("closure")
+    {
+        let [func_ty] = callee_ty.params.as_slice() else {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                "callee closure type must contain exactly one function type",
+            ));
+            return;
+        };
+        *func_ty
+    } else {
+        ctx.value_ty(callee)
+    };
+    let func_ty = ctx.types.get(func_ty);
+    if func_ty.dialect != Symbol::new("core")
+        || func_ty.name != Symbol::new("func")
+        || func_ty.params.is_empty()
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "callee must have core.func or closure.closure<core.func> type",
+        ));
+        return;
+    }
+    let return_ty = ctx.types.get(func_ty.params[0]);
+    if return_ty.dialect != Symbol::new("core") || return_ty.name != Symbol::new("never") {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "callee function result must be core.never",
+        ));
+    }
+    let expected = &func_ty.params[1..];
+    if args.len() != expected.len() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "passes {} argument(s), but callee expects {}",
+                args.len(),
+                expected.len()
+            ),
+        ));
+        return;
+    }
+    for (index, (arg, expected)) in args.iter().zip(expected).enumerate() {
+        if ctx.value_ty(*arg) != *expected {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("argument #{index} type does not match the callee parameter"),
+            ));
+        }
+    }
 }
 
 /// Validate operation-level semantic constraints that are independent of
@@ -455,6 +532,31 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 
         let yield_data = ctx.op(yield_op);
         if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
+            let never_result = match ctx.op_result_types(op) {
+                [ty] => {
+                    let ty = ctx.types.get(*ty);
+                    ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
+                }
+                _ => false,
+            };
+            let proper_tail = (yield_data.dialect == Symbol::new("func")
+                && matches!(
+                    yield_data.name.with_str(|name| name.to_owned()).as_str(),
+                    "tail_call" | "tail_call_indirect" | "unreachable"
+                ))
+                || (yield_data.dialect == Symbol::new("ability")
+                    && matches!(
+                        yield_data.name.with_str(|name| name.to_owned()).as_str(),
+                        "perform" | "handle_dispatch"
+                    ))
+                || (yield_data.dialect == Symbol::new("scf")
+                    && matches!(
+                        yield_data.name.with_str(|name| name.to_owned()).as_str(),
+                        "if" | "switch"
+                    ));
+            if never_result && proper_tail {
+                continue;
+            }
             errors.push(operation_verifier_error(
                 ctx,
                 op,
@@ -1451,6 +1553,119 @@ mod tests {
     // ========================================================================
     // Call arity validation tests (textual IR)
     // ========================================================================
+
+    #[test]
+    fn tail_call_indirect_typed_cps_transfer_passes() {
+        let input = r#"core.module @test {
+  func.func @main(%k: closure.closure(core.func(core.never, core.i32)), %value: core.i32) -> core.never {
+    func.tail_call_indirect %k, %value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
+        let input = r#"core.module @test {
+  func.func @main(%k: closure.closure(core.func(core.i32, core.i32)), %value: core.bool) -> core.never {
+    func.tail_call_indirect %k, %value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        let text = result.to_string();
+        assert!(text.contains("result must be core.never"), "{text}");
+        assert!(text.contains("argument #0 type"), "{text}");
+    }
+
+    #[test]
+    fn tail_call_indirect_rejects_every_malformed_callable_shape() {
+        let input = r#"core.module @test {
+  func.func @result(%k: closure.closure(core.func(core.never))) -> core.never {
+    %bad = func.tail_call_indirect %k : core.i32
+    func.unreachable
+  }
+  func.func @missing() -> core.never {
+    func.tail_call_indirect
+  }
+  func.func @bad_closure(%k: closure.closure()) -> core.never {
+    func.tail_call_indirect %k
+  }
+  func.func @not_callable(%value: core.i32) -> core.never {
+    func.tail_call_indirect %value
+  }
+  func.func @direct_function(%k: core.func(core.never)) -> core.never {
+    func.tail_call_indirect %k
+  }
+  func.func @arity(%k: closure.closure(core.func(core.never, core.i32))) -> core.never {
+    func.tail_call_indirect %k
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        let text = result.to_string();
+        assert!(text.contains("must be resultless"), "{text}");
+        assert!(text.contains("requires a callee operand"), "{text}");
+        assert!(
+            text.contains("closure type must contain exactly one function type"),
+            "{text}"
+        );
+        assert!(text.contains("callee must have core.func"), "{text}");
+        assert!(text.contains("passes 0 argument(s)"), "{text}");
+        assert_eq!(result.errors.len(), 5, "{text}");
+    }
+
+    #[test]
+    fn scf_never_regions_accept_every_proper_tail_surface() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1) -> core.never {
+    %outer = scf.if %cond : core.never {
+      ability.perform
+    } {
+      %nested = scf.if %cond : core.never {
+        func.unreachable
+      } {
+        ability.handle_dispatch
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn resultless_scf_regions_still_require_yield() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1) {
+    scf.if %cond {
+      func.unreachable
+    } {
+      func.unreachable
+    }
+    func.return
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        let text = result.to_string();
+        assert!(
+            text.contains("then_region must terminate with scf.yield"),
+            "{text}"
+        );
+        assert!(
+            text.contains("else_region must terminate with scf.yield"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn call_arity_mismatch_too_few_args() {

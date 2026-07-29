@@ -145,7 +145,8 @@ fn starts_attr_dict(input: &str) -> bool {
     let rest = input.strip_prefix('{').unwrap_or("");
     let rest = rest.trim_start();
     // Must start with an ident char (letter or _)
-    let after_ident = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let after_ident =
+        rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.');
     // Must have consumed at least one ident char, then whitespace + '='
     if after_ident.len() == rest.len() {
         return false; // no ident consumed

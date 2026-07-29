@@ -21,7 +21,7 @@ core.module @test {
     }
   }
   func.func @read(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
-      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %2 = ability.legacy_perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       func.return %2
   }
   func.func @run(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
