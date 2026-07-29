@@ -153,7 +153,7 @@ type, callable ABI, backend carrier가 아니며 continuation representation을
 검사할 권한도 아니다. Logical result가 `Never`인 source general operation은
 canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
 `resume_token`도 노출하지 않는다. Verifier가 erased type을 추측하지 않고
-non-resumptive case를 식별해야 하므로 현재 pre-M2 frontend의 `Never`용 `anyref`
+non-resumptive case를 식별해야 하므로 현재 legacy frontend의 `Never`용 `anyref`
 placeholder는 이 새 경계에서 valid하지 않다.
 
 #### `tribute_control.perform`
@@ -173,7 +173,9 @@ placeholder는 이 새 경계에서 valid하지 않다.
 - **속성:** `ability_ref: Type`, `op_name: Symbol`,
   `operation_kind: Symbol`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
   typecheck된 operation declaration에서 복사한다. 이는 body나 use site에서
-  추론하는 lowering hint가 아니라 source-semantic metadata다.
+  추론하는 lowering hint가 아니라 source-semantic metadata다. 모든 source
+  ability invocation이 이 operation을 사용하며 shared conversion은 kind를
+  재분류하지 않는다.
 - **영역과 block argument:** 없다.
 - **종결자:** 아니다. 직접형 IR에서 이 operation은 terminator가 아니다.
 - **의미:** 선언된 kind로 source operation을 호출한다.
@@ -186,11 +188,6 @@ placeholder는 이 새 경계에서 valid하지 않다.
   resume할 수 없으므로 logical resumption을 만들거나 겉으로 보이는 suffix를
   capture하지 않는다.
 
-| `operation_kind` | 직접형 result | 필수 shared lowering | 일치하는 handler 형상 |
-| ---- | ---- | ---- | ---- |
-| `@fn` | 선언된 source result | suffix capture 없이 `ability.call` 뒤 tail dispatch | resume token 없이 선언된 operation result를 yield하여 자동 resume |
-| `@op` | 선언된 source result. `Never`에는 canonical `core.never` 사용 | `ability.perform`과 CPS dispatch를 위해 suffix를 capture하되, `Never`에는 suffix capture 없는 reject adapter 사용 | `Never`를 제외하면 마지막에 resume token을 받고, resume하지 않을 때 handle answer를 yield |
-
 - **지역 검증:** 세 attribute를 요구하고 `operation_kind` domain을
   검사하며, result가 정확히 하나이고 region은 없으며 operand/result type이
   inference variable이 아니라 resolve되었는지 확인한다. Symbol-aware frontend
@@ -198,8 +195,8 @@ placeholder는 이 새 경계에서 valid하지 않다.
   `fn`/`op` kind, parameter type, result type이 attribute, operand, result와
   일치하는지도 확인한다. 어떤 verifier도 control flow, handler, result type,
   calling convention에서 kind를 추론해서는 안 된다.
-  `tribute_control.handler`와 containing-handle verifier는 handler entry에 위 표의
-  해당 handler 형상을 적용한다.
+  `tribute_control.handler`와 containing-handle verifier는 handler entry에 아래
+  계약의 kind별 형상을 적용한다.
 - **소유권과 값 흐름:** operand는 일반 SSA use다. 이 operation은
   source-visible continuation value를 만들지 않으며 continuation 구성은 shared
   CPS conversion이 소유한다. `@fn`에는 continuation 없는 `ability.call`/tail
@@ -207,23 +204,11 @@ placeholder는 이 새 경계에서 valid하지 않다.
   dispatch를 만든다. `op -> Never`에는 대신 기존 ability/effect ABI가 요구하는
   실제 zero-capture reject continuation을 공급하며 그 body는
   `func.unreachable`이다. 이 continuation은 source suffix를 capture하지 않는다.
-  Null, in-band sentinel, 임의의 `anyref`는 continuation이 아니다.
+  Null, in-band sentinel, 임의의 `anyref`는 continuation이 아니다. ABI adapter의
+  전체 규칙은
+  [cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
 - **위치:** 가능하면 qualified callee와 argument를 모두 포함하는
   ability-operation call의 source location이다.
-
-이 경계에서는 모든 source ability invocation이 `tribute_control.perform`을
-사용한다. Shared conversion이 `operation_kind`를 재분류하지 않고 dispatch
-representation을 선택하는 첫 phase다. 특히 handler body가 항상
-tail-resumptive처럼 보이는 `@op`도 `@op`으로 유지된다. 해당 형상을 인식하고
-최적화하는 작업은 semantic lowering 뒤의 후속 IR optimization이다.
-
-Reject continuation은 명시적인 continuation을 요구하는 기존
-`ability.perform`과 `effect.dispatch_cps` operand contract를 위한 compatibility
-glue다. 일반 lowered continuation과 같은 callable ABI를 사용하고 capture가
-없으며 호출되면 trap한다. Compilation unit마다 deduplicate할 수 있지만 각 use는
-typed closure value를 일반 closure-to-`anyref` conversion을 통해 전달한다. 이
-규칙은 operation을 추가하거나 physical CPS result carrier를 선택하지 않으면서
-source `Never` 의미를 보존한다.
 
 #### `tribute_control.handle`
 

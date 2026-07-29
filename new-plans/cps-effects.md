@@ -1,55 +1,30 @@
 # 직접형 제어와 CPS 효과 처리 파이프라인
 
-이 문서는 logical direct-style/CPS 경계를 정의하고 M2가 해당 경계로
-마이그레이션하는 동안 사용하는 현재 compatibility implementation을 기록한다.
+이 문서는 직접형 IR을 CPS로 바꾸는 conversion source of truth다. Operation
+구조와 verifier 계약은 [ir.md](ir.md#direct-style-control), 계층별 소유권과
+마이그레이션 순서는 [implementation.md](implementation.md#직접형-제어-소유권)를
+따른다.
 
 핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
 WasmGC yield bubbling, `YieldResult` 중심 trampoline, `cont.*` dialect 직접
 lowering은 현재 경로가 아니다.
 
 <!-- markdownlint-disable-next-line MD033 -->
-<a id="m2-direct-style-boundary"></a>
+<a id="direct-style-control-boundary"></a>
 
-## M2 직접형 경계
+## 직접형 제어 경계
 
-목표 pipeline은 다음과 같다:
-
-```text
-typed AST
-  -> verified direct-style tribute_control IR
-  -> shared CPS legalization in tribute-passes
-  -> ability.* / effect.* / closure.* IR
-  -> target-specific lowering
-```
-
-이 경계는 #821에서 명세하지만 문서에 적었다는 사실만으로 구현된 것은 아니다.
-Issue #822가 dialect를 추가하고, #823이 synthetic IR의 conversion을 추가하며, #824가
-frontend emission을 마이그레이션한다. #825는 두 backend pipeline에서
-legalization을 필수로 만들고, #826은 대체된 frontend-owned normalization과
-continuation 구성을 제거한다.
-
-`tribute_control`에는 `perform`, `handle`, `handler`, `resume`, `yield`와 opaque
-affine `resume_token<input, answer>` type만 있다. 전체 structural contract는
-[ir.md](ir.md#direct-style-control)에 있다. 일반 call과 data operation은 기존
-dialect에 남는다. Effectful invocation operation은 따로 두지 않는다. 기존
-direct/indirect call operation과 callable convention metadata가 이미 `Direct`,
-`EvidenceDirect`, `Cps`를 구분한다. `fn` 또는 `op`으로 선언했는지와 무관하게 모든
-ability operation invocation은 `tribute_control.perform`이다. 필수
-`operation_kind = @fn | @op` metadata가 source typechecking에서 확정한 kind를
-보존한다.
-
-이 경계는 source effect와 worker convention을 바꾸지 않는다:
+모든 ability operation invocation은 typechecking이 확정한
+`operation_kind = @fn | @op`를 가진 `tribute_control.perform`이다. 일반
+direct/indirect call은 기존 operation과 callable convention metadata를 사용한다.
+Operation kind는 source 의미이고 callable convention과 별개이므로 frontend나
+conversion이 body 형상에서 이를 추론하거나 재분류하지 않는다.
 
 ```text
 Direct < EvidenceDirect < Cps
 ```
 
-Effect row는 operation identity가 아니라 ability identity를 계속 담는다. Closed
-empty, fn-only, general-op, open-row convention 선택은 기존 의미를 유지한다. ANF는
-각 실행 가능한 region 내부의 representation invariant이며 source phase나
-dialect의 정체성이 아니다. Operation kind와 callable convention은 서로 다른
-사실이다. Typechecking은 tail-resumptive처럼 보이는 `op` body에서 `fn`을 추론하지
-않고 frontend는 dispatch representation을 선택하지 않는다.
+Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
@@ -83,16 +58,16 @@ dispatch를 선택하지 않는다.
 Issue #823은 closure extraction 전에 definition과 일치하는 모든
 direct/indirect call site를 함께 signature-convert한다:
 
-| Convention | #823 이후 physical parameter | M2 동안의 physical result |
+| Convention | #823 이후 physical parameter | 현재 physical result |
 | ---- | ---- | ---- |
 | `Direct` | 소스 parameter | 소스 result |
 | `EvidenceDirect` | evidence 뒤 소스 parameter | 소스 result |
 | `Cps` | evidence, `done_k`, source parameter 순서 | 현재 opaque compatibility control result |
 
-Parameter 순서는 기존 `CallableAbi` 순서다. `Cps`에서 `done_k`는 source result를
-받고 worker와 같은 opaque control-result type을 반환한다. M2 동안 그 physical
-type은 현재 compatibility `anyref`를 유지할 수 있다. 이 표는 이를 영구 logical
-result로 만들거나 #774가 소유하는 향후 `Never`/`Step` 정책을 선택하지 않는다.
+Parameter 순서는 기존 `CallableAbi` 순서다. `Cps`의 `done_k`는 source result를
+받고 worker와 같은 opaque control-result type을 반환한다. 현재 physical type은
+compatibility `anyref`를 유지할 수 있지만, 이는 영구 logical result나 #774의
+향후 `Never`/`Step` 정책이 아니다.
 
 Conversion은 TrunkIR의 `TypeConverter`와 signature-conversion 지원을 사용한다.
 변환 대상은 `func.func` entry argument, `core.func` type, closure type,
@@ -109,19 +84,9 @@ yield를 동일한 body continuation으로 변환한다. Metadata와 callable ty
 `ability.perform`/CPS 경로를 만든다. 이 결정은 `CallableAbi`에 encode하지 않으며
 pass가 operation kind를 추론하거나 변경해서는 안 된다.
 
-이 joint signature conversion 때문에 별도 `tribute_control.invoke` operation이
-필요하지 않다. Callable convention metadata가 conversion을 선택하고 기존 call과
-closure operation이 invocation과 construction을 계속 나타낸다.
-
-Root source `main`은 composition layer가 소유하는 유일한 delimiter다. External
-worker는 pure entry에는 `Direct`, `Io` entry에는 `EvidenceDirect`를 유지하며
-backend에 `Cps`로 노출되지 않는다. Generic/open callback 때문에 body 평가에
-`Cps` chain이 필요한 경우 #823이 external signature를 유지한 채 compiler가 만든
-terminal continuation으로 body를 닫는다. Direct root는 internal chain에 기존
-empty-evidence value를 사용하고 EvidenceDirect root는 새로 삽입한 evidence
-argument를 사용한다. `tribute-front`가 아니라 root
-orchestration/conversion layer가 이 delimiter와 최종 source-result return을
-소유한다.
+별도 `tribute_control.invoke`는 필요하지 않다. Root `main` delimiter와 external
+ABI 조합 책임은 [implementation.md](implementation.md#직접형-제어-소유권)을
+따른다.
 
 ### 논리적 CPS 적법화
 
@@ -171,29 +136,16 @@ Converter는 region, block suffix, `tribute_control.yield`, 검증된
 operation kind를 추론하거나 case, guard, short-circuit, nested handle 전용 규칙을
 추가해서는 안 된다.
 
-Affine `resume_token`은 logical ownership capability다. 사용하지 않거나 한 번
-소비할 수 있다. Erased `anyref` placeholder가 아니라 canonical `core.never`로
-식별한 source `op -> Never`는 token을 만들지 않는다. Closure capture는 token의
-static ownership path를 이전한다. Copy, store, return, yield는 invalid이다.
-Operation-local verification은 token/result type을 검사하고 `Never` handler의
-token이나 nested `resume`을 거부한다. Whole-IR validation은 use-def와
-closure-capture edge를 따라가 single static ownership path와 resumptive general
-handler 하나와의 lexical association을 강제한다.
+Affine `resume_token`의 type/placement는 operation-local verifier가, use-def와
+closure-capture를 지나는 single static ownership path는 whole-IR verifier가
+검사한다. Static SSA 검사는 capture된 closure의 반복 호출을 막지 못하므로
+conversion은 runtime consumed state를 만들고 두 번째 호출을 continuation
+재진입 전에 거부하거나 trap한다. Token은 post-CPS IR에 남지 않는다.
 
-Static SSA validation은 capture 뒤의 dynamic one-shot 동작을 증명하지 못한다.
-같은 closure value를 반복 호출할 수 있기 때문이다. 따라서 conversion은
-capture된 resumption을 runtime consumed state와 함께 lower해야 하며, 두 번째
-호출은 continuation에 다시 진입하기 전에 거부하거나 trap해야 한다. 이는 기존
-scoped-resumption runtime 책임이며 backend carrier-selection 결정이 아니다.
-Conversion은 직접형 token을 소비하고 post-CPS IR에 노출하지 않는다.
-
-`op -> Never` reject continuation은 compiler가 만드는 closure다. 일반
-continuation ABI를 사용하고 capture가 없으며 body는 `func.unreachable`이다.
-Compilation unit 하나에서 공유할 수 있다. `ability.perform`은 이 typed closure를
-받고 `effect.dispatch_cps`는 일반 closure-to-`anyref` conversion 결과를 받는다.
-Null, in-band sentinel, 임의의 `anyref`는 invalid substitute다. `Never` handler는
-resume할 수 없으므로 호출되면 trap한다. 이 adapter는 ABI guard이며 source
-path나 backend carrier 선택이 아니다.
+Canonical `core.never`인 source `op -> Never`는 token과 source suffix
+continuation을 만들지 않는다. 기존 ABI에는 capture가 없고 body가
+`func.unreachable`인 typed reject continuation을 전달한다. Null, in-band
+sentinel, 임의의 `anyref`는 대체할 수 없으며 호출되면 trap한다.
 
 ### 적법화 경계
 
@@ -266,8 +218,8 @@ The shared evidence ABI threads the dynamic tag through `effect.extend`,
 `ability.handle_dispatch`, and the general handler-dispatch closure. Native
 and Wasm obtain the same tag from the selected evidence marker before invoking
 that closure. Shared lowering compares integer owner tags; it does not require
-target-independent reference equality or an owner allocation. This is a
-이는 하나의 private compatibility representation일 뿐 logical
+target-independent reference equality or an owner allocation. 이는 하나의
+private compatibility representation일 뿐 logical
 `tribute_control` semantic contract도, #774의 general backend carrier-selection
 정책도 아니다.
 
@@ -284,20 +236,8 @@ separate compilation이 도입되면 backend의 link-once 정책으로 합칠 �
 
 ### `fn` operation: direct dispatch
 
-`fn`으로 선언된 ability operation은 tail-resumptive임을 선언부에서 보장한다.
-Typechecking은 이 source kind를 보존하고 frontend는 모든 ability invocation과
-마찬가지로 direct-style `perform`을 만든다:
-
-```text
-%result = tribute_control.perform %arg {
-  ability_ref = @Logger,
-  op_name = @log,
-  operation_kind = @fn
-}
-```
-
-Issue #823의 semantic legalization은 `operation_kind = @fn`을 보고 continuation을
-만들지 않은 채 기존 `ability.call` 경로로 내린다:
+직접형 입력은 위 규칙의 `operation_kind = @fn` perform이며, #823은
+continuation을 만들지 않고 기존 `ability.call` 경로로 내린다:
 
 ```text
 %result = ability.call %arg
@@ -329,19 +269,8 @@ and indirect-call representation:
 
 ### `op` operation: tail-call CPS dispatch
 
-`op`으로 선언된 general operation도 frontend에서는 source-logical 결과를 갖는
-direct-style `perform`이다:
-
-```text
-%result = tribute_control.perform {
-  ability_ref = @State,
-  op_name = @get,
-  operation_kind = @op
-}
-```
-
-Issue #823의 semantic legalization은 `operation_kind = @op`을 보고 block suffix에서
-명시적인 continuation closure를 구성한 뒤 `ability.perform`으로 내린다.
+직접형 입력은 위 규칙의 `operation_kind = @op` perform이며, #823은 block
+suffix에서 continuation closure를 구성해 `ability.perform`으로 내린다.
 
 ```text
 %result = ability.perform %continuation, %arg
@@ -379,10 +308,10 @@ Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므
 항상 tail-resumptive인지 분석하여 tail path로 최적화하는 작업은 표준 `@op`
 semantic lowering 이후의 별도 IR optimization이다.
 
-### 현재 pre-M2 frontend 값/계산 경계
+### 현재 frontend 값/계산 경계
 
 다음 `ast_to_ir` normalization과 `lower_value`/`lower_comp` 분리는 현재
-implementation baseline이다. Compositional 동작은 M2 region conversion의
+implementation baseline이다. Compositional 동작은 직접형 region conversion의
 근거이며 migration 도중에도 정확해야 한다. 그러나 frontend-owned
 normalization과 continuation 구성은 영구 phase boundary가 아니다. #824 뒤에는
 `tribute-front`가 검증된 직접형 region을 emit하고 #826 뒤에는 대체된 CPS-only
@@ -631,8 +560,8 @@ validation contract를 사용한다.
 
 현재 baseline에서 `ast_to_ir`는 evidence parameter와 compatibility CPS
 representation을 갖는 effectful function과 closure를 만든다. 이는 현재 구현의
-설명이지 영구 ownership boundary가 아니다. M2 target은 기존 ability/effect pass
-앞에 `tribute_control` CPS legalization을 삽입한다. #824 뒤에는 frontend가
+설명이지 영구 ownership boundary가 아니다. 계획한 target은 기존 ability/effect
+pass 앞에 `tribute_control` CPS legalization을 삽입한다. #824 뒤에는 frontend가
 continuation을 구성하지 않고 #826이 대체된 path를 제거한다. Shared lowering은
 계속 같은 `effect.*` ABI operation을 emit하며 backend가 이를 evidence runtime
 call, closure decomposition, target-specific indirect call로 lower한다.
@@ -659,7 +588,7 @@ Rules:
 - Backend-ready conversion targets must reject residual `effect.*` operations.
 - Shared passes must not inspect Marker field numbers, handler-table storage
   layout, closure field positions, or backend function-pointer representation.
-- Payload value는 shared lowering에서 이미 single value로 pack한다. M2 frontend는
+- Payload value는 shared lowering에서 이미 single value로 pack한다. 직접형 frontend는
   source-logical `tribute_control.perform` operand를 유지하며 dispatch 전략에
   맞춰 pack하지 않는다. 누락된 payload는 `effect.*`에 도달하기 전에
   target-independent null/empty value로 명시적으로 표현한다.
