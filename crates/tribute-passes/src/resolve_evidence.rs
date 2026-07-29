@@ -152,32 +152,7 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch body must end in a proper tail transfer".into(),
         ));
     };
-    let terminator_data = ctx.op(terminator);
-    let proper_tail = (terminator_data.dialect == Symbol::new("func")
-        && matches!(
-            terminator_data
-                .name
-                .with_str(|name| name.to_owned())
-                .as_str(),
-            "tail_call" | "tail_call_indirect" | "unreachable"
-        ))
-        || (terminator_data.dialect == Symbol::new("ability")
-            && matches!(
-                terminator_data
-                    .name
-                    .with_str(|name| name.to_owned())
-                    .as_str(),
-                "perform" | "handle_dispatch"
-            ))
-        || (terminator_data.dialect == Symbol::new("scf")
-            && matches!(
-                terminator_data
-                    .name
-                    .with_str(|name| name.to_owned())
-                    .as_str(),
-                "if" | "switch"
-            ));
-    if !proper_tail {
+    if !trunk_ir::validation::is_proper_tail_terminator(ctx, terminator) {
         return Err(error(
             "final ability.handle_dispatch body must end in a proper tail transfer".into(),
         ));

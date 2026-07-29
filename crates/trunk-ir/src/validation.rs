@@ -481,6 +481,27 @@ fn is_allowed_cmpf_predicate(predicate: Symbol) -> bool {
         || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[5])
 }
 
+/// Return whether `op` is a resultless transfer that may terminate a
+/// structured `core.never` region without an `scf.yield`.
+pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
+    let data = ctx.op(op);
+    (data.dialect == Symbol::new("func")
+        && matches!(
+            data.name.with_str(|name| name.to_owned()).as_str(),
+            "tail_call" | "tail_call_indirect" | "unreachable"
+        ))
+        || (data.dialect == Symbol::new("ability")
+            && matches!(
+                data.name.with_str(|name| name.to_owned()).as_str(),
+                "perform" | "handle_dispatch"
+            ))
+        || (data.dialect == Symbol::new("scf")
+            && matches!(
+                data.name.with_str(|name| name.to_owned()).as_str(),
+                "if" | "switch"
+            ))
+}
+
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
     if data.dialect != Symbol::new("scf") || data.name != Symbol::new("if") {
@@ -539,22 +560,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 }
                 _ => false,
             };
-            let proper_tail = (yield_data.dialect == Symbol::new("func")
-                && matches!(
-                    yield_data.name.with_str(|name| name.to_owned()).as_str(),
-                    "tail_call" | "tail_call_indirect" | "unreachable"
-                ))
-                || (yield_data.dialect == Symbol::new("ability")
-                    && matches!(
-                        yield_data.name.with_str(|name| name.to_owned()).as_str(),
-                        "perform" | "handle_dispatch"
-                    ))
-                || (yield_data.dialect == Symbol::new("scf")
-                    && matches!(
-                        yield_data.name.with_str(|name| name.to_owned()).as_str(),
-                        "if" | "switch"
-                    ));
-            if never_result && proper_tail {
+            if never_result && is_proper_tail_terminator(ctx, yield_op) {
                 continue;
             }
             errors.push(operation_verifier_error(
@@ -1583,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn tail_call_indirect_rejects_every_malformed_callable_shape() {
+    fn tail_call_indirect_rejects_malformed_shapes_and_accepts_bare_function() {
         let input = r#"core.module @test {
   func.func @result(%k: closure.closure(core.func(core.never))) -> core.never {
     %bad = func.tail_call_indirect %k : core.i32

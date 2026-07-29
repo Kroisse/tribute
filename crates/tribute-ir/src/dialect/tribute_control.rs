@@ -1700,30 +1700,44 @@ pub fn validate_local(ctx: &IrContext, module: Module) -> ValidationResult {
     ValidationResult { errors }
 }
 
+fn is_core_module(ctx: &IrContext, op: OpRef) -> bool {
+    let data = ctx.op(op);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("module")
+}
+
+fn walk_symbol_scope_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(OpRef)) {
+    for block in ctx.region(region).blocks.iter().copied() {
+        for op in ctx.block(block).ops.iter().copied() {
+            if is_core_module(ctx, op) {
+                continue;
+            }
+            callback(op);
+            for nested in ctx.op(op).regions.iter().copied() {
+                walk_symbol_scope_ops(ctx, nested, callback);
+            }
+        }
+    }
+}
+
 fn collect_funcs(
     ctx: &IrContext,
     region: RegionRef,
     funcs: &mut HashMap<Symbol, OpRef>,
     errors: &mut Vec<ValidationError>,
 ) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        for op in ctx.block(block).ops.iter().copied() {
-            if is_control_op(ctx, op, "func")
-                && let Some(symbol) = ctx.op(op).attributes.get_symbol("sym_name")
-                && let Some(previous) = funcs.insert(symbol, op)
-            {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    format!("duplicate function symbol @{symbol}; first defined by {previous}"),
-                );
-            }
-            for nested in ctx.op(op).regions.iter().copied() {
-                collect_funcs(ctx, nested, funcs, errors);
-            }
+    walk_symbol_scope_ops(ctx, region, &mut |op| {
+        if is_control_op(ctx, op, "func")
+            && let Some(symbol) = ctx.op(op).attributes.get_symbol("sym_name")
+            && let Some(previous) = funcs.insert(symbol, op)
+        {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("duplicate function symbol @{symbol}; first defined by {previous}"),
+            );
         }
-    }
+    });
 }
 
 fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
@@ -1742,7 +1756,7 @@ fn validate_symbol_uses(
     funcs: &HashMap<Symbol, OpRef>,
     errors: &mut Vec<ValidationError>,
 ) {
-    walk_region_ops(ctx, body, &mut |op| {
+    walk_symbol_scope_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func_ref") {
             let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
                 return;
@@ -1813,6 +1827,39 @@ fn validate_symbol_uses(
             );
         }
     });
+}
+
+fn validate_module_symbol_scopes(
+    ctx: &IrContext,
+    module_op: OpRef,
+    errors: &mut Vec<ValidationError>,
+) {
+    let regions = ctx.op(module_op).regions.to_vec();
+    let mut funcs = HashMap::new();
+    for region in regions.iter().copied() {
+        collect_funcs(ctx, region, &mut funcs, errors);
+    }
+    for region in regions.iter().copied() {
+        validate_symbol_uses(ctx, region, &funcs, errors);
+    }
+
+    fn visit_nested_modules(ctx: &IrContext, region: RegionRef, errors: &mut Vec<ValidationError>) {
+        for block in ctx.region(region).blocks.iter().copied() {
+            for op in ctx.block(block).ops.iter().copied() {
+                if is_core_module(ctx, op) {
+                    validate_module_symbol_scopes(ctx, op, errors);
+                } else {
+                    for nested in ctx.op(op).regions.iter().copied() {
+                        visit_nested_modules(ctx, nested, errors);
+                    }
+                }
+            }
+        }
+    }
+
+    for region in regions {
+        visit_nested_modules(ctx, region, errors);
+    }
 }
 
 fn collect_external_references(
@@ -2238,9 +2285,7 @@ pub fn validate_whole_ir(
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    let mut funcs = HashMap::new();
-    collect_funcs(ctx, body, &mut funcs, &mut errors);
-    validate_symbol_uses(ctx, body, &funcs, &mut errors);
+    validate_module_symbol_scopes(ctx, module.op(), &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(declarations, &mut errors);
     validate_declaration_uses(ctx, body, &declarations, &mut errors);
@@ -3290,6 +3335,41 @@ mod tests {
         );
         let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
         assert!(messages(&excess).contains("capture list contains unused external value"));
+    }
+
+    #[test]
+    fn whole_ir_resolves_same_named_functions_per_nested_module() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @outer {
+  core.module @integers {
+    !callable = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+    tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
+      %reference = tribute_control.func_ref {func_ref = @id} : !callable
+      %direct = tribute_control.call %value {callee = @id} : core.i32
+      %indirect = tribute_control.call_indirect %reference, %direct : core.i32
+      tribute_control.return %indirect
+    }
+  }
+  core.module @booleans {
+    !callable = tribute_control.callable(core.bool, core.bool) {tribute.calling_convention = 0}
+    tribute_control.func @id(%value: core.bool) -> core.bool convention(direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @use(%value: core.bool) -> core.bool convention(direct) {
+      %reference = tribute_control.func_ref {func_ref = @id} : !callable
+      %direct = tribute_control.call %value {callee = @id} : core.bool
+      %indirect = tribute_control.call_indirect %reference, %direct : core.bool
+      tribute_control.return %indirect
+    }
+  }
+}"#,
+        );
+
+        let result = validate_whole_ir(&ctx, module, &[]);
+        assert!(result.is_ok(), "{:?}", result.errors);
     }
 
     #[test]

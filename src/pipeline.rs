@@ -1574,6 +1574,56 @@ mod tests {
             .expect("attached db")
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn native_one_shot_wrapper_traps_on_second_invocation() {
+        let input = r#"core.module @one_shot {
+  !state = adt.struct() {fields = [[@consumed, core.i1]], name = @OneShotState}
+
+  func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
+    %answer = scf.if %consumed : core.i32 {
+      func.unreachable
+    } {
+      %consumed_true = arith.const {value = 1} : core.i1
+      adt.struct_set %state, %consumed_true {field = 0, type = !state}
+      scf.yield %value
+    }
+    func.return %answer
+  }
+
+  func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
+    %not_consumed = arith.const {value = 0} : core.i1
+    %state = adt.struct_new %not_consumed {type = !state} : !state
+    %input = arith.const {value = 7} : core.i32
+    %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
+    %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
+    func.return %second
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+
+        let object = compile_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+        )
+        .expect("one-shot wrapper must compile to native code");
+        let temp = tempfile::tempdir().expect("temporary executable directory");
+        let executable = temp.path().join("one-shot-wrapper");
+        link_native_binary(&object, &executable).expect("one-shot wrapper must link");
+
+        let status = std::process::Command::new(executable)
+            .status()
+            .expect("one-shot wrapper executable must start");
+        assert!(
+            !status.success(),
+            "the second invocation of the same wrapper must trap"
+        );
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn debug_use_chain_verifier_reports_offending_pass() {

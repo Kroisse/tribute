@@ -270,7 +270,11 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
                 ),
             });
         }
-        let expected = if general { 2 } else { 1 };
+        let expected = if general {
+            CallingConvention::Cps as i64
+        } else {
+            CallingConvention::EvidenceDirect as i64
+        };
         let trunk_ir::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
             failures.push(BoundaryFailure {
                 op: Some(owner),
@@ -315,20 +319,22 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
 }
 
 fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
-    let mut signatures = HashMap::new();
     fn collect(
         ctx: &IrContext,
         op: OpRef,
         signatures: &mut HashMap<Symbol, (TypeRef, Option<i64>)>,
     ) {
+        let data = ctx.op(op);
+        if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
+            return;
+        }
         if func::Func::matches(ctx, op)
             && let (Some(symbol), Some(ty)) = (
-                ctx.op(op).attributes.get_symbol("sym_name"),
-                ctx.op(op).attributes.get_type("type"),
+                data.attributes.get_symbol("sym_name"),
+                data.attributes.get_type("type"),
             )
         {
-            let convention = ctx
-                .op(op)
+            let convention = data
                 .attributes
                 .get_i64(CALLING_CONVENTION_ATTR)
                 .ok()
@@ -343,9 +349,7 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
             }
         }
     }
-    collect(ctx, module.op(), &mut signatures);
 
-    let mut failures = Vec::new();
     fn visit(
         ctx: &IrContext,
         op: OpRef,
@@ -353,6 +357,10 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
+        if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
+            verify_module(ctx, op, failures);
+            return;
+        }
         let op_convention = data
             .attributes
             .get_i64(CALLING_CONVENTION_ATTR)
@@ -476,7 +484,115 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
             }
         }
     }
-    visit(ctx, module.op(), &signatures, &mut failures);
+
+    fn verify_module(ctx: &IrContext, module_op: OpRef, failures: &mut Vec<BoundaryFailure>) {
+        let mut signatures = HashMap::new();
+        let regions = ctx.op(module_op).regions.to_vec();
+        for region in regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for op in ctx.block(block).ops.iter().copied() {
+                    collect(ctx, op, &mut signatures);
+                }
+            }
+        }
+        for region in regions {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for op in ctx.block(block).ops.iter().copied() {
+                    visit(ctx, op, &signatures, failures);
+                }
+            }
+        }
+    }
+
+    let mut failures = Vec::new();
+    verify_module(ctx, module.op(), &mut failures);
+    failures
+}
+
+fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
+    fn failure(ctx: &IrContext, op: OpRef, message: impl Into<String>) -> BoundaryFailure {
+        BoundaryFailure {
+            op: Some(op),
+            location: Some(ctx.op(op).location),
+            message: message.into(),
+        }
+    }
+
+    fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
+        let data = ctx.op(op);
+        if !data.successors.is_empty() {
+            failures.push(failure(
+                ctx,
+                op,
+                "tribute-control-pre-cps is structured and forbids block successors",
+            ));
+        }
+        if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
+            if ctx.op_operands(op).len() != 1
+                || !ctx.op_result_types(op).is_empty()
+                || data.regions.len() != 1
+            {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "scf.switch requires one discriminant, no results, and one body region",
+                ));
+            } else {
+                let blocks = &ctx.region(data.regions[0]).blocks;
+                if let [body] = blocks.as_slice() {
+                    for arm in ctx.block(*body).ops.iter().copied() {
+                        let arm_data = ctx.op(arm);
+                        let is_case = arm_data.dialect == Symbol::new("scf")
+                            && arm_data.name == Symbol::new("case");
+                        let is_default = arm_data.dialect == Symbol::new("scf")
+                            && arm_data.name == Symbol::new("default");
+                        if !is_case && !is_default {
+                            failures.push(failure(
+                                ctx,
+                                arm,
+                                "scf.switch body may contain only scf.case and scf.default",
+                            ));
+                            continue;
+                        }
+                        if is_case && !arm_data.attributes.contains_key("value") {
+                            failures.push(failure(ctx, arm, "scf.case requires a value attribute"));
+                        }
+                        if let [region] = arm_data.regions.as_slice() {
+                            if ctx.region(*region).blocks.len() != 1 {
+                                failures.push(failure(
+                                    ctx,
+                                    arm,
+                                    "scf switch arm region requires exactly one block",
+                                ));
+                            }
+                        } else {
+                            failures.push(failure(
+                                ctx,
+                                arm,
+                                "scf switch arm requires exactly one region",
+                            ));
+                        }
+                    }
+                } else {
+                    failures.push(failure(
+                        ctx,
+                        op,
+                        "scf.switch body region requires exactly one block",
+                    ));
+                }
+            }
+        }
+        for region in data.regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for child in ctx.block(block).ops.iter().copied() {
+                    visit(ctx, child, failures);
+                }
+            }
+        }
+    }
+
+    let mut failures = Vec::new();
+    visit(ctx, module.op(), &mut failures);
     failures
 }
 
@@ -516,6 +632,7 @@ pub fn verify_tribute_control_pre_cps(
         );
     }
     failures.extend(verify_type_boundary(ctx, module, TypeBoundary::Pre));
+    failures.extend(verify_source_conversion_shapes(ctx, module));
     failures.extend(
         trunk_ir::validation::validate_all(ctx, module)
             .errors
@@ -621,7 +738,8 @@ struct HandlerArmInfo {
 struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
-    funcs: HashMap<Symbol, CallableInfo>,
+    funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
+    current_module: OpRef,
     converted_types: HashMap<TypeRef, TypeRef>,
     helper_index: u32,
 }
@@ -639,15 +757,37 @@ impl<'a> Converter<'a> {
     fn new(
         ctx: &'a mut IrContext,
         module_block: BlockRef,
-        funcs: HashMap<Symbol, CallableInfo>,
+        funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
+        current_module: OpRef,
     ) -> Self {
         Self {
             ctx,
             module_block,
-            funcs,
+            funcs_by_module,
+            current_module,
             converted_types: HashMap::new(),
             helper_index: 0,
         }
+    }
+
+    fn current_func(&self, symbol: Symbol) -> Option<CallableInfo> {
+        self.funcs_by_module
+            .get(&self.current_module)
+            .and_then(|funcs| funcs.get(&symbol))
+            .cloned()
+    }
+
+    fn malformed_source(
+        &self,
+        source: OpRef,
+        message: impl Into<String>,
+    ) -> TributeControlToCpsError {
+        TributeControlToCpsError::one(
+            PRE_CPS_BOUNDARY,
+            Some(source),
+            Some(self.ctx.op(source).location),
+            message,
+        )
     }
 
     fn never_type(&mut self) -> TypeRef {
@@ -862,6 +1002,12 @@ impl<'a> Converter<'a> {
         let attrs = data.attributes.clone();
         let regions = data.regions.to_vec();
         let successors = data.successors.to_vec();
+        if !successors.is_empty() {
+            return Err(self.malformed_source(
+                source,
+                "plain operation cloning does not support block successors",
+            ));
+        }
 
         let mut builder = OperationDataBuilder::new(location, dialect, name);
         for operand in operands {
@@ -876,14 +1022,15 @@ impl<'a> Converter<'a> {
         }
         for region in regions {
             let converted = if dialect == Symbol::new("core") && name == Symbol::new("module") {
-                self.clone_module_region(region)?
+                let previous_module = self.current_module;
+                self.current_module = source;
+                let converted = self.clone_module_region(region);
+                self.current_module = previous_module;
+                converted?
             } else {
                 self.clone_plain_region(region, mapping)?
             };
             builder = builder.region(converted);
-        }
-        for successor in successors {
-            builder = builder.successor(successor);
         }
         let data = builder.build(self.ctx);
         let cloned = self.ctx.create_op(data);
@@ -1219,13 +1366,10 @@ impl<'a> Converter<'a> {
             )?;
             let converted_region = self.single_block_region(case_location, converted_block);
             let converted = if is_case {
-                scf::case(
-                    self.ctx,
-                    case_location,
-                    case_value.unwrap(),
-                    converted_region,
-                )
-                .op_ref()
+                let Some(case_value) = case_value else {
+                    return Err(self.malformed_source(case, "scf.case requires a value attribute"));
+                };
+                scf::case(self.ctx, case_location, case_value, converted_region).op_ref()
             } else {
                 scf::default(self.ctx, case_location, converted_region).op_ref()
             };
@@ -1453,13 +1597,19 @@ impl<'a> Converter<'a> {
             .op(source)
             .attributes
             .get_symbol("func_ref")
-            .unwrap();
-        let target = self.funcs.get(&target_symbol).cloned().unwrap();
+            .expect("pre-CPS validation checked func_ref target");
+        let target = self
+            .current_func(target_symbol)
+            .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_callable =
-            tribute_control::Callable::from_type_ref(self.ctx, result_logical_ty).unwrap();
-        let result_convention = convert_convention(
-            tribute_control::callable_convention(self.ctx, result_logical_ty).unwrap(),
+        let result_callable = tribute_control::Callable::from_type_ref(self.ctx, result_logical_ty)
+            .expect("pre-CPS validation checked func_ref result type");
+        let result_convention = tribute_control::callable_convention(self.ctx, result_logical_ty)
+            .map(convert_convention)
+            .expect("pre-CPS validation checked func_ref convention");
+        debug_assert!(
+            !target.convention.needs_done_k() || result_convention.needs_done_k(),
+            "pre-CPS validation rejects a weaker func_ref result convention"
         );
         let result = self.convert_type(result_callable.result(self.ctx));
         let source_params: Vec<_> = result_callable
@@ -1484,6 +1634,8 @@ impl<'a> Converter<'a> {
         let block = self.make_block(location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
+        // The environment is interposed immediately after optional evidence,
+        // so a present done continuation is the following slot.
         let done_offset = evidence_offset + 1;
         let source_offset = usize::from(result_convention.needs_evidence())
             + 1
@@ -1859,22 +2011,26 @@ impl<'a> Converter<'a> {
             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
             .collect();
         let never = self.never_type();
+        let ability_ref = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_type("ability_ref")
+            .expect("pre-CPS validation checked perform ability");
+        let op_name = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_symbol("op_name")
+            .expect("pre-CPS validation checked perform operation");
         let perform = ability::perform(
             self.ctx,
             location,
             continuation,
             args,
             never,
-            self.ctx
-                .op(source)
-                .attributes
-                .get_type("ability_ref")
-                .unwrap(),
-            self.ctx
-                .op(source)
-                .attributes
-                .get_symbol("op_name")
-                .unwrap(),
+            ability_ref,
+            op_name,
         );
         self.ctx.push_op(block, perform.op_ref());
         Ok(())
@@ -2206,7 +2362,12 @@ impl<'a> Converter<'a> {
         };
         self.ctx.push_op(block, after_handle_op);
 
-        let handlers_region = self.ctx.op(source).regions[2];
+        let regions = self.ctx.op(source).regions.to_vec();
+        let [body_source, completion_source, handlers_region] = regions.as_slice() else {
+            unreachable!("pre-CPS validation checked handle regions");
+        };
+        let (body_source, completion_source, handlers_region) =
+            (*body_source, *completion_source, *handlers_region);
         let handlers_block = self.ctx.region(handlers_region).blocks[0];
         let mut handler_arms = Vec::new();
         let source_handlers = self.ctx.block(handlers_block).ops.to_vec();
@@ -2249,7 +2410,6 @@ impl<'a> Converter<'a> {
             root_exit_k: Some(after_handle),
             answer_type: handle_answer,
         };
-        let completion_source = self.ctx.op(source).regions[1];
         let (completion_op, completion_k) = self.build_completion_continuation(
             completion_source,
             after_handle,
@@ -2262,7 +2422,6 @@ impl<'a> Converter<'a> {
             exit_k: Some(completion_k),
             ..body_flow_base
         };
-        let body_source = self.ctx.op(source).regions[0];
         let source_body_block = self.ctx.region(body_source).blocks[0];
         self.convert_sequence(
             self.ctx.block(source_body_block).ops.to_vec(),
@@ -2359,9 +2518,15 @@ impl<'a> Converter<'a> {
                     index += 1;
                 }
                 "call" => {
-                    let target_symbol =
-                        self.ctx.op(source).attributes.get_symbol("callee").unwrap();
-                    let target = self.funcs.get(&target_symbol).cloned().unwrap();
+                    let target_symbol = self
+                        .ctx
+                        .op(source)
+                        .attributes
+                        .get_symbol("callee")
+                        .expect("pre-CPS validation checked direct callee");
+                    let target = self
+                        .current_func(target_symbol)
+                        .expect("pre-CPS validation resolved direct callee in this module");
                     if target.convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
                             return Err(TributeControlToCpsError::one(
@@ -2407,9 +2572,9 @@ impl<'a> Converter<'a> {
                 "call_indirect" => {
                     let source_callee = self.ctx.op_operands(source)[0];
                     let logical_type = self.ctx.value_ty(source_callee);
-                    let convention = convert_convention(
-                        tribute_control::callable_convention(self.ctx, logical_type).unwrap(),
-                    );
+                    let convention = tribute_control::callable_convention(self.ctx, logical_type)
+                        .map(convert_convention)
+                        .expect("pre-CPS validation checked indirect callee convention");
                     let callee = mapping
                         .get(&source_callee)
                         .copied()
@@ -2473,7 +2638,7 @@ impl<'a> Converter<'a> {
                         .op(source)
                         .attributes
                         .get_symbol("operation_kind")
-                        .unwrap();
+                        .expect("pre-CPS validation checked operation kind");
                     if kind == Symbol::new("fn") {
                         let evidence = self.current_evidence(source, flow)?;
                         let _ = evidence;
@@ -2484,21 +2649,25 @@ impl<'a> Converter<'a> {
                             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
                             .collect();
                         let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
+                        let ability_ref = self
+                            .ctx
+                            .op(source)
+                            .attributes
+                            .get_type("ability_ref")
+                            .expect("pre-CPS validation checked perform ability");
+                        let op_name = self
+                            .ctx
+                            .op(source)
+                            .attributes
+                            .get_symbol("op_name")
+                            .expect("pre-CPS validation checked perform operation");
                         let call = ability::call(
                             self.ctx,
                             location,
                             args,
                             result_type,
-                            self.ctx
-                                .op(source)
-                                .attributes
-                                .get_type("ability_ref")
-                                .unwrap(),
-                            self.ctx
-                                .op(source)
-                                .attributes
-                                .get_symbol("op_name")
-                                .unwrap(),
+                            ability_ref,
+                            op_name,
                         );
                         self.ctx.push_op(block, call.op_ref());
                         mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -2543,9 +2712,16 @@ impl<'a> Converter<'a> {
             .op(source)
             .attributes
             .get_symbol("sym_name")
-            .unwrap();
-        let logical_type = self.ctx.op(source).attributes.get_type("type").unwrap();
-        let info = self.funcs.get(&symbol).cloned().unwrap();
+            .expect("pre-CPS validation checked function symbol");
+        let logical_type = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_type("type")
+            .expect("pre-CPS validation checked function type");
+        let info = self
+            .current_func(symbol)
+            .expect("validated function is present in its module callable graph");
         let physical_type = self.physical_function_type(logical_type);
         if self.ctx.op(source).regions.is_empty() {
             let mut builder =
@@ -2664,38 +2840,84 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
 fn collect_callable_graph(
     ctx: &IrContext,
     module: Module,
-) -> Result<HashMap<Symbol, CallableInfo>, TributeControlToCpsError> {
-    let mut funcs = HashMap::new();
-    fn visit(ctx: &IrContext, region: RegionRef, funcs: &mut HashMap<Symbol, CallableInfo>) {
+) -> HashMap<OpRef, HashMap<Symbol, CallableInfo>> {
+    fn collect_scope(
+        ctx: &IrContext,
+        region: RegionRef,
+        funcs: &mut HashMap<Symbol, CallableInfo>,
+        nested_modules: &mut Vec<OpRef>,
+    ) {
         for block in ctx.region(region).blocks.iter().copied() {
             for op in ctx.block(block).ops.iter().copied() {
+                let data = ctx.op(op);
+                if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
+                    nested_modules.push(op);
+                    continue;
+                }
                 if tribute_control::Func::matches(ctx, op) {
-                    let symbol = ctx.op(op).attributes.get_symbol("sym_name").unwrap();
-                    let logical_type = ctx.op(op).attributes.get_type("type").unwrap();
-                    let callable =
-                        tribute_control::Callable::from_type_ref(ctx, logical_type).unwrap();
+                    let symbol = data
+                        .attributes
+                        .get_symbol("sym_name")
+                        .expect("pre-CPS validation checked function symbol");
+                    let logical_type = data
+                        .attributes
+                        .get_type("type")
+                        .expect("pre-CPS validation checked function type");
+                    let callable = tribute_control::Callable::from_type_ref(ctx, logical_type)
+                        .expect("pre-CPS validation checked callable type");
+                    let convention = tribute_control::callable_convention(ctx, logical_type)
+                        .expect("pre-CPS validation checked callable convention");
                     funcs.insert(
                         symbol,
                         CallableInfo {
                             symbol,
-                            convention: convert_convention(
-                                tribute_control::callable_convention(ctx, logical_type).unwrap(),
-                            ),
+                            convention: convert_convention(convention),
                             source_result: callable.result(ctx),
                             source_params: callable.params(ctx).to_vec(),
                         },
                     );
                 }
-                for nested in ctx.op(op).regions.iter().copied() {
-                    visit(ctx, nested, funcs);
+                for nested in data.regions.iter().copied() {
+                    collect_scope(ctx, nested, funcs, nested_modules);
                 }
             }
         }
     }
-    if let Some(body) = module.body(ctx) {
-        visit(ctx, body, &mut funcs);
+
+    fn visit_module(
+        ctx: &IrContext,
+        module_op: OpRef,
+        funcs_by_module: &mut HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
+    ) {
+        let mut funcs = HashMap::new();
+        let mut nested_modules = Vec::new();
+        for region in ctx.op(module_op).regions.iter().copied() {
+            collect_scope(ctx, region, &mut funcs, &mut nested_modules);
+        }
+        funcs_by_module.insert(module_op, funcs);
+        for nested in nested_modules {
+            visit_module(ctx, nested, funcs_by_module);
+        }
     }
-    Ok(funcs)
+
+    let mut funcs_by_module = HashMap::new();
+    visit_module(ctx, module.op(), &mut funcs_by_module);
+    funcs_by_module
+}
+
+fn verify_candidate_or_restore_aliases(
+    ctx: &mut IrContext,
+    candidate: Module,
+    source_aliases: &[(Symbol, TypeRef)],
+) -> Result<(), TributeControlToCpsError> {
+    if let Err(error) = verify_tribute_control_post_cps(ctx, candidate) {
+        for (name, ty) in source_aliases {
+            ctx.register_type_alias(*name, *ty);
+        }
+        ctx.remove_op(candidate.op());
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Atomically convert the complete logical callable/control graph.
@@ -2708,7 +2930,7 @@ pub fn tribute_control_to_cps(
     declarations: &[tribute_control::OperationDeclaration],
 ) -> Result<(), TributeControlToCpsError> {
     verify_tribute_control_pre_cps(ctx, module, declarations)?;
-    let funcs = collect_callable_graph(ctx, module)?;
+    let funcs_by_module = collect_callable_graph(ctx, module);
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -2736,7 +2958,7 @@ pub fn tribute_control_to_cps(
         parent_region: None,
     });
     {
-        let mut converter = Converter::new(ctx, new_block, funcs);
+        let mut converter = Converter::new(ctx, new_block, funcs_by_module, module.op());
         let mut mapping = HashMap::new();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.to_vec();
         for source in source_ops {
@@ -2772,18 +2994,23 @@ pub fn tribute_control_to_cps(
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(*name, *ty);
     }
-    if let Err(error) = verify_tribute_control_post_cps(ctx, candidate) {
+    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases)?;
+
+    ctx.detach_region(new_region);
+    ctx.remove_op(candidate.op());
+    ctx.detach_region(source_region);
+    ctx.op_mut(module.op()).regions.push(new_region);
+    ctx.region_mut(new_region).parent_op = Some(module.op());
+    if let Err(error) = verify_tribute_control_post_cps(ctx, module) {
+        ctx.detach_region(new_region);
+        ctx.op_mut(module.op()).regions.push(source_region);
+        ctx.region_mut(source_region).parent_op = Some(module.op());
         for (name, ty) in &source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
         return Err(error);
     }
-
-    ctx.detach_region(new_region);
-    ctx.detach_region(source_region);
-    ctx.op_mut(module.op()).regions.push(new_region);
-    ctx.region_mut(new_region).parent_op = Some(module.op());
-    verify_tribute_control_post_cps(ctx, module)
+    Ok(())
 }
 
 /// Pass-manager wrapper carrying the verified source operation declarations.
@@ -2946,6 +3173,41 @@ mod tests {
     }
 
     #[test]
+    fn nested_modules_resolve_same_named_callables_in_their_own_scope() {
+        let input = r#"core.module @outer {
+  tribute_control.func @same(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @outer_call(%value: core.i32) -> core.i32 convention(direct) {
+    %result = tribute_control.call %value {callee = @same} : core.i32
+    tribute_control.return %result
+  }
+  core.module @inner {
+    tribute_control.func @same(%value: core.i1) -> core.i1 convention(evidence_direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
+      %result = tribute_control.call %value {callee = @same} : core.i1
+      tribute_control.return %result
+    }
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        tribute_control_to_cps(&mut ctx, module, &[]).unwrap();
+        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
+        assert!(printed.contains("func.func @outer_call"), "{printed}");
+        assert!(printed.contains("func.func @inner_call"), "{printed}");
+        assert!(printed.contains("tribute.calling_convention = 0"));
+        assert!(printed.contains("tribute.calling_convention = 1"));
+
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+    }
+
+    #[test]
     fn textual_nested_attribute_types_convert_atomically() {
         let input = r#"core.module @test {
   !callback = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
@@ -2980,6 +3242,218 @@ mod tests {
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("func.call"));
         assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
+        let malformed = [
+            (
+                r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(direct) {
+    %result = tribute_control.call %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+                "requires 'callee' attribute",
+            ),
+            (
+                r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(direct) {
+    %result = tribute_control.call %value {callee = @missing} : core.i32
+    tribute_control.return %result
+  }
+}"#,
+                "unresolved callee @missing",
+            ),
+            (
+                r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(direct) {
+    %result = tribute_control.call_indirect %value, %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+                "callee operand must have tribute_control.callable type",
+            ),
+            (
+                r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(cps) {
+    %result = tribute_control.perform %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+                "requires 'ability_ref' attribute",
+            ),
+            (
+                r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(cps) {
+    %result = tribute_control.handle : core.i32
+    tribute_control.return %result
+  }
+}"#,
+                "expects 3 region(s)",
+            ),
+        ];
+        for (input, expected) in malformed {
+            let (mut ctx, module) = parse(input);
+            let before = print_module(&ctx, module.op());
+            let error = tribute_control_to_cps(&mut ctx, module, &[]).unwrap_err();
+            assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
+        let input = r#"core.module @test {
+  ^entry:
+    scf.br [^exit]
+  ^exit:
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error.to_string().contains("forbids block successors"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
+        let input = r#"core.module @test {
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(cps) {
+    scf.switch %value {
+      scf.case {
+        %identity = tribute_control.lambda(%nested: core.i32) -> core.i32 convention(direct) captures [] {
+          tribute_control.return %nested
+        }
+        scf.yield
+      }
+    }
+    tribute_control.return %value
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error.to_string().contains("scf.case requires a value"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn source_shape_validation_rejects_every_malformed_switch_component() {
+        let malformed = [
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  scf.switch {
+    scf.default {
+      scf.yield
+    }
+  }
+}"#,
+                "one discriminant, no results, and one body region",
+            ),
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  %result = scf.switch %value : core.i32 {
+    scf.default {
+      scf.yield
+    }
+  }
+}"#,
+                "one discriminant, no results, and one body region",
+            ),
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  scf.switch %value {
+    ^first:
+      scf.default {
+        scf.yield
+      }
+    ^second:
+  }
+}"#,
+                "body region requires exactly one block",
+            ),
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  scf.switch %value {
+    %invalid = arith.const {value = 1} : core.i32
+  }
+}"#,
+                "body may contain only scf.case and scf.default",
+            ),
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  scf.switch %value {
+    scf.case {value = 0}
+  }
+}"#,
+                "arm requires exactly one region",
+            ),
+            (
+                r#"core.module @test {
+  %value = arith.const {value = 0} : core.i32
+  scf.switch %value {
+    scf.default {
+      ^first:
+        scf.yield
+      ^second:
+    }
+  }
+}"#,
+                "arm region requires exactly one block",
+            ),
+        ];
+
+        for (input, expected) in malformed {
+            let (ctx, module) = parse(input);
+            let failures = verify_source_conversion_shapes(&ctx, module);
+            assert!(
+                failures
+                    .iter()
+                    .any(|failure| failure.message.contains(expected)),
+                "{failures:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
+        let input = r#"core.module @candidate {
+  !callback = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  func.func @broken(%value: core.i32) -> core.i32 {
+    func.return %value
+  }
+}"#;
+        let (mut ctx, candidate) = parse(input);
+        let before = print_module(&ctx, candidate.op());
+        let source_aliases = ctx.type_aliases().to_vec();
+        let (alias_name, source_type) = source_aliases[0];
+        let converted_type = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        ctx.register_type_alias(alias_name, converted_type);
+
+        let error =
+            verify_candidate_or_restore_aliases(&mut ctx, candidate, &source_aliases).unwrap_err();
+        assert_eq!(error.boundary, POST_CPS_BOUNDARY);
+        assert_eq!(ctx.type_alias_by_name(alias_name), Some(source_type));
+        assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
+        assert_eq!(ctx.type_alias_by_type(converted_type), None);
+        assert_eq!(print_module(&ctx, candidate.op()), before);
     }
 
     #[test]
@@ -3285,6 +3759,45 @@ mod tests {
             i32_type,
         )];
         tribute_control_to_cps(&mut ctx, module, &declarations).unwrap();
+        let mut consumed_get = None;
+        let mut consumed_set = None;
+        fn find_one_shot_state_ops(
+            ctx: &IrContext,
+            op: OpRef,
+            consumed_get: &mut Option<ValueRef>,
+            consumed_set: &mut Option<ValueRef>,
+        ) {
+            let is_one_shot_type = |ty: TypeRef| {
+                ctx.types
+                    .get(ty)
+                    .attrs
+                    .get_symbol("name")
+                    .is_some_and(|name| {
+                        name.with_str(|text| text.starts_with("__tribute_one_shot_state"))
+                    })
+            };
+            if let Ok(get) = adt::StructGet::from_op(ctx, op)
+                && is_one_shot_type(get.r#type(ctx))
+            {
+                *consumed_get = Some(get.r#ref(ctx));
+            }
+            if let Ok(set) = adt::StructSet::from_op(ctx, op)
+                && is_one_shot_type(set.r#type(ctx))
+            {
+                assert!(ctx.op_results(op).is_empty(), "struct_set mutates in place");
+                *consumed_set = Some(set.r#ref(ctx));
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        find_one_shot_state_ops(ctx, child, consumed_get, consumed_set);
+                    }
+                }
+            }
+        }
+        find_one_shot_state_ops(&ctx, module.op(), &mut consumed_get, &mut consumed_set);
+        assert_eq!(consumed_get, consumed_set);
+        assert!(consumed_get.is_some(), "one-shot state was not emitted");
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 1);
         assert!(!printed.contains("effect."));
@@ -3461,6 +3974,70 @@ mod tests {
         assert!(!printed.contains("tribute_control.func "));
         assert!(!printed.contains("tribute_control.func_ref "));
         assert!(!printed.contains("tribute_control.call_indirect "));
+    }
+
+    #[test]
+    fn func_ref_adapters_cover_every_legal_convention_strengthening() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !evidence = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 1}
+  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @evidence(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @cps(%value: core.i32) -> core.i32 convention(cps) {
+    tribute_control.return %value
+  }
+  tribute_control.func @refs(%value: core.i32) -> core.i32 convention(cps) {
+    %direct_direct = tribute_control.func_ref {func_ref = @direct} : !direct
+    %direct_evidence = tribute_control.func_ref {func_ref = @direct} : !evidence
+    %direct_cps = tribute_control.func_ref {func_ref = @direct} : !cps
+    %evidence_evidence = tribute_control.func_ref {func_ref = @evidence} : !evidence
+    %evidence_cps = tribute_control.func_ref {func_ref = @evidence} : !cps
+    %cps_cps = tribute_control.func_ref {func_ref = @cps} : !cps
+    tribute_control.return %value
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        tribute_control_to_cps(&mut ctx, module, &[]).unwrap();
+        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(
+            printed
+                .matches("func.func @__tribute_func_ref_adapter")
+                .count(),
+            6,
+            "{printed}"
+        );
+        assert!(!printed.contains("tribute_control."));
+    }
+
+    #[test]
+    fn weaker_func_ref_adapter_is_rejected_before_mutation() {
+        let input = r#"core.module @test {
+  !evidence = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 1}
+  tribute_control.func @cps(%value: core.i32) -> core.i32 convention(cps) {
+    tribute_control.return %value
+  }
+  tribute_control.func @broken(%value: core.i32) -> core.i32 convention(evidence_direct) {
+    %callee = tribute_control.func_ref {func_ref = @cps} : !evidence
+    tribute_control.return %value
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("result convention must be at least as strong"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
