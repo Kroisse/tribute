@@ -1313,7 +1313,7 @@ fn lower_cps_call_expr<'db, D: ControlDomain>(
                 arg_values = pack_ability_args(builder, location, arg_values);
                 let ability_name = ability.qualified(builder.db());
                 let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
-                let perform = ability::perform(
+                let perform = ability::legacy_perform(
                     builder.ir,
                     location,
                     continuation,

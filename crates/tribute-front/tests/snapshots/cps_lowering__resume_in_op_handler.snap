@@ -99,7 +99,7 @@ core.module @test {
       }
       %57 = arith.const {value = 0} : tribute_rt.anyref
       %58 = effect.fresh_prompt_tag : core.i32
-      %59 = ability.handle_dispatch %10, %58, %11, %57 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %59 = ability.legacy_handle_dispatch %10, %58, %11, %57 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb18(%60: tribute_rt.anyref):
               %61 = core.unrealized_conversion_cast %60 : core.i32

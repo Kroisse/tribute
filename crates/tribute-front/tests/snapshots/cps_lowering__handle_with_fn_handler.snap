@@ -8,7 +8,7 @@ core.module @test {
   !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
 
   func.func @get_state(%0: !t1) -> core.i32 attributes {tribute.calling_convention = 1} {
-      %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %1 = ability.legacy_call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       %2 = core.unrealized_conversion_cast %1 : core.i32
       func.return %2
   }
@@ -86,7 +86,7 @@ core.module @test {
           func.return %37
       }
       %50 = effect.fresh_prompt_tag : core.i32
-      %51 = ability.handle_dispatch %11, %50, %12, %32 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %51 = ability.legacy_handle_dispatch %11, %50, %12, %32 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb13(%52: tribute_rt.anyref):
               %53 = core.unrealized_conversion_cast %52 : core.i32

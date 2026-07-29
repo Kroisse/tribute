@@ -2,7 +2,7 @@
 //!
 //! Verifies that:
 //! - `resume` expressions lower to `func.call_indirect` on the continuation
-//! - Ability op calls in blocks produce `ability.perform` with CPS continuations
+//! - Ability op calls in blocks produce `ability.legacy_perform` with CPS continuations
 //! - Handle expressions produce `ability.handle_dispatch` with handler closures
 //! - Nested ability op calls chain continuations correctly
 
@@ -89,7 +89,7 @@ fn main() { }
 // CPS Block Lowering Tests
 // ========================================================================
 
-/// A single ability op call in a block should produce `ability.perform`
+/// A single ability op call in a block should produce `ability.legacy_perform`
 /// with a trivial identity continuation.
 #[salsa_test]
 fn test_single_ability_op_in_block(db: &salsa::DatabaseImpl) {
@@ -115,7 +115,7 @@ fn main() { }
 }
 
 /// An ability op call followed by a pure expression should produce
-/// `ability.perform` with a continuation that evaluates the remaining code.
+/// `ability.legacy_perform` with a continuation that evaluates the remaining code.
 #[salsa_test]
 fn test_ability_op_then_pure_expr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -141,7 +141,7 @@ fn main() { }
 }
 
 /// Two sequential ability op calls should chain continuations:
-/// the first continuation contains the second `ability.perform`.
+/// the first continuation contains the second `ability.legacy_perform`.
 #[salsa_test]
 fn test_sequential_ability_ops(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -946,7 +946,7 @@ fn main() { }
 // ========================================================================
 
 /// An ability op with multiple arguments should pack them into a tuple
-/// before passing to `ability.perform`.
+/// before passing to `ability.legacy_perform`.
 #[salsa_test]
 fn test_multi_arg_ability_op(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

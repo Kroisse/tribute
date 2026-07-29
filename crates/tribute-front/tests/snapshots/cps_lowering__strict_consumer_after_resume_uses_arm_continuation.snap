@@ -18,7 +18,7 @@ core.module @test {
       %0 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : !t0
       %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref {
-          %4 = ability.perform %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          %4 = ability.legacy_perform %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           func.return %4
       }
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -72,7 +72,7 @@ core.module @test {
       }
       %42 = arith.const {value = 0} : tribute_rt.anyref
       %43 = effect.fresh_prompt_tag : core.i32
-      %44 = ability.handle_dispatch %7, %43, %8, %42 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %44 = ability.legacy_handle_dispatch %7, %43, %8, %42 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb12(%45: tribute_rt.anyref):
               %46 = func.call_indirect %1, %45 : tribute_rt.anyref

@@ -207,7 +207,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -241,7 +241,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -278,7 +278,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -318,7 +318,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -354,7 +354,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -395,7 +395,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -440,7 +440,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -481,7 +481,7 @@ mod tests {
   func.func @test_fn() -> core.ptr {
     %yr = arith.const {value = 0} : core.ptr
     %hf = arith.const {value = 0} : core.ptr
-    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+    %1 = ability.legacy_handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v

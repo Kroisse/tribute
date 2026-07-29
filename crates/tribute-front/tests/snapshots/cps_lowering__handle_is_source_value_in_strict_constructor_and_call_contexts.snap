@@ -9,7 +9,7 @@ core.module @test {
   !Boxed = adt.enum() {name = @Boxed, variants = [[@Boxed, [tribute_rt.anyref]]]}
 
   func.func @read(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
-      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %2 = ability.legacy_perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       func.return %2
   }
   func.func @consume(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.calling_convention = 0} {
@@ -83,7 +83,7 @@ core.module @test {
       }
       %34 = arith.const {value = 0} : tribute_rt.anyref
       %35 = effect.fresh_prompt_tag : core.i32
-      %36 = ability.handle_dispatch %8, %35, %9, %34 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %36 = ability.legacy_handle_dispatch %8, %35, %9, %34 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
             ^bb11(%37: tribute_rt.anyref):
               %38 = core.unrealized_conversion_cast %37 : core.i32

@@ -7,7 +7,7 @@ core.module @test {
   !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
   func.func @effectful(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
-      %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Flag}, op_name = @read} : tribute_rt.anyref
+      %2 = ability.legacy_perform %1 {ability_ref = core.ability_ref() {name = @Flag}, op_name = @read} : tribute_rt.anyref
       func.return %2
   }
   func.func @after(%0: core.i1) -> core.i1 attributes {tribute.calling_convention = 0} {

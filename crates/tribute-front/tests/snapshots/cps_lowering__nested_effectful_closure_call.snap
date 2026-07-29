@@ -8,7 +8,7 @@ core.module @test {
 
   func.func @run(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = closure.lambda(%3: !t0, %4: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} {
-          %5 = ability.perform %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          %5 = ability.legacy_perform %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           func.return %5
       }
       %6 = closure.lambda(%7: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
