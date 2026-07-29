@@ -48,31 +48,30 @@ Partial conversion may leave unknown operations for later passes. Full
 conversion boundaries, such as backend-ready native IR, must reject unknown
 operations.
 
-The direct-control migration uses these named boundaries:
+직접형 control 마이그레이션은 다음과 같은 이름의 경계를 사용한다:
 
-| Boundary | `ConversionTarget` mode | Required legality |
+| 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
-| `tribute-control-pre-cps` | Full for frontend conformance; partial while composing migration passes | `tribute_control.*` may coexist with `core`, `func`, `scf`, `arith`, `adt`, `list`, `closure`, `tribute_rt`, and `tribute_io`. Existing `ability.*`, `effect.*`, and legacy CPS construction operations are illegal. |
-| `tribute-control-post-cps` | Partial after the shared CPS conversion | The entire `tribute_control` dialect is illegal. Existing `ability.perform`, `ability.call`, handler/evidence operations, `effect.*`, `closure.*`, and ordinary dialects may coexist for their subsequent shared passes. |
-| `tribute-backend-ready-native` | Full Tribute boundary followed by the generic Cranelift boundary | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, and conversion casts are absent. Only the explicitly listed native infrastructure and `clif.*` operations remain. |
-| `tribute-backend-ready-wasm` | Partial high-level rejection followed by the existing emission-ready checks | `tribute_control`, `ability`, and `effect` are explicitly illegal before backend-ready Wasm IR; `wasm_gc` is additionally illegal before emission. |
+| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 마이그레이션 pass 조합 중에는 partial | `tribute_control.*`은 `core`, `func`, `scf`, `arith`, `adt`, `list`, `closure`, `tribute_rt`, `tribute_io`와 공존할 수 있다. 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
+| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect 전체가 illegal이다. 기존 `ability.perform`, `ability.call`, handler/evidence operation, `effect.*`, `closure.*`, 일반 dialect는 이후 shared pass를 위해 공존할 수 있다. |
+| `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
+| `tribute-backend-ready-wasm` | 기존 emission-ready 검사 전에 high-level operation을 partial 방식으로 거부 | backend-ready Wasm IR 전에 `tribute_control`, `ability`, `effect`를 명시적으로 illegal로 지정하며, emission 전에는 `wasm_gc`도 illegal이다. |
 
-The post-CPS helper is implementable with the current API as
-`ConversionTarget::new().illegal_dialect("tribute_control")` plus partial
-verification. Frontend conformance and backend full targets must enumerate
-their legal dialects and operations because unknown is not legal in full mode.
-They must not mark `func.func`, `closure.lambda`, or another region-owning
-container recursively legal: doing so would hide illegal control operations in
-nested regions. The generic `trunk-ir` Cranelift boundary remains
-Tribute-agnostic; the Tribute pipeline owns the explicit rejection of
-Tribute-specific high-level dialects before invoking it.
+현재 API에서는 `ConversionTarget::new().illegal_dialect("tribute_control")`와
+partial verification을 조합해 post-CPS helper를 구현할 수 있다. Full mode에서는
+unknown operation이 legal하지 않으므로 frontend 적합성 target과 backend full
+target이 legal dialect와 operation을 열거해야 한다. `func.func`,
+`closure.lambda` 또는 다른 region 소유 container를 recursively legal로
+표시해서는 안 된다. 그렇게 하면 nested region의 illegal control operation이
+가려진다. Generic `trunk-ir`의 Cranelift 경계는 Tribute에 독립적으로 유지한다.
+이를 호출하기 전에 Tribute 전용 high-level dialect를 명시적으로 거부하는 책임은
+Tribute pipeline에 있다.
 
-Transiently, one rewrite may contain both source `tribute_control.*` and its
-new `ability.*`/`effect.*` output. That is an implementation state inside
-partial conversion, not a successful named boundary. Successful
-`tribute-control-post-cps` verification reports every residual
-`tribute_control.*` operation with its source location as a conversion
-failure.
+하나의 rewrite 도중에는 source `tribute_control.*`과 새
+`ability.*`/`effect.*` 결과가 일시적으로 공존할 수 있다. 이는 partial
+conversion 내부의 구현 상태이지 성공한 named boundary가 아니다. 성공한
+`tribute-control-post-cps` verification은 남은 모든 `tribute_control.*`
+operation을 source location과 함께 conversion failure로 보고한다.
 
 ## Validation Layers
 
@@ -109,52 +108,53 @@ interfaces describe behavior, not validation phases.
 `tribute.*` represents source-level constructs that should disappear after
 resolution, type checking, TDNR, and AST-to-IR lowering.
 
-### Direct-style control
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="direct-style-control"></a>
 
-`tribute_control.*` is the target-independent, direct-style boundary between
-typed frontend lowering and shared CPS conversion. The dialect identifier is
-exactly `tribute_control`. TrunkIR parses a qualified operation as one
-`<dialect>.<operation>` pair, so spellings with another separator, such as a
-dot inside the dialect identifier, are invalid.
+### 직접형 제어
 
-The dialect models only control constructs that the CPS pass must transform.
-ANF is an input invariant, not the dialect's identity. Arithmetic, ordinary
-direct and indirect calls, ADT/list/tuple/record construction, closures, and
-structured selection remain in their existing dialects. In particular, there
-is no `tribute_control.invoke`: `func.call`, `func.call_indirect`, and
-`closure.lambda` already carry the callable type and
-`Direct < EvidenceDirect < Cps` convention metadata needed by shared
-conversion. A new invocation operation would duplicate those operations
-without adding a control fact.
+`tribute_control.*`은 typed frontend lowering과 shared CPS conversion 사이의
+target-independent 직접형 경계다. Dialect identifier는 정확히
+`tribute_control`이다. TrunkIR은 qualified operation을 하나의
+`<dialect>.<operation>` 쌍으로 parse하므로 dialect identifier 안에 점을 넣는
+등 separator를 하나 더 사용하는 표기는 invalid이다.
 
-At the pre-CPS boundary, all `func.func`, `closure.lambda`, `func.call`, and
-`func.call_indirect` signatures are source-logical regardless of convention:
-source parameters in, source result out, with no hidden evidence or `done_k`
-operands. Convention metadata is required on the definition/lambda and its
-callable type. Shared conversion rewrites definitions and all direct/indirect
-call sites together to the existing `CallableAbi`; the complete rule is in
-[cps-effects.md](cps-effects.md#pre-cps-callable-shape).
+이 dialect는 CPS pass가 변환해야 하는 control construct만 모델링한다. ANF는
+input invariant이지 dialect의 정체성이 아니다. 산술, 일반 direct/indirect call,
+ADT/list/tuple/record 구성, closure, structured selection은 기존 dialect에
+남는다. 특히 `tribute_control.invoke`는 없다. `func.call`,
+`func.call_indirect`, `closure.lambda`가 이미 callable type과 shared
+conversion에 필요한 `Direct < EvidenceDirect < Cps` convention metadata를
+운반한다. 새 invocation operation을 추가하면 control fact를 더하지 못한 채
+기존 operation만 중복한다.
 
-The minimal operation set is:
+pre-CPS 경계에서 모든 `func.func`, `closure.lambda`, `func.call`,
+`func.call_indirect` signature는 convention과 무관하게 source-logical 형상을
+유지한다. Source parameter를 받고 source result를 내며 hidden evidence나
+`done_k` operand가 없다. Definition/lambda와 해당 callable type에는 convention
+metadata가 필수다. Shared conversion은 definition과 모든 direct/indirect call
+site를 기존 `CallableAbi`에 맞춰 함께 rewrite한다. 전체 규칙은
+[cps-effects.md](cps-effects.md#pre-cps-callable-shape)에 있다.
 
-| Operation | Purpose |
+최소 operation 집합은 다음과 같다:
+
+| Operation | 용도 |
 | ---- | ---- |
-| `tribute_control.perform` | Invoke one source `fn` or general `op` in direct style, retaining its semantic kind |
-| `tribute_control.handle` | Delimit a direct-style computation, its completion arm, and its handler table |
-| `tribute_control.handler` | Describe one `fn` or general `op` handler arm inside a handle |
-| `tribute_control.resume` | Consume the affine resumption bound by a resumptive general handler arm |
-| `tribute_control.yield` | Terminate one executable `tribute_control` region with its logical value |
+| `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
+| `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
+| `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
+| `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
+| `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-The dialect also owns the opaque type
-`tribute_control.resume_token<input, answer>`. `input` is the value accepted
-by the suspended operation's continuation, and `answer` is the logical result
-of running that continuation through the enclosing handle. The type is not a
-source type, callable ABI, backend carrier, or permission to inspect a
-continuation representation. A source general operation whose logical result
-is `Never` uses the canonical `core.never` TypeRef, creates no resumption, and
-exposes no `resume_token`. The current pre-M2 frontend's `anyref` placeholder
-for `Never` is not valid at this new boundary because a verifier must identify
-the non-resumptive case without guessing from an erased type.
+이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
+소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는
+그 continuation을 enclosing handle까지 실행한 logical result다. 이 type은 source
+type, callable ABI, backend carrier가 아니며 continuation representation을
+검사할 권한도 아니다. Logical result가 `Never`인 source general operation은
+canonical `core.never` TypeRef를 사용하고 resumption을 만들지 않으며
+`resume_token`도 노출하지 않는다. Verifier가 erased type을 추측하지 않고
+non-resumptive case를 식별해야 하므로 현재 pre-M2 frontend의 `Never`용 `anyref`
+placeholder는 이 새 경계에서 valid하지 않다.
 
 #### `tribute_control.perform`
 
@@ -166,69 +166,64 @@ the non-resumptive case without guessing from an erased type.
 } : ResultType
 ```
 
-- **Operands:** zero or more already-evaluated source arguments in declaration
-  order. Values retain their logical types; tuple packing and erasure are
-  conversion work.
-- **Results:** exactly one logical operation result. A source `Never` result is
-  `core.never`; it does not select a physical `Never` control carrier.
-- **Attributes:** required `ability_ref: Type`, `op_name: Symbol`, and
-  `operation_kind: Symbol`. `operation_kind` is exactly `fn` or `op` and is
-  copied from the typechecked operation declaration. It is source-semantic
-  metadata, not a lowering hint inferred from the body or use site.
-- **Regions and block arguments:** none.
-- **Terminator:** none; this is not a terminator in direct-style IR.
-- **Semantics:** invokes the source operation with its declared kind. For
-  `operation_kind = @fn`, the selected handler result automatically resumes
-  direct-style evaluation; shared conversion does not capture a
-  continuation and uses the existing tail-dispatch path. For
-  `operation_kind = @op`, a matching handler may resume, in which case
-  execution continues after the operation and the result becomes `%result`.
-  If it does not resume, the selected general handler completes the matching
-  handle and the apparent suffix is not evaluated. A source `op -> Never`
-  cannot resume and therefore never constructs a logical resumption or
-  captures the apparent suffix.
+- **피연산자:** declaration 순서로 놓인, 이미 평가된 source argument 0개 이상이다.
+  값은 logical type을 유지하며 tuple packing과 erasure는 conversion이 담당한다.
+- **결과:** logical operation result 하나만 만든다. Source `Never` result는
+  `core.never`이며 physical `Never` control carrier를 선택하지 않는다.
+- **속성:** `ability_ref: Type`, `op_name: Symbol`,
+  `operation_kind: Symbol`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
+  typecheck된 operation declaration에서 복사한다. 이는 body나 use site에서
+  추론하는 lowering hint가 아니라 source-semantic metadata다.
+- **영역과 block argument:** 없다.
+- **종결자:** 아니다. 직접형 IR에서 이 operation은 terminator가 아니다.
+- **의미:** 선언된 kind로 source operation을 호출한다.
+  `operation_kind = @fn`이면 선택된 handler result가 직접형 평가를 자동으로
+  resume한다. Shared conversion은 continuation을 capture하지 않고 기존 tail
+  dispatch 경로를 사용한다. `operation_kind = @op`이면 일치하는 handler가
+  resume할 수 있으며, 이 경우 operation 뒤에서 실행을 계속하고 `%result`가
+  결과가 된다. Resume하지 않으면 선택된 general handler가 일치하는 handle을
+  완료하고 겉으로 보이는 suffix는 평가하지 않는다. Source `op -> Never`는
+  resume할 수 없으므로 logical resumption을 만들거나 겉으로 보이는 suffix를
+  capture하지 않는다.
 
-| `operation_kind` | Direct-style result | Required shared lowering | Matching handler shape |
+| `operation_kind` | 직접형 result | 필수 shared lowering | 일치하는 handler 형상 |
 | ---- | ---- | ---- | ---- |
-| `@fn` | Declared source result | No suffix capture; `ability.call` then tail dispatch | No resume token; yield the declared operation result for automatic resumption |
-| `@op` | Declared source result, using canonical `core.never` for `Never` | Capture the suffix for `ability.perform` and CPS dispatch, except use the reject adapter without suffix capture for `Never` | Final resume token except for `Never`; yield the handle answer on non-resumption |
+| `@fn` | 선언된 source result | suffix capture 없이 `ability.call` 뒤 tail dispatch | resume token 없이 선언된 operation result를 yield하여 자동 resume |
+| `@op` | 선언된 source result. `Never`에는 canonical `core.never` 사용 | `ability.perform`과 CPS dispatch를 위해 suffix를 capture하되, `Never`에는 suffix capture 없는 reject adapter 사용 | `Never`를 제외하면 마지막에 resume token을 받고, resume하지 않을 때 handle answer를 yield |
 
-- **Local verification:** requires the three attributes, checks the
-  `operation_kind` domain, requires exactly one result and no regions, and
-  requires resolved operand/result types rather than inference variables.
-  Symbol-aware frontend conformance additionally checks that `ability_ref` and
-  `op_name` resolve to an operation declaration whose declared `fn`/`op` kind,
-  parameter types, and result type equal the attributes, operands, and result.
-  Neither verifier may infer the kind from control flow, handlers, result type,
-  or calling convention. The `tribute_control.handler` and containing-handle
-  verifiers apply the corresponding handler row above to handler entries.
-- **Ownership and value flow:** operands are ordinary SSA uses. The operation
-  creates no source-visible continuation value; shared CPS conversion owns
-  continuation construction. For `@fn`, conversion produces
-  `ability.call`/tail dispatch without a continuation. For `@op`, conversion
-  produces `ability.perform`/CPS dispatch with the suffix continuation. For
-  `op -> Never`, it instead supplies the existing ability/effect ABI with a
-  real zero-capture reject continuation whose body is `func.unreachable`; it
-  does not capture the source suffix. Null, an in-band sentinel, or arbitrary
-  `anyref` is not a continuation.
-- **Location:** the source location of the ability-operation call, covering
-  the qualified callee and arguments when available.
+- **지역 검증:** 세 attribute를 요구하고 `operation_kind` domain을
+  검사하며, result가 정확히 하나이고 region은 없으며 operand/result type이
+  inference variable이 아니라 resolve되었는지 확인한다. Symbol-aware frontend
+  적합성 검사는 `ability_ref`와 `op_name`이 resolve한 operation declaration의
+  `fn`/`op` kind, parameter type, result type이 attribute, operand, result와
+  일치하는지도 확인한다. 어떤 verifier도 control flow, handler, result type,
+  calling convention에서 kind를 추론해서는 안 된다.
+  `tribute_control.handler`와 containing-handle verifier는 handler entry에 위 표의
+  해당 handler 형상을 적용한다.
+- **소유권과 값 흐름:** operand는 일반 SSA use다. 이 operation은
+  source-visible continuation value를 만들지 않으며 continuation 구성은 shared
+  CPS conversion이 소유한다. `@fn`에는 continuation 없는 `ability.call`/tail
+  dispatch를, `@op`에는 suffix continuation을 받는 `ability.perform`/CPS
+  dispatch를 만든다. `op -> Never`에는 대신 기존 ability/effect ABI가 요구하는
+  실제 zero-capture reject continuation을 공급하며 그 body는
+  `func.unreachable`이다. 이 continuation은 source suffix를 capture하지 않는다.
+  Null, in-band sentinel, 임의의 `anyref`는 continuation이 아니다.
+- **위치:** 가능하면 qualified callee와 argument를 모두 포함하는
+  ability-operation call의 source location이다.
 
-Every source ability invocation uses `tribute_control.perform` at this
-boundary. The shared conversion is the first phase that chooses a dispatch
-representation, using `operation_kind` without reclassifying it. In
-particular, an `@op` whose handler body appears always tail-resumptive remains
-an `@op`; recognizing and optimizing that shape is a later IR optimization
-after semantic lowering.
+이 경계에서는 모든 source ability invocation이 `tribute_control.perform`을
+사용한다. Shared conversion이 `operation_kind`를 재분류하지 않고 dispatch
+representation을 선택하는 첫 phase다. 특히 handler body가 항상
+tail-resumptive처럼 보이는 `@op`도 `@op`으로 유지된다. 해당 형상을 인식하고
+최적화하는 작업은 semantic lowering 뒤의 후속 IR optimization이다.
 
-The reject continuation is compatibility glue for the existing
-`ability.perform` and `effect.dispatch_cps` operand contract, both of which
-require an explicit continuation. It has the same callable ABI as an ordinary
-lowered continuation, contains no captures, and traps if invoked. It may be
-deduplicated per compilation unit, but each use passes a typed closure value
-through the normal closure-to-`anyref` conversion. This rule preserves source
-`Never` semantics without adding an operation or choosing the physical CPS
-result carrier.
+Reject continuation은 명시적인 continuation을 요구하는 기존
+`ability.perform`과 `effect.dispatch_cps` operand contract를 위한 compatibility
+glue다. 일반 lowered continuation과 같은 callable ABI를 사용하고 capture가
+없으며 호출되면 trap한다. Compilation unit마다 deduplicate할 수 있지만 각 use는
+typed closure value를 일반 closure-to-`anyref` conversion을 통해 전달한다. 이
+규칙은 operation을 추가하거나 physical CPS result carrier를 선택하지 않으면서
+source `Never` 의미를 보존한다.
 
 #### `tribute_control.handle`
 
@@ -248,43 +243,38 @@ result carrier.
   }
 ```
 
-- **Operands:** none. Values captured by executable regions use normal
-  enclosing SSA visibility.
-- **Results:** exactly one logical handle result.
-- **Attributes:** none are required. Dynamic prompt/owner tags and backend
-  carrier choices are deliberately absent.
-- **Regions:** exactly three, in the fixed order `body`, `completion`,
-  `handlers`.
-- **Block arguments:** `body` has one block and no arguments. `completion` has
-  one block with exactly one argument, whose type equals the value yielded by
-  `body`. `handlers` has one block with no arguments and contains only
-  `tribute_control.handler` entries.
-- **Terminators:** `body` and `completion` end in
-  `tribute_control.yield`. The `handlers` block is a declarative table and has
-  no terminator.
-- **Semantics:** normal completion of `body` evaluates `completion` exactly
-  once and returns its value. A general handler arm that finishes without
-  resuming returns its arm value as the handle result and bypasses
-  `completion`. A tail-resumptive `fn` arm returns an operation result that is
-  fed automatically to the suspended computation.
-- **Local verification:** enforces the fixed region count, single-block
-  shapes, block-argument counts, terminators, yielded type equalities, and that
-  every direct child of `handlers` is a unique
-  `(ability_ref, op_name)` `tribute_control.handler`. Its result type must
-  equal the completion yield type and every general handler's answer type.
-- **Ownership and value flow:** the operation owns the delimited resumption
-  capabilities created when its body performs resumptive general operations.
-  They are exposed only as `resume_token` block arguments of resumptive
-  general handler entries. Values leave executable regions only through
-  `tribute_control.yield`.
-- **Location:** the complete source `handle` expression. Region/block
-  locations use the corresponding body, completion arm, and handler-list
-  spans.
+- **피연산자:** 없다. 실행 가능한 region이 capture하는 값은 일반 enclosing SSA
+  visibility를 사용한다.
+- **결과:** logical handle result 하나만 만든다.
+- **속성:** 필수 attribute는 없다. Dynamic prompt/owner tag와 backend
+  carrier 선택은 의도적으로 포함하지 않는다.
+- **영역:** 고정된 `body`, `completion`, `handlers` 순서로 정확히 세 개다.
+- **Block argument:** `body`는 argument가 없는 block 하나다. `completion`은
+  argument가 정확히 하나인 block 하나이며, 그 type은 `body`가 yield한 value의
+  type과 같다. `handlers`는 argument가 없는 block 하나이며
+  `tribute_control.handler` entry만 포함한다.
+- **종결자:** `body`와 `completion`은 `tribute_control.yield`로 끝난다.
+  `handlers` block은 선언적 table이며 terminator가 없다.
+- **의미:** `body`가 정상 완료되면 `completion`을 정확히 한 번 평가하고 그 값을
+  반환한다. Resume하지 않고 완료된 general handler arm은 arm value를 handle
+  result로 반환하고 `completion`을 건너뛴다. Tail-resumptive `fn` arm은 중단된
+  computation에 자동으로 공급되는 operation result를 반환한다.
+- **지역 검증:** 고정된 region 개수, single-block 형상, block-argument
+  개수, terminator, yield type equality를 강제한다. 또한 `handlers`의 모든
+  direct child가 유일한 `(ability_ref, op_name)`
+  `tribute_control.handler`인지 확인한다. Result type은 completion yield type과
+  모든 general handler의 answer type과 같아야 한다.
+- **소유권과 값 흐름:** 이 operation은 body가 resumptive general
+  operation을 수행할 때 생기는 delimited resumption capability를 소유한다.
+  해당 capability는 resumptive general handler entry의 `resume_token` block
+  argument로만 노출된다. 값은 `tribute_control.yield`를 통해서만 실행 가능한
+  region 밖으로 나간다.
+- **위치:** 전체 source `handle` expression이다. Region/block location은 각각
+  대응하는 body, completion arm, handler-list span을 사용한다.
 
-The frontend always materializes a completion region. When source omits a
-`do` arm, the region is the identity operation on the body result. This removes
-an optional structural case from conversion without changing source
-semantics.
+Frontend는 항상 completion region을 materialize한다. Source에 `do` arm이 없으면
+이 region은 body result에 대한 identity operation이다. Source 의미를 바꾸지
+않으면서 conversion의 optional structural case를 없앤다.
 
 #### `tribute_control.handler`
 
@@ -301,42 +291,38 @@ tribute_control.handler {
 }
 ```
 
-- **Operands and results:** none. It is a declarative entry owned by the
-  surrounding `tribute_control.handle`.
-- **Attributes:** required `ability_ref: Type`, `op_name: Symbol`,
-  `kind: Symbol`, and `operation_result_type: Type`. `kind` is exactly `fn` or
-  `op`.
-- **Regions:** exactly one executable `body` region with one block.
-- **Block arguments:** source operation arguments appear first, in declaration
-  order and at logical types. A resumptive `op` entry has one final
-  `resume_token<operation_result_type, handle-result-type>` argument. An `op`
-  whose `operation_result_type` is source `Never` has no token, and a `fn`
-  entry has no token.
-- **Terminator:** the body ends in `tribute_control.yield`. For `fn`, the
-  yielded type equals `operation_result_type` and is automatically resumed.
-  For `op`, the yielded type equals the token's `answer` type and is the
-  enclosing handle result when the arm completes without transferring control
-  through `resume`.
-- **Local verification:** checks required attributes and domains, one block,
-  the final terminator, token position/parameters, and the yield rules above.
-  A general handler whose `operation_result_type` is `Never` must have no
-  token argument and no `tribute_control.resume` anywhere in its body,
-  including nested regions.
-  Parent placement, uniqueness, and equality with the enclosing handle result
-  are checked by the local verifier of the containing handle. Symbol-aware
-  frontend conformance also checks that the referenced declaration has the
-  same `kind`, argument types, and `operation_result_type`; no verifier
-  reclassifies a general `op` from its body shape.
-- **Ownership and value flow:** when present, the final token argument is
-  affine. It may be unused, meaning the continuation is dropped, or have one
-  static ownership path to a `tribute_control.resume`. Capturing it in a
-  closure transfers that static path to the closure; copying, storing,
-  returning, yielding, or otherwise escaping it is invalid. Static SSA
-  validation cannot prove that a captured closure is dynamically invoked only
-  once, so the lowered resumption must also enforce one-shot consumption at
-  runtime and reject or trap a second invocation. A `fn` arm and an
-  `op -> Never` arm have no continuation capability.
-- **Location:** the source handler arm, including its operation header.
+- **피연산자와 결과:** 없다. Surrounding `tribute_control.handle`이 소유하는
+  declarative entry다.
+- **속성:** `ability_ref: Type`, `op_name: Symbol`, `kind: Symbol`,
+  `operation_result_type: Type`이 필수다. `kind`는 정확히 `fn` 또는 `op`이다.
+- **영역:** block 하나를 가진 실행 가능한 `body` region 하나만 있다.
+- **Block argument:** source operation argument가 declaration 순서와 logical
+  type으로 먼저 나온다. Resumptive `op` entry는 마지막에
+  `resume_token<operation_result_type, handle-result-type>` argument 하나를
+  갖는다. `operation_result_type`이 source `Never`인 `op`에는 token이 없고
+  `fn` entry에도 token이 없다.
+- **종결자:** body는 `tribute_control.yield`로 끝난다. `fn`에서는 yield
+  type이 `operation_result_type`과 같고 자동으로 resume한다. `op`에서는 yield
+  type이 token의 `answer` type과 같으며, arm이 `resume`을 통해 control을
+  넘기지 않고 완료되면 enclosing handle result가 된다.
+- **지역 검증:** 필수 attribute와 domain, block 하나, 마지막
+  terminator, token 위치/parameter, 위 yield 규칙을 확인한다.
+  `operation_result_type`이 `Never`인 general handler는 token argument가 없어야
+  하며 nested region을 포함한 body 어디에도 `tribute_control.resume`이 없어야
+  한다. Parent placement, uniqueness, enclosing handle result와의 equality는
+  containing handle의 local verifier가 확인한다. Symbol-aware frontend 적합성
+  검사는 참조된 declaration의 `kind`, argument type,
+  `operation_result_type`도 동일한지 확인하며, 어떤 verifier도 body 형상으로
+  general `op`을 재분류하지 않는다.
+- **소유권과 값 흐름:** 마지막 token argument가 있으면 affine이다.
+  사용하지 않아 continuation을 drop하거나, `tribute_control.resume`까지 하나의
+  static ownership path를 가질 수 있다. Closure가 이를 capture하면 그 static
+  path가 closure로 이전된다. Copy, store, return, yield 또는 다른 방식의
+  escape는 invalid이다. Static SSA validation은 capture한 closure가 dynamic하게
+  한 번만 호출되는지 증명할 수 없으므로 lowered resumption은 runtime에서도
+  one-shot consumption을 강제하고 두 번째 호출을 거부하거나 trap해야 한다.
+  `fn` arm과 `op -> Never` arm에는 continuation capability가 없다.
+- **위치:** operation header를 포함한 source handler arm이다.
 
 #### `tribute_control.resume`
 
@@ -344,25 +330,25 @@ tribute_control.handler {
 %answer = tribute_control.resume %resume, %value : AnswerType
 ```
 
-- **Operands:** exactly two. `%resume` has
-  `resume_token<InputType, AnswerType>` and `%value` has `InputType`.
-- **Results:** exactly one `AnswerType`.
-- **Attributes and regions:** none.
-- **Terminator:** none. Strict work after `resume` remains explicit in the
-  enclosing region and executes only after the resumed computation returns.
-- **Semantics:** consumes the nearest lexically enclosing general handler's
-  one-shot resumption, supplies `%value` to the suspended `perform`, and
-  returns the logical result obtained when that resumed computation reaches
-  the handle boundary. It is invalid in a `fn` or `op -> Never` arm.
-- **Local verification:** enforces operand/result arity and the three type
-  equalities implied by `resume_token<InputType, AnswerType>`.
-- **Ownership and value flow:** consumes the token. The token may reach this
-  operation through explicit closure capture, but must retain a single static
-  use-def path from its handler block argument. Affine-use validation is a
-  whole-IR check because it follows captures and nested regions. If capture
-  makes repeated dynamic invocation possible, the converted continuation's
-  runtime one-shot state is the final enforcement boundary.
-- **Location:** the source `resume` expression.
+- **피연산자:** 정확히 두 개다. `%resume`은
+  `resume_token<InputType, AnswerType>`이고 `%value`는 `InputType`이다.
+- **결과:** `AnswerType` 하나만 만든다.
+- **속성과 영역:** 없다.
+- **종결자:** 아니다. `resume` 뒤의 strict work는 enclosing region에
+  명시적으로 남으며 resumed computation이 반환한 뒤에만 실행된다.
+- **의미:** lexical하게 가장 가까운 enclosing general handler의 one-shot
+  resumption을 소비하고, 중단된 `perform`에 `%value`를 공급하며, resumed
+  computation이 handle boundary에 도달했을 때 얻는 logical result를 반환한다.
+  `fn` 또는 `op -> Never` arm에서는 invalid이다.
+- **지역 검증:** operand/result arity와
+  `resume_token<InputType, AnswerType>`이 요구하는 세 type equality를 강제한다.
+- **소유권과 값 흐름:** token을 소비한다. Explicit closure capture를 통해
+  token이 이 operation에 도달할 수 있지만 handler block argument에서 시작하는
+  single static use-def path를 유지해야 한다. Affine-use validation은 capture와
+  nested region을 따라가므로 whole-IR check다. Capture 때문에 반복적인 dynamic
+  invocation이 가능하면 converted continuation의 runtime one-shot state가 최종
+  enforcement boundary다.
+- **위치:** source `resume` expression이다.
 
 #### `tribute_control.yield`
 
@@ -370,53 +356,50 @@ tribute_control.handler {
 tribute_control.yield %value
 ```
 
-- **Operands:** exactly one logical value.
-- **Results, attributes, and regions:** none.
-- **Terminator:** this operation is the terminator of a `handle` body,
-  completion region, or handler body. It is invalid elsewhere.
-- **Local verification:** enforces its own shape. The owning operation verifies
-  placement and the yielded type.
-- **Ownership and value flow:** transfers an ordinary logical value to the
-  owning structured operation. A `resume_token` may never be yielded.
-- **Location:** the source expression producing the region result, or the
-  owning `handle` location for a synthesized identity completion.
+- **피연산자:** logical value 하나만 받는다.
+- **결과, 속성, 영역:** 없다.
+- **종결자:** `handle` body, completion region, handler body의 terminator다.
+  다른 위치에서는 invalid이다.
+- **지역 검증:** 자체 형상을 강제한다. Owning operation이 placement와
+  yield type을 검사한다.
+- **소유권과 값 흐름:** 일반 logical value를 owning structured
+  operation으로 전달한다. `resume_token`은 절대 yield할 수 없다.
+- **위치:** region result를 만드는 source expression이다. 합성한 identity
+  completion에는 owning `handle` location을 사용한다.
 
-#### Structured continuation invariant
+#### 구조화된 continuation 불변 조건
 
-Frontend output is in strict ANF inside every executable region. Strict
-children are evaluated once, left to right. A selected case/conditional arm,
-case guard, or short-circuit right-hand side remains inside its selected
-`scf.*` region and is not hoisted. Handler bodies and nested handle bodies are
-independent executable regions.
+Frontend output은 모든 실행 가능한 region 내부에서 strict ANF다. Strict child는
+왼쪽에서 오른쪽으로 정확히 한 번 평가한다. 선택된 case/conditional arm, case
+guard, short-circuit 오른쪽 항은 선택된 `scf.*` region 안에 남고 hoist하지
+않는다. Handler body와 nested handle body는 독립적인 실행 region이다.
 
-Shared CPS conversion lowers a region with an explicit logical continuation
-for its remaining operations and its enclosing region exits:
+Shared CPS conversion은 남은 operation과 enclosing region exit를 위한 명시적인
+logical continuation으로 region을 lower한다:
 
-1. The continuation at an operation includes the strict suffix in its current
-   block.
-2. At a case, conditional, or short-circuit operation, each branch receives a
-   continuation that first reaches that structured operation's merge and then
-   the enclosing suffix. Only the selected branch evaluates.
-3. A handle body receives a delimiter continuation. Normal body completion
-   enters `completion` and then the enclosing continuation.
-4. An `operation_kind = @fn` perform does not capture a continuation. Shared
-   conversion dispatches it through the tail path, and the automatically
-   resumed operation result flows into the ordinary remaining block suffix.
-5. A resumptive general handler's resume token denotes the suspended body
-   continuation. `tribute_control.resume` invokes it and then continues with
-   the arm-local strict suffix. If the arm never resumes, its yield completes
-   the matching handle directly and bypasses the suspended suffix and
-   completion region. A source `op -> Never` arm receives no token and can
-   only take this non-resuming path.
-6. A nested handle installs its own delimiter. A perform is handled by the
-   nearest dynamically installed matching handler; resuming re-enters every
-   selected structured frame between the perform and that handler. Non-resume
-   completion abandons those frames.
+1. Operation 위치의 continuation은 현재 block의 strict suffix를 포함한다.
+2. Case, conditional, short-circuit operation에서는 각 branch가 먼저 해당
+   structured operation의 merge에 도달한 뒤 enclosing suffix를 실행하는
+   continuation을 받는다. 선택된 branch만 평가한다.
+3. Handle body는 delimiter continuation을 받는다. Body가 정상 완료되면
+   `completion`에 들어간 뒤 enclosing continuation을 실행한다.
+4. `operation_kind = @fn`인 perform은 continuation을 capture하지 않는다.
+   Shared conversion이 tail path로 dispatch하며 자동으로 resume된 operation
+   result는 일반적인 남은 block suffix로 흐른다.
+5. Resumptive general handler의 resume token은 중단된 body continuation을
+   가리킨다. `tribute_control.resume`이 이를 호출한 뒤 arm-local strict
+   suffix를 계속 실행한다. Arm이 resume하지 않으면 yield가 일치하는 handle을
+   직접 완료하고 중단된 suffix와 completion region을 건너뛴다. Source
+   `op -> Never` arm은 token을 받지 않으며 이 non-resuming path만 취할 수 있다.
+6. Nested handle은 자체 delimiter를 설치한다. Perform은 dynamic하게 설치된
+   handler 중 가장 가까운 일치 handler가 처리한다. Resume하면 perform과 해당
+   handler 사이에서 선택된 모든 structured frame에 다시 진입한다. Resume하지
+   않고 완료하면 그 frame을 포기한다.
 
-This single region/suffix rule covers case arms and guards, conditionals,
-short-circuit right-hand sides, nested handle bodies and arms, resume paths,
-and strict work enclosing all of them. No AST containment scan or
-construct-specific continuation convention is part of the dialect contract.
+이 단일 region/suffix 규칙은 case arm과 guard, conditional, short-circuit
+오른쪽 항, nested handle body와 arm, resume path, 그리고 이들을 감싸는 strict
+work를 모두 다룬다. AST containment scan이나 construct-specific continuation
+convention은 dialect contract에 포함되지 않는다.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
@@ -546,9 +529,9 @@ Important stage invariants:
 | Resolution | Names, constructors, and variable references are resolved |
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
-| AST-to-IR | Source-logical callable signatures, verified `tribute_control` structure, and valid SSA use chains |
-| Shared CPS legalization | Callable signatures and all call sites use the physical `CallableAbi`; no `tribute_control.*` remains |
-| Shared lowering | High-level ability dispatch operations are removed at their claimed boundaries |
+| AST-to-IR | Source-logical callable signature, 검증된 `tribute_control` 구조, valid SSA use chain |
+| Shared CPS legalization | Callable signature과 모든 call site가 physical `CallableAbi`를 사용하며 `tribute_control.*`이 남지 않음 |
+| Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
 | Backend lowering | Backend-ready target verification succeeds and no `effect.*` operations remain |
 

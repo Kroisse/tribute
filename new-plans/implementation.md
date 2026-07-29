@@ -38,10 +38,10 @@ TrunkIR validation follows the layered model in `new-plans/ir.md`:
 Do not add a separate semantic-contract DSL unless these existing mechanisms
 cannot express a required invariant.
 
-## M2 direct-style control ownership
+## M2 직접형 제어 소유권
 
-Issue #821 fixes the design contract; it does not make the new pipeline live.
-The M2 target moves continuation construction out of `tribute-front`:
+Issue #821은 design contract를 확정하지만 새 pipeline을 live 상태로 만들지는
+않는다. M2 target은 continuation 구성을 `tribute-front` 밖으로 옮긴다:
 
 ```text
 typed AST
@@ -51,7 +51,7 @@ typed AST
   -> native or Wasm lowering
 ```
 
-The dependency direction is mandatory:
+Dependency direction은 다음과 같이 고정한다:
 
 ```text
 tribute-front  -> tribute-ir + trunk-ir
@@ -59,32 +59,31 @@ tribute-passes -> tribute-ir + trunk-ir
 tribute        -> tribute-front + tribute-passes
 ```
 
-`tribute-front` must not depend on `tribute-passes`. The root `tribute` crate
-orchestrates frontend emission followed by shared conversion.
+`tribute-front`는 `tribute-passes`에 의존해서는 안 된다. Root `tribute` crate가
+frontend emission 뒤의 shared conversion을 orchestrate한다.
 
-The dialect identifier is exactly `tribute_control`, and its minimal operations
-are `tribute_control.perform`, `tribute_control.handle`,
-`tribute_control.handler`, `tribute_control.resume`, and
-`tribute_control.yield`. The fixed structural and verifier contracts are in
-[ir.md](ir.md#direct-style-control); the conversion contract is in
-[cps-effects.md](cps-effects.md#m2-direct-style-boundary).
+Dialect identifier는 정확히 `tribute_control`이며 최소 operation은
+`tribute_control.perform`, `tribute_control.handle`,
+`tribute_control.handler`, `tribute_control.resume`,
+`tribute_control.yield`다. 고정된 structural/verifier contract는
+[ir.md](ir.md#direct-style-control)에, conversion contract는
+[cps-effects.md](cps-effects.md#m2-direct-style-boundary)에 있다.
 
-ANF remains an invariant of frontend output. It does not move ordinary calls,
-arithmetic, ADT/list/closure construction, or structured selection into
-`tribute_control`. There is no new effectful invocation operation:
-`func.call`, `func.call_indirect`, and callable convention metadata already
-provide the necessary `Direct < EvidenceDirect < Cps` distinction. In
-contrast, every source ability invocation, both `fn` and `op`, uses
-`tribute_control.perform` with the required typechecked
-`operation_kind = @fn | @op`. Typechecking preserves that source-semantic
-distinction; `tribute-front` copies it into IR and does not choose a dispatch
-strategy.
+ANF는 frontend output의 invariant로 유지한다. 일반 call, 산술,
+ADT/list/closure 구성, structured selection을 `tribute_control`로 옮기지 않는다.
+새 effectful invocation operation도 추가하지 않는다. `func.call`,
+`func.call_indirect`, callable convention metadata가 이미 필요한
+`Direct < EvidenceDirect < Cps` 구분을 제공한다. 반면 source ability
+invocation은 `fn`과 `op` 모두 필수 typechecked
+`operation_kind = @fn | @op`를 가진 `tribute_control.perform`을 사용한다.
+Typechecking이 이 source-semantic 구분을 보존하고 `tribute-front`는 이를 IR에
+복사할 뿐 dispatch 전략을 선택하지 않는다.
 
-Pre-CPS definitions, lambdas, direct calls, and indirect calls keep only their
-source-logical parameters and source result. `EvidenceDirect` has no hidden
-evidence operand yet, and `Cps` has neither evidence nor a frontend-created
-`done_k`; convention metadata is the phase marker. #823 uses the existing
-`CallableAbi` ordering to signature-convert the entire callable graph:
+Pre-CPS definition, lambda, direct call, indirect call은 source-logical
+parameter와 source result만 유지한다. `EvidenceDirect`에는 아직 hidden evidence
+operand가 없고 `Cps`에는 evidence와 frontend가 만든 `done_k`가 모두 없다.
+Convention metadata가 phase marker다. #823은 기존 `CallableAbi` 순서로 전체
+callable graph를 signature-convert한다:
 
 ```text
 Direct         (source...)                 -> source result
@@ -92,120 +91,115 @@ EvidenceDirect (evidence, source...)       -> source result
 Cps            (evidence, done_k, source...) -> compatibility control result
 ```
 
-The same conversion rewrites `func.func`, `closure.lambda`, `core.func` and
-closure types, entry block arguments, `func.call`, and `func.call_indirect`.
-A `Cps` logical return invokes `done_k`; an `EvidenceDirect` body receives the
-new evidence argument used by lowered ability invocations. In the same #823
-legalization, `operation_kind = @fn` becomes `ability.call`/tail dispatch
-without suffix capture, while `operation_kind = @op` becomes
-`ability.perform`/CPS dispatch with a suffix continuation. `CallableAbi`
-governs callable signatures; it does not encode or infer operation kind.
-Conversion runs before closure extraction so a lambda and every
-direct/indirect use agree on one physical signature. Metadata/type disagreement
-fails conversion.
+같은 conversion이 `func.func`, `closure.lambda`, `core.func`/closure type, entry
+block argument, `func.call`, `func.call_indirect`를 rewrite한다. `Cps` logical
+return은 `done_k`를 호출하고 `EvidenceDirect` body는 lowered ability invocation이
+사용하는 새 evidence argument를 받는다. 같은 #823 legalization에서
+`operation_kind = @fn`은 suffix capture 없는 `ability.call`/tail dispatch가 되고
+`operation_kind = @op`은 suffix continuation을 받는 `ability.perform`/CPS
+dispatch가 된다. `CallableAbi`는 callable signature를 규정할 뿐 operation kind를
+encode하거나 추론하지 않는다. Conversion은 closure extraction 전에 실행하므로
+lambda와 모든 direct/indirect use가 하나의 physical signature에 합의한다.
+Metadata/type 불일치는 conversion failure다.
 
-Root source `main` retains its external Direct or EvidenceDirect ABI. #823 and
-the root `tribute` pipeline own its internal terminal continuation: they close
-an implementation-level CPS body, use empty evidence for a Direct root or the
-inserted argument for an EvidenceDirect root, and return the logical source
-result. `tribute-front` does not build this delimiter after #824.
+Root source `main`은 external Direct 또는 EvidenceDirect ABI를 유지한다. #823과
+root `tribute` pipeline이 internal terminal continuation을 소유한다. 이 계층은
+implementation-level CPS body를 닫고, Direct root에는 empty evidence를,
+EvidenceDirect root에는 삽입된 argument를 사용하며, logical source result를
+반환한다. #824 뒤에는 `tribute-front`가 이 delimiter를 만들지 않는다.
 
-The implementation must preserve these validation responsibilities:
+Implementation은 다음 validation 책임을 보존해야 한다:
 
-- `tribute-ir` owns typed wrappers, parser/printer round trips, and local
-  verifiers for all `tribute_control` operations and
-  `resume_token<input, answer>`. The `perform` verifier requires
-  `operation_kind = @fn | @op`; frontend conformance checks it against the
-  typechecked declaration and verifies kind-specific argument/result types.
-- The containing `tribute_control.handle` verifier checks handler placement,
-  uniqueness, region shape, block arguments, terminators, and type agreement.
-- Whole-IR verification follows use-def and closure-capture edges for one
-  static ownership path of a resume token and checks SSA visibility. It cannot
-  prove how many times a captured closure is invoked; converted resumptions
-  carry runtime one-shot state and reject or trap a second dynamic invocation.
-  This is not conversion legality.
-- `tribute-passes` owns the conversion patterns and the
-  `tribute-control-post-cps` target. It must reject every residual
-  `tribute_control.*` operation after successful conversion.
-- The Tribute native and Wasm pipelines each reject residual
-  `tribute_control.*`, `ability.*`, and `effect.*` before their backend-ready
-  boundary. Generic `trunk-ir` remains free of Tribute-specific semantics.
+- `tribute-ir`는 모든 `tribute_control` operation과
+  `resume_token<input, answer>`의 typed wrapper, parser/printer round trip,
+  local verifier를 소유한다. `perform` verifier는
+  `operation_kind = @fn | @op`를 요구하며 frontend 적합성 검사는 typecheck된
+  declaration과 대조하고 kind별 argument/result type을 검증한다.
+- Containing `tribute_control.handle` verifier는 handler placement, uniqueness,
+  region shape, block argument, terminator, type agreement를 검사한다.
+- Whole-IR verification은 use-def와 closure-capture edge를 따라 resume token의
+  single static ownership path와 SSA visibility를 확인한다. Capture된 closure의
+  동적 호출 횟수는 증명할 수 없으므로 converted resumption은 runtime one-shot
+  state를 운반하고 두 번째 dynamic invocation을 거부하거나 trap한다. 이는
+  conversion legality가 아니다.
+- `tribute-passes`는 conversion pattern과 `tribute-control-post-cps` target을
+  소유한다. 성공한 conversion 뒤 남은 모든 `tribute_control.*` operation을
+  거부해야 한다.
+- Tribute native/Wasm pipeline은 각각 backend-ready boundary 전에 남은
+  `tribute_control.*`, `ability.*`, `effect.*`를 거부한다. Generic
+  `trunk-ir`에는 Tribute 전용 semantics를 넣지 않는다.
 
-The full `tribute-control-pre-cps` frontend-conformance target makes existing
-`ability.*`, `effect.*`, and legacy CPS-dispatch operations illegal. Only the
-in-progress partial rewrite in #823 may temporarily contain those lowered
-operations beside residual `tribute_control.*`; neither named boundary treats
-that coexistence as successful conformance.
+Full `tribute-control-pre-cps` frontend-conformance target은 기존 `ability.*`,
+`effect.*`, legacy CPS-dispatch operation을 illegal로 만든다. #823에서 진행
+중인 partial rewrite만 lowered operation과 남은 `tribute_control.*`을 일시적으로
+함께 포함할 수 있다. 어느 named boundary도 이 공존을 성공한 적합성으로 보지
+않는다.
 
-The current TrunkIR dialect macro can represent this fixed five-operation,
-fixed-region surface, and the generic parser/printer already round-trips one
-`dialect.operation` separator plus ordinary regions and block arguments.
-TrunkIR's current `validate_operation_verifiers` entrypoint directly calls its
-builtin verifiers; it has no dialect callback registry. #822 must therefore
-expose the Tribute-specific local validator from `tribute-ir`, and the
-frontend/pre-CPS boundary must call it alongside generic SSA/use-chain
-validation. A later generic verifier registry is optional infrastructure, but
-no `tribute_control` rule may be implemented in `trunk-ir`.
+현재 TrunkIR dialect macro는 이 고정된 five-operation/fixed-region surface를
+표현할 수 있으며 generic parser/printer는 하나의 `dialect.operation`
+separator와 일반 region/block argument를 이미 round-trip한다. TrunkIR의 현재
+`validate_operation_verifiers` entrypoint는 builtin verifier를 직접 호출하고
+dialect callback registry가 없다. 따라서 #822는 `tribute-ir`의 Tribute 전용
+local validator를 노출해야 하며 frontend/pre-CPS boundary는 이를 generic
+SSA/use-chain validation과 함께 호출해야 한다. 향후 generic verifier registry는
+optional infrastructure지만 어떤 `tribute_control` 규칙도 `trunk-ir`에
+구현해서는 안 된다.
 
-The region strategy is uniform. The converter threads a logical exit
-continuation through each block suffix. Selected case/conditional arms, guards,
-and short-circuit right-hand sides receive an exit that reaches their merge
-and then the enclosing suffix. Handle bodies introduce delimiters; completion
-regions run only on normal body completion; resumptive general handler arms
-may consume their affine resumption and then continue through arm-local strict
-work. A source `op -> Never` arm receives no resume token and contains no
-`tribute_control.resume`. Nested handles apply the same rule recursively.
-Strict values evaluate once, left to right, and unselected regions never
-evaluate.
+Region 전략은 일관된다. Converter가 각 block suffix에 logical exit
+continuation을 전달한다. 선택된 case/conditional arm, guard, short-circuit
+오른쪽 항은 merge에 도달한 뒤 enclosing suffix를 실행하는 exit를 받는다.
+Handle body는 delimiter를 만들고 completion region은 body가 정상 완료될 때만
+실행된다. Resumptive general handler arm은 affine resumption을 소비한 뒤
+arm-local strict work를 계속할 수 있다. Source `op -> Never` arm은 resume
+token을 받지 않고 `tribute_control.resume`을 포함하지 않는다. Nested handle도
+동일한 규칙을 재귀적으로 적용한다. Strict value는 왼쪽에서 오른쪽으로 한 번만
+평가하며 선택되지 않은 region은 평가하지 않는다.
 
-The M2 implementation order is:
+M2 구현 순서는 다음과 같다:
 
-1. #822 implements and tests the verified dialect in `tribute-ir`.
-2. #823 converts synthetic direct-style IR in `tribute-passes`, including
-   kind-directed `perform` lowering, nested regions, resume suffixes,
-   simultaneous `CallableAbi` signature conversion, and post-CPS legality. It
-   consumes `operation_kind`; it never infers or changes it.
-3. #824 changes `tribute-front` to emit the direct dialect for every `fn` and
-   `op` invocation, copying the typechecked kind without emitting
-   `ability.call`, `ability.perform`, or `effect.dispatch_*`, while retaining
-   the dependency graph above.
-4. #825 composes conversion in `tribute` and makes native/Wasm residual-control
-   rejection mandatory.
-5. #826 removes superseded typed-AST CPS normalization, frontend continuation
-   construction, and duplicate compatibility lowering after migrated coverage
-   passes.
+1. #822가 `tribute-ir`에 검증된 dialect를 구현하고 테스트한다.
+2. #823이 `tribute-passes`에서 synthetic direct-style IR을 변환한다. 여기에는
+   kind에 따른 `perform` lowering, nested region, resume suffix,
+   `CallableAbi` signature 동시 변환, post-CPS legality가 포함된다.
+   `operation_kind`를 소비할 뿐 추론하거나 변경하지 않는다.
+3. #824가 `tribute-front`를 변경해 모든 `fn`/`op` invocation에 직접형 dialect를
+   emit한다. Typecheck된 kind를 복사하며 `ability.call`, `ability.perform`,
+   `effect.dispatch_*`를 emit하지 않고 위 dependency graph를 유지한다.
+4. #825가 `tribute`에서 conversion을 조합하고 native/Wasm residual-control
+   rejection을 필수로 만든다.
+5. #826이 migrated coverage가 통과한 뒤 대체된 typed-AST CPS normalization,
+   frontend continuation 구성, 중복 compatibility lowering을 제거한다.
 
-Preparatory #823 and #824 work may proceed after #822, but integration cannot
-claim the new boundary until the shared contracts agree. During migration, a
-partial conversion may transiently contain direct and lowered operations
-together. The named post-CPS boundary never does.
+Issues #823과 #824의 준비 작업은 #822 뒤에 진행할 수 있지만 shared contract가 합의되기
+전에는 integration이 새 boundary를 구현했다고 주장할 수 없다. Migration 도중
+partial conversion에는 direct/lowered operation이 일시적으로 공존할 수 있으나
+named post-CPS boundary에는 절대 공존하지 않는다.
 
-The logical contract deliberately does not select `Never`, `Step`, a
-trampoline, or another backend carrier. #774 owns logical-versus-physical
-control-result selection. The current owner-tagged private
-`Normal | Escape(owner_tag, payload)` completion protocol may remain as an M2
-compatibility implementation, but no `tribute_control` operation exposes its
-tag, variants, or representation. Only values proven to be that private
-carrier may be inspected by its compatibility lowering.
+Logical contract는 의도적으로 `Never`, `Step`, trampoline 또는 다른 backend
+carrier를 선택하지 않는다. Logical/physical control-result 선택은 #774가
+소유한다. 현재 owner-tagged private
+`Normal | Escape(owner_tag, payload)` completion protocol은 M2 compatibility
+implementation으로 남을 수 있지만 어떤 `tribute_control` operation도 tag,
+variant, representation을 노출하지 않는다. 해당 private carrier임이 증명된
+value만 compatibility lowering에서 검사할 수 있다.
 
-For source `op -> Never`, #823 still satisfies the current mandatory
-continuation operand of `ability.perform` and `effect.dispatch_cps`. It passes
-a compiler-generated, typed, zero-capture continuation closure whose body is
-`func.unreachable`. The adapter captures no source suffix and traps if a
-malformed path invokes it. It may be deduplicated per compilation unit. Null,
-in-band sentinels, and arbitrary `anyref` are never accepted as continuation
-substitutes, and no new IR operation is required.
+Source `op -> Never`에 대해 #823은 현재 `ability.perform`과
+`effect.dispatch_cps`의 필수 continuation operand를 계속 만족시킨다.
+Compiler-generated typed zero-capture continuation closure를 전달하며 body는
+`func.unreachable`이다. Adapter는 source suffix를 capture하지 않고 malformed
+path가 호출하면 trap한다. Compilation unit마다 deduplicate할 수 있다. Null,
+in-band sentinel, 임의의 `anyref`를 continuation substitute로 허용하지 않으며 새
+IR operation도 필요하지 않다.
 
-TrunkIR already defines `core.never`. #824 must use that canonical type for a
-direct-style source `Never` result so #822/#823 can recognize the no-token
-case structurally. The current pre-M2 `convert_type` mapping of `Never` to an
-`anyref` placeholder is compatibility behavior and must not cross the
-`tribute-control-pre-cps` boundary.
+TrunkIR은 이미 `core.never`를 정의한다. #824는 직접형 source `Never` result에
+이 canonical type을 사용해야 #822/#823이 no-token case를 구조적으로 인식할 수
+있다. 현재 pre-M2 `convert_type`이 `Never`를 `anyref` placeholder로 mapping하는
+동작은 compatibility behavior이며 `tribute-control-pre-cps` boundary를 넘어서는
+안 된다.
 
-M2 does not change source syntax, effect-row semantics, the convention order,
-ability optimization policy, or multi-file compilation. It does not select
-`Never`/`Step`/trampoline carriers and does not move Tribute semantics into
-generic `trunk-ir`.
+M2는 source syntax, effect-row semantics, convention 순서, ability optimization
+정책, multi-file compilation을 변경하지 않는다. `Never`/`Step`/trampoline
+carrier를 선택하지 않고 Tribute semantics를 generic `trunk-ir`로 옮기지 않는다.
 
 ---
 
@@ -522,17 +516,16 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
 
-In the current pre-M2 implementation, root `main` is a frontend CPS delimiter,
-not a `Cps` backend entry ABI. Its valid source residual contract remains pure
-or `Io`. If its body only needs the stronger implementation convention because
-it calls a generic/open callback worker, current AST-to-IR keeps root `main` at
-its Direct/EvidenceDirect seed, closes that computation with the shared
-identity continuation, and returns the recovered source value normally. This
-frontend-owned closing step is a migration baseline, not the permanent phase
-boundary. After #824, the frontend emits direct-style control and shared
-conversion in `tribute-passes` closes the root computation. A genuine residual
-general effect is still rejected before the backend entrypoint;
-nested-module `main` is not special.
+현재 pre-M2 implementation에서 root `main`은 frontend CPS delimiter이며 `Cps`
+backend entry ABI가 아니다. Valid source residual contract는 pure 또는 `Io`를
+유지한다. Generic/open callback worker 호출 때문에 body에 더 강한 implementation
+convention만 필요한 경우 현재 AST-to-IR은 root `main`을
+Direct/EvidenceDirect seed로 유지하고 shared identity continuation으로 computation을
+닫은 뒤 복구한 source value를 정상 반환한다. 이 frontend-owned closing step은
+migration baseline이지 영구 phase boundary가 아니다. #824 뒤에는 frontend가
+direct-style control을 emit하고 `tribute-passes`의 shared conversion이 root
+computation을 닫는다. 실제 residual general effect는 backend entrypoint 전에 계속
+거부하며 nested-module `main`은 특별하지 않다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
@@ -607,11 +600,11 @@ ability containing any op  → Cps
 open or otherwise unknown e → Cps
 ```
 
-This ability-level convention bound does not erase an operation declaration's
-source `fn`/`op` kind. Typechecking stores that kind on the resolved operation,
-and #824 copies it to each `tribute_control.perform.operation_kind`. #823
-consumes it directly; neither `CallingConvention`, handler-body analysis, nor
-the effect-row bound reconstructs or changes it.
+이 ability-level convention bound는 operation declaration의 source `fn`/`op`
+kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
+Issue #824가 각 `tribute_control.perform.operation_kind`에 이를 복사한다. #823은 이를
+직접 소비하며 `CallingConvention`, handler-body analysis, effect-row bound 중
+어느 것도 kind를 재구성하거나 변경하지 않는다.
 
 Effect annotation 생략은 closed-empty 추론이 아니다.
 
@@ -767,7 +760,7 @@ fn run_state_optimized(comp, init_state) {
 복잡한 handler에서는 적용되지 않을 수 있으며, 적용 여부가 source meaning이나
 pre-CPS IR을 바꾸지 않는다.
 
-#### `op -> Never` semantics
+#### `op -> Never` 의미
 
 `-> Never`를 반환하는 operation은 source semantics상 resume할 수 없다.
 `tribute_control.handler`는 이 arm에 `resume_token`을 노출하지 않고, nested
@@ -884,8 +877,8 @@ ABI lowering의 의미론적 기준이 아니다.
 
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 
-The following describes the current pre-M2 compatibility pipeline. Effect
-handling is implemented with tail-call CPS.
+다음은 현재 pre-M2 compatibility pipeline을 설명한다. Effect handling은
+tail-call CPS로 구현한다.
 `lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
 `effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
@@ -907,10 +900,10 @@ WASM:   → lower_to_wasm [includes evidence_to_wasm] → emit_wasm
 Native: → evidence_to_native → lower_to_clif → emit_native
 ```
 
-The M2 target inserts verified `tribute_control` emission and shared CPS
-legalization before continuation-dependent closure/effect lowering. #825 owns
-the exact pipeline splice after #823 and #824 agree; this document does not
-claim that splice is already implemented.
+M2 target은 continuation-dependent closure/effect lowering 전에 검증된
+`tribute_control` emission과 shared CPS legalization을 삽입한다. #823과 #824가
+합의한 뒤 정확한 pipeline splice는 #825가 소유한다. 이 문서는 해당 splice가
+이미 구현되었다고 주장하지 않는다.
 
 ---
 
@@ -996,8 +989,8 @@ pub fn compile(db, source: SourceCst) -> Module {
 
 ### 파이프라인 구조
 
-The following is the planned M2 topology, not the current live pipeline until
-Issue #825 composes #823 and #824:
+다음은 계획한 M2 topology이며 Issue #825가 #823과 #824를 조합하기 전까지 현재
+live pipeline이 아니다:
 
 ```text
 source
@@ -1011,10 +1004,10 @@ source
   -> emit
 ```
 
-The current compatibility topology is recorded in
-[cps-effects.md](cps-effects.md#current-shared-middle-end-pipeline). It remains
-live only until migrated coverage permits #826 to remove frontend-owned CPS
-construction.
+현재 compatibility topology는
+[cps-effects.md](cps-effects.md#current-shared-middle-end-pipeline)에 기록한다.
+Migrated coverage가 #826의 frontend-owned CPS 구성 제거를 허용할 때까지만 live로
+유지한다.
 
 ### 패스 분류
 
@@ -1027,9 +1020,9 @@ construction.
 | | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
 | | `lower_closures_in_func` | closure.new | func.call_indirect + evidence arg | function-anchored |
 | | `tdnr` | x.method() | Type::method(x) | |
-| **Direct control (M2 target)** | `ast_to_ir` | typed AST | verified `tribute_control` with typechecked operation kind + ordinary IR | frontend, planned #824 |
-| | `tribute_control_to_cps` | `tribute_control` + operation-kind/convention metadata | kind-directed ability/effect/closure CPS IR | shared, planned #823 |
-| **Ability (current compatibility)** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
+| **직접형 제어 (M2 target)** | `ast_to_ir` | typed AST | typecheck된 operation kind를 갖는 검증된 `tribute_control` + 일반 IR | frontend, #824 계획 |
+| | `tribute_control_to_cps` | `tribute_control` + operation-kind/convention metadata | kind-directed ability/effect/closure CPS IR | shared, #823 계획 |
+| **Ability (현재 compatibility)** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
 | | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
 | | `resolve_evidence` | handler evidence setup | effect.extend | module-wide setup before function-local lowering |
 | | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
