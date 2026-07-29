@@ -405,12 +405,39 @@ pub fn raw_attr_dict<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawAt
         ('{', ws),
         separated(
             0..,
-            (ws, ident, ws, '=', ws, raw_attr_value, ws).map(|(_, k, _, _, _, v, _)| (k, v)),
+            (ws, attribute_key, ws, '=', ws, raw_attr_value, ws)
+                .map(|(_, k, _, _, _, v, _)| (k, v)),
             ',',
         ),
         (ws, '}'),
     )
     .parse_next(input)
+}
+
+/// Parse an attribute key.
+///
+/// Attribute symbols may be namespaced with dots (for example,
+/// `tribute.calling_convention`). The printer has always emitted the complete
+/// symbol, so accepting the same spelling here restores generic round-trips.
+pub fn attribute_key<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    let key = take_while(1.., |c: char| {
+        c.is_ascii_alphanumeric() || c == '_' || c == '.'
+    })
+    .parse_next(input)?;
+    let valid = key.split('.').all(|segment| {
+        let mut chars = segment.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    if valid {
+        Ok(key)
+    } else {
+        Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::new(),
+        ))
+    }
 }
 
 /// Parse result list: %0 = or %0, %1 =
