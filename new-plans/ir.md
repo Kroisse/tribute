@@ -20,6 +20,8 @@ Infrastructure
 
 High-level
   tribute   unresolved or source-level frontend constructs
+  tribute_control
+            target-independent direct-style effect control
   ability   evidence and handler dispatch semantics
   effect    target-independent effect ABI
   closure   closure construction and decomposition
@@ -45,6 +47,32 @@ An unspecified operation is `Unknown`, not legal.
 Partial conversion may leave unknown operations for later passes. Full
 conversion boundaries, such as backend-ready native IR, must reject unknown
 operations.
+
+The direct-control migration uses these named boundaries:
+
+| Boundary | `ConversionTarget` mode | Required legality |
+| ---- | ---- | ---- |
+| `tribute-control-pre-cps` | Full for frontend conformance; partial while composing migration passes | `tribute_control.*` may coexist with `core`, `func`, `scf`, `arith`, `adt`, `list`, `closure`, `tribute_rt`, and `tribute_io`. Existing `ability.*`, `effect.*`, and legacy CPS construction operations are illegal. |
+| `tribute-control-post-cps` | Partial after the shared CPS conversion | The entire `tribute_control` dialect is illegal. Existing `ability.perform`, `ability.call`, handler/evidence operations, `effect.*`, `closure.*`, and ordinary dialects may coexist for their subsequent shared passes. |
+| `tribute-backend-ready-native` | Full Tribute boundary followed by the generic Cranelift boundary | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, and conversion casts are absent. Only the explicitly listed native infrastructure and `clif.*` operations remain. |
+| `tribute-backend-ready-wasm` | Partial high-level rejection followed by the existing emission-ready checks | `tribute_control`, `ability`, and `effect` are explicitly illegal before backend-ready Wasm IR; `wasm_gc` is additionally illegal before emission. |
+
+The post-CPS helper is implementable with the current API as
+`ConversionTarget::new().illegal_dialect("tribute_control")` plus partial
+verification. Frontend conformance and backend full targets must enumerate
+their legal dialects and operations because unknown is not legal in full mode.
+They must not mark `func.func`, `closure.lambda`, or another region-owning
+container recursively legal: doing so would hide illegal control operations in
+nested regions. The generic `trunk-ir` Cranelift boundary remains
+Tribute-agnostic; the Tribute pipeline owns the explicit rejection of
+Tribute-specific high-level dialects before invoking it.
+
+Transiently, one rewrite may contain both source `tribute_control.*` and its
+new `ability.*`/`effect.*` output. That is an implementation state inside
+partial conversion, not a successful named boundary. Successful
+`tribute-control-post-cps` verification reports every residual
+`tribute_control.*` operation with its source location as a conversion
+failure.
 
 ## Validation Layers
 
@@ -80,6 +108,315 @@ interfaces describe behavior, not validation phases.
 
 `tribute.*` represents source-level constructs that should disappear after
 resolution, type checking, TDNR, and AST-to-IR lowering.
+
+### Direct-style control
+
+`tribute_control.*` is the target-independent, direct-style boundary between
+typed frontend lowering and shared CPS conversion. The dialect identifier is
+exactly `tribute_control`. TrunkIR parses a qualified operation as one
+`<dialect>.<operation>` pair, so spellings with another separator, such as a
+dot inside the dialect identifier, are invalid.
+
+The dialect models only control constructs that the CPS pass must transform.
+ANF is an input invariant, not the dialect's identity. Arithmetic, ordinary
+direct and indirect calls, ADT/list/tuple/record construction, closures, and
+structured selection remain in their existing dialects. In particular, there
+is no `tribute_control.invoke`: `func.call`, `func.call_indirect`, and
+`closure.lambda` already carry the callable type and
+`Direct < EvidenceDirect < Cps` convention metadata needed by shared
+conversion. A new invocation operation would duplicate those operations
+without adding a control fact.
+
+At the pre-CPS boundary, all `func.func`, `closure.lambda`, `func.call`, and
+`func.call_indirect` signatures are source-logical regardless of convention:
+source parameters in, source result out, with no hidden evidence or `done_k`
+operands. Convention metadata is required on the definition/lambda and its
+callable type. Shared conversion rewrites definitions and all direct/indirect
+call sites together to the existing `CallableAbi`; the complete rule is in
+[cps-effects.md](cps-effects.md#pre-cps-callable-shape).
+
+The minimal operation set is:
+
+| Operation | Purpose |
+| ---- | ---- |
+| `tribute_control.perform` | Invoke one source `fn` or general `op` in direct style, retaining its semantic kind |
+| `tribute_control.handle` | Delimit a direct-style computation, its completion arm, and its handler table |
+| `tribute_control.handler` | Describe one `fn` or general `op` handler arm inside a handle |
+| `tribute_control.resume` | Consume the affine resumption bound by a resumptive general handler arm |
+| `tribute_control.yield` | Terminate one executable `tribute_control` region with its logical value |
+
+The dialect also owns the opaque type
+`tribute_control.resume_token<input, answer>`. `input` is the value accepted
+by the suspended operation's continuation, and `answer` is the logical result
+of running that continuation through the enclosing handle. The type is not a
+source type, callable ABI, backend carrier, or permission to inspect a
+continuation representation. A source general operation whose logical result
+is `Never` uses the canonical `core.never` TypeRef, creates no resumption, and
+exposes no `resume_token`. The current pre-M2 frontend's `anyref` placeholder
+for `Never` is not valid at this new boundary because a verifier must identify
+the non-resumptive case without guessing from an erased type.
+
+#### `tribute_control.perform`
+
+```text
+%result = tribute_control.perform %arg0, ... {
+  ability_ref = !State,
+  op_name = @get,
+  operation_kind = @op
+} : ResultType
+```
+
+- **Operands:** zero or more already-evaluated source arguments in declaration
+  order. Values retain their logical types; tuple packing and erasure are
+  conversion work.
+- **Results:** exactly one logical operation result. A source `Never` result is
+  `core.never`; it does not select a physical `Never` control carrier.
+- **Attributes:** required `ability_ref: Type`, `op_name: Symbol`, and
+  `operation_kind: Symbol`. `operation_kind` is exactly `fn` or `op` and is
+  copied from the typechecked operation declaration. It is source-semantic
+  metadata, not a lowering hint inferred from the body or use site.
+- **Regions and block arguments:** none.
+- **Terminator:** none; this is not a terminator in direct-style IR.
+- **Semantics:** invokes the source operation with its declared kind. For
+  `operation_kind = @fn`, the selected handler result automatically resumes
+  direct-style evaluation; shared conversion does not capture a
+  continuation and uses the existing tail-dispatch path. For
+  `operation_kind = @op`, a matching handler may resume, in which case
+  execution continues after the operation and the result becomes `%result`.
+  If it does not resume, the selected general handler completes the matching
+  handle and the apparent suffix is not evaluated. A source `op -> Never`
+  cannot resume and therefore never constructs a logical resumption or
+  captures the apparent suffix.
+
+| `operation_kind` | Direct-style result | Required shared lowering | Matching handler shape |
+| ---- | ---- | ---- | ---- |
+| `@fn` | Declared source result | No suffix capture; `ability.call` then tail dispatch | No resume token; yield the declared operation result for automatic resumption |
+| `@op` | Declared source result, using canonical `core.never` for `Never` | Capture the suffix for `ability.perform` and CPS dispatch, except use the reject adapter without suffix capture for `Never` | Final resume token except for `Never`; yield the handle answer on non-resumption |
+
+- **Local verification:** requires the three attributes, checks the
+  `operation_kind` domain, requires exactly one result and no regions, and
+  requires resolved operand/result types rather than inference variables.
+  Symbol-aware frontend conformance additionally checks that `ability_ref` and
+  `op_name` resolve to an operation declaration whose declared `fn`/`op` kind,
+  parameter types, and result type equal the attributes, operands, and result.
+  Neither verifier may infer the kind from control flow, handlers, result type,
+  or calling convention. The `tribute_control.handler` and containing-handle
+  verifiers apply the corresponding handler row above to handler entries.
+- **Ownership and value flow:** operands are ordinary SSA uses. The operation
+  creates no source-visible continuation value; shared CPS conversion owns
+  continuation construction. For `@fn`, conversion produces
+  `ability.call`/tail dispatch without a continuation. For `@op`, conversion
+  produces `ability.perform`/CPS dispatch with the suffix continuation. For
+  `op -> Never`, it instead supplies the existing ability/effect ABI with a
+  real zero-capture reject continuation whose body is `func.unreachable`; it
+  does not capture the source suffix. Null, an in-band sentinel, or arbitrary
+  `anyref` is not a continuation.
+- **Location:** the source location of the ability-operation call, covering
+  the qualified callee and arguments when available.
+
+Every source ability invocation uses `tribute_control.perform` at this
+boundary. The shared conversion is the first phase that chooses a dispatch
+representation, using `operation_kind` without reclassifying it. In
+particular, an `@op` whose handler body appears always tail-resumptive remains
+an `@op`; recognizing and optimizing that shape is a later IR optimization
+after semantic lowering.
+
+The reject continuation is compatibility glue for the existing
+`ability.perform` and `effect.dispatch_cps` operand contract, both of which
+require an explicit continuation. It has the same callable ABI as an ordinary
+lowered continuation, contains no captures, and traps if invoked. It may be
+deduplicated per compilation unit, but each use passes a typed closure value
+through the normal closure-to-`anyref` conversion. This rule preserves source
+`Never` semantics without adding an operation or choosing the physical CPS
+result carrier.
+
+#### `tribute_control.handle`
+
+```text
+%answer = tribute_control.handle : AnswerType
+  body {
+    ...
+    tribute_control.yield %body_value
+  }
+  completion(%completed: BodyType) {
+    ...
+    tribute_control.yield %answer_value
+  }
+  handlers {
+    tribute_control.handler ... { ... }
+    ...
+  }
+```
+
+- **Operands:** none. Values captured by executable regions use normal
+  enclosing SSA visibility.
+- **Results:** exactly one logical handle result.
+- **Attributes:** none are required. Dynamic prompt/owner tags and backend
+  carrier choices are deliberately absent.
+- **Regions:** exactly three, in the fixed order `body`, `completion`,
+  `handlers`.
+- **Block arguments:** `body` has one block and no arguments. `completion` has
+  one block with exactly one argument, whose type equals the value yielded by
+  `body`. `handlers` has one block with no arguments and contains only
+  `tribute_control.handler` entries.
+- **Terminators:** `body` and `completion` end in
+  `tribute_control.yield`. The `handlers` block is a declarative table and has
+  no terminator.
+- **Semantics:** normal completion of `body` evaluates `completion` exactly
+  once and returns its value. A general handler arm that finishes without
+  resuming returns its arm value as the handle result and bypasses
+  `completion`. A tail-resumptive `fn` arm returns an operation result that is
+  fed automatically to the suspended computation.
+- **Local verification:** enforces the fixed region count, single-block
+  shapes, block-argument counts, terminators, yielded type equalities, and that
+  every direct child of `handlers` is a unique
+  `(ability_ref, op_name)` `tribute_control.handler`. Its result type must
+  equal the completion yield type and every general handler's answer type.
+- **Ownership and value flow:** the operation owns the delimited resumption
+  capabilities created when its body performs resumptive general operations.
+  They are exposed only as `resume_token` block arguments of resumptive
+  general handler entries. Values leave executable regions only through
+  `tribute_control.yield`.
+- **Location:** the complete source `handle` expression. Region/block
+  locations use the corresponding body, completion arm, and handler-list
+  spans.
+
+The frontend always materializes a completion region. When source omits a
+`do` arm, the region is the identity operation on the body result. This removes
+an optional structural case from conversion without changing source
+semantics.
+
+#### `tribute_control.handler`
+
+```text
+tribute_control.handler {
+  ability_ref = !State,
+  op_name = @get,
+  kind = @op,
+  operation_result_type = ResultType
+} (%arg0: Arg0Type, ..., %resume:
+    tribute_control.resume_token<ResultType, AnswerType>) {
+  ...
+  tribute_control.yield %answer
+}
+```
+
+- **Operands and results:** none. It is a declarative entry owned by the
+  surrounding `tribute_control.handle`.
+- **Attributes:** required `ability_ref: Type`, `op_name: Symbol`,
+  `kind: Symbol`, and `operation_result_type: Type`. `kind` is exactly `fn` or
+  `op`.
+- **Regions:** exactly one executable `body` region with one block.
+- **Block arguments:** source operation arguments appear first, in declaration
+  order and at logical types. A resumptive `op` entry has one final
+  `resume_token<operation_result_type, handle-result-type>` argument. An `op`
+  whose `operation_result_type` is source `Never` has no token, and a `fn`
+  entry has no token.
+- **Terminator:** the body ends in `tribute_control.yield`. For `fn`, the
+  yielded type equals `operation_result_type` and is automatically resumed.
+  For `op`, the yielded type equals the token's `answer` type and is the
+  enclosing handle result when the arm completes without transferring control
+  through `resume`.
+- **Local verification:** checks required attributes and domains, one block,
+  the final terminator, token position/parameters, and the yield rules above.
+  A general handler whose `operation_result_type` is `Never` must have no
+  token argument and no `tribute_control.resume` anywhere in its body,
+  including nested regions.
+  Parent placement, uniqueness, and equality with the enclosing handle result
+  are checked by the local verifier of the containing handle. Symbol-aware
+  frontend conformance also checks that the referenced declaration has the
+  same `kind`, argument types, and `operation_result_type`; no verifier
+  reclassifies a general `op` from its body shape.
+- **Ownership and value flow:** when present, the final token argument is
+  affine. It may be unused, meaning the continuation is dropped, or have one
+  static ownership path to a `tribute_control.resume`. Capturing it in a
+  closure transfers that static path to the closure; copying, storing,
+  returning, yielding, or otherwise escaping it is invalid. Static SSA
+  validation cannot prove that a captured closure is dynamically invoked only
+  once, so the lowered resumption must also enforce one-shot consumption at
+  runtime and reject or trap a second invocation. A `fn` arm and an
+  `op -> Never` arm have no continuation capability.
+- **Location:** the source handler arm, including its operation header.
+
+#### `tribute_control.resume`
+
+```text
+%answer = tribute_control.resume %resume, %value : AnswerType
+```
+
+- **Operands:** exactly two. `%resume` has
+  `resume_token<InputType, AnswerType>` and `%value` has `InputType`.
+- **Results:** exactly one `AnswerType`.
+- **Attributes and regions:** none.
+- **Terminator:** none. Strict work after `resume` remains explicit in the
+  enclosing region and executes only after the resumed computation returns.
+- **Semantics:** consumes the nearest lexically enclosing general handler's
+  one-shot resumption, supplies `%value` to the suspended `perform`, and
+  returns the logical result obtained when that resumed computation reaches
+  the handle boundary. It is invalid in a `fn` or `op -> Never` arm.
+- **Local verification:** enforces operand/result arity and the three type
+  equalities implied by `resume_token<InputType, AnswerType>`.
+- **Ownership and value flow:** consumes the token. The token may reach this
+  operation through explicit closure capture, but must retain a single static
+  use-def path from its handler block argument. Affine-use validation is a
+  whole-IR check because it follows captures and nested regions. If capture
+  makes repeated dynamic invocation possible, the converted continuation's
+  runtime one-shot state is the final enforcement boundary.
+- **Location:** the source `resume` expression.
+
+#### `tribute_control.yield`
+
+```text
+tribute_control.yield %value
+```
+
+- **Operands:** exactly one logical value.
+- **Results, attributes, and regions:** none.
+- **Terminator:** this operation is the terminator of a `handle` body,
+  completion region, or handler body. It is invalid elsewhere.
+- **Local verification:** enforces its own shape. The owning operation verifies
+  placement and the yielded type.
+- **Ownership and value flow:** transfers an ordinary logical value to the
+  owning structured operation. A `resume_token` may never be yielded.
+- **Location:** the source expression producing the region result, or the
+  owning `handle` location for a synthesized identity completion.
+
+#### Structured continuation invariant
+
+Frontend output is in strict ANF inside every executable region. Strict
+children are evaluated once, left to right. A selected case/conditional arm,
+case guard, or short-circuit right-hand side remains inside its selected
+`scf.*` region and is not hoisted. Handler bodies and nested handle bodies are
+independent executable regions.
+
+Shared CPS conversion lowers a region with an explicit logical continuation
+for its remaining operations and its enclosing region exits:
+
+1. The continuation at an operation includes the strict suffix in its current
+   block.
+2. At a case, conditional, or short-circuit operation, each branch receives a
+   continuation that first reaches that structured operation's merge and then
+   the enclosing suffix. Only the selected branch evaluates.
+3. A handle body receives a delimiter continuation. Normal body completion
+   enters `completion` and then the enclosing continuation.
+4. An `operation_kind = @fn` perform does not capture a continuation. Shared
+   conversion dispatches it through the tail path, and the automatically
+   resumed operation result flows into the ordinary remaining block suffix.
+5. A resumptive general handler's resume token denotes the suspended body
+   continuation. `tribute_control.resume` invokes it and then continues with
+   the arm-local strict suffix. If the arm never resumes, its yield completes
+   the matching handle directly and bypasses the suspended suffix and
+   completion region. A source `op -> Never` arm receives no token and can
+   only take this non-resuming path.
+6. A nested handle installs its own delimiter. A perform is handled by the
+   nearest dynamically installed matching handler; resuming re-enters every
+   selected structured frame between the perform and that handler. Non-resume
+   completion abandons those frames.
+
+This single region/suffix rule covers case arms and guards, conditionals,
+short-circuit right-hand sides, nested handle bodies and arms, resume paths,
+and strict work enclosing all of them. No AST containment scan or
+construct-specific continuation convention is part of the dialect contract.
 
 `ability.*` represents effect evidence and handler dispatch. Ability operations
 are lowered through the effect pipeline; ability-related types may remain until
@@ -194,7 +531,8 @@ source
   -> name resolution
   -> type checking
   -> TDNR
-  -> AST-to-IR
+  -> AST-to-IR (source-logical callable + tribute_control IR)
+  -> shared CPS legalization
   -> shared lowering and optimization
   -> Wasm or native lowering
   -> backend-ready full conversion target
@@ -208,8 +546,9 @@ Important stage invariants:
 | Resolution | Names, constructors, and variable references are resolved |
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
-| AST-to-IR | IR structure and SSA use chains are valid |
-| Shared lowering | Source-level and high-level ability dispatch operations are removed at claimed boundaries |
+| AST-to-IR | Source-logical callable signatures, verified `tribute_control` structure, and valid SSA use chains |
+| Shared CPS legalization | Callable signatures and all call sites use the physical `CallableAbi`; no `tribute_control.*` remains |
+| Shared lowering | High-level ability dispatch operations are removed at their claimed boundaries |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
 | Backend lowering | Backend-ready target verification succeeds and no `effect.*` operations remain |
 

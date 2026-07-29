@@ -1,10 +1,226 @@
-# CPS 기반 Effect Handling 파이프라인
+# Direct control and CPS effect-handling pipeline
 
-이 문서는 현재 구현 기준의 ability lowering 전략을 설명한다.
+This document defines the logical direct-style/CPS boundary and records the
+current compatibility implementation used while M2 migrates to it.
 
 핵심 전략은 **tail-call CPS + evidence-based handler dispatch**이다.
 WasmGC yield bubbling, `YieldResult` 중심 trampoline, `cont.*` dialect 직접
 lowering은 현재 경로가 아니다.
+
+## M2 direct-style boundary
+
+The target pipeline is:
+
+```text
+typed AST
+  -> verified direct-style tribute_control IR
+  -> shared CPS legalization in tribute-passes
+  -> ability.* / effect.* / closure.* IR
+  -> target-specific lowering
+```
+
+This boundary is specified by #821 but is not implemented merely because this
+document describes it. #822 adds the dialect, #823 adds conversion over
+synthetic IR, #824 migrates frontend emission, #825 makes legalization
+mandatory in both backend pipelines, and #826 removes the superseded
+frontend-owned normalization and continuation construction.
+
+`tribute_control` contains only `perform`, `handle`, `handler`, `resume`, and
+`yield`, plus the opaque affine `resume_token<input, answer>` type. Their full
+structural contracts are in [ir.md](ir.md#direct-style-control). Ordinary
+calls and data operations stay in their existing dialects. There is no
+effectful invocation operation: existing direct/indirect call operations and
+their callable convention metadata already distinguish `Direct`,
+`EvidenceDirect`, and `Cps`. Every ability operation invocation, whether
+declared `fn` or `op`, is `tribute_control.perform`. Its required
+`operation_kind = @fn | @op` metadata preserves the kind established by source
+typechecking.
+
+Source effects and worker conventions do not change at this boundary:
+
+```text
+Direct < EvidenceDirect < Cps
+```
+
+Effect rows continue to contain ability identities rather than operation
+identities. Closed empty, fn-only, general-op, and open-row convention
+selection retain their existing meanings. ANF is a representation invariant
+inside each executable region, not a source phase and not the identity of the
+dialect. The operation kind and callable convention are distinct facts:
+typechecking never infers `fn` from a tail-resumptive-looking `op` body, and
+the frontend does not select a dispatch representation.
+
+### Pre-CPS callable shape
+
+The `tribute-control-pre-cps` boundary uses source-logical callable signatures
+for every convention:
+
+- `func.func` entry block arguments are exactly the source parameters, and its
+  result is the source result.
+- `closure.lambda` block arguments and its `closure<func<...>>` result type use
+  the same source-logical parameters and result.
+- `func.call` and `func.call_indirect` pass only source arguments and produce
+  the source result.
+- Definitions, lambdas, function/closure types, and call sites carry the
+  existing `CallingConvention` metadata. They do not encode the convention by
+  pre-inserting operands.
+
+Consequently, neither `EvidenceDirect` nor `Cps` has a hidden evidence
+parameter at this boundary, and `Cps` has no frontend-created `done_k`.
+The typing/convention analysis has already established convention metadata,
+which `tribute-front` preserves without constructing its physical ABI.
+
+At this same boundary, `tribute-front` emits every ability invocation as
+`tribute_control.perform` and copies the typechecked declaration kind into
+`operation_kind`. It does not emit `ability.call`, `ability.perform`, or
+`effect.dispatch_*`, infer kind from the handler body, or choose tail versus
+CPS dispatch.
+
+Issue #823 signature-converts definitions and every matching direct/indirect call
+site together, before closure extraction:
+
+| Convention | Physical parameters after #823 | Physical result during M2 |
+| ---- | ---- | ---- |
+| `Direct` | source parameters | source result |
+| `EvidenceDirect` | evidence, then source parameters | source result |
+| `Cps` | evidence, `done_k`, then source parameters | current opaque compatibility control result |
+
+The parameter order is the existing `CallableAbi` order. For `Cps`, `done_k`
+accepts the source result and returns the same opaque control-result type as
+the worker. During M2 that physical type may remain the current compatibility
+`anyref`; this table does not make it a permanent logical result or select the
+future `Never`/`Step` policy owned by #774.
+
+The conversion uses TrunkIR's `TypeConverter` and signature-conversion support
+to rewrite `func.func` entry arguments, `core.func` types, closure types,
+`closure.lambda` entries, and direct and indirect call sites consistently.
+It threads the current evidence value into `EvidenceDirect` and `Cps` calls.
+It converts a `Cps` body `func.return value` into
+`return done_k(value)` in the compatibility representation; direct-style
+control points and structured-region yields are converted with the same body
+continuation. A call whose metadata and callable type disagree is a conversion
+failure, not a reason to guess hidden operands.
+
+In the same #823 legalization, each `tribute_control.perform` is converted
+from its typechecked `operation_kind`: `@fn` produces the existing
+`ability.call`/tail-dispatch path without capturing the suffix, while `@op`
+produces the existing `ability.perform`/CPS path. This decision is not encoded
+in `CallableAbi`, and the pass must not infer or change the operation kind.
+
+This joint signature conversion is why a separate
+`tribute_control.invoke` operation is unnecessary. Callable convention
+metadata selects the conversion, while existing call and closure operations
+continue to represent invocation and construction.
+
+Root source `main` is the one composition-owned delimiter. Its external worker
+remains `Direct` for a pure entry or `EvidenceDirect` for an `Io` entry; it is
+never exposed to a backend as `Cps`. If evaluating its body requires a `Cps`
+chain only because of a generic/open callback, #823 closes that body with a
+compiler-generated terminal continuation while retaining the external
+signature. A Direct root obtains the existing empty-evidence value for the
+internal chain; an EvidenceDirect root uses its newly inserted evidence
+argument. The root orchestration/conversion layer, not `tribute-front`, owns
+this delimiter and the final source-result return.
+
+### Logical CPS legalization
+
+The shared conversion lowers one executable region as
+`convert_region(region, exit_k)`. `exit_k` is a logical continuation for the
+region result; it is not a selected backend carrier. The conversion consumes
+operations from left to right:
+
+- An ordinary direct operation stays in its existing dialect and its result
+  flows to the remaining suffix.
+- A `Cps` `func.call` or `func.call_indirect` uses its existing convention
+  metadata and the jointly converted callable type. Conversion supplies
+  evidence and a continuation for the suffix using `CallableAbi` order.
+- `tribute_control.perform` branches only on its verified `operation_kind`.
+  For `@fn`, conversion does not capture the suffix and produces the existing
+  `ability.call`/`effect.dispatch_tail` path; the returned operation result
+  flows through the ordinary suffix. For `@op`, it captures the current suffix
+  and all selected enclosing structured exits up to the matching dynamic
+  handle boundary, then produces the existing
+  `ability.perform`/`effect.dispatch_cps` path. Operands are packed only at
+  that lower boundary. For `op -> Never`, conversion captures no suffix and
+  supplies a real zero-capture reject continuation to the existing required
+  ABI operand.
+- `tribute_control.yield value` invokes the region's `exit_k(value)`.
+
+At `scf.if`, case lowering, a guarded arm, or short-circuit selection, each
+executable branch is converted independently with an exit continuation that
+first reaches the structured merge and then runs the enclosing suffix. The
+condition, scrutinee, and preceding strict values are evaluated once in source
+order. Only the selected branch, guard, or right-hand side executes.
+
+`tribute_control.handle` creates a delimiter:
+
+1. Normal body yield enters the completion region exactly once; completion
+   yield continues through the enclosing `exit_k`.
+2. The nearest dynamically installed matching handler receives the operation
+   arguments. A `fn` arm yields the operation result and resumes
+   automatically.
+3. A resumptive general `op` arm receives an affine resumption. Its
+   `tribute_control.resume` supplies the performed operation's result, runs
+   the captured body continuation, and then runs the arm-local suffix with the
+   returned handle answer. A source `op -> Never` arm receives no resumption
+   and cannot contain `resume`.
+4. A general arm that yields without resuming completes that handle directly.
+   It bypasses the abandoned performed-computation suffix and the completion
+   region.
+5. A nested handle introduces the same delimiter recursively. A resumed path
+   re-enters every selected case/conditional/short-circuit/nested-handle frame
+   captured between the perform and its handler. A non-resumed path abandons
+   those frames.
+
+The converter must derive all continuations from regions, block suffixes,
+`tribute_control.yield`, verified `operation_kind`, and callable convention
+metadata. It must not rescan the typed AST, inspect AST containment, infer an
+operation kind, or add construct-specific rules for case, guard, short-circuit,
+or nested handles.
+
+The affine `resume_token` is a logical ownership capability. It may be unused
+or consumed once. Source `op -> Never`, identified by canonical `core.never`
+rather than an erased `anyref` placeholder, creates no token. Closure capture
+transfers the token's static ownership path; copying, storing, returning, or
+yielding it is invalid. Operation-local verification checks token/result types
+and rejects a token or nested `resume` in a `Never` handler. Whole-IR
+validation follows use-def and closure-capture edges to enforce one static
+ownership path and lexical association with one resumptive general handler.
+
+Static SSA validation does not prove dynamic one-shot behavior after capture:
+the same closure value may be invoked repeatedly. Conversion must therefore
+lower a captured resumption with runtime consumed state, and a second
+invocation must be rejected or trap before re-entering the continuation. This
+is the existing scoped-resumption runtime responsibility, not a backend
+carrier-selection decision. Conversion consumes the direct token and does not
+expose it in post-CPS IR.
+
+The `op -> Never` reject continuation is a compiler-generated closure with the
+ordinary continuation ABI, no captures, and a `func.unreachable` body. It may
+be shared within one compilation unit. `ability.perform` receives that typed
+closure, and `effect.dispatch_cps` receives its ordinary closure-to-`anyref`
+conversion. Null, an in-band sentinel, and arbitrary `anyref` are invalid
+substitutes. Invocation traps because a `Never` handler is forbidden to
+resume; the adapter is an ABI guard, not a source path or backend carrier
+choice.
+
+### Legalization boundaries
+
+The named `tribute-control-pre-cps` boundary accepts verified
+`tribute_control.*` beside ordinary high-level and mid-level dialects.
+Frontend conformance makes all existing `ability.*`, `effect.*`, and legacy
+CPS-dispatch operations illegal. During a partial #823 rewrite, source and
+lowered operations may coexist transiently; that transient state is not the
+named pre-CPS boundary.
+
+Successful shared conversion verifies the partial
+`tribute-control-post-cps` target, whose defining rule is
+`illegal_dialect("tribute_control")`. Any residual direct-control operation is
+a conversion failure at its source location. Later shared passes may still
+consume `ability.*`, `effect.*`, and `closure.*`. Native and Wasm
+backend-ready Tribute boundaries independently reject residual
+`tribute_control.*`, `ability.*`, and `effect.*`; they do not rely only on a
+previous pass having run.
 
 논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 `done_k`의
 인자로 전달되고 함수와 continuation의 control result는 `Never`다. 아래 예시의
@@ -13,7 +229,7 @@ continuation chain의 결과를 되돌려 보내기 위해 사용하는 compatib
 향후 control lowering은 이를 true tail call의 `Never` 또는 trampoline의 `Step`으로
 대체할 수 있다.
 
-## Private CPS completion carrier (#815)
+## Current private CPS completion carrier (#815)
 
 Until #774 supplies a general logical/backend control-result separation, the
 narrow #815 compatibility protocol at a handle boundary is:
@@ -62,8 +278,9 @@ The shared evidence ABI threads the dynamic tag through `effect.extend`,
 and Wasm obtain the same tag from the selected evidence marker before invoking
 that closure. Shared lowering compares integer owner tags; it does not require
 target-independent reference equality or an owner allocation. This is a
-single private compatibility representation, not #818's `tribute.control`
-dialect and not #774's general backend carrier-selection policy.
+single private compatibility representation, not the logical
+`tribute_control` semantic contract and not #774's general backend
+carrier-selection policy.
 
 현재 compatibility representation에서 캡처 없는 identity `done_k`의 함수 본문은
 컴파일 단위 전체에서 동일하다. AST-to-IR lowering은 이 내부 함수 정의를 compilation
@@ -79,7 +296,19 @@ separate compilation이 도입되면 backend의 link-once 정책으로 합칠 �
 ### `fn` operation: direct dispatch
 
 `fn`으로 선언된 ability operation은 tail-resumptive임을 선언부에서 보장한다.
-호출 지점은 continuation을 만들지 않고 `ability.call`로 내려간다.
+Typechecking은 이 source kind를 보존하고 frontend는 모든 ability invocation과
+마찬가지로 direct-style `perform`을 만든다:
+
+```text
+%result = tribute_control.perform %arg {
+  ability_ref = @Logger,
+  op_name = @log,
+  operation_kind = @fn
+}
+```
+
+Issue #823 semantic legalization이 `operation_kind = @fn`을 보고 continuation을
+만들지 않은 채 기존 `ability.call` 경로로 내린다:
 
 ```text
 %result = ability.call %arg
@@ -111,8 +340,19 @@ and indirect-call representation:
 
 ### `op` operation: tail-call CPS dispatch
 
-`op`으로 선언된 general operation은 명시적인 continuation closure와 함께
-`ability.perform`으로 내려간다.
+`op`으로 선언된 general operation도 frontend에서는 source-logical 결과를 갖는
+direct-style `perform`이다:
+
+```text
+%result = tribute_control.perform {
+  ability_ref = @State,
+  op_name = @get,
+  operation_kind = @op
+}
+```
+
+Issue #823 semantic legalization이 `operation_kind = @op`을 보고 block suffix에서
+명시적인 continuation closure를 구성한 뒤 `ability.perform`으로 내린다.
 
 ```text
 %result = ability.perform %continuation, %arg
@@ -146,7 +386,19 @@ func.return %result
 Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
 `ability.perform` 이후의 같은 function-body ops는 dead code가 된다.
 
-### 값/계산 lowering 경계
+이 lowering은 source kind를 재분류하지 않는다. 일반 `op` handler가 실제로
+항상 tail-resumptive인지 분석하여 tail path로 최적화하는 작업은 표준 `@op`
+semantic lowering 이후의 별도 IR optimization이다.
+
+### Current pre-M2 frontend value/computation boundary
+
+The following `ast_to_ir` normalization and `lower_value`/`lower_comp` split is
+the current implementation baseline. Its compositional behavior is evidence
+for the M2 region conversion and must remain correct during migration, but
+frontend-owned normalization and continuation construction are not the
+permanent phase boundary. After #824, `tribute-front` emits verified
+direct-style regions; after #826, superseded CPS-only frontend machinery is
+removed.
 
 `ast_to_ir`는 lowering 직전에 작은 typed-AST A-normalization을 한 번 수행한다.
 이것은 새 HIR, source language phase, 또는 source effect 의미가 아니다. 기존
@@ -269,8 +521,9 @@ expression variant가 없으므로 unary strict-child normalization은 적용 �
 
 `#816`은 현재 `anyref` compatibility carrier를 보존한다. #815 adds only the
 owner-tagged private escape protocol above. General logical/backend
-control-result selection remains #774 work, and a direct-style
-`tribute.control` dialect remains #818 work.
+control-result selection remains #774 work. The direct-style
+`tribute_control` contract is fixed above; implementation and migration remain
+owned by Issues #822 through #826.
 
 Rust lowering은 sealed answer domain marker로 이 경계를 표현한다. `Ambient`는
 함수/바깥 CPS chain의 control answer, `HandleAnswer`는 handle delimiter 안의
@@ -366,9 +619,9 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 Effect 발생 시점에서 이미 handler closure로 tail-call되므로,
 `lower_handle_dispatch`는 body result에 `done` handler를 적용하는 역할만 한다.
 
-## Shared Middle-End Pipeline
+## Current shared middle-end pipeline
 
-현재 shared pipeline의 핵심 순서는 다음과 같다.
+Until #823-#825 land, the implemented shared pipeline remains:
 
 ```text
 ast_to_ir
@@ -386,11 +639,14 @@ ast_to_ir
 Future effect specialization and handler inlining use the same validation
 contract defined in `optimizations.md`.
 
-`ast_to_ir` 단계에서 effectful function과 closure는 evidence parameter와
-현재 compatibility CPS representation을 반영한 IR로 생성된다. Shared lowering removes
-high-level dispatch operations and emits `effect.*` ABI operations. Backends
-then lower `effect.*` into evidence runtime calls, closure decomposition, and
-target-specific indirect calls.
+In this current baseline, `ast_to_ir` creates effectful functions and closures
+with evidence parameters and the compatibility CPS representation. This is
+descriptive, not the permanent ownership boundary. The M2 target inserts
+`tribute_control` CPS legalization before the existing ability/effect passes;
+after #824 the frontend does not construct continuations, and #826 removes the
+superseded path. Shared lowering still emits the same `effect.*` ABI
+operations, which backends lower into evidence runtime calls, closure
+decomposition, and target-specific indirect calls.
 
 ## Effect ABI Boundary
 
@@ -414,9 +670,11 @@ Rules:
 - Backend-ready conversion targets must reject residual `effect.*` operations.
 - Shared passes must not inspect Marker field numbers, handler-table storage
   layout, closure field positions, or backend function-pointer representation.
-- Payload values are already packed into a single value by the frontend or
-  earlier shared lowering. Missing payloads are represented explicitly by a
-  target-independent null/empty value before reaching `effect.*`.
+- Payload values are already packed into a single value by shared lowering.
+  The M2 frontend retains source-logical `tribute_control.perform` operands
+  and does not pack them for a dispatch strategy. Missing payloads are
+  represented explicitly by a target-independent null/empty value before
+  reaching `effect.*`.
 
 ## Backend Implications
 
