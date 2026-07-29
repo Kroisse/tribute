@@ -1,0 +1,5 @@
+5
+12
+error: invalid integer
+5
+error: expected 'add|sub|mul <int> <int>' or 'quit'

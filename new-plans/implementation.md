@@ -107,6 +107,52 @@ WasmGC selects its own private GC layout. Native layout choices are not shared
 IR conventions and do not establish Wasm execution parity. Full RRB trees,
 efficient concatenation, slicing, and transients remain post-M1 work.
 
+## Canonical M1 Native Calculator
+
+The canonical M1 native calculator is a single-file, public-API-only native
+program at `lang-examples/native_calculator.trb`. It establishes an executable
+integration contract for canonical `String`, `Bytes`, `List`, `Int`, and
+`std::io`; it does not expose compiler intrinsics, runtime ABI symbols, or test
+helpers.
+
+### Command Grammar
+
+```text
+line             := horizontal-space* (quit | calculation) horizontal-space*
+quit             := "quit"
+calculation      := operator horizontal-space+ integer horizontal-space+ integer
+operator         := "add" | "sub" | "mul"
+integer          := [+-]?[0-9]+
+horizontal-space := ASCII space | ASCII tab
+```
+
+The tokenizer ignores leading, trailing, and repeated horizontal space.
+`std::io::read_line` removes the input line ending before the tokenizer sees
+the line. Dispatch compares the first token with `"add"`, `"sub"`, and
+`"mul"` through public `String` equality. The source keeps byte tokenization,
+List-based command parsing/dispatch, and recursive I/O handling in separate
+functions.
+
+### Observable Behavior
+
+- A successful calculation prints only `Int::to_string(result)` followed by
+  one newline.
+- `Int::ParseError::InvalidSyntax` prints `error: invalid integer`.
+- `Int::ParseError::OutOfRange` prints `error: integer out of range`.
+- An unknown command, blank line, or wrong arity prints
+  `error: expected 'add|sub|mul <int> <int>' or 'quit'`.
+- Every command error is recoverable: the recursive input loop reads the next
+  line after printing it.
+- Exact `quit` prints nothing and terminates without reading later input.
+- `std::io::Error::EndOfFile` prints nothing and terminates normally.
+- `std::io::Error::InvalidEncoding` and `std::io::Error::System(_)` print
+  `error: input failure` once and terminate. No `Throw(std::io::Error)` escapes
+  the entrypoint.
+
+Arithmetic overflow policy and additional operators are outside this M1
+integration contract. Its executable fixtures use only representable operands
+and results.
+
 ---
 
 ## Semantic Model

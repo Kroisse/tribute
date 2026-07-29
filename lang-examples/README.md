@@ -8,13 +8,56 @@ the wider frontend and target status.
 
 ## Canonical runnable examples
 
-### Native effects and I/O
+### M1 native calculator
+
+[`native_calculator.trb`](native_calculator.trb) is the canonical M1 native
+preview. It tokenizes commands with public String/Bytes APIs, uses canonical
+`List(String)` patterns for dispatch, formats with `Int::to_string`, and
+recursively handles `std::io::read_line` until `quit` or EOF.
+
+```bash
+cargo run --locked -- compile lang-examples/native_calculator.trb \
+  -o target/native-calculator
+./target/native-calculator \
+  < tests/fixtures/native_calculator_scripted.stdin \
+  > target/native-calculator-scripted.stdout
+diff -u \
+  tests/expected/native_calculator_scripted.stdout \
+  target/native-calculator-scripted.stdout
+./target/native-calculator \
+  < tests/fixtures/native_calculator_eof.stdin \
+  > target/native-calculator-eof.stdout
+diff -u \
+  tests/expected/native_calculator_eof.stdout \
+  target/native-calculator-eof.stdout
+```
+
+The scripted session covers multiple operations, a recoverable invalid integer,
+and `quit`; the EOF session proves quiet termination after its preceding result.
+The product regression also supplies a NUL-leading valid UTF-8 malformed line
+and invalid UTF-8, verifying respectively normal command recovery and exactly
+one terminal input-failure line. On Ubuntu, CI also executes this identical
+scripted session with AddressSanitizer:
+
+```bash
+cargo run --locked -- compile --sanitize=address \
+  lang-examples/native_calculator.trb \
+  -o target/native-calculator-asan
+./target/native-calculator-asan \
+  < tests/fixtures/native_calculator_scripted.stdin \
+  > target/native-calculator-asan.stdout
+diff -u \
+  tests/expected/native_calculator_scripted.stdout \
+  target/native-calculator-asan.stdout
+```
+
+### M0 native effects artifact
 
 [`native_effects.trb`](native_effects.trb) handles the public
 `abilities::Throw` ability and writes through `std::io`.
 
 ```bash
-cargo run -- compile lang-examples/native_effects.trb \
+cargo run --locked -- compile lang-examples/native_effects.trb \
   -o target/native-effects-example
 ./target/native-effects-example
 ```
@@ -25,8 +68,8 @@ Expected standard output:
 Recovered: the failure was handled
 ```
 
-Native currently has the broadest execution coverage, including handled
-abilities and `std::io::read_line`.
+This retained M0 artifact demonstrates handled abilities and native output. The
+calculator above is the canonical native M1 command example.
 
 ### WasmGC dynamic output
 

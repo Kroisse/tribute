@@ -117,6 +117,17 @@ jobs:
             tests/expected/native_effects.stdout \
             target/native-effects-example.stdout
 
+      - name: Run canonical calculator input contracts
+        run: |
+          cargo test --locked --test canonical_calculator \
+            canonical_calculator_cli_matches_all_input_contracts -- --exact
+
+      - name: Run canonical calculator AddressSanitizer contract
+        if: matrix.platform == 'Ubuntu'
+        run: |
+          cargo test --locked --test canonical_calculator \
+            canonical_calculator_asan_matches_scripted_contract -- --exact
+
   canonical-wasm:
     name: Canonical WasmGC example
     permissions:
