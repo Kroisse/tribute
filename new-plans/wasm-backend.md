@@ -185,8 +185,10 @@ user-defined type은 그 뒤에 배치된다:
 | 5 | `Evidence` array |
 | 6+ | user-defined structs, arrays, variants, closures |
 
-Builtin layout은 CPS control carrier나 trampoline placeholder index를 예약하지
-않는다. `_closure` environment와 Marker의 dispatch closure field는 일반 reference
+이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
+verifier는 `_closure` 3, `_Marker` 4, `Evidence` 5, user-defined type 6+를 정확히
+사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
+`_closure` environment와 Marker의 dispatch closure field는 일반 reference
 erasure이므로 계속 `anyref`를 사용할 수 있다.
 
 ```wasm

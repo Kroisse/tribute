@@ -55,7 +55,7 @@ operations.
 | `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
 | `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
 | `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
-| `tribute-backend-ready-wasm` | 기존 emission-ready 검사 전에 high-level operation을 partial 방식으로 거부 | backend-ready Wasm IR 전에 `tribute_control`, `ability`, `effect`를 명시적으로 illegal로 지정하며, emission 전에는 `wasm_gc`도 illegal이다. |
+| `tribute-backend-ready-wasm` | emission-ready full 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, `wasm_gc`, `core.unrealized_conversion_cast`가 없다. 명시적으로 열거한 Wasm infrastructure와 `wasm.*` operation만 legal이며 unknown operation은 illegal이다. |
 
 Post-CPS helper는
 `ConversionTarget::new().illegal_dialect("tribute_control")`와 partial
