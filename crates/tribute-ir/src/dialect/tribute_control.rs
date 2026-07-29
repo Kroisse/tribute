@@ -122,7 +122,7 @@ impl DialectType for Callable {
     const TYPE_NAME: &'static str = "callable";
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
-        Self::matches(ctx, ty).then_some(Self(ty))
+        (Self::matches(ctx, ty) && !ctx.types.get(ty).params.is_empty()).then_some(Self(ty))
     }
 
     fn as_type_ref(&self) -> TypeRef {
@@ -174,6 +174,16 @@ pub fn callable_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConven
         .attrs
         .get_i128(CALLING_CONVENTION_ATTR)
         .and_then(|code| CallingConvention::try_from(code).ok())
+}
+
+fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
+    if !ResumeToken::matches(ctx, ty) {
+        return None;
+    }
+    let [input, answer] = ctx.types.get(ty).params.as_slice() else {
+        return None;
+    };
+    Some((*input, *answer))
 }
 
 /// Build a body-less `tribute_control.func` declaration.
@@ -378,9 +388,7 @@ fn callable_raw_type<'a>(
 fn has_duplicate_convention_attr(
     attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)],
 ) -> bool {
-    attrs
-        .iter()
-        .any(|(key, _)| *key == CALLING_CONVENTION_ATTR || *key == "tribute_calling_convention")
+    attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
 }
 
 fn parse_func<'a>(
@@ -1217,13 +1225,12 @@ fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     validate_arity(ctx, op, None, Some(1), Some(0), errors);
     validate_attr_keys(ctx, op, &["callee"], false, errors);
     validate_attr_types(ctx, op, &[("callee", AttributeKind::Symbol)], errors);
-    for ty in value_types(ctx, ctx.op_operands(op))
+    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-    {
-        if contains_unresolved_type(ctx, ty, &mut HashSet::new()) {
-            push_op_error(ctx, op, errors, "operands and result must be resolved");
-        }
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+    if has_unresolved_type {
+        push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
 }
 
@@ -1330,13 +1337,12 @@ fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
         ),
         None => {}
     }
-    for ty in value_types(ctx, ctx.op_operands(op))
+    let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-    {
-        if contains_unresolved_type(ctx, ty, &mut HashSet::new()) {
-            push_op_error(ctx, op, errors, "operands and result must be resolved");
-        }
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+    if has_unresolved_type {
+        push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
 }
 
@@ -1505,12 +1511,12 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     let last_token = args
         .last()
         .copied()
-        .and_then(|value| ResumeToken::from_type_ref(ctx, ctx.value_ty(value)));
+        .and_then(|value| resume_token_parts(ctx, ctx.value_ty(value)));
     match (kind, result_type) {
         (Some(kind), Some(operation_result))
             if kind == Symbol::new("op") && !is_never(ctx, operation_result) =>
         {
-            let Some(token) = last_token else {
+            let Some((token_input, token_answer)) = last_token else {
                 push_op_error(
                     ctx,
                     op,
@@ -1519,8 +1525,8 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
                 );
                 return;
             };
-            if token.input(ctx) != operation_result
-                || handle_result.is_some_and(|answer| token.answer(ctx) != answer)
+            if token_input != operation_result
+                || handle_result.is_some_and(|answer| token_answer != answer)
             {
                 push_op_error(
                     ctx,
@@ -1606,7 +1612,8 @@ fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
     let [token_value, input_value] = ctx.op_operands(op) else {
         return;
     };
-    let Some(token) = ResumeToken::from_type_ref(ctx, ctx.value_ty(*token_value)) else {
+    let Some((token_input, token_answer)) = resume_token_parts(ctx, ctx.value_ty(*token_value))
+    else {
         push_op_error(
             ctx,
             op,
@@ -1615,8 +1622,8 @@ fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
         );
         return;
     };
-    if ctx.value_ty(*input_value) != token.input(ctx)
-        || ctx.op_result_types(op).first().copied() != Some(token.answer(ctx))
+    if ctx.value_ty(*input_value) != token_input
+        || ctx.op_result_types(op).first().copied() != Some(token_answer)
     {
         push_op_error(
             ctx,
@@ -2498,6 +2505,23 @@ mod tests {
     }
 
     #[test]
+    fn callable_wrapper_rejects_missing_result_component() {
+        let mut ctx = IrContext::new();
+        let loc = location(&mut ctx);
+        let malformed = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("callable"))
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+        );
+        assert!(Callable::from_type_ref(&ctx, malformed).is_none());
+
+        let declaration = func_declaration(&mut ctx, loc, Symbol::new("malformed"), malformed);
+        let module = module(&mut ctx, loc, &[declaration.op_ref()]);
+        let result = validate_local(&ctx, module);
+        assert!(messages(&result).contains("requires one result type"));
+    }
+
+    #[test]
     fn all_operations_construct_with_typed_accessors_and_preserve_locations() {
         let fixture = valid_fixture();
         let ctx = &fixture.ctx;
@@ -2644,6 +2668,18 @@ mod tests {
             let mut ctx = IrContext::new();
             assert!(parse_module(&mut ctx, input).is_err(), "{input}");
         }
+    }
+
+    #[test]
+    fn parser_preserves_underscore_named_extra_attribute() {
+        let input = r#"core.module @test {
+  tribute_control.func @ok() -> core.i32 convention(direct) attributes {tribute_calling_convention = 7}
+}"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("ordinary extra attribute should parse");
+        let module = Module::new(&ctx, root).expect("core.module");
+        let printed = assert_round_trip(&ctx, module);
+        assert!(printed.contains("tribute_calling_convention = 7"));
     }
 
     #[test]
@@ -2808,13 +2844,18 @@ mod tests {
 
         let result = validate_local(&fixture.ctx, fixture.module);
         for op in [unresolved_call.op_ref(), unresolved_perform.op_ref()] {
-            assert!(
-                result.errors.iter().any(|error| {
-                    error.op == Some(op)
-                        && error
-                            .message
-                            .contains("operands and result must be resolved")
-                }),
+            assert_eq!(
+                result
+                    .errors
+                    .iter()
+                    .filter(|error| {
+                        error.op == Some(op)
+                            && error
+                                .message
+                                .contains("operands and result must be resolved")
+                    })
+                    .count(),
+                1,
                 "{result}"
             );
         }
@@ -3006,6 +3047,60 @@ mod tests {
 
         let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("is not a resolved logical value type"));
+    }
+
+    #[test]
+    fn validator_reports_malformed_resume_token_uses_without_panicking() {
+        let mut fixture = valid_fixture();
+        let i32_ty = fixture.declarations[0].result_type;
+        let malformed = fixture.ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("resume_token"))
+                .param(i32_ty)
+                .build(),
+        );
+        let handler_body = fixture.ctx.op(fixture.handler).regions[0];
+        let handler_block = fixture.ctx.region(handler_body).blocks[0];
+        let token_index = u32::try_from(fixture.ctx.block_args(handler_block).len() - 1).unwrap();
+        fixture
+            .ctx
+            .set_block_arg_type(handler_block, token_index, malformed);
+        let resume = fixture
+            .ctx
+            .block(handler_block)
+            .ops
+            .iter()
+            .copied()
+            .find(|op| is_control_op(&fixture.ctx, *op, "resume"))
+            .expect("fixture resume");
+
+        let result = validate_local(&fixture.ctx, fixture.module);
+        assert!(
+            result.errors.iter().any(|error| {
+                error.op.is_none()
+                    && error
+                        .message
+                        .contains("resume_token requires exactly input and answer types")
+            }),
+            "{result}"
+        );
+        assert!(
+            result.errors.iter().any(|error| {
+                error.op == Some(fixture.handler)
+                    && error
+                        .message
+                        .contains("requires a final resume_token block argument")
+            }),
+            "{result}"
+        );
+        assert!(
+            result.errors.iter().any(|error| {
+                error.op == Some(resume)
+                    && error
+                        .message
+                        .contains("first operand must have tribute_control.resume_token type")
+            }),
+            "{result}"
+        );
     }
 
     fn replace_direct_resume_with_transitive_carrier(fixture: &mut ValidFixture) {

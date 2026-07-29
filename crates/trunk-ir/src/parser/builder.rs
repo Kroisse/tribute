@@ -633,11 +633,7 @@ core.module @test {
         let root = parse_module(&mut ctx, input).expect("namespaced attribute key should parse");
         let printed = print_module(&ctx, root);
         assert!(printed.contains("tribute.calling_convention = 2"));
-
-        let mut reparsed_ctx = IrContext::new();
-        let reparsed =
-            parse_module(&mut reparsed_ctx, &printed).expect("printed namespaced key should parse");
-        assert_eq!(printed, print_module(&reparsed_ctx, reparsed));
+        assert_roundtrip(&ctx, root);
     }
 
     #[test]
