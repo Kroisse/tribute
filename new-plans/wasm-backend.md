@@ -4,9 +4,8 @@
 
 ## Overview
 
-Tribute의 Wasm backend는 WasmGC (Wasm 3.0) 표현을 emit한다. 현재 주요 구현
-경로는 native이지만, Wasm backend도 같은 shared middle-end와 effect ABI를
-입력으로 받는다. 백엔드는 다음 원칙을 따른다:
+Tribute의 Wasm backend는 WasmGC (Wasm 3.0) 표현을 emit하고 native와 같은 shared
+middle-end와 effect ABI를 입력으로 받는다. 백엔드는 다음 원칙을 따른다:
 
 1. **타겟 독립적 IR 유지**: trunk-ir는 특정 타겟에 종속되지 않음
 2. **Backend-specific 타입 처리**: WasmGC 타입 정의는 백엔드에서 처리
@@ -37,7 +36,7 @@ trunk-ir-wasm-backend/    # trunk-ir만 의존
 tribute-passes/           # tribute-ir 의존
 ├── wasm/lower.rs         # Wasm lowering pipeline orchestration
 ├── wasm/evidence_to_wasm.rs
-│                         # effect.* → evidence helpers + call_indirect
+│                         # effect.* → evidence helpers + call/return_call
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
 ├── wasm/intrinsic_to_wasm.rs
@@ -64,6 +63,7 @@ tribute-ir (High-level)
 ├── closure.new
 ├── effect.extend
 ├── effect.dispatch_tail / effect.dispatch_cps
+├── func.tail_call / func.tail_call_indirect
 │
 ▼ tribute-passes/wasm/lower.rs
 │
@@ -71,7 +71,10 @@ trunk-ir (Mid-level)
 ├── wasm.struct_new       # 인스턴스 생성
 ├── wasm.struct_get/set   # 필드 접근
 ├── wasm.array_new        # 배열 생성
-├── wasm.call_indirect    # dispatch closure 호출
+├── wasm.call_indirect    # ordinary indirect 호출
+├── wasm.return_call      # direct proper tail transfer
+├── wasm.return_call_indirect
+│                         # indirect proper tail transfer
 ├── wasm.func             # evidence lookup/extend helpers
 │
 ▼ trunk-ir-wasm-backend
@@ -81,11 +84,11 @@ trunk-ir (Mid-level)
 WebAssembly Binary
 ```
 
-Effect lowering is target-specific. Shared ability lowering produces
-`effect.*` operations and must not inspect Marker field numbers or closure
-layout. `wasm/evidence_to_wasm` is the Wasm boundary that removes those
-operations by generating evidence lookup/extend helpers, unpacking closure
-structs `(table_idx, env)`, and emitting `wasm.call_indirect`.
+Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect.*`를
+만들며 Marker field 번호나 closure layout을 검사하지 않는다.
+`wasm/evidence_to_wasm`은 evidence lookup/extend helper를 만들고 closure struct
+`(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
+emit하여 해당 operation을 제거하는 Wasm 경계다.
 
 ### Entrypoint contract
 
@@ -98,6 +101,32 @@ the `EvidenceDirect` ABI. Other residual effects are rejected by the frontend.
 Printing program results belongs in explicit standard I/O calls such as
 `std::io::print_line`, which shared lowering maps to the target-independent I/O
 boundary described in [io.md](io.md), not in backend entrypoint lowering.
+
+CPS root가 필요한 export는
+[직접형 wrapper와 completion cell](cps-effects.md#root-main-delimiter)을 사용한다.
+Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계약만
+보존한다. Wasm signature lowering이 CPS signature를 empty-result signature로
+내린 뒤 nil/void machinery에 맞는 wrapper와 ordinary call을 합성한다. Wrapper는 root
+`done_k`가 typed cell을 쓴 뒤 call이 돌아오면 이를 읽는다. Shared `func.call`에
+zero-result 형상을 추가하지 않으며, 이 bridge는 trampoline이나 `anyref` control
+carrier가 아니다.
+
+### 올바른 꼬리 호출 계약
+
+[WebAssembly 3.0 validation](https://webassembly.github.io/spec/core/valid/instructions.html#valid-return-call-indirect)은
+`return_call`, `return_call_indirect`, `return_call_ref`의 tail-call 형식과 caller
+result matching을 정의한다. Tribute는 다음 경로를 구현한다:
+
+| Shared IR | Wasm IR | Encoder |
+| ---- | ---- | ---- |
+| `func.tail_call` | `wasm.return_call` | `wasm_encoder::Instruction::ReturnCall` |
+| `func.tail_call_indirect` | `wasm.return_call_indirect` | `wasm_encoder::Instruction::ReturnCallIndirect { type_index, table_index }` |
+
+`func.tail_call_indirect` lowering은 callee table index와 argument를 기존
+`call_indirect`와 같은 순서로 평가하고, callee `core.func`에서 `type_index`를
+결정한다. CPS caller/callee의 result vector는 모두 비어 있어야 하며
+`wasm.return_call_indirect`는 result local을 만들지 않는다. 일반 source-data
+indirect call만 `wasm.call_indirect`를 유지한다.
 
 ### Dynamic basic output
 
@@ -119,9 +148,9 @@ the standard-library I/O wrapper explicitly converts them to `Bytes`.
 WasmGC must lower the same representation-independent `list.*` sequence
 operations to a target-private GC layout and eliminate them before the
 backend-ready boundary. It is not required to share native's linked-node/null
-layout. The M1 native implementation and compile-only shared frontend evidence
-do not by themselves establish Wasm compilation or execution support; capability
-claims require focused Wasm evidence.
+layout. Native implementation and shared frontend evidence do not by themselves
+establish Wasm compilation or execution support; capability claims require
+focused Wasm evidence.
 
 ---
 
@@ -143,21 +172,24 @@ claims require focused Wasm evidence.
 
 ### Type Section 생성
 
-수집된 타입 정보로 WasmGC type section을 생성한다. Builtin type index layout은
-현재 고정되어 있고, user-defined type은 그 뒤에 배치된다:
+수집된 타입 정보로 WasmGC type section을 생성한다. Builtin layout은 다음과 같고
+user-defined type은 그 뒤에 배치된다:
 
 | Index | Type |
 | ---: | --- |
 | 0 | `BoxedF64` |
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
-| 3 | `Step` legacy trampoline struct |
-| 4 | `_closure { table_idx: i32, env: anyref }` |
-| 5 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }` |
-| 6 | `Evidence` array |
-| 7 | `Continuation` legacy trampoline struct |
-| 8 | `ResumeWrapper` legacy trampoline struct |
-| 9+ | user-defined structs, arrays, variants, closures |
+| 3 | `_closure { table_idx: i32, env: anyref }` |
+| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }` |
+| 5 | `Evidence` array |
+| 6+ | user-defined structs, arrays, variants, closures |
+
+이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
+verifier는 `_closure` 3, `_Marker` 4, `Evidence` 5, user-defined type 6+를 정확히
+사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
+`_closure` environment와 Marker의 dispatch closure field는 일반 reference
+erasure이므로 계속 `anyref`를 사용할 수 있다.
 
 ```wasm
 ;; 생성된 type section 예시
@@ -201,33 +233,24 @@ wasm dialect는 WasmGC 인스턴스 연산만 포함:
 
 타입 정의 (type section)는 백엔드가 이 연산들에서 추론하여 생성한다.
 
-### tribute-wasm-backend 제거
+### 크레이트 역할 분담
 
-별도 `tribute-wasm-backend` 크레이트는 현재 사용하지 않는다. 역할 분담은 다음과
-같다:
+역할 분담은 다음과 같다:
 
 - Lowering → tribute-passes
 - Emission → trunk-ir-wasm-backend
 - 조율 → tribute main crate
 
----
-
-## Current Work Items
-
-- Remove or repurpose the legacy `Step`, `Continuation`, and `ResumeWrapper`
-  builtin types once the old trampoline path is fully retired.
-- Promote the current Wasm backend-ready partial boundary, which rejects
-  residual `ability.*` and `effect.*`, into a full emission boundary once
-  remaining later-stage infrastructure such as unresolved casts is cleaned up.
-- Keep pass-level textual IR fixtures for `effect.extend`,
-  `effect.dispatch_tail`, and `effect.dispatch_cps` so the Wasm and native
-  lowering paths cannot drift silently.
+최종 Wasm emission boundary는 residual `tribute_control.*`, `ability.*`,
+`effect.*`, CPS control carrier, trampoline과 result-producing CPS transfer를
+거부한다.
 
 ---
 
 ## References
 
 - [Wasm 3.0 Release](https://webassembly.org/news/2025-09-17-wasm-3.0/)
+- [WebAssembly 3.0 tail-call validation](https://webassembly.github.io/spec/core/valid/instructions.html#valid-return-call-indirect)
 - [WasmGC Proposal](https://github.com/WebAssembly/gc/blob/main/proposals/gc/Overview.md)
 - [Cranelift Stack Maps](https://bytecodealliance.org/articles/new-stack-maps-for-wasmtime)
 - [MLIR Dialects](https://mlir.llvm.org/docs/Dialects/)

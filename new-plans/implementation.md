@@ -38,6 +38,60 @@ TrunkIR validation follows the layered model in `new-plans/ir.md`:
 Do not add a separate semantic-contract DSL unless these existing mechanisms
 cannot express a required invariant.
 
+## 직접형 제어 소유권
+
+구조와 의미의 source of truth는
+[ir.md](ir.md#direct-style-control), conversion 규칙은
+[cps-effects.md](cps-effects.md#direct-style-control-boundary)이다.
+
+Dependency direction은 다음과 같이 고정한다:
+
+```text
+tribute-front  -> tribute-ir + trunk-ir
+tribute-passes -> tribute-ir + trunk-ir
+tribute        -> tribute-front + tribute-passes
+```
+
+`tribute-front`는 `tribute-passes`에 의존하지 않는다. 각 계층의 책임은 다음과
+같다:
+
+- `tribute-front`는 [논리 callable/control 계약](ir.md#direct-style-control)을
+  emit하고 `func.*`, `closure.*`, `core.func` 또는 dispatch representation을
+  만들지 않는다.
+- `tribute-ir`는 callable/control type과 operation, custom assembly, local
+  verifier와 Tribute-specific whole-IR verifier를 소유한다.
+- `tribute-passes`는
+  [atomic callable/control conversion](cps-effects.md#pre-cps-callable-shape)과
+  post-CPS legality, generic `func.tail_call_indirect`를 소유한다.
+- Root `tribute` crate는 frontend emission과 shared conversion을 조합한다.
+  Target-independent root bridge는 completion cell과 terminal continuation의 추상
+  조합 계약만 정한다.
+- Native/Wasm signature lowering은 `core.never` CPS signature를 target
+  empty-result signature로 내린 뒤 external Direct/EvidenceDirect wrapper와
+  ordinary call을 합성한다.
+
+검증 책임은 구현 계층과 분리한다:
+
+- Frontend 경계는 `tribute-ir` validator와 generic SSA/use-chain validation을
+  함께 호출한다. 세부 검증 계약은 [ir.md](ir.md#direct-style-control)를 따른다.
+- Whole-IR verifier는 static affine path를, converted resumption runtime은
+  closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
+- `tribute-passes`와 backend pipeline은 각각 post-CPS 및 backend-ready target을
+  검증한다. 성공한 경계에는 residual `tribute_control` operation/type이 없고
+  backend-ready 경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
+
+Logical CPS result는 `core.never`, physical CPS ABI는 empty result다. 모든 CPS
+이전은 direct/indirect proper tail call이며 backend-ready IR은 CPS control-result
+`anyref`, private control enum, `Step`과 trampoline을 거부한다. Boxed source
+value, effect payload, closure environment의 일반 reference erasure에는
+`anyref`를 사용할 수 있다. Source `op -> Never`의 canonical `core.never`와 typed
+zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
+[cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
+
+Source syntax, effect-row semantics, `Direct < EvidenceDirect < Cps` 순서, ability
+optimization 정책, multi-file compilation은 변경하지 않으며 Tribute semantics를
+generic `trunk-ir`로 옮기지 않는다.
+
 ---
 
 ## Nominal Type Identity
@@ -95,7 +149,7 @@ is not an intrinsic. User code depends only on the public function signature and
 canonical `List(a)` contract; the private intrinsic, shared operation, and native
 node layout are not separately addressable collection APIs.
 
-For M1, native may lower the operations to private immutable singly linked
+Native may lower the operations to private immutable singly linked
 RC-managed nodes with empty represented by a private null sentinel. Each
 non-empty node owns its element when reference-typed and its tail. Existing RTTI,
 RC insertion, deep release, and borrowed-field rules apply after the private
@@ -105,11 +159,12 @@ uniqueness proof is an optional optimization and cannot change semantics.
 
 WasmGC selects its own private GC layout. Native layout choices are not shared
 IR conventions and do not establish Wasm execution parity. Full RRB trees,
-efficient concatenation, slicing, and transients remain post-M1 work.
+efficient concatenation, slicing, and transients are outside the canonical
+`List` contract.
 
-## Canonical M1 Native Calculator
+## Canonical Native Calculator
 
-The canonical M1 native calculator is a single-file, public-API-only native
+The canonical native calculator is a single-file, public-API-only native
 program at `lang-examples/native_calculator.trb`. It establishes an executable
 integration contract for canonical `String`, `Bytes`, `List`, `Int`, and
 `std::io`; it does not expose compiler intrinsics, runtime ABI symbols, or test
@@ -149,9 +204,8 @@ functions.
   `error: input failure` once and terminate. No `Throw(std::io::Error)` escapes
   the entrypoint.
 
-Arithmetic overflow policy and additional operators are outside this M1
-integration contract. Its executable fixtures use only representable operands
-and results.
+Arithmetic overflow policy and additional operators are outside this integration
+contract. Its executable fixtures use only representable operands and results.
 
 ---
 
@@ -200,6 +254,11 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 `resume`은 키워드이므로 단독으로 값이 될 수 없고, 호출 위치(`resume expr`)에서만
 사용할 수 있다. 다만 `fn() resume state`처럼 람다 안에서 호출하는 것은 가능하며,
 이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장해야 한다.
+`tribute_control`의 정적 verifier는 이 캡처까지 이어지는 단일 ownership path와
+금지된 escape만 확인한다. 동일 closure의 동적 재호출 가능성은 정적으로 제거되지
+않으므로, CPS conversion이 생성한 resumption은 consumed state를 유지하고 두 번째
+호출을 재진입 전에 거부하거나 trap해야 한다. Source `op -> Never` handler는
+resumption을 만들지 않으며 `resume_token` block argument도 받지 않는다.
 
 ---
 
@@ -251,7 +310,7 @@ struct Marker {
 Operation table 대신 handler boundary에서 두 종류의 dispatch closure를 만든다:
 
 - `tr_dispatch_fn`: `fn` operation 전용. `(op_idx, value) -> anyref`
-- `handler_dispatch`: `op` operation 전용. `(k, op_idx, value) -> anyref`
+- `handler_dispatch`: `op` operation 전용. `(k, op_idx, value) -> ()`
 
 `op_idx`는 ability 이름과 operation 이름의 stable hash로 계산한다. 호출 지점과
 handler dispatch closure가 같은 hash 함수를 사용하므로, handler arm 등록 순서에
@@ -348,14 +407,15 @@ Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
 `Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
 자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
 
-Root `main` is a frontend CPS delimiter, not a `Cps` backend entry ABI. Its
-valid source residual contract remains pure or `Io`. If its body only needs
-the stronger implementation convention because it calls a generic/open
-callback worker, AST-to-IR keeps root `main` at its Direct/EvidenceDirect
-seed, closes that computation with the shared identity continuation, and
-returns the recovered source value normally. A genuine residual general effect
-is still rejected before the backend entrypoint; nested-module `main` is not
-special.
+Root `main`은 CPS delimiter이지만 `Cps` backend entry ABI가 아니다. Valid source
+residual contract는 pure 또는 `Io`이며 residual general effect는 backend
+entrypoint 전에 거부한다. Frontend는 root body도 direct-style control로 emit하고
+shared conversion은 typed completion cell과 `core.never` root `done_k`의 추상
+계약을 만든다. Target signature lowering이 CPS entry를 empty result로 바꾼 뒤에만
+Direct/EvidenceDirect export wrapper의 ordinary call을 합성한다. Wrapper는
+completion cell을 소유하고 root `done_k`가 이를 쓴 뒤 target call이 돌아오면
+cell을 읽는다. Shared `func.call`에 zero-result 형상을 추가하지 않으며
+nested-module `main`은 특별하지 않다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
@@ -369,11 +429,10 @@ runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.
 fn cps(ev: Evidence, done_k: fn(T) -> Never, args...) -> Never
 ```
 
-현재 IR은 true tail call이 모든 경로에서 보장되지 않으므로 continuation chain의
-행정적 반환값을 `anyref`로 전달하는 compatibility representation을 사용한다.
-`anyref`는 source result가 아니며 `Cps` convention의 영구적인 의미도 아니다.
-Control lowering이 분리되면 true tail-call backend는 `Never`, trampoline
-backend는 `Step`, 기존 경로는 `anyref` carrier를 선택할 수 있다.
+최종 physical ABI는 empty result를 쓰고 direct transfer는 `func.tail_call`,
+closure/continuation/`done_k` transfer는 `func.tail_call_indirect`를 쓴다. CPS
+control carrier로 `anyref`를 사용할 수 없다. Boxed source value, payload, closure
+environment 같은 일반 reference erasure에는 사용할 수 있다.
 
 ### 런타임 함수
 
@@ -430,6 +489,12 @@ ability containing any op  → Cps
 open or otherwise unknown e → Cps
 ```
 
+이 ability-level convention bound는 operation declaration의 source `fn`/`op`
+kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
+frontend가 각 `tribute_control.perform.operation_kind`에 이를 복사한다.
+`tribute_control_to_cps`는 이를 직접 소비하며 `CallingConvention`, handler-body
+analysis, effect-row bound 중 어느 것도 kind를 재구성하거나 변경하지 않는다.
+
 Effect annotation 생략은 closed-empty 추론이 아니다.
 
 ```text
@@ -445,8 +510,8 @@ boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명�
 닫힌 빈 row이므로 Direct를 사용한다.
 
 여기서 `Cps`는 source result를 직접 반환하지 않고 `done_k`로 전달한다는
-논리적 convention이다. 실제 lowered result carrier는 control-lowering 전략이
-`Never`, `Step`, 또는 compatibility `anyref` 중에서 결정한다.
+논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
+transfer로 바꾸며 대체 carrier를 선택하지 않는다.
 
 따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
 분류한다. 이는 안전한 **ability 단위 상한**이다. 다만 CPS 함수 안에서도 개별
@@ -495,7 +560,8 @@ plain/CPS worker 복제나 specialization은 후속 최적화로 검토한다.
 
 ### 변환 범위
 
-모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
+모든 코드를 CPS로 변환하지 않는다. Ability operation 중 typechecked
+`operation_kind = @op` 지점에서만 continuation 캡처가 필요하다:
 
 ```text
 생략 annotation의 semantic type       → open row, indirect call은 Cps
@@ -527,8 +593,10 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 #### 1. 선언 수준 보장 (`fn` operation)
 
-`fn`으로 선언된 operation은 **호출 지점에서** continuation 캡처 코드를
-생성하지 않는다. Evidence에서 handler 함수를 조회하여 직접 호출한다:
+`fn`으로 선언된 operation도 pre-CPS frontend IR에서는
+`tribute_control.perform { operation_kind = @fn }`이다.
+`tribute_control_to_cps`는 보존된 kind를 보고 continuation 캡처 코드를 생성하지
+않으며, evidence에서 handler 함수를 조회하여 직접 호출하는 경로로 내린다:
 
 ```rust
 // fn operation 호출 → shift 없이 직접 호출
@@ -544,10 +612,9 @@ Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언되므로,
 이 최적화가 큰 효과를 낸다.
 
 `Io` 함수도 continuation을 받지 않는다는 점에서는 `fn` operation과 같지만,
-handler dispatch가 없으므로 marker lookup도 수행하지 않는다. 현재는 ABI 안정성과
-effectful call 규칙의 단순성을 위해 evidence를 계속 전달한다. 현재 representation의
-`Io`-only entrypoint는 empty evidence를 사용할 수 있지만 이는 backend 구현
-세부사항이다.
+handler dispatch가 없으므로 marker lookup도 수행하지 않는다. Uniform
+`EvidenceDirect` ABI를 위해 evidence를 계속 전달한다. `Io`-only entrypoint의
+empty evidence 표현은 backend 구현 세부사항이다.
 
 #### 2. Handler 수준 분석 (`op` operation)
 
@@ -575,12 +642,20 @@ fn run_state_optimized(comp, init_state) {
 }
 ```
 
-이 분석은 best-effort이며, 복잡한 handler에서는 적용되지 않을 수 있다.
+이 분석은 표준 `operation_kind = @op` semantic lowering 이후에만 실행할 수 있는
+별도 best-effort IR optimization이다. `tribute_control_to_cps`는 handler body를
+분석하여 `op`을 `fn`으로 재분류하거나 이 최적화를 semantic legalization과
+결합하지 않는다. 복잡한 handler에서는 적용되지 않을 수 있으며, 적용 여부가
+source meaning이나 pre-CPS IR을 바꾸지 않는다.
 
-#### `op -> Never` 최적화
+#### `op -> Never` 의미
 
-`-> Never`를 반환하는 operation은 continuation을 캡처하지 않는다.
-Handler arm에서도 `-> k`를 사용하지 않으므로 continuation 관련 오버헤드가 없다.
+`-> Never`를 반환하는 operation은 source semantics상 resume할 수 없다.
+`tribute_control.handler`는 이 arm에 `resume_token`을 노출하지 않고, nested
+region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부한다.
+따라서 conversion은 source suffix를 캡처하지 않는다.
+`ability.perform`/`effect.dispatch_cps` ABI의 continuation operand에는 이미
+규정한 zero-capture reject continuation adapter를 전달한다.
 
 ---
 
@@ -669,7 +744,7 @@ op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 ```
 
 항상 resume하지 않는 operation은 `-> Never`로 선언한다.
-`-> Never`는 continuation 캡처 자체를 생략하는 최적화를 가능하게 한다.
+`-> Never`는 direct-style IR에서 resume token을 만들지 않는다.
 `op -> Never` handler body에서는 `resume`을 사용할 수 없다.
 
 ---
@@ -678,19 +753,17 @@ op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 
 ### WasmGC
 
-WasmGC는 당분간 후순위 타겟이지만, active path는 native와 같은 shared
-middle-end의 tail-call CPS / effect ABI 결과를 입력으로 받는다. 과거 설계의
-yield bubbling / `YieldResult` trampoline 방식은 active path가 아니다.
+WasmGC는 native와 같은 shared middle-end의 tail-call CPS / effect ABI 결과를
+입력으로 받는다.
 
 Wasm lowering은 `effect.extend`, `effect.dispatch_tail`,
 `effect.dispatch_cps`를 evidence helper, closure unpacking, and
-`wasm.call_indirect`로 낮춘다. 남아 있는 `Step`, `Continuation`,
-`ResumeWrapper` builtin 타입은 과거 trampoline 경로의 호환 흔적이며, 새 effect
-ABI lowering의 의미론적 기준이 아니다.
+direct `wasm.return_call` 또는 indirect `wasm.return_call_indirect`로 낮춘다.
+일반 source data call은 계속 `wasm.call_indirect`를 사용할 수 있다.
 
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 
-Effect handling은 tail-call CPS 방식으로 처리된다.
+Effect handling은 tail-call CPS로 구현한다.
 `lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
 `effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
@@ -704,13 +777,20 @@ native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
-      → evidence_params → prepare_closure_lowering → lower_closures_in_func
+      → tribute_control_to_cps
+      → lower_closure_lambda → prepare_closure_lowering → lower_closures_in_func
       → lower_ability_perform → resolve_evidence → lower_handle_dispatch
-      → dce → resolve_casts
+      → effect ABI verification → dce → resolve_casts
 
-WASM:   → lower_to_wasm [includes evidence_to_wasm] → emit_wasm
-Native: → evidence_to_native → lower_to_clif → emit_native
+WASM:   → lower_to_wasm [includes evidence_to_wasm and empty-result mapping]
+        → backend-ready verification → emit_wasm
+Native: → evidence_to_native → lower_to_clif [includes empty-result mapping]
+        → backend-ready verification → emit_native
 ```
+
+`tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
+`ability.*` 표면이며, closure, ability/evidence, backend effect ABI pass가
+순서대로 소비한다.
 
 ---
 
@@ -718,8 +798,8 @@ Native: → evidence_to_native → lower_to_clif → emit_native
 
 ### WasmGC
 
-런타임의 GC가 자동으로 처리한다. 다만 현재 주요 구현 경로는 native이며,
-WasmGC continuation/trampoline 객체 설계는 active path가 아니다.
+런타임의 GC가 자동으로 처리한다. WasmGC CPS continuation은 closure로 표현하며
+trampoline object는 허용하지 않는다.
 
 ### Cranelift: Reference Counting
 
@@ -747,15 +827,9 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 **Continuation과 RC:**
 
-- Yield bubbling에서 continuation은 ADT struct로 캡처됨
-- 캡처된 라이브 변수들은 struct 필드로 저장되어 RC가 자동 관리
-- Resume 시 struct에서 필드를 꺼내 복원
-
-**단계적 구현:**
-
-1. Phase 2: malloc/free 단순 할당 (누수 허용)
-2. Phase 3: RC retain/release 삽입
-3. Future: Cycle detection (필요시)
+- Continuation closure는 live value를 environment field로 캡처한다.
+- RC insertion은 해당 environment와 캡처한 reference의 ownership을 관리한다.
+- Resume은 environment에서 live value를 복원하고 continuation을 한 번 소비한다.
 
 ---
 
@@ -796,66 +870,57 @@ pub fn compile(db, source: SourceCst) -> Module {
 
 ### 파이프라인 구조
 
+직접형 callable/control부터 backend-ready 검증까지의 topology는 다음과 같다:
+
 ```mermaid
 flowchart TB
-    subgraph input["Input"]
-        source["Tribute Source (.trb)"]
+    subgraph input["입력"]
+        source["Tribute source"]
     end
 
-    subgraph frontend["Frontend Passes"]
-        parse["parse_cst + lower_cst"]
-        prelude["merge_with_prelude"]
-        resolve["resolve"]
-        const_inline["inline_constants"]
-        typecheck["typecheck"]
+    subgraph frontend["Frontend"]
+        parse["parse / prelude / resolve"]
+        typecheck["typecheck / TDNR"]
+        direct["검증된 tribute_control callable/control IR"]
     end
 
-    subgraph closure["Closure Processing"]
-        lambda_lift["lambda_lift"]
-        closure_prep["prepare_closure_lowering"]
-        closure_func["lower_closures_in_func"]
-        tdnr["tdnr"]
+    subgraph shared["Shared legalization과 lowering"]
+        cps["atomic tribute_control_to_cps"]
+        physical["physical func/closure + logical ability dispatch"]
+        closure["closure lowering"]
+        ability["ability/evidence lowering"]
+        effect["target-independent effect ABI"]
     end
 
-    subgraph ability["Ability Processing"]
-        evidence["evidence_insert"]
-        resolve_ev["resolve_evidence"]
-        tail_opt["convert_tail_resumptive"]
+    subgraph targets["Proper tail-call lowering"]
+        native_tail["Native direct/indirect return_call"]
+        wasm_tail["Wasm return_call/return_call_indirect"]
     end
 
-    subgraph lowering["Final Lowering"]
-        lower_case["lower_case"]
-        dce["dce"]
+    subgraph verify["Backend-ready 검증"]
+        native_ready["native full boundary"]
+        wasm_ready["Wasm emission boundary"]
     end
 
-    subgraph backends["Code Generation"]
-        wasm["WasmGC Backend"]
-        cranelift["Cranelift Backend"]
-        future["(Future)"]
-    end
-
-    subgraph output["Output"]
+    subgraph output["출력"]
+        native_bin["native binary"]
         wasm_bin[".wasm"]
-        native["native binary"]
     end
 
     source --> parse
-    parse -->|"tribute.* ops"| prelude
-    prelude --> resolve
-    resolve -->|"func.*, adt.*"| const_inline
-    const_inline --> typecheck
-    typecheck -->|"typed module"| lambda_lift
-    lambda_lift -->|"closure signatures"| closure_prep
-    closure_prep -->|"closure.new"| closure_func
-    closure_func -->|"call_indirect + evidence"| tdnr
-    tdnr --> evidence
-    evidence -->|"+evidence param"| resolve_ev
-    resolve_ev -->|"dispatch closures"| tail_opt
-    tail_opt --> lower_case
-    lower_case -->|"scf.if"| dce
-    dce --> wasm & cranelift & future
-    wasm -->|"WasmGC ops"| wasm_bin
-    cranelift -->|"clif.* ops"| native
+    parse --> typecheck
+    typecheck --> direct
+    direct --> cps
+    cps --> physical
+    physical --> closure
+    closure --> ability
+    ability --> effect
+    effect --> native_tail
+    effect --> wasm_tail
+    native_tail --> native_ready
+    wasm_tail --> wasm_ready
+    native_ready --> native_bin
+    wasm_ready --> wasm_bin
 ```
 
 ### 패스 분류
@@ -865,18 +930,22 @@ flowchart TB
 | **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | solved or generalized typed AST | ✓ |
-| **Closure** | `lambda_lift` | lambdas | top-level funcs | |
+| | `lambda_lift` | lambdas | top-level funcs | |
+| | `tdnr` | x.method() | Type::method(x) | |
+| **직접형 제어** | `ast_to_ir` | typed AST | 검증된 `tribute_control` callable/control + 일반 value IR | frontend |
+| | `tribute_control_to_cps` | logical callable/control + typechecked metadata | physical func/closure/tail-call + logical `ability.*`; `effect.*` 없음 | shared |
+| **Closure (공유 후속)** | `lower_closure_lambda` | closure.lambda | func.func + closure.new | module-wide |
 | | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
 | | `lower_closures_in_func` | closure.new | func.call_indirect + evidence arg | function-anchored |
-| | `tdnr` | x.method() | Type::method(x) | |
-| **Ability** | `ast_to_ir evidence params` | effectful funcs | +ev param | |
-| | `lower_ability_perform`, `tail_resumptive` | ability.perform/call | effect.dispatch_* | function-anchored |
+| **Ability/evidence (공유 후속)** | `lower_ability_perform` | ability.perform/call | effect.dispatch_* + evidence lookup | function-anchored |
 | | `resolve_evidence` | handler evidence setup | effect.extend | module-wide setup before function-local lowering |
 | | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
 | **Backend effect ABI** | `native/evidence runtime decls` | evidence runtime stubs | native extern declarations | module-wide |
-| | `native/evidence` | effect.* | native runtime calls + call_indirect | function-anchored |
+| | `native/evidence` | effect.* | native runtime + func tail transfer | function-anchored |
+| | `func_to_clif` | func.tail_call / indirect | clif.return_call / indirect | function-anchored |
 | | `wasm/evidence runtime funcs` | evidence runtime stubs | wasm evidence helpers | module-wide |
-| | `wasm/evidence_to_wasm` | effect.* | wasm.call + wasm.call_indirect | function-anchored |
+| | `wasm/evidence_to_wasm` | effect.* | wasm helpers + indirect return_call | function-anchored |
+| | `func_to_wasm` | func.tail_call / indirect | wasm.return_call / indirect | function-anchored |
 | **Lowering** | `ast_to_ir case lowering` | tribute.case | scf.if | frontend lowering, not a pass |
 | | `canonicalize`, local `dce`, `scf_to_cf` | func.func body | canonical body / cf blocks | function-anchored |
 | | `global_dce` | module symbols | reachable funcs | module-wide |
@@ -954,7 +1023,6 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 
 - `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
 - 모듈 구조와 개별 항목 분리
-- 점진적 마이그레이션 전략 (일부 패스부터 적용)
 
 이를 통해 "함수 하나 수정 시 해당 함수만 재처리"하는 진정한 incremental compilation이 가능해진다.
 
