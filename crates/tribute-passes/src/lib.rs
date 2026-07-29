@@ -24,6 +24,7 @@ pub mod lower_handle_dispatch;
 pub mod native;
 pub mod resolve_evidence;
 pub mod tail_resumptive;
+pub mod tribute_control_to_cps;
 pub mod type_converter;
 pub mod wasm;
 
