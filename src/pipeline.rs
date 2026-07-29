@@ -1577,6 +1577,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn native_one_shot_wrapper_traps_on_second_invocation() {
+        use std::os::unix::process::ExitStatusExt;
+
         let input = r#"core.module @one_shot {
   !state = adt.struct() {fields = [[@consumed, core.i1]], name = @OneShotState}
 
@@ -1595,7 +1597,7 @@ mod tests {
   func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
     %not_consumed = arith.const {value = 0} : core.i1
     %state = adt.struct_new %not_consumed {type = !state} : !state
-    %input = arith.const {value = 7} : core.i32
+    %input = arith.const {value = 0} : core.i32
     %first = func.call %state, %input {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
     %second = func.call %state, %first {callee = @one_shot_wrapper, tribute.calling_convention = 0} : core.i32
     func.return %second
@@ -1619,8 +1621,8 @@ mod tests {
             .status()
             .expect("one-shot wrapper executable must start");
         assert!(
-            !status.success(),
-            "the second invocation of the same wrapper must trap"
+            status.signal().is_some(),
+            "the second invocation of the same wrapper must terminate by signal, got {status}"
         );
     }
 
