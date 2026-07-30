@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use itertools::Itertools;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -2203,13 +2204,7 @@ fn validate_token_path(
             );
         }
     }
-    if resumes.len() > 1
-        && resumes.iter().enumerate().any(|(index, resume)| {
-            resumes[index + 1..]
-                .iter()
-                .any(|other| !ops_are_mutually_exclusive(ctx, *resume, *other))
-        })
-    {
+    if has_nonexclusive_pair(ctx, &resumes) {
         push_op_error(
             ctx,
             handler,
@@ -2217,22 +2212,18 @@ fn validate_token_path(
             "resume token reaches more than one tribute_control.resume",
         );
     }
-    for left in 0..captures.len() {
-        for right in left + 1..captures.len() {
-            let left_region = ctx.op(captures[left]).regions.first().copied();
-            let right_region = ctx.op(captures[right]).regions.first().copied();
-            let comparable = left_region
-                .is_some_and(|region| op_is_within_region(ctx, captures[right], region))
-                || right_region
-                    .is_some_and(|region| op_is_within_region(ctx, captures[left], region));
-            if !comparable && !ops_are_mutually_exclusive(ctx, captures[left], captures[right]) {
-                push_op_error(
-                    ctx,
-                    handler,
-                    errors,
-                    "resume token is copied into multiple capture paths",
-                );
-            }
+    for (left, right) in captures.iter().copied().tuple_combinations() {
+        let left_region = ctx.op(left).regions.first().copied();
+        let right_region = ctx.op(right).regions.first().copied();
+        let comparable = left_region.is_some_and(|region| op_is_within_region(ctx, right, region))
+            || right_region.is_some_and(|region| op_is_within_region(ctx, left, region));
+        if !comparable && !ops_are_mutually_exclusive(ctx, left, right) {
+            push_op_error(
+                ctx,
+                handler,
+                errors,
+                "resume token is copied into multiple capture paths",
+            );
         }
     }
     for capture in &captures {
@@ -2264,11 +2255,10 @@ fn validate_token_path(
 /// use counting alone would reject a source `case` whose exhaustive arms each
 /// resume the same handler-owned token.
 fn has_nonexclusive_pair(ctx: &IrContext, ops: &[OpRef]) -> bool {
-    ops.iter().enumerate().any(|(index, op)| {
-        ops[index + 1..]
-            .iter()
-            .any(|other| !ops_are_mutually_exclusive(ctx, *op, *other))
-    })
+    ops.iter()
+        .copied()
+        .tuple_combinations()
+        .any(|(left, right)| !ops_are_mutually_exclusive(ctx, left, right))
 }
 
 fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> bool {
