@@ -95,6 +95,9 @@ pub struct Resolver<'db> {
     /// Ability operations injected from effect annotations (effect-directed resolution).
     /// Maps unqualified operation name → Binding. Cleared on each function scope.
     effect_ops: HashMap<Symbol, Binding<'db>>,
+    /// Lexical nested-module namespace used for unqualified references in an
+    /// inline module body.
+    module_path: Vec<Symbol>,
 }
 
 impl<'db> Resolver<'db> {
@@ -108,6 +111,7 @@ impl<'db> Resolver<'db> {
             resume_local_id_stack: Vec::new(),
             span_map,
             effect_ops: HashMap::new(),
+            module_path: Vec::new(),
         }
     }
 
@@ -149,6 +153,20 @@ impl<'db> Resolver<'db> {
             // First check local variables
             if let Some(local_id) = self.lookup_local(sym) {
                 return ResolvedRef::local(local_id, sym);
+            }
+
+            if !self.module_path.is_empty() {
+                let namespace = Symbol::from_dynamic(
+                    &self
+                        .module_path
+                        .iter()
+                        .map(Symbol::to_string)
+                        .collect::<Vec<_>>()
+                        .join("::"),
+                );
+                if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
+                    return self.binding_to_ref(binding, sym);
+                }
             }
 
             // Check module environment (unqualified lookup)
@@ -270,9 +288,11 @@ impl<'db> Resolver<'db> {
         module: crate::ast::ModuleDecl<UnresolvedName>,
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
         // For inline modules, recursively resolve nested declarations
+        self.module_path.push(module.name);
         let body = module
             .body
             .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+        self.module_path.pop();
 
         crate::ast::ModuleDecl {
             id: module.id,

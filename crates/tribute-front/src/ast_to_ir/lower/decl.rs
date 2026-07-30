@@ -22,12 +22,12 @@ struct PendingWellKnownType {
     ir_type: Option<TypeRef>,
 }
 
-struct WellKnownTypePrescan {
+pub(super) struct WellKnownTypePrescan {
     string: Option<PendingWellKnownType>,
 }
 
 impl WellKnownTypePrescan {
-    fn new(types: crate::typeck::WellKnownTypes<'_>) -> Self {
+    pub(super) fn new(types: crate::typeck::WellKnownTypes<'_>) -> Self {
         Self {
             string: types.string.map(|ty| PendingWellKnownType {
                 definition: ty.definition,
@@ -36,19 +36,19 @@ impl WellKnownTypePrescan {
         }
     }
 
-    fn is_string(&self, definition: crate::typeck::DefinitionIdentity) -> bool {
+    pub(super) fn is_string(&self, definition: crate::typeck::DefinitionIdentity) -> bool {
         self.string
             .as_ref()
             .is_some_and(|string| string.definition == definition)
     }
 
-    fn record_string(&mut self, ir_type: TypeRef) {
+    pub(super) fn record_string(&mut self, ir_type: TypeRef) {
         if let Some(string) = &mut self.string {
             string.ir_type = Some(ir_type);
         }
     }
 
-    fn finish(self) -> tribute_ir::metadata::WellKnownTypes {
+    pub(super) fn finish(self) -> tribute_ir::metadata::WellKnownTypes {
         tribute_ir::metadata::WellKnownTypes {
             string: self.string.and_then(|string| string.ir_type),
         }
@@ -56,7 +56,7 @@ impl WellKnownTypePrescan {
 }
 
 /// Pre-scan declarations to register struct field orders.
-fn prescan_struct_fields<'db>(
+pub(super) fn prescan_struct_fields<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     decls: &[Decl<TypedRef<'db>>],
@@ -247,7 +247,8 @@ fn promote_definition_conventions_pass<'db>(
 
 impl<'db> TypedModule<'db> {
     /// Lower this module when its source path has already been interned.
-    pub(crate) fn lower_module(
+    #[allow(dead_code)] // Explicit #826 cleanup inventory: superseded physical frontend CPS path.
+    pub(crate) fn lower_module_legacy(
         self,
         db: &'db dyn salsa::Database,
         ir: &mut IrContext,
@@ -258,9 +259,15 @@ impl<'db> TypedModule<'db> {
             ast,
             span_map,
             function_types,
+            constructor_types: _,
             node_types,
             ability_conventions,
             well_known_types,
+            ability_definitions: _,
+            handler_operations: _,
+            perform_operations: _,
+            lambda_signatures: _,
+            exhaustive_cases: _,
         } = self;
         let module_location = span_map.get_or_default(ast.id);
         let location = Location::new(path, module_location);

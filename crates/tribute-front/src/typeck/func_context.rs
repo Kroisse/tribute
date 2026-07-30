@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
+use super::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 use crate::ast::{
     CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
     UniVarId, UniVarSource,
@@ -27,6 +28,8 @@ use super::subst;
 /// Captures the body type and body effect row so that handler arms
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
+    /// The source result of the complete handle expression after its `do` arm.
+    pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
 }
@@ -67,6 +70,29 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
+
+    /// Fully instantiated operation metadata for handler arms.
+    handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+
+    /// Exact instantiated metadata for ability-operation call expressions.
+    perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
+
+    /// Inference-time types for ability-operation callees. This is deliberately
+    /// separate from `node_types`: conversion revisits the callee and must be
+    /// constrained to the same instantiated operation without changing the
+    /// concrete node-type table consumed by legacy lowering.
+    ability_op_callee_types: HashMap<NodeId, Type<'db>>,
+
+    /// Inference-time lambda expression types. Call conversion revisits lambda
+    /// children, so this keeps their call-constrained instance separate from
+    /// the concrete node-type table used by legacy lowering.
+    inferred_lambda_types: HashMap<NodeId, Type<'db>>,
+
+    /// Source-logical callable signatures for lambda nodes.
+    lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
+
+    /// Case expressions whose typechecking coverage analysis proved exhaustive.
+    exhaustive_cases: Vec<NodeId>,
 
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
@@ -132,6 +158,12 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
+            handler_operations: HashMap::new(),
+            perform_operations: HashMap::new(),
+            ability_op_callee_types: HashMap::new(),
+            inferred_lambda_types: HashMap::new(),
+            lambda_signatures: HashMap::new(),
+            exhaustive_cases: Vec::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
@@ -315,6 +347,84 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Used for collecting all node types after type checking a function.
     pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
         std::mem::take(&mut self.node_types)
+    }
+
+    /// Record the exact semantic operation selected for a handler arm.
+    pub fn record_handler_operation(
+        &mut self,
+        arm: NodeId,
+        operation: InstantiatedHandlerOperation<'db>,
+    ) {
+        self.handler_operations.insert(arm, operation);
+    }
+
+    /// Take handler operation metadata collected for this function.
+    pub fn take_handler_operations(
+        &mut self,
+    ) -> HashMap<NodeId, InstantiatedHandlerOperation<'db>> {
+        std::mem::take(&mut self.handler_operations)
+    }
+
+    pub fn record_perform_operation(
+        &mut self,
+        call: NodeId,
+        operation: InstantiatedPerformOperation<'db>,
+    ) {
+        self.perform_operations.entry(call).or_insert(operation);
+    }
+
+    pub fn take_perform_operations(
+        &mut self,
+    ) -> HashMap<NodeId, InstantiatedPerformOperation<'db>> {
+        std::mem::take(&mut self.perform_operations)
+    }
+
+    /// Preserve the type selected for an ability-operation callee while the
+    /// expression is converted into its typed form.
+    pub fn record_ability_op_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {
+        self.ability_op_callee_types.entry(callee).or_insert(ty);
+    }
+
+    /// Return the inference-time type selected for an ability-operation callee.
+    pub fn get_ability_op_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
+        self.ability_op_callee_types.get(&callee).copied()
+    }
+
+    pub fn record_inferred_lambda_type(&mut self, lambda: NodeId, ty: Type<'db>) {
+        self.inferred_lambda_types.entry(lambda).or_insert(ty);
+    }
+
+    pub fn get_inferred_lambda_type(&self, lambda: NodeId) -> Option<Type<'db>> {
+        self.inferred_lambda_types.get(&lambda).copied()
+    }
+
+    pub fn record_lambda_signature(&mut self, lambda: NodeId, signature: LambdaSignature<'db>) {
+        self.lambda_signatures.entry(lambda).or_insert(signature);
+    }
+
+    /// Replace an inference-time lambda seed with the contextual function
+    /// type used while checking the expression.  The latter is authoritative:
+    /// it carries the expected polymorphic result/effect slots before solving.
+    pub fn record_checked_lambda_signature(
+        &mut self,
+        lambda: NodeId,
+        signature: LambdaSignature<'db>,
+    ) {
+        self.lambda_signatures.insert(lambda, signature);
+    }
+
+    pub fn take_lambda_signatures(&mut self) -> HashMap<NodeId, LambdaSignature<'db>> {
+        std::mem::take(&mut self.lambda_signatures)
+    }
+
+    pub fn record_exhaustive_case(&mut self, case: NodeId) {
+        if !self.exhaustive_cases.contains(&case) {
+            self.exhaustive_cases.push(case);
+        }
+    }
+
+    pub fn take_exhaustive_cases(&mut self) -> Vec<NodeId> {
+        std::mem::take(&mut self.exhaustive_cases)
     }
 
     // =========================================================================

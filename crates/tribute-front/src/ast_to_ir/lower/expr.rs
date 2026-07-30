@@ -769,10 +769,6 @@ fn lower_value_impl<'db>(
         ExprKind::Lambda { params, body } => {
             let db = builder.ctx.db;
             let node_ty = builder.ctx.get_node_type(expr_node_id).copied();
-            debug_assert!(
-                node_ty.is_some(),
-                "lambda node type should be populated by typeck"
-            );
             let (param_ir_types, result_ir_ty, convention) = match node_ty.map(|t| (t, t.kind(db)))
             {
                 Some((

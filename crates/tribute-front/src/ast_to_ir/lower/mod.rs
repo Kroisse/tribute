@@ -8,6 +8,7 @@ mod decl;
 mod expr;
 mod handle;
 mod lambda;
+mod logical;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -25,6 +26,7 @@ use crate::ast::{
 };
 
 /// IR-level function signature extracted from a TypeScheme.
+#[derive(Clone)]
 pub(super) struct FuncSignature {
     pub param_types: Vec<TypeRef>,
     pub return_type: TypeRef,
@@ -42,6 +44,33 @@ impl FuncSignature {
             TypeKind::Func { params, result, .. } => Some(Self {
                 param_types: params.iter().map(|t| ctx.convert_type(ir, *t)).collect(),
                 return_type: ctx.convert_type(ir, *result),
+                convention: ctx.calling_convention_for_type(body)?,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn lookup_logical<'db>(
+        ctx: &IrLoweringCtx<'db>,
+        ir: &mut IrContext,
+        name: Symbol,
+    ) -> Option<Self> {
+        if let Some(signature) = ctx.lookup_logical_generated_signature(name) {
+            return Some(Self {
+                param_types: signature.param_types.clone(),
+                return_type: signature.return_type,
+                convention: signature.convention,
+            });
+        }
+        let scheme = *ctx.lookup_function_type(name)?;
+        let body = scheme.body(ctx.db);
+        match body.kind(ctx.db) {
+            TypeKind::Func { params, result, .. } => Some(Self {
+                param_types: params
+                    .iter()
+                    .map(|ty| ctx.convert_logical_type(ir, *ty))
+                    .collect(),
+                return_type: ctx.convert_logical_type(ir, *result),
                 convention: ctx.calling_convention_for_type(body)?,
             }),
             _ => None,
@@ -232,6 +261,40 @@ pub(super) fn get_or_create_tuple_type<'db>(
         })
         .collect();
     let tuple_name = Symbol::from_dynamic(&format!("__tuple_{}", type_names.join("_")));
+
+    if let Some(struct_ty) = ctx.get_type(tuple_name) {
+        return Some((tuple_name, struct_ty));
+    }
+
+    let struct_ty = ctx.adt_struct_type(ir, tuple_name, &ir_fields);
+    ctx.register_type(tuple_name, struct_ty);
+    Some((tuple_name, struct_ty))
+}
+
+/// Logical counterpart to [`get_or_create_tuple_type`].
+///
+/// The legacy helper above deliberately retains its physical recursive type
+/// representation.  Source-logical lowering must never share that conversion:
+/// a tuple can contain callable or resume-token values.
+pub(super) fn get_or_create_logical_tuple_type<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    node_id: NodeId,
+) -> Option<(Symbol, TypeRef)> {
+    let ast_ty = ctx.get_node_type(node_id)?;
+    let TypeKind::Tuple(elem_tys) = ast_ty.kind(ctx.db) else {
+        return None;
+    };
+    let ir_fields: Vec<(Symbol, TypeRef)> = elem_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let name = Symbol::from_dynamic(&i.to_string());
+            let ir_ty = ctx.convert_logical_type(ir, *ty);
+            (name, ir_ty)
+        })
+        .collect();
+    let tuple_name = ctx.logical_tuple_name(*ast_ty);
 
     if let Some(struct_ty) = ctx.get_type(tuple_name) {
         return Some((tuple_name, struct_ty));

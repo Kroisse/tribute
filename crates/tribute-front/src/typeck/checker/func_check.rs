@@ -128,6 +128,10 @@ impl<'db> TypeChecker<'db> {
         let constraints = ctx.take_constraints();
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
+        let func_handler_operations = ctx.take_handler_operations();
+        let func_perform_operations = ctx.take_perform_operations();
+        let func_lambda_signatures = ctx.take_lambda_signatures();
+        let func_exhaustive_cases = ctx.take_exhaustive_cases();
         // Save the accumulated effect row from the body before dropping ctx
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
@@ -181,6 +185,12 @@ impl<'db> TypeChecker<'db> {
             .map(|(i, id)| (id, i as u32))
             .collect();
 
+        // Only the exact root `main` is an entrypoint. Its omitted effect
+        // annotation is closed over the effects actually performed by its body:
+        // pure roots remain Direct and ambient-Io roots EvidenceDirect.  The
+        // later control/backend pipeline owns any root completion adaptation.
+        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
+
         // An omitted annotation denotes an open effect row. Preserve the
         // concrete residual effects discovered while checking the body, then
         // reattach the generalized tail supplied by the collected signature.
@@ -193,7 +203,13 @@ impl<'db> TypeChecker<'db> {
                     minimum_convention,
                     ..
                 } => {
-                    let inferred_effect = if body_effect_row.rest(self.db()).is_some() {
+                    let inferred_effect = if is_root_main {
+                        crate::ast::EffectRow::new(
+                            self.db(),
+                            body_effect_row.effects(self.db()).clone(),
+                            None,
+                        )
+                    } else if body_effect_row.rest(self.db()).is_some() {
                         body_effect_row
                     } else {
                         crate::ast::EffectRow::new(
@@ -220,10 +236,6 @@ impl<'db> TypeChecker<'db> {
 
         // Apply substitution and generalization to the function type.
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
-
-        // Only the exact root `main` is an entrypoint. A nested-module
-        // function named `main` is an ordinary worker.
-        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
 
         // Validate that root `main` returns Nil.
         if is_root_main
@@ -346,12 +358,75 @@ impl<'db> TypeChecker<'db> {
         );
 
         // 7. Collect node types from this function's context and apply substitution.
-        // Note: We apply substitution but NOT generalization, because these types
-        // are used for IR lowering which needs concrete types, not polymorphic ones.
+        // These entries describe concrete expression storage for lowering; the
+        // source-logical operation metadata is carried separately on TypedRef.
         for (node_id, ty) in func_node_types {
             let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
             self.node_types.insert(node_id, substituted);
         }
+        for (arm_id, operation) in func_handler_operations {
+            self.handler_operations.insert(
+                arm_id,
+                crate::typeck::InstantiatedHandlerOperation {
+                    ability: operation.ability,
+                    ability_args: operation
+                        .ability_args
+                        .into_iter()
+                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .collect(),
+                    kind: operation.kind,
+                    params: operation
+                        .params
+                        .into_iter()
+                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .collect(),
+                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                },
+            );
+        }
+        for (call_id, operation) in func_perform_operations {
+            self.perform_operations.insert(
+                call_id,
+                crate::typeck::InstantiatedPerformOperation {
+                    ability: operation.ability,
+                    ability_args: operation
+                        .ability_args
+                        .into_iter()
+                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .collect(),
+                    kind: operation.kind,
+                    params: operation
+                        .params
+                        .into_iter()
+                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .collect(),
+                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                },
+            );
+        }
+        let ability_conventions = self
+            .env
+            .export_ability_conventions()
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        for (lambda_id, signature) in func_lambda_signatures {
+            let function_type =
+                type_subst.apply_with_rows(self.db(), signature.function_type, row_subst);
+            let convention = crate::ast::calling_convention_for_function_type(
+                self.db(),
+                function_type,
+                &ability_conventions,
+            )
+            .expect("lambda semantic signature must remain a function type");
+            self.lambda_signatures.insert(
+                lambda_id,
+                crate::typeck::LambdaSignature {
+                    function_type,
+                    convention,
+                },
+            );
+        }
+        self.exhaustive_cases.extend(func_exhaustive_cases);
 
         FuncDecl {
             id: func.id,
