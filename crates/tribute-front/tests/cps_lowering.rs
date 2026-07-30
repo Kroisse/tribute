@@ -173,6 +173,78 @@ fn run() -> Int {
     );
 }
 
+/// Handler-operation metadata is fail-closed: a generic handled ability must
+/// have exactly one body-effect instance, and the arm still diagnoses unknown
+/// operations and incorrect source arity before logical lowering can run.
+#[salsa_test]
+fn handler_metadata_failures_remain_type_diagnostics(db: &salsa::DatabaseImpl) {
+    let missing_instance = SourceCst::from_source_str(
+        db,
+        "missing_handler_instance.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn run() -> Int {
+    handle 0 {
+        op State::get() { resume 0 }
+    }
+}
+"#,
+    );
+    assert!(
+        ast_pipeline_error_messages(db, missing_instance)
+            .iter()
+            .any(|error| error.contains("cannot determine the instantiated ability")),
+        "a generic handler with no matching effect must be diagnosed"
+    );
+
+    let unknown_operation = SourceCst::from_source_str(
+        db,
+        "unknown_handler_operation.trb",
+        r#"
+ability State {
+    op get() -> Int
+}
+
+fn run() -> Int {
+    handle State::get() {
+        op State::missing() { resume 0 }
+    }
+}
+"#,
+    );
+    assert!(
+        ast_pipeline_error_messages(db, unknown_operation)
+            .iter()
+            .any(|error| error.contains("unknown handler operation 'missing'")),
+        "unknown handler operations must be diagnosed before lowering"
+    );
+
+    let wrong_arity = SourceCst::from_source_str(
+        db,
+        "handler_arity.trb",
+        r#"
+ability State {
+    op get(value: Int) -> Int
+}
+
+fn run() -> Int {
+    handle State::get(0) {
+        op State::get() { resume 0 }
+    }
+}
+"#,
+    );
+    assert!(
+        ast_pipeline_error_messages(db, wrong_arity)
+            .iter()
+            .any(|error| error.contains("handler arm has 0 parameter(s)")),
+        "handler parameter arity must be diagnosed before logical metadata is emitted"
+    );
+}
+
 #[salsa_test]
 fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl) {
     let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() { }");
@@ -208,6 +280,157 @@ fn main() { }
     assert!(
         ir_text.contains("tribute_control.func @\"Nested::main\"() -> core.i32 convention(cps)"),
         "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
+    );
+}
+
+/// Source extern declarations stay source-logical callables, and direct calls
+/// to them retain the declared symbol rather than introducing a physical ABI.
+#[salsa_test]
+fn logical_extern_declaration_and_call_preserve_source_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_extern.trb",
+        r#"
+extern "intrinsic" fn identity(value: Int) -> Int
+
+fn call(value: Int) -> Int { identity(value) }
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    assert!(
+        ir.contains(
+            "tribute_control.func @identity(%arg0: core.i32) -> core.i32 convention(direct)"
+        ),
+        "extern declaration must retain its source-visible logical signature:\n{ir}"
+    );
+    let call = checked_logical_function(&ir, "call");
+    assert!(
+        call.contains("tribute_control.call %0 {callee = @identity} : core.i32"),
+        "direct source call must target the logical extern declaration:\n{call}"
+    );
+}
+
+/// Source value layouts stay logical even when they contain the primitive
+/// values that are not represented by the old physical function carrier.
+#[salsa_test]
+fn logical_scalar_tuple_preserves_all_element_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_scalar_tuple.trb",
+        r#"
+fn scalars() -> #(Float, Bytes, Rune, Nil) {
+    #(3.25, b"x", ?x, Nil)
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let scalars = checked_logical_function(&ir_text, "scalars");
+    assert!(
+        scalars.contains("adt.struct_new")
+            && scalars.contains("core.f64")
+            && scalars.contains("core.bytes")
+            && scalars.contains("value = 120")
+            && scalars.contains("rune")
+            && scalars.contains("core.nil"),
+        "scalar tuple layout must preserve each source value type:\n{scalars}"
+    );
+}
+
+/// A `Never` operation result is the logical bottom type, rather than an
+/// erased control carrier or frontend-owned completion value.
+#[salsa_test]
+fn logical_never_perform_preserves_bottom_result_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_never.trb",
+        r#"
+ability Abort {
+    op abort() -> Never
+}
+
+fn terminate() ->{Abort} Never {
+    Abort::abort()
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let terminate = checked_logical_function(&ir_text, "terminate");
+    assert!(
+        terminate.contains("tribute_control.perform") && terminate.contains(": core.never"),
+        "a Never perform must retain its logical result type:\n{terminate}"
+    );
+}
+
+/// Nested declarations keep their fully-qualified logical accessor symbols,
+/// including callable field types, rather than relying on physical closure
+/// extraction to recover a getter later.
+#[salsa_test]
+fn logical_nested_accessor_preserves_qualified_callable_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_nested_accessor.trb",
+        r#"
+pub mod Nested {
+    pub struct Holder { callback: fn(Int) -> Int }
+
+    pub fn read(holder: Holder) -> fn(Int) -> Int {
+        holder.callback
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let accessor = checked_logical_function(&ir_text, "Nested::Holder::callback");
+    assert!(
+        accessor.contains("tribute_control.func @\"Nested::Holder::callback\"")
+            && accessor.contains("tribute_control.return"),
+        "nested accessor must use its qualified logical symbol:\n{accessor}"
+    );
+    let read = checked_logical_function(&ir_text, "Nested::read");
+    assert!(
+        read.contains("callee = @\"Nested::Holder::callback\"")
+            && read.contains("tribute_control.call"),
+        "field access must call the matching logical accessor:\n{read}"
+    );
+    assert!(
+        ir_text.contains("tribute_control.callable(core.i32, core.i32)")
+            && !ir_text.contains("core.func"),
+        "nested callable fields must remain source-logical:\n{ir_text}"
+    );
+}
+
+/// A handler without a `do` arm yields the handled computation directly; the
+/// missing completion arm is ordinary logical control, not a CPS fallback.
+#[salsa_test]
+fn logical_handle_without_do_arm_yields_handled_answer(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_handle_without_do.trb",
+        r#"
+ability State {
+    fn get() -> Int
+}
+
+fn run() -> Int {
+    handle State::get() {
+        fn State::get() { +42 }
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let run = checked_logical_function(&ir_text, "run");
+    assert!(
+        run.contains("tribute_control.handle")
+            && run.contains("kind = @fn")
+            && run.contains("tribute_control.yield %2"),
+        "a no-do handler must yield the logical handled answer:\n{run}"
     );
 }
 
@@ -1262,12 +1485,12 @@ fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImp
         "callable_nominals.trb",
         r#"
 struct Holder { callback: fn(Int) -> Int }
-enum Choice { Callback(#(fn(Int) -> Int, Int)), Other }
+enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
-fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, +1)) }
+fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, [callback])) }
 fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
     case choice {
-        Callback(#(callback, _)) -> callback
+        Callback(#(callback, [nested])) -> nested
         Other -> fallback
     }
 }
@@ -1281,8 +1504,86 @@ fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
         "generated accessor must retain its callable field type:\n{accessor}"
     );
     let inspect = checked_logical_function(&ir, "inspect");
-    assert!(inspect.contains("adt.variant_get"));
+    assert!(
+        inspect.contains("adt.variant_get")
+            && inspect.contains("list.head")
+            && inspect.contains("adt.struct_get"),
+        "nested callable variant patterns must stay in the logical aggregate dialect:\n{inspect}"
+    );
     assert!(inspect.contains("-> !t"));
+    assert!(!ir.contains("core.func"));
+}
+
+/// Callable list patterns use the source-logical list layout through exact,
+/// rest, and `as` branches; extracting a callable must not reconstruct a
+/// physical function carrier.
+#[salsa_test]
+fn logical_callable_list_rest_pattern_preserves_element_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_callable_list_pattern.trb",
+        r#"
+fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+    case values {
+        [] as empty -> fallback
+        [head, ..tail] as whole -> head
+    }
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let first_or = checked_logical_function(&ir, "first_or");
+    assert!(
+        first_or.contains("list.is_empty")
+            && first_or.contains("list.head")
+            && first_or.contains("list.tail")
+            && ir.contains("tribute_control.callable(core.i32, core.i32)"),
+        "callable list pattern extraction must retain its logical element type:\n{first_or}"
+    );
+    assert!(!first_or.contains("core.func"));
+}
+
+/// Nonempty list and tuple pattern checks both extract callable values through
+/// the logical aggregate layouts before choosing the corresponding `scf` arm.
+#[salsa_test]
+fn logical_callable_aggregate_checks_preserve_pattern_order(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_callable_aggregate_checks.trb",
+        r#"
+fn first_nonempty(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+    case values {
+        [head, ..tail] -> head
+        [] -> fallback
+    }
+}
+
+fn choose_pair(pair: #(fn(Int) -> Int, Bool), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+    case pair {
+        #(callback, True) -> callback
+        #(callback, False) -> callback
+    }
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let list_case = checked_logical_function(&ir, "first_nonempty");
+    assert!(
+        list_case.contains("list.is_empty")
+            && list_case.contains("list.head")
+            && list_case.contains("list.tail")
+            && list_case.contains("scf.if"),
+        "nonempty callable list check must stay structured and evaluate once:\n{list_case}"
+    );
+    let tuple_case = checked_logical_function(&ir, "choose_pair");
+    assert!(
+        tuple_case.contains("adt.struct_get")
+            && tuple_case.contains("arith.and")
+            && tuple_case.contains("scf.if"),
+        "callable tuple pattern check must stay in logical aggregate IR:\n{tuple_case}"
+    );
     assert!(!ir.contains("core.func"));
 }
 

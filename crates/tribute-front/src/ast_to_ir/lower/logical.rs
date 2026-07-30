@@ -1502,12 +1502,10 @@ fn lower_call<'db>(
                         semantic,
                     },
                 );
-                let result_ty = declaration.result_type;
-                declarations.record(declaration, location, builder.db());
                 let perform = op(builder.ir, builder.block, location, "perform", |builder| {
                     builder
                         .operands(values)
-                        .result(result_ty)
+                        .result(declaration.result_type)
                         .attr("ability_ref", Attribute::Type(ability_ref))
                         .attr("op_name", Attribute::Symbol(operation))
                         .attr(
@@ -1518,7 +1516,9 @@ fn lower_call<'db>(
                             })),
                         )
                 });
-                Some(result(builder.ir, perform))
+                declarations.record(declaration, location, builder.db());
+                let value = result(builder.ir, perform);
+                Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Function { id } => {
                 if let Some(value) = lower_arith_intrinsic(

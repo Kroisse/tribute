@@ -39,13 +39,15 @@ core.module @test {
   tribute_control.func @main() -> core.i32 convention(direct) {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.perform {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get, operation_kind = @op} : core.i32
-          tribute_control.return %1
+          %2 = core.unrealized_conversion_cast %1 : tribute_rt.anyref
+          %3 = core.unrealized_conversion_cast %2 : core.i32
+          tribute_control.return %3
       }
-      %2 = arith.const {value = 42} : core.i32
-      %3 = core.unrealized_conversion_cast %0 : !t0
-      %4 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
-      %5 = tribute_control.call %3, %4 {callee = @with_state} : tribute_rt.anyref
-      %6 = core.unrealized_conversion_cast %5 : core.i32
-      tribute_control.return %6
+      %4 = arith.const {value = 42} : core.i32
+      %5 = core.unrealized_conversion_cast %0 : !t0
+      %6 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
+      %7 = tribute_control.call %5, %6 {callee = @with_state} : tribute_rt.anyref
+      %8 = core.unrealized_conversion_cast %7 : core.i32
+      tribute_control.return %8
   }
 }

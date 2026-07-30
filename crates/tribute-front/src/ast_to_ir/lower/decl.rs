@@ -247,7 +247,6 @@ fn promote_definition_conventions_pass<'db>(
 
 impl<'db> TypedModule<'db> {
     /// Lower this module when its source path has already been interned.
-    #[allow(dead_code)] // Explicit #826 cleanup inventory: superseded physical frontend CPS path.
     pub(crate) fn lower_module_legacy(
         self,
         db: &'db dyn salsa::Database,

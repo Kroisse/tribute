@@ -1144,6 +1144,7 @@ impl Drop for PromptTagGuard<'_, '_> {
 mod tests {
     use super::*;
     use crate::ast::{Type as AstType, TypeKind};
+    use trunk_ir::ops::DialectType;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -1250,6 +1251,161 @@ mod tests {
         let ir_ty = ctx.convert_type(&mut ir, ty);
         let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
+    }
+
+    /// The logical frontend boundary has its own recursive conversion: source
+    /// callables, bottom values, resumptions, tuple layouts, and forward
+    /// nominals must never fall back to the physical `core.func` carrier.
+    #[test]
+    fn test_convert_logical_types_preserves_recursive_control_shapes() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("test.trb".to_owned());
+        let mut ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+        let int = AstType::new(&db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(&db);
+        let callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let logical_callable = ctx.convert_logical_type(&mut ir, callable);
+        let i32_ty = ctx.i32_type(&mut ir);
+        let signature =
+            tribute_ir::dialect::tribute_control::Callable::from_type_ref(&ir, logical_callable)
+                .expect("logical function type must be a control callable");
+        assert_eq!(signature.result(&ir), i32_ty);
+        assert_eq!(signature.params(&ir), &[i32_ty]);
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, logical_callable),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::Direct)
+        );
+
+        let never = AstType::new(&db, TypeKind::Never);
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, never),
+            core::never(&mut ir).as_type_ref()
+        );
+
+        let resume = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect,
+            },
+        );
+        let resume = ctx.convert_logical_type(&mut ir, resume);
+        let resume_data = ir.types.get(resume);
+        assert_eq!(resume_data.dialect, Symbol::new("tribute_control"));
+        assert_eq!(resume_data.name, Symbol::new("resume_token"));
+
+        let tuple = AstType::new(&db, TypeKind::Tuple(vec![callable, never]));
+        let tuple_name = ctx.logical_tuple_name(tuple);
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, tuple),
+            ctx.adt_typeref(&mut ir, tuple_name)
+        );
+
+        let nominal_name = Symbol::new("Forward");
+        ctx.declare_logical_nominal(nominal_name);
+        let forward = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: nominal_name,
+                args: vec![],
+            },
+        );
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, forward),
+            ctx.adt_typeref(&mut ir, nominal_name)
+        );
+
+        let generated = Symbol::new("Forward::value");
+        ctx.register_logical_generated_signature(
+            generated,
+            vec![i32_ty],
+            i32_ty,
+            CallingConvention::Direct,
+        );
+        // Re-registering the exact semantic signature is a deterministic
+        // no-op; a conflicting signature remains fail-closed in the lowering
+        // context rather than being silently replaced.
+        ctx.register_logical_generated_signature(
+            generated,
+            vec![i32_ty],
+            i32_ty,
+            CallingConvention::Direct,
+        );
+        let generated_signature = ctx
+            .lookup_logical_generated_signature(generated)
+            .expect("generated logical signature must be retained");
+        assert_eq!(generated_signature.param_types, vec![i32_ty]);
+        assert_eq!(generated_signature.return_type, i32_ty);
+        assert_eq!(generated_signature.convention, CallingConvention::Direct);
+
+        let source_function = Symbol::new("Forward::run");
+        ctx.register_logical_source_function(source_function);
+        assert!(ctx.is_logical_source_function(source_function));
+        assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
+        assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
+
+        ctx.enter_module(Symbol::new("Nested"));
+        assert_eq!(
+            ctx.qualify_name(Symbol::new("run")),
+            Symbol::new("Nested::run")
+        );
+        ctx.exit_module();
+
+        let erased_cases = [
+            AstType::new(&db, TypeKind::BoundVar { index: 0 }),
+            AstType::new(
+                &db,
+                TypeKind::UniVar {
+                    id: crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0),
+                },
+            ),
+            AstType::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::builtin_list(&db),
+                    name: Symbol::new("Undeclared"),
+                    args: vec![],
+                },
+            ),
+        ];
+        let anyref = ctx.anyref_type(&mut ir);
+        for source_ty in erased_cases {
+            assert_eq!(ctx.convert_logical_type(&mut ir, source_ty), anyref);
+        }
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, AstType::new(&db, TypeKind::Error)),
+            ctx.nil_type(&mut ir)
+        );
+        let applied_forward = AstType::new(
+            &db,
+            TypeKind::App {
+                ctor: forward,
+                args: vec![int],
+            },
+        );
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, applied_forward),
+            ctx.adt_typeref(&mut ir, nominal_name)
+        );
     }
 
     #[test]
