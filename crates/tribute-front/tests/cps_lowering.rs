@@ -294,6 +294,12 @@ fn logical_extern_declaration_and_call_preserve_source_signature(db: &salsa::Dat
 extern "intrinsic" fn identity(value: Int) -> Int
 
 fn call(value: Int) -> Int { identity(value) }
+
+mod Native {
+    extern "intrinsic" fn identity(value: Int) -> Int
+
+    fn call(value: Int) -> Int { identity(value) }
+}
 "#,
     );
 
@@ -309,6 +315,14 @@ fn call(value: Int) -> Int { identity(value) }
     assert!(
         call.contains("tribute_control.call %0 {callee = @identity} : core.i32"),
         "direct source call must target the logical extern declaration:\n{call}"
+    );
+    let nested_call = checked_logical_function(&ir, "Native::call");
+    assert!(
+        nested_call.contains("callee = @\"Native::identity\"")
+            && ir.contains(
+                "tribute_control.func @\"Native::identity\"(%arg0: core.i32) -> core.i32 convention(direct)"
+            ),
+        "nested extern calls must retain their qualified logical declaration:\n{nested_call}"
     );
 }
 
@@ -1585,6 +1599,120 @@ fn choose_pair(pair: #(fn(Int) -> Int, Bool), fallback: fn(Int) -> Int) -> fn(In
         "callable tuple pattern check must stay in logical aggregate IR:\n{tuple_case}"
     );
     assert!(!ir.contains("core.func"));
+}
+
+/// Multi-field variants and exact list literals retain each nested pattern
+/// check in ordinary structured control before their final exhaustive arms.
+#[salsa_test]
+fn logical_nested_pattern_checks_remain_structured(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_nested_pattern_checks.trb",
+        r#"
+enum Pair { Pair(Int, Int), None }
+
+fn classify_pair(value: Pair) -> Int {
+    case value {
+        Pair(1, 2) -> 1
+        Pair(_, _) -> 2
+        None -> 0
+    }
+}
+
+fn classify_list(values: List(Int)) -> Int {
+    case values {
+        [1, 2] -> 1
+        _ -> 0
+    }
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let pair = checked_logical_function(&ir, "classify_pair");
+    assert!(
+        pair.contains("adt.variant_is")
+            && pair.contains("adt.variant_cast")
+            && pair.contains("arith.and"),
+        "two-field variant checks must combine both source patterns:\n{pair}"
+    );
+    assert_occurrences(pair, "adt.variant_get", 8);
+
+    let list = checked_logical_function(&ir, "classify_list");
+    assert!(
+        list.contains("list.is_empty")
+            && list.contains("list.head")
+            && list.contains("list.tail")
+            && list.contains("scf.if"),
+        "exact list patterns must remain nested structured checks:\n{list}"
+    );
+    assert_occurrences(list, "list.head", 4);
+    assert_occurrences(list, "list.tail", 4);
+}
+
+/// A guarded handler arm resumes only in its selected case region; later
+/// source arms remain distinct structured fallbacks.
+#[salsa_test]
+fn logical_guarded_handler_resume_stays_in_selected_region(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "logical_guarded_handler_resume.trb",
+        r#"
+ability State {
+    op get() -> Nat
+    op choose(pair: #(Nat, Nat), values: List(Nat)) -> Nat
+}
+
+ability Flag {
+    op read() -> Bool
+}
+
+fn allowed() ->{Flag} Bool { Flag::read() }
+
+fn run() ->{Flag} Nat {
+    handle State::get() {
+        do result { result }
+        op State::get() {
+            case True {
+                True if allowed() -> resume 1
+                False -> resume 2
+                True -> resume 3
+            }
+        }
+        op State::choose(pair, values) {
+            case #(pair, values) {
+                #(#(left, right), [head, ..tail]) if allowed() -> resume left
+                _ -> resume 0
+            }
+        }
+    }
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let run = checked_logical_function(&ir, "run");
+    assert_in_order(
+        run,
+        &[
+            "tribute_control.handler",
+            "scf.if",
+            "callee = @allowed",
+            "tribute_control.resume",
+        ],
+    );
+    assert_occurrences(run, "tribute_control.resume %", 8);
+    assert_occurrences(run, "scf.if", 8);
+    assert_in_order(
+        run,
+        &[
+            "op_name = @choose",
+            "adt.struct_get",
+            "list.head",
+            "callee = @allowed",
+            "tribute_control.resume",
+        ],
+    );
 }
 
 /// Logical nominal layouts are collected before fields are converted, so a

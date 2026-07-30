@@ -1715,12 +1715,40 @@ mod tests {
 
     #[salsa_test]
     fn pre_825_legacy_route_has_no_logical_control_leak(db: &salsa::DatabaseImpl) {
+        // Temporary pre-#825 compatibility routing: this must continue to
+        // specialize a representative generic source program into physical IR
+        // until the shared logical-control pipeline owns composition. Remove
+        // this fixture with the legacy route.
         let source = source_from_str(
             "legacy-route.trb",
-            "fn identity(value: fn(Int) -> Int) -> Int { value(+1) }\nfn main() { }",
+            r#"
+struct Packet(a) { value: a }
+
+fn select(packet: Packet(a), values: List(a)) -> a {
+    let singleton = [packet.value]
+    let pair = #(packet.value, values)
+    case pair {
+        #(value, [head, ..tail]) -> {
+            let identity = fn(item) { item }
+            identity(value)
+        }
+        _ -> packet.value
+    }
+}
+
+fn main() {
+    let packet = Packet { value: +1 }
+    let _ = select(packet, [+2])
+}
+"#,
         );
-        let (ctx, module) = compile_frontend(db, source)
-            .expect("legacy frontend route should lower before shared passes");
+        let result = compile_frontend(db, source);
+        assert!(
+            result.is_some(),
+            "legacy frontend route should lower before shared passes: {:#?}",
+            parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        );
+        let (ctx, module) = result.unwrap();
         let output = trunk_ir::printer::print_module(&ctx, module.op());
         for forbidden in [
             "tribute_control.",
@@ -1733,6 +1761,12 @@ mod tests {
             );
         }
         assert!(output.contains("func.func"), "{output}");
+        assert!(
+            output.contains("Packet$Int")
+                && output.contains("func.func @select(")
+                && output.contains("closure.lambda"),
+            "root pipeline must retain the specialized physical generic layout, callable, and lambda:\n{output}"
+        );
     }
 
     #[salsa_test]

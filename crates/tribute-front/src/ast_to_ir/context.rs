@@ -1406,6 +1406,116 @@ mod tests {
             ctx.convert_logical_type(&mut ir, applied_forward),
             ctx.adt_typeref(&mut ir, nominal_name)
         );
+
+        let evidence_callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::EvidenceDirect,
+            },
+        );
+        let cps_callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::Cps,
+            },
+        );
+        let evidence_ir = ctx.convert_logical_type(&mut ir, evidence_callable);
+        let cps_ir = ctx.convert_logical_type(&mut ir, cps_callable);
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, evidence_ir),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect)
+        );
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, cps_ir),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::Cps)
+        );
+
+        let continuation_key = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect,
+            },
+        );
+        let univar_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(1), 1),
+            },
+        );
+        let error_key = AstType::new(&db, TypeKind::Error);
+        let list_key = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: Symbol::new("List"),
+                args: vec![int],
+            },
+        );
+        let function_local_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(
+                    &db,
+                    crate::ast::UniVarSource::FunctionLocal {
+                        func_id: crate::ast::FuncDefId::new(&db, Symbol::new("Nested::key")),
+                        index: 2,
+                    },
+                    0,
+                ),
+            },
+        );
+        let solver_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(
+                    &db,
+                    crate::ast::UniVarSource::Solver { index: 2 },
+                    0,
+                ),
+            },
+        );
+        let structural_tuple = AstType::new(
+            &db,
+            TypeKind::Tuple(vec![
+                evidence_callable,
+                cps_callable,
+                applied_forward,
+                continuation_key,
+                univar_key,
+                error_key,
+                list_key,
+                function_local_key,
+                solver_key,
+            ]),
+        );
+        let structural_name = ctx.logical_tuple_name(structural_tuple);
+        let structural_text = structural_name.with_str(str::to_owned);
+        assert!(
+            structural_text.contains("callable")
+                && structural_text.contains("evidence_direct")
+                && structural_text.contains("cps")
+                && structural_text.contains("app")
+                && structural_text.contains("resume")
+                && structural_text.contains("univar")
+                && structural_text.contains("error")
+                && structural_text.contains("builtin_list")
+                && structural_text.contains("function_local")
+                && structural_text.contains("solver"),
+            "logical tuple keys must retain full recursive callable and value shapes"
+        );
+        let function_local_name =
+            ctx.logical_tuple_name(AstType::new(&db, TypeKind::Tuple(vec![function_local_key])));
+        let solver_name =
+            ctx.logical_tuple_name(AstType::new(&db, TypeKind::Tuple(vec![solver_key])));
+        assert_ne!(function_local_name, solver_name);
     }
 
     #[test]
