@@ -1,17 +1,79 @@
-//! Tests for CPS-based effect handling in AST-to-IR lowering.
+//! Tests for source-logical control lowering in AST-to-IR.
 //!
 //! Verifies that:
-//! - `resume` expressions lower to `func.call_indirect` on the continuation
-//! - Ability op calls in blocks produce `ability.legacy_perform` with CPS continuations
-//! - Handle expressions produce `ability.handle_dispatch` with handler closures
-//! - Nested ability op calls chain continuations correctly
+//! - source calls, performs, handlers, and resumptions retain their logical forms;
+//! - ordinary branches remain structured `scf` value control;
+//! - strict source evaluation is ordered exactly once around logical control.
 
 mod common;
 
 use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
-use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
+
+/// The former snapshots described frontend-owned physical CPS. The logical
+/// boundary is asserted through canonical printed TrunkIR, while each fixture
+/// below additionally asserts its own source-level ordering or region shape.
+fn assert_logical_boundary(ir: &str) {
+    assert!(
+        ir.contains("tribute_control.func"),
+        "source-logical lowering must define control callables:\n{ir}"
+    );
+    for forbidden in [
+        "func.func",
+        "func.call",
+        "func.return",
+        "func.unreachable",
+        "closure.",
+        "ability.legacy",
+        "ability.handle",
+        "effect.",
+        "__tribute_cps_control",
+        "core.func",
+    ] {
+        assert!(
+            !ir.contains(forbidden),
+            "source-logical lowering must not contain `{forbidden}`:\n{ir}"
+        );
+    }
+}
+
+fn assert_in_order(ir: &str, needles: &[&str]) {
+    let mut start = 0;
+    for needle in needles {
+        let offset = ir[start..]
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing `{needle}` in canonical IR:\n{ir}"));
+        start += offset + needle.len();
+    }
+}
+
+fn assert_occurrences(ir: &str, needle: &str, expected: usize) {
+    assert_eq!(
+        ir.match_indices(needle).count(),
+        expected,
+        "expected {expected} occurrence(s) of `{needle}`:\n{ir}"
+    );
+}
+
+fn logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
+    let unquoted = format!("tribute_control.func @{name}(");
+    let quoted = format!("tribute_control.func @\"{name}\"(");
+    let start = ir
+        .find(&unquoted)
+        .or_else(|| ir.find(&quoted))
+        .unwrap_or_else(|| panic!("missing logical function `{name}` in canonical IR:\n{ir}"));
+    let function_and_following = &ir[start..];
+    let end = function_and_following[1..]
+        .find("\n  tribute_control.func ")
+        .map_or(function_and_following.len(), |offset| offset + 1);
+    &function_and_following[..end]
+}
+
+fn checked_logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
+    assert_logical_boundary(ir);
+    logical_function(ir, name)
+}
 
 /// A diagnosed CPS root must still leave valid IR: failed CPS lowering uses
 /// the same Nil fallback as other direct-returning functions.
@@ -43,11 +105,11 @@ fn main() {
     );
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let main = ir_text
-        .split("func.func @main")
+        .split("tribute_control.func @main")
         .nth(1)
         .expect("root main must be lowered");
     assert!(
-        main.contains("func.return"),
+        main.contains("tribute_control.return"),
         "root main must retain a terminator after CPS lowering fails:\n{main}"
     );
 }
@@ -56,8 +118,8 @@ fn main() {
 // Resume Expression Tests
 // ========================================================================
 
-/// `resume value` in an `op` handler arm should lower to `func.call_indirect`
-/// on the continuation closure.
+/// `resume value` in an `op` handler arm must remain a logical resume followed
+/// by the handler-region yield.
 #[salsa_test]
 fn test_resume_in_op_handler(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -65,12 +127,12 @@ fn test_resume_in_op_handler(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
-fn run() -> Int {
-    handle 42 {
+fn run() ->{State(Int)} Int {
+    handle State::get() {
         do result { result }
         op State::get() { resume +0 }
         op State::set(v) { resume Nil }
@@ -82,15 +144,112 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_resume_shape(checked_logical_function(&ir_text, "run"));
+}
+
+#[salsa_test]
+fn handler_kind_mismatch_is_a_type_diagnostic_not_a_lowering_panic(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+}
+
+fn run() -> Int {
+    handle 42 {
+        op State::get() { resume 0 }
+    }
+}
+"#,
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("handler arm uses @Op")),
+        "expected an operation-kind diagnostic, got {errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl) {
+    let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() { }");
+    let pure_ir = run_ast_pipeline_with_ir(db, pure);
+    assert!(
+        pure_ir.contains("tribute_control.func @main() -> core.nil convention(direct)"),
+        "pure root main must be direct:\n{pure_ir}"
+    );
+    let io = SourceCst::from_source_str(db, "io.trb", "fn main() ->{std::io::Io} Nil { Nil }");
+    let io_ir = run_ast_pipeline_with_ir(db, io);
+    assert!(
+        io_ir.contains("tribute_control.func @main() -> core.nil convention(evidence_direct)"),
+        "Io root main must preserve EvidenceDirect:\n{io_ir}"
+    );
+}
+
+#[salsa_test]
+fn nested_main_is_not_a_root_convention_special_case(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State {
+    op get() -> Int
+}
+mod Nested {
+    fn main() ->{State} Int { State::get() }
+}
+fn main() { }
+"#,
+    );
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir_text.contains("tribute_control.func @\"Nested::main\"() -> core.i32 convention(cps)"),
+        "nested main must preserve its ordinary checker-selected CPS convention:\n{ir_text}"
+    );
+}
+
+#[salsa_test]
+fn perform_metadata_preserves_phantom_args(db: &salsa::DatabaseImpl) {
+    let phantom = SourceCst::from_source_str(
+        db,
+        "phantom.trb",
+        r#"
+ability Phantom(p) {
+    fn get() -> Int
+}
+fn read() ->{Phantom(Bool)} Int { Phantom::get() }
+fn main() { }
+"#,
+    );
+    let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
+    assert!(
+        phantom_ir.contains("core.ability_ref(core.i1) {name = @Phantom}"),
+        "perform must retain the phantom ability argument from its typed effect:\n{phantom_ir}"
+    );
+    let conflicting = SourceCst::from_source_str(
+        db,
+        "conflicting.trb",
+        r#"
+ability Same(a) {
+    fn pair(a, a) -> Nil
+}
+fn bad() ->{Same(Int)} Nil { Same::pair(+1, true) }
+"#,
+    );
+    assert!(
+        !ast_pipeline_error_messages(db, conflicting).is_empty(),
+        "repeated ability BoundVars with conflicting actual arguments must be rejected"
+    );
 }
 
 // ========================================================================
 // CPS Block Lowering Tests
 // ========================================================================
 
-/// A single ability op call in a block should produce `ability.legacy_perform`
-/// with a trivial identity continuation.
+/// A single ability operation must retain its exact logical operation kind.
 #[salsa_test]
 fn test_single_ability_op_in_block(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -98,8 +257,8 @@ fn test_single_ability_op_in_block(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn get_state() ->{State(Int)} Int {
@@ -111,11 +270,11 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_single_perform_shape(checked_logical_function(&ir_text, "get_state"));
 }
 
-/// An ability op call followed by a pure expression should produce
-/// `ability.legacy_perform` with a continuation that evaluates the remaining code.
+/// An ability call followed by a pure expression must return only after the
+/// logical perform has produced its source value.
 #[salsa_test]
 fn test_ability_op_then_pure_expr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -137,11 +296,10 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_perform_then_value_shape(checked_logical_function(&ir_text, "get_value"));
 }
 
-/// Two sequential ability op calls should chain continuations:
-/// the first continuation contains the second `ability.legacy_perform`.
+/// Two sequential ability calls must stay in source evaluation order.
 #[salsa_test]
 fn test_sequential_ability_ops(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -163,7 +321,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_sequential_performs_shape(checked_logical_function(&ir_text, "set_and_get"));
 }
 
 /// An effectful named call nested inside another call must be lifted into a
@@ -195,7 +353,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_nested_argument_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Local closures use the CPS calling convention even when the call is nested
@@ -220,7 +378,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_indirect_lambda_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Worker conventions start with concrete effects, then monotonically promote
@@ -241,7 +399,7 @@ fn apply_open(value: a, callback: fn(a) -> b) -> b {
     callback(value)
 }
 
-fn pure(value: Int) -> Int { value }
+fn pure(value: Int) ->{} Int { value }
 
 fn apply_closed(value: Int, callback: fn(Int) ->{} Int) ->{} Int {
     callback(value)
@@ -259,20 +417,20 @@ fn main() {
             .lines()
             .find(|line| {
                 line.trim_start()
-                    .starts_with(&format!("func.func @{name}("))
+                    .starts_with(&format!("tribute_control.func @{name}("))
             })
             .unwrap_or_else(|| panic!("missing lowered worker {name}"));
         assert!(
-            header.contains("tribute.calling_convention = 2"),
+            header.contains("convention(cps)"),
             "{name} must be promoted to Cps:\n{header}"
         );
     }
     let pure_header = ir_text
         .lines()
-        .find(|line| line.trim_start().starts_with("func.func @pure("))
+        .find(|line| line.trim_start().starts_with("tribute_control.func @pure("))
         .expect("missing lowered pure worker");
     assert!(
-        pure_header.contains("tribute.calling_convention = 0"),
+        pure_header.contains("convention(direct)"),
         "pure worker must remain Direct:\n{pure_header}"
     );
     for name in ["apply_closed", "main"] {
@@ -280,11 +438,11 @@ fn main() {
             .lines()
             .find(|line| {
                 line.trim_start()
-                    .starts_with(&format!("func.func @{name}("))
+                    .starts_with(&format!("tribute_control.func @{name}("))
             })
             .unwrap_or_else(|| panic!("missing lowered worker {name}"));
         assert!(
-            header.contains("tribute.calling_convention = 0"),
+            header.contains("convention(direct)"),
             "{name} must stay Direct:\n{header}"
         );
     }
@@ -312,10 +470,10 @@ fn main() ->{std::io::Io} Nil {
     let ir_text = run_ast_pipeline_with_ir(db, source);
     let main_header = ir_text
         .lines()
-        .find(|line| line.trim_start().starts_with("func.func @main("))
+        .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
         .expect("missing lowered root main");
     assert!(
-        main_header.contains("tribute.calling_convention = 1"),
+        main_header.contains("convention(evidence_direct)"),
         "Io root main must remain EvidenceDirect, not Cps:\n{main_header}"
     );
 }
@@ -374,12 +532,48 @@ fn main() { }
         .lines()
         .find(|line| {
             line.trim_start()
-                .starts_with("func.func @\"Nested::main\"(")
+                .starts_with("tribute_control.func @\"Nested::main\"(")
         })
         .expect("missing lowered Nested::main worker");
     assert!(
-        nested_main.contains("tribute.calling_convention = 2"),
+        nested_main.contains("convention(cps)"),
         "nested open-callback main must be promoted to Cps:\n{nested_main}"
+    );
+}
+
+/// Nested function references must be resolved before lowering; a same-named
+/// local shadows the nested definition and therefore remains an indirect call.
+#[salsa_test]
+fn nested_function_resolution_respects_local_shadowing(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "shadowing.trb",
+        r#"
+mod Nested {
+    fn apply(value: Int) ->{} Int { value }
+
+    fn main() -> Int {
+        let apply = fn(value) { value }
+        apply(+41)
+    }
+}
+
+fn main() { }
+"#,
+    );
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    assert!(
+        ir.contains("tribute_control.func @\"Nested::apply\""),
+        "nested declaration must be present:\n{ir}"
+    );
+    assert!(
+        ir.contains("tribute_control.call_indirect"),
+        "shadowing local must stay an indirect call:\n{ir}"
+    );
+    assert!(
+        !ir.contains("tribute_control.call {callee = @\"Nested::apply\"}"),
+        "lowering must not reinterpret the local as the nested function:\n{ir}"
     );
 }
 
@@ -411,7 +605,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_case_arm_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Short-circuit RHS lowering must keep the effectful call inside the selected
@@ -439,7 +633,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_short_circuit_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A nested effectful call in a handle body must use the handle body's local
@@ -470,7 +664,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_handle_body_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Handler operation arms use a region-local identity continuation for nested
@@ -508,7 +702,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_handler_arm_shape(checked_logical_function(&ir_text, "run"));
 }
 
 // ========================================================================
@@ -541,7 +735,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_case_scrutinee_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// The right side of `||` is a selected strict region, but its resulting value
@@ -565,7 +760,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_short_circuit_consumer_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Guards are evaluated only after their pattern matches and inside that arm's
@@ -594,7 +790,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_case_guard_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A computation inside a selected case arm of an `op` handler must preserve
@@ -631,17 +828,16 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_handler_case_resume_shape(checked_logical_function(&ir_text, "run"));
 }
 
 // ========================================================================
 // Handle Expression Tests
 // ========================================================================
 
-/// A handle expression should produce `ability.handle_dispatch` with:
-/// - A body closure wrapping the handled computation
-/// - A handler dispatch closure with per-arm dispatch
-/// - A dispatch body region with `ability.done` and `ability.suspend` ops
+/// A handle expression must contain a logical handler with `@op` arm metadata
+/// and a region-local resumption.
 #[salsa_test]
 fn test_handle_with_do_and_op_arms(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -649,8 +845,8 @@ fn test_handle_with_do_and_op_arms(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn get_state() ->{State(Int)} Int {
@@ -670,7 +866,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_op_handler_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A handle expression with an `fn` (tail-resumptive) handler arm
@@ -703,7 +899,7 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_fn_handler_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A Direct parent consumes a handled result as an ordinary source value, even
@@ -740,7 +936,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_handle_strict_value_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A normalized CPS parent does not normalize an already isolated handle
@@ -773,7 +970,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_nested_handle_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A handler arm may continue after `resume`: the delimited answer becomes the
@@ -802,7 +1000,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_resume_then_suffix_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A lambda created in an `op` arm captures the tagged resume local and still
@@ -831,7 +1030,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_resume_capture_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// A CPS parent normalizes the nested direct case, short-circuit RHS, and
@@ -876,7 +1076,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_normalized_region_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// Closure capture analysis must include a record spread base after a CPS
@@ -903,7 +1104,8 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_record_spread_shape(checked_logical_function(&ir_text, "run"));
 }
 
 /// One compact aggregate regression covers CPS values in tuple, record, and
@@ -938,15 +1140,200 @@ fn main() { }
 "#,
     );
 
-    assert_snapshot!(run_ast_pipeline_with_ir(db, source));
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_aggregate_shape(checked_logical_function(&ir_text, "run"));
+}
+
+/// Record spreads evaluate their base before explicit fields, even though the
+/// final `adt.struct_new` operands are arranged in declaration layout order.
+#[salsa_test]
+fn logical_record_spread_evaluates_base_before_explicit_fields(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "record_spread_order.trb",
+        r#"
+ability Trace {
+    op spread() -> Pair
+    op field() -> Int
+}
+
+struct Pair { left: Int, right: Int }
+
+fn run() ->{Trace} Pair {
+    Pair { right: Trace::field(), ..Trace::spread() }
+}
+"#,
+    );
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let run = checked_logical_function(&ir, "run");
+    assert_in_order(
+        run,
+        &["op_name = @spread", "op_name = @field", "adt.struct_new"],
+    );
+    assert_occurrences(run, "op_name = @spread", 1);
+    assert_occurrences(run, "op_name = @field", 1);
+}
+
+/// Logical aggregate construction and matching must preserve callable fields
+/// recursively; no physical `core.func` carrier may enter tuple/list layouts.
+#[salsa_test]
+fn logical_callable_tuple_and_list_layouts_remain_distinct(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "callable_aggregates.trb",
+        r#"
+fn tuple_int(callback: fn(Int) -> Int) {
+    let tuple = #(callback, True)
+}
+fn tuple_bool(callback: fn(Bool) -> Bool) {
+    let tuple = #(callback, 0)
+}
+
+struct A {}
+struct B {}
+struct A__named_B {}
+
+fn delimiter_pair(left: A, right: B) {
+    let pair = #(left, right)
+}
+fn delimiter_spoof(value: A__named_B) {
+    let singleton = #(value)
+}
+
+fn from_list(callback: fn(Int) -> Int) -> Int {
+    case [callback] {
+        [callback] -> callback(+1)
+        _ -> +0
+    }
+}
+"#,
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "callable aggregate fixture must resolve: {errors:?}"
+    );
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    assert!(ir.contains("tribute_control.callable(core.i32, core.i32)"));
+    assert!(ir.contains("tribute_control.callable(core.i1, core.i1)"));
+    let tuple_layout = |function: &str| {
+        logical_function(&ir, function)
+            .split("adt.struct_new")
+            .nth(1)
+            .and_then(|line| line.split("{type = !").nth(1))
+            .and_then(|suffix| suffix.split('}').next())
+            .expect("tuple fixture must construct a logical tuple")
+    };
+    let tuple_int_layout = tuple_layout("tuple_int");
+    let tuple_bool_layout = tuple_layout("tuple_bool");
+    assert_ne!(
+        tuple_int_layout, tuple_bool_layout,
+        "distinct callable tuple shapes must retain distinct layouts:\n{ir}"
+    );
+    for layout in [tuple_int_layout, tuple_bool_layout] {
+        assert!(
+            layout.starts_with("__logical_tuple_tuple_"),
+            "callable tuple layout must retain the logical tuple prefix: {layout}"
+        );
+        assert!(
+            !layout.contains('"') && !layout.contains("{:?}"),
+            "callable tuple layout must not contain debug-formatted fragments: {layout}"
+        );
+    }
+    assert_ne!(
+        tuple_layout("delimiter_pair"),
+        tuple_layout("delimiter_spoof"),
+        "length-delimited logical keys must not alias delimiter-sensitive tuple shapes:\n{ir}"
+    );
+    assert!(
+        !ir.contains("core.func"),
+        "callable aggregate layouts must not use physical core.func:\n{ir}"
+    );
+}
+
+/// Nominal logical layouts must share the same recursive callable conversion:
+/// generated field accessors, enum construction, and enum pattern extraction
+/// cannot reintroduce a physical `core.func` field.
+#[salsa_test]
+fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "callable_nominals.trb",
+        r#"
+struct Holder { callback: fn(Int) -> Int }
+enum Choice { Callback(#(fn(Int) -> Int, Int)), Other }
+
+fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, +1)) }
+fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+    case choice {
+        Callback(#(callback, _)) -> callback
+        Other -> fallback
+    }
+}
+"#,
+    );
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    let accessor = checked_logical_function(&ir, "Holder::callback");
+    assert!(
+        accessor.contains("-> !t") && ir.contains("= tribute_control.callable(core.i32, core.i32)"),
+        "generated accessor must retain its callable field type:\n{accessor}"
+    );
+    let inspect = checked_logical_function(&ir, "inspect");
+    assert!(inspect.contains("adt.variant_get"));
+    assert!(inspect.contains("-> !t"));
+    assert!(!ir.contains("core.func"));
+}
+
+/// Logical nominal layouts are collected before fields are converted, so a
+/// recursive or forward field retains its nominal typeref instead of erasing
+/// to `anyref` while the target layout is still incomplete.
+#[salsa_test]
+fn logical_nominal_layouts_preserve_recursive_and_forward_fields(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "recursive_nominals.trb",
+        r#"
+struct Node { next: Node }
+struct First { second: Second }
+struct Second { first: First }
+
+fn keep_node(node: Node) -> Node { node }
+fn keep_first(first: First) -> First { first }
+"#,
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "recursive nominal fixture must typecheck: {errors:?}"
+    );
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    for field in [
+        "!Node_1 = adt.struct() {fields = [[@next, !Node]], name = @Node}",
+        "!First_1 = adt.struct() {fields = [[@second, !Second]], name = @First}",
+        "!Second_1 = adt.struct() {fields = [[@first, !First]], name = @Second}",
+    ] {
+        assert!(
+            ir.contains(field),
+            "recursive/forward nominal field must retain `{field}`:\n{ir}"
+        );
+    }
+    assert!(
+        !ir.contains("[@next, tribute_rt.anyref]")
+            && !ir.contains("[@second, tribute_rt.anyref]")
+            && !ir.contains("[@first, tribute_rt.anyref]"),
+        "recursive/forward nominal fields must not erase to anyref:\n{ir}"
+    );
 }
 
 // ========================================================================
 // Multi-arg Ability Op Tests
 // ========================================================================
 
-/// An ability op with multiple arguments should pack them into a tuple
-/// before passing to `ability.legacy_perform`.
+/// An ability operation with multiple arguments must retain each source value
+/// as a separate logical perform operand.
 #[salsa_test]
 fn test_multi_arg_ability_op(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -966,5 +1353,150 @@ fn main() { }
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+    assert_multi_argument_shape(checked_logical_function(&ir_text, "store"));
+}
+
+/// Named semantic assertions replace the former physical-CPS snapshots. Each
+/// test selects one directly, so its source-level contract stays visible.
+fn assert_resume_shape(function: &str) {
+    assert_in_order(
+        function,
+        &["tribute_control.resume", "tribute_control.yield"],
+    );
+}
+fn assert_single_perform_shape(function: &str) {
+    assert!(function.contains("operation_kind = @op"));
+}
+fn assert_perform_then_value_shape(function: &str) {
+    assert_in_order(function, &["op_name = @get", "tribute_control.return"]);
+}
+fn assert_sequential_performs_shape(function: &str) {
+    assert_in_order(function, &["op_name = @set", "op_name = @get"]);
+}
+fn assert_nested_argument_shape(function: &str) {
+    assert_in_order(function, &["callee = @read", "callee = @add_one"]);
+}
+fn assert_indirect_lambda_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.lambda",
+            "tribute_control.call_indirect",
+            "arith.addi",
+        ],
+    );
+}
+fn assert_case_arm_shape(function: &str) {
+    assert_in_order(function, &["scf.if", "callee = @read", "arith.addi"]);
+}
+fn assert_short_circuit_shape(function: &str) {
+    assert_in_order(function, &["scf.if", "callee = @read"]);
+}
+fn assert_handle_body_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.handle",
+            "callee = @read",
+            "tribute_control.resume",
+        ],
+    );
+}
+fn assert_handler_arm_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.handler",
+            "callee = @read_log",
+            "tribute_control.resume",
+        ],
+    );
+}
+fn assert_case_scrutinee_shape(function: &str) {
+    assert_in_order(
+        function,
+        &["callee = @effectful", "scf.if", "callee = @after"],
+    );
+}
+fn assert_short_circuit_consumer_shape(function: &str) {
+    assert_in_order(
+        function,
+        &["scf.if", "callee = @effectful", "callee = @after"],
+    );
+}
+fn assert_case_guard_shape(function: &str) {
+    assert_in_order(function, &["scf.if", "callee = @effectful"]);
+}
+fn assert_handler_case_resume_shape(function: &str) {
+    assert_occurrences(function, "tribute_control.resume %", 2);
+    assert!(function.contains("scf.if"));
+}
+fn assert_op_handler_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.handle",
+            "kind = @op",
+            "tribute_control.resume",
+        ],
+    );
+}
+fn assert_fn_handler_shape(function: &str) {
+    assert!(function.contains("kind = @fn"));
+}
+fn assert_handle_strict_value_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.handle",
+            "adt.variant_new",
+            "tribute_control.call",
+        ],
+    );
+}
+fn assert_nested_handle_shape(function: &str) {
+    assert_in_order(
+        function,
+        &["tribute_control.perform", "tribute_control.handle"],
+    );
+}
+fn assert_resume_then_suffix_shape(function: &str) {
+    assert_in_order(function, &["tribute_control.resume", "arith.addi"]);
+}
+fn assert_resume_capture_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.lambda",
+            "tribute_control.resume",
+            "arith.addi",
+        ],
+    );
+}
+fn assert_normalized_region_shape(function: &str) {
+    assert_in_order(
+        function,
+        &[
+            "tribute_control.lambda",
+            "scf.if",
+            "tribute_control.handle",
+            "adt.variant_new",
+        ],
+    );
+}
+fn assert_record_spread_shape(function: &str) {
+    assert_in_order(
+        function,
+        &["tribute_control.lambda", "adt.struct_get", "adt.struct_new"],
+    );
+}
+fn assert_aggregate_shape(function: &str) {
+    assert_occurrences(function, "callee = @read", 4);
+    assert_in_order(
+        function,
+        &["adt.struct_new", "adt.struct_new", "adt.variant_new"],
+    );
+}
+fn assert_multi_argument_shape(function: &str) {
+    assert!(function.contains("tribute_control.perform %0, %1"));
 }

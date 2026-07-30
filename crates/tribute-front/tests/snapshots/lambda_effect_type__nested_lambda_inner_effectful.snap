@@ -3,115 +3,40 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
-  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
-  !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
-  !t2 = closure.closure(core.func(tribute_rt.anyref, !t0, tribute_rt.anyref))
-  !t3 = closure.closure(core.func(core.i32, !t0))
+  !t0 = tribute_control.callable(core.i32) {tribute.calling_convention = 2}
+  !t1 = tribute_control.callable(core.i32, !t0) {tribute.calling_convention = 2}
 
-  func.func @"test::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-  func.func @"test::__lambda_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-      func.return %3
-  }
-  func.func @run_with_state(%0: core.func(core.i32)) -> core.i32 attributes {tribute.calling_convention = 0} {
-      %1 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %2 = closure.new %1 {func_ref = @"test::__lambda_0"} : !t1
-      %3 = closure.lambda(%4: tribute_rt.anyref) -> tribute_rt.anyref [%0] {
-          %5 = adt.ref_null {type = !t0} : !t0
-          %6 = core.unrealized_conversion_cast %0 : !t3
-          %7 = func.call_indirect %6, %5 {tribute.calling_convention = 1} : core.i32
-          %8 = core.unrealized_conversion_cast %4 : !t1
-          %9 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
-          %10 = func.call_indirect %8, %9 : tribute_rt.anyref
-          func.return %10
-      }
-      %11 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %12 = closure.new %11 {func_ref = @"test::__lambda_1"} : !t1
-      %13 = func.call_indirect %3, %12 : tribute_rt.anyref
-      %14 = closure.lambda(%15: tribute_rt.anyref, %16: core.i32, %17: core.i32, %18: tribute_rt.anyref) -> tribute_rt.anyref {
-          %19 = arith.const {value = 1} : core.i1
-          %20 = scf.if %19 : tribute_rt.anyref {
-              %21 = closure.lambda(%22: tribute_rt.anyref) -> tribute_rt.anyref [%16] {
-                  %23 = adt.variant_new %16, %22 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-                  func.return %23
-              }
-              %24 = arith.const {value = 99} : core.i32
-              %25 = core.unrealized_conversion_cast %15 : !t1
-              %26 = core.unrealized_conversion_cast %24 : tribute_rt.anyref
-              %27 = func.call_indirect %25, %26 : tribute_rt.anyref
-              %28 = adt.variant_is %27 {tag = @Normal, type = !__tribute_cps_control} : core.i1
-              %29 = scf.if %28 : tribute_rt.anyref {
-                  %30 = adt.variant_cast %27 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %31 = adt.variant_get %30 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %32 = func.call_indirect %21, %31 : tribute_rt.anyref
-                  %33 = adt.variant_cast %32 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %34 = adt.variant_get %33 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
-                  %35 = adt.variant_get %33 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %36 = arith.cmpi %34, %16 {predicate = @eq} : core.i1
-                  %37 = scf.if %36 : tribute_rt.anyref {
-                      %38 = adt.variant_new %35 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                      scf.yield %38
-                  } {
-                      scf.yield %32
-                  }
-                  scf.yield %37
-              } {
-                  scf.yield %27
-              }
-              scf.yield %29
-          } {
-              func.unreachable
-          }
-          func.return %20
-      }
-      %39 = arith.const {value = 0} : tribute_rt.anyref
-      %40 = effect.fresh_prompt_tag : core.i32
-      %41 = ability.legacy_handle_dispatch %13, %40, %14, %39 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
-          ability.done {
-            ^bb11(%42: tribute_rt.anyref):
-              %43 = core.unrealized_conversion_cast %42 : core.i32
-              %44 = core.unrealized_conversion_cast %43 : tribute_rt.anyref
-              %45 = func.call_indirect %2, %44 : tribute_rt.anyref
-              scf.yield %45
-          }
-          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb12(%46: tribute_rt.anyref, %47: tribute_rt.anyref):
-              scf.yield %47
-          }
+  tribute_control.func @run_with_state(%0: !t0) -> core.i32 convention(cps) {
+      %1 = tribute_control.handle : core.i32 {
+          %2 = tribute_control.call_indirect %0 : core.i32
+          tribute_control.yield %2
       } {
-        ^bb13(%48: tribute_rt.anyref):
-          %49 = func.call_indirect %2, %48 : tribute_rt.anyref
-          scf.yield %49
-      }
-      %50 = core.unrealized_conversion_cast %41 : core.i32
-      func.return %50
-  }
-  func.func @apply_thunk(%0: !t0, %1: tribute_rt.anyref, %2: core.func(core.i32)) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
-      %3 = core.unrealized_conversion_cast %2 : !t2
-      %4 = func.call_indirect %3, %0, %1 {tribute.calling_convention = 2} : tribute_rt.anyref
-      func.return %4
-  }
-  func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
-      %0 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : !t1
-      %2 = closure.lambda(%3: !t0, %4: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 2} {
-          %5 = closure.lambda(%6: !t0) -> core.i32 {tribute.calling_convention = 1} {
-              %7 = ability.legacy_call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-              %8 = core.unrealized_conversion_cast %7 : core.i32
-              func.return %8
+        ^bb2(%3: core.i32):
+          tribute_control.yield %3
+      } {
+          tribute_control.handler {ability_ref = core.ability_ref(core.i32) {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+            ^bb4(%4: tribute_control.resume_token(core.i32, core.i32)):
+              %5 = arith.const {value = 99} : core.i32
+              %6 = tribute_control.resume %4, %5 : core.i32
+              tribute_control.yield %6
           }
-          %9 = func.call %5 {callee = @run_with_state, tribute.calling_convention = 0} : core.i32
-          %10 = core.unrealized_conversion_cast %4 : !t1
-          %11 = core.unrealized_conversion_cast %9 : tribute_rt.anyref
-          %12 = func.call_indirect %10, %11 : tribute_rt.anyref
-          func.return %12
       }
-      %13 = adt.ref_null {type = !t0} : !t0
-      %14 = func.call %13, %1, %2 {callee = @apply_thunk, tribute.calling_convention = 2} : tribute_rt.anyref
-      %15 = core.unrealized_conversion_cast %14 : core.i32
-      func.return %15
+      tribute_control.return %1
+  }
+  tribute_control.func @apply_thunk(%0: !t0) -> core.i32 convention(cps) {
+      %1 = tribute_control.call_indirect %0 : core.i32
+      tribute_control.return %1
+  }
+  tribute_control.func @main() -> core.i32 convention(direct) {
+      %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
+          %1 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
+              %2 = tribute_control.perform {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+              tribute_control.return %2
+          }
+          %3 = tribute_control.call %1 {callee = @run_with_state} : core.i32
+          tribute_control.return %3
+      }
+      %4 = tribute_control.call %0 {callee = @apply_thunk} : core.i32
+      tribute_control.return %4
   }
 }

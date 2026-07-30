@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 attributes {tribute.calling_convention = 0} {
+  tribute_control.func @logic(%0: core.i1, %1: core.i1) -> core.i1 convention(cps) {
       %2 = scf.if %0 : core.i1 {
           %3 = arith.const {value = true} : core.i1
           scf.yield %3
@@ -17,6 +17,6 @@ core.module @test {
           }
           scf.yield %4
       }
-      func.return %2
+      tribute_control.return %2
   }
 }

@@ -3,56 +3,51 @@ source: crates/tribute-front/tests/ufcs_method_call.rs
 expression: ir_text
 ---
 core.module @test {
-  !Triple = adt.struct() {fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}
+  !Triple = adt.typeref() {name = @Triple}
+  !Triple_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}
+  !Pair = adt.typeref() {name = @Pair}
+  !t0 = tribute_control.callable(core.i32, !Triple) {tribute.calling_convention = 0}
+  !t1 = tribute_control.callable(core.i32, !Pair) {tribute.calling_convention = 0}
+  !Pair_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}
 
-  core.module @Pair {
-    !Pair = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}
-    !Pair_1 = adt.typeref() {name = @Pair}
-
-    func.func @"Pair::x"(%0: !Pair_1) -> core.i32 {
-        %1 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
-        func.return %1
-    }
-    func.func @"Pair::y"(%0: !Pair_1) -> core.i32 {
-        %1 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
-        func.return %1
-    }
+  tribute_control.func @"Pair::x"(%0: !Pair) -> core.i32 convention(direct) {
+      %1 = adt.struct_get %0 {field = 0, type = !Pair_1} : core.i32
+      tribute_control.return %1
   }
-  core.module @Triple {
-    !Triple_1 = adt.typeref() {name = @Triple}
-
-    func.func @"Triple::x"(%0: !Triple_1) -> core.i32 {
-        %1 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
-        func.return %1
-    }
-    func.func @"Triple::y"(%0: !Triple_1) -> core.i32 {
-        %1 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
-        func.return %1
-    }
-    func.func @"Triple::z"(%0: !Triple_1) -> core.i32 {
-        %1 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
-        func.return %1
-    }
+  tribute_control.func @"Pair::y"(%0: !Pair) -> core.i32 convention(direct) {
+      %1 = adt.struct_get %0 {field = 1, type = !Pair_1} : core.i32
+      tribute_control.return %1
   }
-  func.func @"Pair::extend"(%0: tribute_rt.anyref, %1: core.i32) -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
-      %2 = func.call %0 {callee = @"Pair::x", tribute.calling_convention = 0} : core.i32
-      %3 = func.call %0 {callee = @"Pair::y", tribute.calling_convention = 0} : core.i32
-      %4 = adt.struct_new %2, %3, %1 {type = !Triple} : adt.typeref() {name = @Triple}
-      %5 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      func.return %5
+  tribute_control.func @"Triple::x"(%0: !Triple) -> core.i32 convention(direct) {
+      %1 = adt.struct_get %0 {field = 0, type = !Triple_1} : core.i32
+      tribute_control.return %1
   }
-  func.func @"Triple::sum"(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.calling_convention = 0} {
-      %1 = func.call %0 {callee = @"Triple::x", tribute.calling_convention = 0} : core.i32
-      %2 = func.call %0 {callee = @"Triple::y", tribute.calling_convention = 0} : core.i32
-      %3 = func.call %1, %2 {callee = @"Nat::+", tribute.calling_convention = 0} : core.i32
-      %4 = func.call %0 {callee = @"Triple::z", tribute.calling_convention = 0} : core.i32
-      %5 = func.call %3, %4 {callee = @"Nat::+", tribute.calling_convention = 0} : core.i32
-      func.return %5
+  tribute_control.func @"Triple::y"(%0: !Triple) -> core.i32 convention(direct) {
+      %1 = adt.struct_get %0 {field = 1, type = !Triple_1} : core.i32
+      tribute_control.return %1
   }
-  func.func @test(%0: tribute_rt.anyref) -> core.i32 attributes {tribute.calling_convention = 0} {
+  tribute_control.func @"Triple::z"(%0: !Triple) -> core.i32 convention(direct) {
+      %1 = adt.struct_get %0 {field = 2, type = !Triple_1} : core.i32
+      tribute_control.return %1
+  }
+  tribute_control.func @"Pair::extend"(%0: !Pair, %1: core.i32) -> !Triple convention(cps) {
+      %2 = tribute_control.call %0 {callee = @"Pair::x"} : core.i32
+      %3 = tribute_control.call %0 {callee = @"Pair::y"} : core.i32
+      %4 = adt.struct_new %2, %3, %1 {type = !Triple_1} : !Triple
+      tribute_control.return %4
+  }
+  tribute_control.func @"Triple::sum"(%0: !Triple) -> core.i32 convention(cps) {
+      %1 = tribute_control.call %0 {callee = @"Triple::x"} : core.i32
+      %2 = tribute_control.call %0 {callee = @"Triple::y"} : core.i32
+      %3 = arith.addi %1, %2 : core.i32
+      %4 = tribute_control.call %0 {callee = @"Triple::z"} : core.i32
+      %5 = arith.addi %3, %4 : core.i32
+      tribute_control.return %5
+  }
+  tribute_control.func @test(%0: !Pair) -> core.i32 convention(cps) {
       %1 = arith.const {value = 3} : core.i32
-      %2 = func.call %0, %1 {callee = @"Pair::extend", tribute.calling_convention = 0} : tribute_rt.anyref
-      %3 = func.call %2 {callee = @"Triple::sum", tribute.calling_convention = 0} : core.i32
-      func.return %3
+      %2 = tribute_control.call %0, %1 {callee = @"Pair::extend"} : !Triple
+      %3 = tribute_control.call %2 {callee = @"Triple::sum"} : core.i32
+      tribute_control.return %3
   }
 }

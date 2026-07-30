@@ -4,24 +4,21 @@ expression: ir_text
 ---
 core.module @test {
   !Pair = adt.struct() {fields = [[@first, tribute_rt.anyref], [@second, tribute_rt.anyref]], name = @Pair}
+  !Pair_1 = adt.typeref() {name = @Pair}
+  !t0 = tribute_control.callable(tribute_rt.anyref, !Pair_1) {tribute.calling_convention = 0}
 
-  core.module @Pair {
-    !Pair_1 = adt.typeref() {name = @Pair}
-
-    func.func @"Pair::first"(%0: !Pair_1) -> tribute_rt.anyref {
-        %1 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
-        func.return %1
-    }
-    func.func @"Pair::second"(%0: !Pair_1) -> tribute_rt.anyref {
-        %1 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
-        func.return %1
-    }
+  tribute_control.func @"Pair::first"(%0: !Pair_1) -> tribute_rt.anyref convention(direct) {
+      %1 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
+      tribute_control.return %1
   }
-  func.func @make_pair() -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
+  tribute_control.func @"Pair::second"(%0: !Pair_1) -> tribute_rt.anyref convention(direct) {
+      %1 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
+      tribute_control.return %1
+  }
+  tribute_control.func @make_pair() -> !Pair_1 convention(cps) {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = true} : core.i1
-      %2 = adt.struct_new %0, %1 {type = !Pair} : adt.typeref() {name = @Pair}
-      %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
-      func.return %3
+      %2 = adt.struct_new %0, %1 {type = !Pair} : !Pair_1
+      tribute_control.return %2
   }
 }

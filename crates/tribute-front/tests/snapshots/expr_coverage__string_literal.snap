@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @greeting() -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
+  tribute_control.func @greeting() -> tribute_rt.anyref convention(cps) {
       %0 = adt.string_const {value = "hello"} : tribute_rt.anyref
-      func.return %0
+      tribute_control.return %0
   }
 }
