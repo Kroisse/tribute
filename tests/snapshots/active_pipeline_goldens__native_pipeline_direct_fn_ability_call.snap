@@ -71,31 +71,29 @@ core.module @direct_fn_native {
       %26 = scf.if %25 : tribute_rt.anyref {
           %27 = adt.variant_cast %24 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
           %28 = adt.variant_get %27 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-          %29 = tribute_rt.unbox_int %28 : core.i32
-          %30 = func.call {callee = @__tribute_evidence_empty} : core.ptr
-          %31 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
-          %32 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-          %33 = func.call_indirect %31, %23, %32, %28 : tribute_rt.anyref
-          scf.yield %33
+          %29 = func.call {callee = @__tribute_evidence_empty} : core.ptr
+          %30 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
+          %31 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
+          %32 = func.call_indirect %30, %23, %31, %28 : tribute_rt.anyref
+          scf.yield %32
       } {
-          %34 = adt.variant_cast %24 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-          %35 = adt.variant_get %34 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
-          %36 = adt.variant_get %34 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-          %37 = arith.cmpi %35, %19 {predicate = @eq} : core.i1
-          %38 = scf.if %37 : tribute_rt.anyref {
-              %39 = func.call {callee = @__tribute_evidence_empty} : core.ptr
-              %40 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
-              %41 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-              %42 = func.call_indirect %40, %39, %41, %36 : tribute_rt.anyref
-              scf.yield %42
+          %33 = adt.variant_cast %24 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %34 = adt.variant_get %33 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
+          %35 = adt.variant_get %33 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
+          %36 = arith.cmpi %34, %19 {predicate = @eq} : core.i1
+          %37 = scf.if %36 : tribute_rt.anyref {
+              %38 = func.call {callee = @__tribute_evidence_empty} : core.ptr
+              %39 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
+              %40 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
+              %41 = func.call_indirect %39, %38, %40, %35 : tribute_rt.anyref
+              scf.yield %41
           } {
               scf.yield %24
           }
-          scf.yield %38
+          scf.yield %37
       }
-      %43 = tribute_rt.unbox_int %26 : core.i32
-      %44 = arith.const {value = unit} : core.nil
-      func.return %44
+      %42 = arith.const {value = unit} : core.nil
+      func.return %42
   }
 
   func.func @"run::__clam_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
@@ -107,19 +105,18 @@ core.module @direct_fn_native {
       %8 = adt.struct_get %6 {field = 0, type = !_closure} : core.i32
       %9 = adt.struct_get %6 {field = 1, type = !_closure} : tribute_rt.anyref
       %10 = func.call_indirect %8, %0, %9, %7, %4 : tribute_rt.anyref
-      %11 = tribute_rt.unbox_int %10 : core.i32
-      %12 = arith.const {value = 1361557906} : core.i32
-      %13 = func.call %0, %12 {callee = @__tribute_evidence_lookup_tr} : core.ptr
-      %14 = arith.const {value = 2110389019} : core.i32
-      %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
-      %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-      %17 = func.call_indirect %15, %0, %16, %14, %10 : tribute_rt.anyref
-      %18 = core.unrealized_conversion_cast %17 : core.nil
-      %19 = core.unrealized_conversion_cast %2 : closure.closure(!t0)
-      %20 = adt.struct_get %19 {field = 0, type = !_closure} : core.i32
-      %21 = adt.struct_get %19 {field = 1, type = !_closure} : tribute_rt.anyref
-      %22 = func.call_indirect %20, %0, %21, %10 : tribute_rt.anyref
-      func.return %22
+      %11 = arith.const {value = 1361557906} : core.i32
+      %12 = func.call %0, %11 {callee = @__tribute_evidence_lookup_tr} : core.ptr
+      %13 = arith.const {value = 2110389019} : core.i32
+      %14 = adt.struct_get %12 {field = 0, type = !_closure} : core.i32
+      %15 = adt.struct_get %12 {field = 1, type = !_closure} : tribute_rt.anyref
+      %16 = func.call_indirect %14, %0, %15, %13, %10 : tribute_rt.anyref
+      %17 = core.unrealized_conversion_cast %16 : core.nil
+      %18 = core.unrealized_conversion_cast %2 : closure.closure(!t0)
+      %19 = adt.struct_get %18 {field = 0, type = !_closure} : core.i32
+      %20 = adt.struct_get %18 {field = 1, type = !_closure} : tribute_rt.anyref
+      %21 = func.call_indirect %19, %0, %20, %10 : tribute_rt.anyref
+      func.return %21
   }
 
   func.func @"run::__clam_1"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref, %3: core.i32, %4: core.i32, %5: tribute_rt.anyref) -> tribute_rt.anyref {
