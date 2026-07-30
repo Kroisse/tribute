@@ -8,6 +8,7 @@ description = "Tribute language-specific IR dialects"
 
 [dependencies]
 inventory.workspace = true
+itertools.workspace = true
 rustc-hash.workspace = true
 tracing.workspace = true
 tribute-rc.workspace = true

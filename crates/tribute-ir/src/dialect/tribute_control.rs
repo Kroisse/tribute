@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use itertools::Itertools;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -2044,6 +2045,23 @@ fn nearest_enclosing_handler(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     None
 }
 
+fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
+    if !is_control_op(ctx, op, "call") {
+        return false;
+    }
+    let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+        return false;
+    };
+    let mut owner = parent_op(ctx, op);
+    while let Some(current) = owner {
+        if is_control_op(ctx, current, "func") {
+            return ctx.op(current).attributes.get_symbol("sym_name") == Some(callee);
+        }
+        owner = parent_op(ctx, current);
+    }
+    false
+}
+
 fn validate_affine_lambda_carrier(
     ctx: &IrContext,
     handler: OpRef,
@@ -2078,7 +2096,13 @@ fn validate_affine_lambda_carrier(
         }
         if is_control_op(ctx, use_.user, "lambda") {
             captures.push(use_.user);
-        } else if is_control_op(ctx, use_.user, "call_indirect") && use_.operand_index == 0 {
+        } else if (is_control_op(ctx, use_.user, "call_indirect") && use_.operand_index == 0)
+            // A captured resumption may be passed to the enclosing source
+            // function's recursive logical call (for example
+            // `run_state(fn() { resume value }, value)`). Other direct calls
+            // are rejected: their parameter ownership is not yet proven.
+            || direct_call_reenters_enclosing_func(ctx, use_.user)
+        {
             terminals.push(use_.user);
         } else {
             push_op_error(
@@ -2093,7 +2117,7 @@ fn validate_affine_lambda_carrier(
         }
     }
 
-    if captures.len() > 1 {
+    if has_nonexclusive_pair(ctx, &captures) {
         push_op_error(
             ctx,
             handler,
@@ -2101,27 +2125,35 @@ fn validate_affine_lambda_carrier(
             "resume-token carrier branches into multiple lambda captures",
         );
     }
-    if terminals.len() > 1 {
+    if has_nonexclusive_pair(ctx, &terminals) {
         push_op_error(
             ctx,
             handler,
             errors,
-            "resume-token carrier has multiple static indirect-call uses",
+            "resume-token carrier has multiple static terminal uses",
         );
     }
 
-    if let Some(&capture) = captures.first() {
-        let capture_region = ctx.op(capture).regions.first().copied();
+    if !captures.is_empty() {
         for terminal in &terminals {
-            if !capture_region.is_some_and(|region| op_is_within_region(ctx, *terminal, region)) {
+            if is_control_op(ctx, *terminal, "call_indirect")
+                && !captures.iter().any(|capture| {
+                    ctx.op(*capture)
+                        .regions
+                        .first()
+                        .is_some_and(|region| op_is_within_region(ctx, *terminal, *region))
+                })
+            {
                 push_op_error(
                     ctx,
                     handler,
                     errors,
-                    "resume-token carrier call is outside its single capture path",
+                    "resume-token carrier call is outside its capture path",
                 );
             }
         }
+    }
+    for capture in captures {
         let Some(&next_carrier) = ctx.op_results(capture).first() else {
             push_op_error(
                 ctx,
@@ -2172,7 +2204,7 @@ fn validate_token_path(
             );
         }
     }
-    if resumes.len() > 1 {
+    if has_nonexclusive_pair(ctx, &resumes) {
         push_op_error(
             ctx,
             handler,
@@ -2180,37 +2212,34 @@ fn validate_token_path(
             "resume token reaches more than one tribute_control.resume",
         );
     }
-    for left in 0..captures.len() {
-        for right in left + 1..captures.len() {
-            let left_region = ctx.op(captures[left]).regions.first().copied();
-            let right_region = ctx.op(captures[right]).regions.first().copied();
-            let comparable = left_region
-                .is_some_and(|region| op_is_within_region(ctx, captures[right], region))
-                || right_region
-                    .is_some_and(|region| op_is_within_region(ctx, captures[left], region));
-            if !comparable {
-                push_op_error(
-                    ctx,
-                    handler,
-                    errors,
-                    "resume token is copied into multiple capture paths",
-                );
-            }
+    for (left, right) in captures.iter().copied().tuple_combinations() {
+        let left_region = ctx.op(left).regions.first().copied();
+        let right_region = ctx.op(right).regions.first().copied();
+        let comparable = left_region.is_some_and(|region| op_is_within_region(ctx, right, region))
+            || right_region.is_some_and(|region| op_is_within_region(ctx, left, region));
+        if !comparable && !ops_are_mutually_exclusive(ctx, left, right) {
+            push_op_error(
+                ctx,
+                handler,
+                errors,
+                "resume token is copied into multiple capture paths",
+            );
         }
     }
-    if let Some(&resume) = resumes.first() {
-        for capture in &captures {
-            let Some(region) = ctx.op(*capture).regions.first().copied() else {
-                continue;
-            };
-            if !op_is_within_region(ctx, resume, region) {
-                push_op_error(
-                    ctx,
-                    handler,
-                    errors,
-                    "resume token capture does not form a single path to resume",
-                );
-            }
+    for capture in &captures {
+        let Some(region) = ctx.op(*capture).regions.first().copied() else {
+            continue;
+        };
+        if !resumes
+            .iter()
+            .any(|resume| op_is_within_region(ctx, *resume, region))
+        {
+            push_op_error(
+                ctx,
+                handler,
+                errors,
+                "resume token capture does not form a single path to resume",
+            );
         }
     }
     let mut visited = HashSet::new();
@@ -2219,6 +2248,43 @@ fn validate_token_path(
             validate_affine_lambda_carrier(ctx, handler, closure_value, &mut visited, errors);
         }
     }
+}
+
+/// A handler token may have one affine resume on each branch of an ordinary
+/// structured conditional: exactly one branch executes at runtime.  Static
+/// use counting alone would reject a source `case` whose exhaustive arms each
+/// resume the same handler-owned token.
+fn has_nonexclusive_pair(ctx: &IrContext, ops: &[OpRef]) -> bool {
+    ops.iter()
+        .copied()
+        .tuple_combinations()
+        .any(|(left, right)| !ops_are_mutually_exclusive(ctx, left, right))
+}
+
+fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> bool {
+    let mut region = parent_region(ctx, left);
+    while let Some(current) = region {
+        let owner = ctx.region(current).parent_op;
+        if let Some(owner) = owner
+            && ctx.op(owner).dialect == Symbol::new("scf")
+            && ctx.op(owner).name == Symbol::new("if")
+            && let Some(left_index) = ctx
+                .op(owner)
+                .regions
+                .iter()
+                .position(|candidate| *candidate == current)
+            && let Some(right_index) = ctx
+                .op(owner)
+                .regions
+                .iter()
+                .position(|candidate| op_is_within_region(ctx, right, *candidate))
+            && left_index != right_index
+        {
+            return true;
+        }
+        region = owner.and_then(|owner| parent_region(ctx, owner));
+    }
+    false
 }
 
 fn validate_resume_ownership(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
@@ -3571,7 +3637,7 @@ mod tests {
             &[
                 "resume-token carrier escapes through",
                 "resume-token carrier branches into multiple lambda captures",
-                "resume-token carrier call is outside its single capture path",
+                "resume-token carrier call is outside its capture path",
             ],
         );
     }
@@ -3605,13 +3671,86 @@ mod tests {
         let result = validate_whole_ir(&ctx, module, &[]);
         assert_diagnostics(
             &result,
-            &[
-                "resume token is copied into multiple capture paths",
-                "resume token capture does not form a single path to resume",
-            ],
+            &["resume token is copied into multiple capture paths"],
         );
     }
 
+    #[test]
+    fn whole_ir_allows_mutually_exclusive_lambda_capture_and_terminal_paths() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %flag = arith.const {value = true} : core.i1
+        %value = scf.if %flag : core.i32 {
+          %left = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+            %resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.return %resumed
+          }
+          %called = tribute_control.call_indirect %left : core.i32
+          scf.yield %called
+        } {
+          %right = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+            %resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.return %resumed
+          }
+          %called = tribute_control.call_indirect %right : core.i32
+          scf.yield %called
+        }
+        tribute_control.yield %value
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
+        let diagnostics = messages(&result);
+        for forbidden in [
+            "resume token is copied into multiple capture paths",
+            "resume token capture does not form a single path to resume",
+            "resume-token carrier branches into multiple lambda captures",
+            "resume-token carrier has multiple static terminal uses",
+        ] {
+            assert!(!diagnostics.contains(forbidden), "{result}");
+        }
+    }
+
+    #[test]
+    fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %continuation = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.return %resumed
+        }
+        %first = tribute_control.call_indirect %continuation : core.i32
+        %second = tribute_control.call_indirect %continuation : core.i32
+        tribute_control.yield %first
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[]);
+        assert!(
+            messages(&result).contains("multiple static terminal uses"),
+            "{result}"
+        );
+    }
     #[test]
     fn validators_reject_resume_token_escape_and_never_clause_capability() {
         let (ctx, module) = parse_fixture(
@@ -3746,7 +3885,7 @@ mod tests {
         );
         let result = validate_whole_ir(&ctx, module, &[]);
         assert!(
-            messages(&result).contains("multiple static indirect-call uses"),
+            messages(&result).contains("multiple static terminal uses"),
             "{result}"
         );
     }

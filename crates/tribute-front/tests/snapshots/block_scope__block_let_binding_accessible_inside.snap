@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/block_scope.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @example() -> core.i32 attributes {tribute.calling_convention = 0} {
+  tribute_control.func @example() -> core.i32 convention(cps) {
       %0 = arith.const {value = 42} : core.i32
-      func.return %0
+      tribute_control.return %0
   }
 }

@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CallingConvention, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeDefId,
-    TypeKind, TypeParam, TypeScheme,
+    AbilityId, AbilityOrigin, CallingConvention, CtorId, EffectRow, FuncDefId, OpDeclKind, Type,
+    TypeDefId, TypeKind, TypeParam, TypeScheme,
 };
 
 // =========================================================================
@@ -25,7 +25,7 @@ use crate::ast::{
 pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
 
 /// Information about an ability operation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AbilityOpInfo<'db> {
     /// Operation name.
     pub name: Symbol,
@@ -415,6 +415,16 @@ impl<'db> ModuleTypeEnv<'db> {
         for (ability, convention) in exports.ability_conventions(self.db) {
             self.ability_conventions.insert(*ability, *convention);
         }
+        for (ability, type_params, operations) in exports.ability_definitions(self.db) {
+            self.ability_defs.insert(
+                *ability,
+                AbilityInfo {
+                    id: *ability,
+                    type_params: type_params.clone(),
+                    operations: operations.iter().map(|op| (op.name, op.clone())).collect(),
+                },
+            );
+        }
     }
 
     pub fn well_known_types(&self) -> super::WellKnownTypes<'db> {
@@ -445,19 +455,19 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Export function types with FuncDefId (for PreludeExports).
     ///
-    /// Results are sorted alphabetically by function name for deterministic output.
+    /// Results are sorted by fully qualified function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.name(self.db)
-                .with_str(|a| b.name(self.db).with_str(|b| a.cmp(b)))
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
         });
         result
     }
 
     /// Export constructor types for PreludeExports.
     ///
-    /// Results are sorted alphabetically by constructor name for deterministic output.
+    /// Results are sorted by fully qualified constructor name for deterministic output.
     pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
             .constructor_types
@@ -465,8 +475,8 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, *v))
             .collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.name(self.db)
-                .with_str(|a| b.name(self.db).with_str(|b| a.cmp(b)))
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
         });
         result
     }
@@ -524,7 +534,9 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Export ability definitions.
     ///
-    /// Results are sorted alphabetically by ability name for deterministic output.
+    /// Results are sorted by fully qualified ability name, then origin, for
+    /// deterministic output even when source and builtin identities share a
+    /// display path.
     pub fn export_ability_defs(&self) -> Vec<(AbilityId<'db>, AbilityInfo<'db>)> {
         let mut result: Vec<_> = self
             .ability_defs
@@ -532,8 +544,36 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.name(self.db)
-                .with_str(|a_str| b.name(self.db).with_str(|b_str| a_str.cmp(b_str)))
+            a.qualified(self.db)
+                .with_str(|a_str| b.qualified(self.db).with_str(|b_str| a_str.cmp(b_str)))
+                .then_with(|| {
+                    ability_origin_rank(a.origin(self.db))
+                        .cmp(&ability_origin_rank(b.origin(self.db)))
+                })
+        });
+        result
+    }
+
+    /// Export prelude ability schemas without a HashMap so Salsa can track them.
+    pub fn export_ability_defs_for_prelude(
+        &self,
+    ) -> Vec<(AbilityId<'db>, Vec<TypeParam>, Vec<AbilityOpInfo<'db>>)> {
+        let mut result: Vec<_> = self
+            .ability_defs
+            .iter()
+            .map(|(id, info)| {
+                let mut operations: Vec<_> = info.operations.values().cloned().collect();
+                operations.sort_by(|a, b| a.name.with_str(|a| b.name.with_str(|b| a.cmp(b))));
+                (*id, info.type_params.clone(), operations)
+            })
+            .collect();
+        result.sort_by(|(a, ..), (b, ..)| {
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
+                .then_with(|| {
+                    ability_origin_rank(a.origin(self.db))
+                        .cmp(&ability_origin_rank(b.origin(self.db)))
+                })
         });
         result
     }
@@ -680,14 +720,24 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 }
 
+fn ability_origin_rank(origin: AbilityOrigin) -> u8 {
+    match origin {
+        AbilityOrigin::Source => 0,
+        AbilityOrigin::Builtin(_) => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    use super::ModuleTypeEnv;
+    use super::{AbilityInfo, ModuleTypeEnv};
     use crate::ast::{
-        CtorId, FuncDefId, NodeId, Type, TypeDefId, TypeKind, TypeOrigin, TypeScheme,
+        AbilityId, AbilityOrigin, BuiltinAbility, CtorId, FuncDefId, NodeId, Type, TypeDefId,
+        TypeKind, TypeOrigin, TypeScheme,
     };
 
     // =========================================================================
@@ -795,6 +845,92 @@ mod tests {
                 Symbol::new("Middle"),
                 Symbol::new("Zebra")
             ]
+        );
+    }
+
+    #[salsa_test]
+    fn id_exports_sort_same_short_names_by_qualified_identity(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let scheme = TypeScheme::mono(db, Type::new(db, TypeKind::Int));
+
+        let function_z = FuncDefId::new(db, Symbol::new("z::same"));
+        let function_a = FuncDefId::new(db, Symbol::new("a::same"));
+        env.register_function(function_z, scheme);
+        env.register_function(function_a, scheme);
+        let functions: Vec<_> = env
+            .export_function_types_with_ids()
+            .into_iter()
+            .filter(|(id, _)| id.name(db) == Symbol::new("same"))
+            .map(|(id, _)| id.qualified(db))
+            .collect();
+        assert_eq!(
+            functions,
+            vec![Symbol::new("a::same"), Symbol::new("z::same")]
+        );
+
+        let constructor_z = CtorId::new(db, Symbol::new("z::same"));
+        let constructor_a = CtorId::new(db, Symbol::new("a::same"));
+        env.register_constructor(constructor_z, scheme);
+        env.register_constructor(constructor_a, scheme);
+        let constructors: Vec<_> = env
+            .export_constructor_types()
+            .into_iter()
+            .filter(|(id, _)| id.name(db) == Symbol::new("same"))
+            .map(|(id, _)| id.qualified(db))
+            .collect();
+        assert_eq!(
+            constructors,
+            vec![Symbol::new("a::same"), Symbol::new("z::same")]
+        );
+
+        let ability_a = AbilityId::source(db, Symbol::new("a::Audit"));
+        let ability_source = AbilityId::source(db, Symbol::new("z::Audit"));
+        let ability_builtin = AbilityId::new(
+            db,
+            AbilityOrigin::Builtin(BuiltinAbility::Io),
+            Symbol::new("z::Audit"),
+        );
+        for ability in [ability_source, ability_builtin, ability_a] {
+            env.register_ability(
+                ability,
+                AbilityInfo {
+                    id: ability,
+                    type_params: vec![],
+                    operations: HashMap::new(),
+                },
+            );
+        }
+        let expected = vec![
+            (Symbol::new("a::Audit"), AbilityOrigin::Source),
+            (Symbol::new("z::Audit"), AbilityOrigin::Source),
+            (
+                Symbol::new("z::Audit"),
+                AbilityOrigin::Builtin(BuiltinAbility::Io),
+            ),
+        ];
+        let ability_keys = |ids: Vec<AbilityId<'_>>| {
+            ids.into_iter()
+                .filter(|id| id.name(db) == Symbol::new("Audit"))
+                .map(|id| (id.qualified(db), id.origin(db)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ability_keys(
+                env.export_ability_defs()
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .collect(),
+            ),
+            expected
+        );
+        assert_eq!(
+            ability_keys(
+                env.export_ability_defs_for_prelude()
+                    .into_iter()
+                    .map(|(id, ..)| id)
+                    .collect(),
+            ),
+            expected
         );
     }
 

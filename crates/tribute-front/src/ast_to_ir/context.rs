@@ -21,6 +21,34 @@ use crate::ast::{
 
 use super::{AstToIrOptions, DoneContinuationPolicy};
 
+/// Encode a tagged type-shape node without relying on separator characters in
+/// source symbols. Each component carries its byte length, so nested keys are
+/// readable in printed IR while still being uniquely decodable.
+fn logical_key<I, S>(tag: &str, parts: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let parts = parts.into_iter().collect::<Vec<_>>();
+    let mut key = format!("{tag}_{}", parts.len());
+    for part in parts {
+        let part = part.as_ref();
+        key.push('_');
+        key.push_str(&part.len().to_string());
+        key.push('_');
+        key.push_str(part);
+    }
+    key
+}
+
+fn logical_convention_key(convention: CallingConvention) -> String {
+    match convention {
+        CallingConvention::Direct => "direct".into(),
+        CallingConvention::EvidenceDirect => "evidence_direct".into(),
+        CallingConvention::Cps => "cps".into(),
+    }
+}
+
 /// Information about a captured variable.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -33,6 +61,16 @@ pub struct CaptureInfo {
     pub ty: TypeRef,
     /// The SSA value in the outer scope.
     pub value: ValueRef,
+}
+
+/// A source-visible callable synthesized by the logical frontend, such as a
+/// struct-field accessor. These signatures are semantic lowering metadata,
+/// not reconstructed by inspecting emitted operations.
+#[derive(Clone)]
+pub(crate) struct LogicalGeneratedSignature {
+    pub param_types: Vec<TypeRef>,
+    pub return_type: TypeRef,
+    pub convention: CallingConvention,
 }
 
 /// Mutable reuse state for helper functions synthesized during lowering.
@@ -66,6 +104,12 @@ pub struct IrLoweringCtx<'db> {
     handler_owner_scopes: Vec<Option<ValueRef>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
+    /// Source-visible generated callables that have no source TypeScheme.
+    logical_generated_signatures: HashMap<Symbol, LogicalGeneratedSignature>,
+    /// Source declarations collected before logical lowering begins.
+    logical_source_functions: HashSet<Symbol>,
+    /// Extern declarations synthesized for referenced prelude functions.
+    logical_emitted_externs: HashSet<Symbol>,
     /// Ability-level calling-convention requirements.
     ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     /// Physical worker conventions for named function definitions.
@@ -90,6 +134,10 @@ pub struct IrLoweringCtx<'db> {
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
     type_map: im::HashMap<Symbol, TypeRef>,
+    /// All source nominal identities collected before source-logical layouts
+    /// are built. This lets recursive and forward fields retain `adt.typeref`
+    /// while their layout is still incomplete.
+    logical_nominal_declarations: HashSet<Symbol>,
     /// Counter for generating unique prompt tags (per-module deterministic).
     prompt_tag_counter: u32,
     /// Stack of active prompt tags for nested handlers.
@@ -139,6 +187,9 @@ impl<'db> IrLoweringCtx<'db> {
             resume_scopes: vec![HashSet::new()],
             handler_owner_scopes: vec![None],
             function_types,
+            logical_generated_signatures: HashMap::new(),
+            logical_source_functions: HashSet::new(),
+            logical_emitted_externs: HashSet::new(),
             ability_conventions,
             definition_conventions: HashMap::new(),
             module_path,
@@ -148,6 +199,7 @@ impl<'db> IrLoweringCtx<'db> {
             module_block: None,
             struct_fields: HashMap::new(),
             type_map: im::HashMap::new(),
+            logical_nominal_declarations: HashSet::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
 
@@ -259,6 +311,52 @@ impl<'db> IrLoweringCtx<'db> {
     /// Look up a function's type scheme by name.
     pub fn lookup_function_type(&self, name: Symbol) -> Option<&TypeScheme<'db>> {
         self.function_types.get(&name)
+    }
+
+    pub(crate) fn register_logical_generated_signature(
+        &mut self,
+        name: Symbol,
+        param_types: Vec<TypeRef>,
+        return_type: TypeRef,
+        convention: CallingConvention,
+    ) {
+        let signature = LogicalGeneratedSignature {
+            param_types,
+            return_type,
+            convention,
+        };
+        if let Some(existing) = self
+            .logical_generated_signatures
+            .insert(name, signature.clone())
+        {
+            assert!(
+                existing.param_types == signature.param_types
+                    && existing.return_type == signature.return_type
+                    && existing.convention == signature.convention,
+                "conflicting logical generated signature for {name}"
+            );
+        }
+    }
+
+    pub(crate) fn lookup_logical_generated_signature(
+        &self,
+        name: Symbol,
+    ) -> Option<&LogicalGeneratedSignature> {
+        self.logical_generated_signatures.get(&name)
+    }
+
+    pub(crate) fn register_logical_source_function(&mut self, name: Symbol) {
+        self.logical_source_functions.insert(name);
+    }
+
+    pub(crate) fn is_logical_source_function(&self, name: Symbol) -> bool {
+        self.logical_source_functions.contains(&name)
+    }
+
+    /// Returns true exactly once for each prelude declaration that must be
+    /// materialized in the logical module.
+    pub(crate) fn mark_logical_extern_emitted(&mut self, name: Symbol) -> bool {
+        self.logical_emitted_externs.insert(name)
     }
 
     /// Derive a function convention from both its effect row and ABI lower bound.
@@ -471,6 +569,11 @@ impl<'db> IrLoweringCtx<'db> {
         self.type_map.get(&name).copied()
     }
 
+    /// Mark a nominal source type as known before its layout is complete.
+    pub fn declare_logical_nominal(&mut self, name: Symbol) {
+        self.logical_nominal_declarations.insert(name);
+    }
+
     /// Resolve an AST type to its registered ADT IR type (struct or enum).
     ///
     /// For `Named { name, .. }` types, looks up the type_map by name.
@@ -518,9 +621,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => {
-                // TODO(#621): Never values are never produced at runtime; using
-                // anyref as a placeholder causes Cranelift type mismatches in
-                // case branches mixing Never with concrete types.
+                // Legacy frontend CPS has no logical bottom representation.
                 self.anyref_type(ir)
             }
             TypeKind::BoundVar { .. } => {
@@ -535,26 +636,177 @@ impl<'db> IrLoweringCtx<'db> {
                 );
                 self.anyref_type(ir)
             }
-            TypeKind::Named { .. } => {
-                // Type erasure: struct/enum → tribute_rt.any
-                self.anyref_type(ir)
-            }
+            TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func { params, result, .. } => {
                 let param_refs: Vec<TypeRef> =
                     params.iter().map(|p| self.convert_type(ir, *p)).collect();
                 let result_ref = self.convert_type(ir, *result);
                 self.func_type(ir, &param_refs, result_ref)
             }
-            TypeKind::Tuple(_) => {
-                // Type erasure: tuple → tribute_rt.any
-                self.anyref_type(ir)
-            }
+            TypeKind::Tuple(_) => self.anyref_type(ir),
             TypeKind::App { ctor, .. } => self.convert_type(ir, *ctor),
-            TypeKind::Continuation { .. } => {
-                // CPS: continuations are represented as anyref-typed closures
-                self.anyref_type(ir)
+            TypeKind::Continuation { .. } => self.anyref_type(ir),
+        }
+    }
+
+    /// Convert a source type at the source-logical `tribute_control` boundary.
+    /// This is deliberately separate from `convert_type`, which remains the
+    /// physical representation consumed by the explicit pre-#825 legacy path.
+    pub fn convert_logical_type(&self, ir: &mut IrContext, ty: crate::ast::Type<'db>) -> TypeRef {
+        match ty.kind(self.db) {
+            TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
+            TypeKind::Float => self.f64_type(ir),
+            TypeKind::Bool => self.bool_type(ir),
+            TypeKind::Bytes => self.bytes_type(ir),
+            TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
+            TypeKind::Never => core::never(ir).as_type_ref(),
+            TypeKind::BoundVar { .. } | TypeKind::UniVar { .. } => self.anyref_type(ir),
+            TypeKind::Named { name, .. }
+                if self.get_type(*name).is_some()
+                    || self.logical_nominal_declarations.contains(name) =>
+            {
+                self.adt_typeref(ir, *name)
+            }
+            TypeKind::Named { .. } => self.anyref_type(ir),
+            TypeKind::Func { params, result, .. } => {
+                let params = params
+                    .iter()
+                    .map(|param| self.convert_logical_type(ir, *param))
+                    .collect::<Vec<_>>();
+                let result = self.convert_logical_type(ir, *result);
+                let convention = self
+                    .calling_convention_for_type(ty)
+                    .unwrap_or(crate::ast::CallingConvention::Cps);
+                tribute_ir::dialect::tribute_control::callable(
+                    ir,
+                    result,
+                    params,
+                    match convention {
+                        crate::ast::CallingConvention::Direct => {
+                            tribute_ir::dialect::tribute_control::CallingConvention::Direct
+                        }
+                        crate::ast::CallingConvention::EvidenceDirect => {
+                            tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect
+                        }
+                        crate::ast::CallingConvention::Cps => {
+                            tribute_ir::dialect::tribute_control::CallingConvention::Cps
+                        }
+                    },
+                )
+                .as_type_ref()
+            }
+            TypeKind::Tuple(elements) => {
+                let fields = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        (
+                            Symbol::from_dynamic(&index.to_string()),
+                            self.convert_logical_type(ir, *element),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let name = self.logical_tuple_name(ty);
+                self.adt_struct_type(ir, name, &fields);
+                self.adt_typeref(ir, name)
+            }
+            TypeKind::App { ctor, .. } => self.convert_logical_type(ir, *ctor),
+            TypeKind::Continuation { arg, result, .. } => {
+                let arg = self.convert_logical_type(ir, *arg);
+                let result = self.convert_logical_type(ir, *result);
+                ir.types.intern(
+                    TypeDataBuilder::new(
+                        Symbol::new("tribute_control"),
+                        Symbol::new("resume_token"),
+                    )
+                    .param(arg)
+                    .param(result)
+                    .build(),
+                )
             }
         }
+    }
+
+    /// Canonical nominal name for a source-logical tuple layout.  Do not use
+    /// arena dialect type names here: distinct callable signatures all share
+    /// the `tribute_control.callable` dialect name.
+    pub fn logical_tuple_name(&self, ty: crate::ast::Type<'db>) -> Symbol {
+        Symbol::from_dynamic(&format!("__logical_tuple_{}", self.logical_type_key(ty)))
+    }
+
+    fn logical_type_key(&self, ty: crate::ast::Type<'db>) -> String {
+        match ty.kind(self.db) {
+            TypeKind::Int => "int".into(),
+            TypeKind::Nat => "nat".into(),
+            TypeKind::Float => "float".into(),
+            TypeKind::Bool => "bool".into(),
+            TypeKind::Bytes => "bytes".into(),
+            TypeKind::Rune => "rune".into(),
+            TypeKind::Nil => "nil".into(),
+            TypeKind::Never => "never".into(),
+            TypeKind::Error => "error".into(),
+            TypeKind::BoundVar { index } => logical_key("bound", [index.to_string()]),
+            TypeKind::UniVar { id } => self.logical_univar_key(*id),
+            TypeKind::Named { id, name, args } => {
+                let mut parts = vec![self.logical_nominal_key(*id, *name)];
+                parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
+                logical_key("named", parts)
+            }
+            TypeKind::Func { params, result, .. } => {
+                let mut parts = vec![params.len().to_string()];
+                parts.extend(params.iter().map(|param| self.logical_type_key(*param)));
+                parts.push(self.logical_type_key(*result));
+                parts.push(logical_convention_key(
+                    self.calling_convention_for_type(ty)
+                        .unwrap_or(crate::ast::CallingConvention::Cps),
+                ));
+                logical_key("callable", parts)
+            }
+            TypeKind::Tuple(elements) => {
+                let mut parts = vec![elements.len().to_string()];
+                parts.extend(
+                    elements
+                        .iter()
+                        .map(|element| self.logical_type_key(*element)),
+                );
+                logical_key("tuple", parts)
+            }
+            TypeKind::App { ctor, args } => {
+                let mut parts = vec![args.len().to_string(), self.logical_type_key(*ctor)];
+                parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
+                logical_key("app", parts)
+            }
+            TypeKind::Continuation { arg, result, .. } => logical_key(
+                "resume",
+                [self.logical_type_key(*arg), self.logical_type_key(*result)],
+            ),
+        }
+    }
+
+    fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: Symbol) -> String {
+        let origin = match id.origin(self.db) {
+            crate::ast::TypeOrigin::Source(_) => "source".into(),
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
+            crate::ast::TypeOrigin::Synthetic => "synthetic".into(),
+        };
+        logical_key("nominal", [origin, name.with_str(str::to_owned)])
+    }
+
+    fn logical_univar_key(&self, id: crate::ast::UniVarId<'db>) -> String {
+        use crate::ast::UniVarSource;
+
+        let source = match id.source(self.db) {
+            UniVarSource::FunctionLocal { func_id, index } => logical_key(
+                "function_local",
+                [
+                    func_id.qualified(self.db).with_str(str::to_owned),
+                    index.to_string(),
+                ],
+            ),
+            UniVarSource::Anonymous(index) => logical_key("anonymous", [index.to_string()]),
+            UniVarSource::Solver { index } => logical_key("solver", [index.to_string()]),
+        };
+        logical_key("univar", [source, id.index(self.db).to_string()])
     }
 
     /// Convert an AST EffectRow to an arena TypeRef.
@@ -892,6 +1144,7 @@ impl Drop for PromptTagGuard<'_, '_> {
 mod tests {
     use super::*;
     use crate::ast::{Type as AstType, TypeKind};
+    use trunk_ir::ops::DialectType;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -998,6 +1251,271 @@ mod tests {
         let ir_ty = ctx.convert_type(&mut ir, ty);
         let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
+    }
+
+    /// The logical frontend boundary has its own recursive conversion: source
+    /// callables, bottom values, resumptions, tuple layouts, and forward
+    /// nominals must never fall back to the physical `core.func` carrier.
+    #[test]
+    fn test_convert_logical_types_preserves_recursive_control_shapes() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("test.trb".to_owned());
+        let mut ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+        let int = AstType::new(&db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(&db);
+        let callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let logical_callable = ctx.convert_logical_type(&mut ir, callable);
+        let i32_ty = ctx.i32_type(&mut ir);
+        let signature =
+            tribute_ir::dialect::tribute_control::Callable::from_type_ref(&ir, logical_callable)
+                .expect("logical function type must be a control callable");
+        assert_eq!(signature.result(&ir), i32_ty);
+        assert_eq!(signature.params(&ir), &[i32_ty]);
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, logical_callable),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::Direct)
+        );
+
+        let never = AstType::new(&db, TypeKind::Never);
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, never),
+            core::never(&mut ir).as_type_ref()
+        );
+
+        let resume = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect,
+            },
+        );
+        let resume = ctx.convert_logical_type(&mut ir, resume);
+        let resume_data = ir.types.get(resume);
+        assert_eq!(resume_data.dialect, Symbol::new("tribute_control"));
+        assert_eq!(resume_data.name, Symbol::new("resume_token"));
+
+        let tuple = AstType::new(&db, TypeKind::Tuple(vec![callable, never]));
+        let tuple_name = ctx.logical_tuple_name(tuple);
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, tuple),
+            ctx.adt_typeref(&mut ir, tuple_name)
+        );
+
+        let nominal_name = Symbol::new("Forward");
+        ctx.declare_logical_nominal(nominal_name);
+        let forward = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: nominal_name,
+                args: vec![],
+            },
+        );
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, forward),
+            ctx.adt_typeref(&mut ir, nominal_name)
+        );
+
+        let generated = Symbol::new("Forward::value");
+        ctx.register_logical_generated_signature(
+            generated,
+            vec![i32_ty],
+            i32_ty,
+            CallingConvention::Direct,
+        );
+        // Re-registering the exact semantic signature is a deterministic
+        // no-op; a conflicting signature remains fail-closed in the lowering
+        // context rather than being silently replaced.
+        ctx.register_logical_generated_signature(
+            generated,
+            vec![i32_ty],
+            i32_ty,
+            CallingConvention::Direct,
+        );
+        let generated_signature = ctx
+            .lookup_logical_generated_signature(generated)
+            .expect("generated logical signature must be retained");
+        assert_eq!(generated_signature.param_types, vec![i32_ty]);
+        assert_eq!(generated_signature.return_type, i32_ty);
+        assert_eq!(generated_signature.convention, CallingConvention::Direct);
+
+        let source_function = Symbol::new("Forward::run");
+        ctx.register_logical_source_function(source_function);
+        assert!(ctx.is_logical_source_function(source_function));
+        assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
+        assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
+
+        ctx.enter_module(Symbol::new("Nested"));
+        assert_eq!(
+            ctx.qualify_name(Symbol::new("run")),
+            Symbol::new("Nested::run")
+        );
+        ctx.exit_module();
+
+        let erased_cases = [
+            AstType::new(&db, TypeKind::BoundVar { index: 0 }),
+            AstType::new(
+                &db,
+                TypeKind::UniVar {
+                    id: crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0),
+                },
+            ),
+            AstType::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::builtin_list(&db),
+                    name: Symbol::new("Undeclared"),
+                    args: vec![],
+                },
+            ),
+        ];
+        let anyref = ctx.anyref_type(&mut ir);
+        for source_ty in erased_cases {
+            assert_eq!(ctx.convert_logical_type(&mut ir, source_ty), anyref);
+        }
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, AstType::new(&db, TypeKind::Error)),
+            ctx.nil_type(&mut ir)
+        );
+        let applied_forward = AstType::new(
+            &db,
+            TypeKind::App {
+                ctor: forward,
+                args: vec![int],
+            },
+        );
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, applied_forward),
+            ctx.adt_typeref(&mut ir, nominal_name)
+        );
+
+        let evidence_callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::EvidenceDirect,
+            },
+        );
+        let cps_callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: CallingConvention::Cps,
+            },
+        );
+        let evidence_ir = ctx.convert_logical_type(&mut ir, evidence_callable);
+        let cps_ir = ctx.convert_logical_type(&mut ir, cps_callable);
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, evidence_ir),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect)
+        );
+        assert_eq!(
+            tribute_ir::dialect::tribute_control::callable_convention(&ir, cps_ir),
+            Some(tribute_ir::dialect::tribute_control::CallingConvention::Cps)
+        );
+
+        let continuation_key = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect,
+            },
+        );
+        let univar_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(1), 1),
+            },
+        );
+        let error_key = AstType::new(&db, TypeKind::Error);
+        let list_key = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: Symbol::new("List"),
+                args: vec![int],
+            },
+        );
+        let function_local_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(
+                    &db,
+                    crate::ast::UniVarSource::FunctionLocal {
+                        func_id: crate::ast::FuncDefId::new(&db, Symbol::new("Nested::key")),
+                        index: 2,
+                    },
+                    0,
+                ),
+            },
+        );
+        let solver_key = AstType::new(
+            &db,
+            TypeKind::UniVar {
+                id: crate::ast::UniVarId::new(
+                    &db,
+                    crate::ast::UniVarSource::Solver { index: 2 },
+                    0,
+                ),
+            },
+        );
+        let structural_tuple = AstType::new(
+            &db,
+            TypeKind::Tuple(vec![
+                evidence_callable,
+                cps_callable,
+                applied_forward,
+                continuation_key,
+                univar_key,
+                error_key,
+                list_key,
+                function_local_key,
+                solver_key,
+            ]),
+        );
+        let structural_name = ctx.logical_tuple_name(structural_tuple);
+        let structural_text = structural_name.with_str(str::to_owned);
+        assert!(
+            structural_text.contains("callable")
+                && structural_text.contains("evidence_direct")
+                && structural_text.contains("cps")
+                && structural_text.contains("app")
+                && structural_text.contains("resume")
+                && structural_text.contains("univar")
+                && structural_text.contains("error")
+                && structural_text.contains("builtin_list")
+                && structural_text.contains("function_local")
+                && structural_text.contains("solver"),
+            "logical tuple keys must retain full recursive callable and value shapes"
+        );
+        let function_local_name =
+            ctx.logical_tuple_name(AstType::new(&db, TypeKind::Tuple(vec![function_local_key])));
+        let solver_name =
+            ctx.logical_tuple_name(AstType::new(&db, TypeKind::Tuple(vec![solver_key])));
+        assert_ne!(function_local_name, solver_name);
     }
 
     #[test]

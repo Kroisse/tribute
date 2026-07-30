@@ -3,18 +3,24 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  !__tuple_i1_i1_i1_i1_i1_i1 = adt.struct() {fields = [[@0, core.i1], [@1, core.i1], [@2, core.i1], [@3, core.i1], [@4, core.i1], [@5, core.i1]], name = @__tuple_i1_i1_i1_i1_i1_i1}
-  !__tuple_i1_i1_i1_i1_i1_i1_1 = adt.typeref() {name = @__tuple_i1_i1_i1_i1_i1_i1}
+  !t0 = tribute_control.callable(core.i1, core.f64, core.f64) {tribute.calling_convention = 0}
+  !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool = adt.struct() {fields = [[@0, core.i1], [@1, core.i1], [@2, core.i1], [@3, core.i1], [@4, core.i1], [@5, core.i1]], name = @__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool}
+  !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1 = adt.typeref() {name = @__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool}
 
-  func.func @comparisons(%0: core.f64, %1: core.f64) -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
-      %2 = func.call %0, %1 {callee = @"Float::==", tribute.calling_convention = 0} : core.i1
-      %3 = func.call %0, %1 {callee = @"Float::!=", tribute.calling_convention = 0} : core.i1
-      %4 = func.call %0, %1 {callee = @"Float::<", tribute.calling_convention = 0} : core.i1
-      %5 = func.call %0, %1 {callee = @"Float::<=", tribute.calling_convention = 0} : core.i1
-      %6 = func.call %0, %1 {callee = @"Float::>", tribute.calling_convention = 0} : core.i1
-      %7 = func.call %0, %1 {callee = @"Float::>=", tribute.calling_convention = 0} : core.i1
-      %8 = adt.struct_new %2, %3, %4, %5, %6, %7 {type = !__tuple_i1_i1_i1_i1_i1_i1} : !__tuple_i1_i1_i1_i1_i1_i1_1
-      %9 = core.unrealized_conversion_cast %8 : tribute_rt.anyref
-      func.return %9
+  tribute_control.func @"Float::=="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"Float::!="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"Float::<"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"Float::<="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"Float::>"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"Float::>="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @comparisons(%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1 convention(cps) {
+      %2 = tribute_control.call %0, %1 {callee = @"Float::=="} : core.i1
+      %3 = tribute_control.call %0, %1 {callee = @"Float::!="} : core.i1
+      %4 = tribute_control.call %0, %1 {callee = @"Float::<"} : core.i1
+      %5 = tribute_control.call %0, %1 {callee = @"Float::<="} : core.i1
+      %6 = tribute_control.call %0, %1 {callee = @"Float::>"} : core.i1
+      %7 = tribute_control.call %0, %1 {callee = @"Float::>="} : core.i1
+      %8 = adt.struct_new %2, %3, %4, %5, %6, %7 {type = !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool} : !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1
+      tribute_control.return %8
   }
 }

@@ -1,10 +1,9 @@
-//! Tests for evidence parameter insertion during AST-to-IR lowering.
+//! Tests for source-logical effectful callables during AST-to-IR lowering.
 //!
 //! Verifies that:
-//! - Effectful functions receive `(evidence, done_k, params...)` in their signature
-//! - Effectful call sites pass evidence as the first argument
-//! - Pure functions do not have evidence parameters
-//! - Pure contexts create null evidence when calling effectful functions
+//! - Effectful functions expose only their source-visible signature
+//! - Effectful calls remain logical `tribute_control.call` operations
+//! - A pure source context installs a logical handler without frontend evidence
 
 mod common;
 
@@ -13,7 +12,7 @@ use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
-/// Effectful function should have evidence as first block arg, before done_k.
+/// Effectful functions retain only source-visible parameters and results.
 #[salsa_test]
 fn test_effectful_func_has_evidence_param(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -36,8 +35,7 @@ fn main() { }
     assert_snapshot!(ir_text);
 }
 
-/// Direct call to an effectful function from another effectful function
-/// should pass the caller's evidence as the first argument.
+/// Direct calls between effectful source functions remain logical calls.
 #[salsa_test]
 fn test_effectful_call_passes_evidence(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -66,8 +64,7 @@ fn main() { }
     assert_snapshot!(ir_text);
 }
 
-/// Pure function calling an effectful function through a handler should
-/// create null evidence for the outer call context.
+/// A pure function handling an effectful call introduces no frontend evidence.
 #[salsa_test]
 fn test_pure_context_creates_null_evidence(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

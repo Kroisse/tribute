@@ -5,17 +5,26 @@ expression: ir_text
 core.module @test {
   !Option = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
 
-  func.func @unwrap_or(%0: tribute_rt.anyref, %1: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+  tribute_control.func @unwrap_or(%0: adt.typeref() {name = @Option}, %1: core.i32) -> core.i32 convention(cps) {
       %2 = adt.variant_is %0 {tag = @Some, type = !Option} : core.i1
-      %3 = scf.if %2 : core.i32 {
+      %3 = scf.if %2 : core.i1 {
           %4 = adt.variant_cast %0 {tag = @Some, type = !Option} : !Option
           %5 = adt.variant_get %4 {field = 0, tag = @Some, type = !Option} : tribute_rt.anyref
-          %6 = core.unrealized_conversion_cast %5 : core.i32
+          %6 = arith.const {value = true} : core.i1
           scf.yield %6
       } {
-          %7 = adt.variant_cast %0 {tag = @None, type = !Option} : !Option
+          %7 = arith.const {value = false} : core.i1
+          scf.yield %7
+      }
+      %8 = scf.if %3 : core.i32 {
+          %9 = adt.variant_cast %0 {tag = @Some, type = !Option} : !Option
+          %10 = adt.variant_get %9 {field = 0, tag = @Some, type = !Option} : tribute_rt.anyref
+          %11 = core.unrealized_conversion_cast %10 : core.i32
+          scf.yield %11
+      } {
+          %12 = adt.variant_cast %0 {tag = @None, type = !Option} : !Option
           scf.yield %1
       }
-      func.return %3
+      tribute_control.return %8
   }
 }

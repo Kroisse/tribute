@@ -3,8 +3,8 @@
 //! These tests verify that lambda expressions with effects have their
 //! effect types correctly propagated to the lifted IR functions.
 //!
-//! This is critical for the evidence pass to correctly identify which
-//! lifted lambdas need evidence parameters.
+//! This ensures the source-logical callable and lambda forms preserve the
+//! checker-selected calling convention without frontend evidence parameters.
 
 mod common;
 
@@ -12,40 +12,6 @@ use self::common::run_ast_pipeline_with_ir;
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-
-fn assert_shared_normal_done_k(ir_text: &str, expected_references: usize) {
-    let lines: Vec<_> = ir_text.lines().collect();
-    let normal_done_k_headers: Vec<_> = lines
-        .windows(3)
-        .filter_map(|window| {
-            let header = window[0].trim_start();
-            (header.starts_with("func.func ")
-                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
-                && window[1].trim()
-                    == "%3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref"
-                && window[2].trim() == "func.return %3")
-                .then_some(header)
-        })
-        .collect();
-    assert_eq!(
-        normal_done_k_headers.len(),
-        1,
-        "Normal done_k should have one function definition per compilation unit"
-    );
-
-    let normal_done_k_symbol = normal_done_k_headers[0]
-        .strip_prefix("func.func ")
-        .expect("Normal done_k header should start with func.func")
-        .split('(')
-        .next()
-        .expect("Normal done_k header should contain a parameter list");
-    let normal_done_k_ref = format!("func_ref = {normal_done_k_symbol}");
-    assert_eq!(
-        ir_text.matches(&normal_done_k_ref).count(),
-        expected_references,
-        "all Normal done_k closures should reference the shared function"
-    );
-}
 
 // ========================================================================
 // Pure Lambda Tests - No Effect Expected
@@ -105,8 +71,8 @@ fn test_effectful_lambda_direct_ability_call(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
@@ -138,8 +104,8 @@ fn test_effectful_lambda_indirect_effect_call(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn counter() ->{State(Int)} Int {
@@ -174,8 +140,8 @@ fn test_effectful_lambda_multiple_operations(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
@@ -218,8 +184,8 @@ fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
@@ -246,8 +212,8 @@ fn test_ability_core_full_pattern(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn counter() ->{State(Int)} Int {
@@ -275,9 +241,8 @@ fn main() -> Int {
     );
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
-    // The root source boundary has one shared private `Normal` completion;
-    // operation-arm completion closures are owner-tagged `Escape`s instead.
-    assert_shared_normal_done_k(&ir_text, 1);
+    assert!(ir_text.contains("tribute_control.lambda"));
+    assert!(!ir_text.contains("__tribute_cps_control"));
     assert_snapshot!(ir_text);
 }
 
@@ -293,7 +258,7 @@ fn test_nested_lambda_inner_effectful(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
+    op get() -> s
 }
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
@@ -332,8 +297,8 @@ fn test_lambda_effect_row_unification(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
@@ -354,4 +319,59 @@ fn main() -> Nat {
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
+}
+
+/// Contextual generic rows must retain one solved logical signature regardless
+/// of harmless body wrapping.  In particular, lowering must not recover a
+/// lambda result by recognizing a perform-shaped AST body.
+#[salsa_test]
+fn test_generic_effect_lambda_wrappers_share_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle f() {
+        do result { result }
+        op State::get() { with_state(fn() { resume init }, init) }
+    }
+}
+
+fn main() -> Nat {
+    let direct = with_state(fn() { State::get() }, 42)
+    let empty_block = with_state(fn() { { State::get() } }, 42)
+    let let_wrapped = with_state(fn() {
+        let value = State::get()
+        value
+    }, 42)
+    let case_wrapped = with_state(fn() {
+        case State::get() {
+            value -> value
+        }
+    }, 42)
+    direct + empty_block + let_wrapped + case_wrapped
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_eq!(
+        ir_text
+            .match_indices("tribute_control.lambda() -> core.i32 convention(cps)")
+            .count(),
+        4,
+        "every direct or wrapped generic State operation lambda must retain the same solved signature:\n{ir_text}"
+    );
+    let main = ir_text
+        .split("tribute_control.func @main")
+        .nth(1)
+        .expect("fixture must lower root main");
+    assert!(
+        !main.contains("tribute_control.lambda() -> tribute_rt.anyref"),
+        "the four main lambdas must not erase their result:\n{main}"
+    );
 }

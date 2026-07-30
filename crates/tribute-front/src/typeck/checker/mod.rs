@@ -44,10 +44,27 @@ pub struct ModuleCheckResult<'db> {
     pub module: Module<TypedRef<'db>>,
     /// Function type schemes (name → polymorphic type).
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    /// Constructor type schemes retain exact nominal field types for logical
+    /// layout construction.
+    pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
     pub node_types: Vec<(NodeId, Type<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
+    /// Exact semantic operation instances for handler arms.
+    pub handler_operations: Vec<(NodeId, crate::typeck::InstantiatedHandlerOperation<'db>)>,
+    /// Exact semantic operation instances for ability-operation calls.
+    pub perform_operations: Vec<(NodeId, crate::typeck::InstantiatedPerformOperation<'db>)>,
+    /// Fully solved source-callable signatures for lambda expressions.
+    pub lambda_signatures: Vec<(NodeId, crate::typeck::LambdaSignature<'db>)>,
+    /// Case expression nodes whose coverage was proved exhaustive.
+    pub exhaustive_cases: Vec<NodeId>,
+    /// Resolved ability operation schemas retained for source-logical IR
+    /// declaration metadata.
+    pub ability_definitions: Vec<(
+        crate::ast::AbilityId<'db>,
+        crate::typeck::context::AbilityInfo<'db>,
+    )>,
     /// Prelude-defined semantic type identities.
     pub well_known_types: WellKnownTypes<'db>,
 }
@@ -76,6 +93,11 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
+    /// Exact handler operation instances collected from each checked function.
+    handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
 }
@@ -109,6 +131,10 @@ impl<'db> TypeChecker<'db> {
             prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
+            handler_operations: HashMap::new(),
+            perform_operations: HashMap::new(),
+            lambda_signatures: HashMap::new(),
+            exhaustive_cases: Vec::new(),
             effect_annotation_origins: HashMap::new(),
         }
     }
@@ -201,13 +227,22 @@ impl<'db> TypeChecker<'db> {
 
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
+        let constructor_types = self.env.export_constructor_types();
         let ability_conventions = self.env.export_ability_conventions();
+        let ability_definitions = self.env.export_ability_defs();
         let well_known_types = self.env.well_known_types();
 
         // Convert node_types HashMap to Vec for Salsa compatibility
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
+        let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
+        handler_operations.sort_by_key(|(id, _)| *id);
+        let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
+        perform_operations.sort_by_key(|(id, _)| *id);
+        let mut lambda_signatures: Vec<_> = self.lambda_signatures.into_iter().collect();
+        lambda_signatures.sort_by_key(|(id, _)| *id);
+        self.exhaustive_cases.sort();
 
         ModuleCheckResult {
             module: Module {
@@ -216,8 +251,14 @@ impl<'db> TypeChecker<'db> {
                 decls,
             },
             function_types,
+            constructor_types,
             node_types,
             ability_conventions,
+            handler_operations,
+            perform_operations,
+            lambda_signatures,
+            exhaustive_cases: self.exhaustive_cases,
+            ability_definitions,
             well_known_types,
         }
     }
@@ -253,6 +294,7 @@ impl<'db> TypeChecker<'db> {
         let enum_variants = self.env.export_enum_variants();
         let method_index = self.env.export_method_index();
         let ability_conventions = self.env.export_ability_conventions();
+        let ability_definitions = self.env.export_ability_defs_for_prelude();
         let well_known_types = WellKnownTypes {
             string: string_type,
         };
@@ -266,6 +308,7 @@ impl<'db> TypeChecker<'db> {
             enum_variants,
             method_index,
             ability_conventions,
+            ability_definitions,
             well_known_types,
         )
     }

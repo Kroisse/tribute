@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/case_type.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @to_nat(%0: core.i1) -> core.i32 attributes {tribute.calling_convention = 0} {
+  tribute_control.func @to_nat(%0: core.i1) -> core.i32 convention(cps) {
       %1 = arith.const {value = true} : core.i1
       %2 = arith.cmpi %0, %1 {predicate = @eq} : core.i1
       %3 = scf.if %2 : core.i32 {
@@ -13,6 +13,6 @@ core.module @test {
           %5 = arith.const {value = 0} : core.i32
           scf.yield %5
       }
-      func.return %3
+      tribute_control.return %3
   }
 }

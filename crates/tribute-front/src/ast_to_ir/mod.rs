@@ -13,13 +13,16 @@
 //!
 //! ## Output Format
 //!
-//! The generated TrunkIR uses dialects:
-//! - `func`: Functions, calls, returns
+//! The source-logical frontend output uses dialects:
+//! - `tribute_control`: Source callables, ability operations, and handlers
 //! - `arith`: Arithmetic operations, constants
 //! - `adt`: Struct/enum construction, field access
 //! - `scf`: Structured control flow (if, case)
-//! - `cont`: Continuation-based control flow (handle, shift)
-//! - `closure`: Closure creation
+//! - `list`: Source list values and observations
+//!
+//! The old physical `func`/continuation/closure route is kept only through the
+//! explicit temporary legacy entry below until shared CPS composition moves to
+//! the driver.
 //!
 //! ## Arena IR
 //!
@@ -32,6 +35,7 @@ mod normalize;
 
 use std::collections::HashMap;
 
+use tribute_ir::dialect::tribute_control::OperationDeclaration;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
@@ -41,6 +45,16 @@ use crate::ast::{
 };
 
 pub use context::IrLoweringCtx;
+
+/// The source-logical frontend boundary.
+///
+/// `operation_declarations` is semantic metadata, deliberately kept outside
+/// textual TrunkIR.  The shared CPS conversion consumes this exact set rather
+/// than attempting to reconstruct source declarations from lowered ops.
+pub struct FrontendIrModule {
+    pub module: IrModule,
+    pub operation_declarations: Vec<OperationDeclaration>,
+}
 
 /// Policy for compiler-generated identity done continuations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
@@ -85,8 +99,16 @@ pub struct TypedModule<'db> {
     pub ast: AstModule<TypedRef<'db>>,
     pub span_map: SpanMap,
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
+    pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    pub handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    /// Solved source-callable signatures for lambda expressions.
+    pub lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    /// Case expressions whose source coverage is known to be exhaustive.
+    pub exhaustive_cases: std::collections::HashSet<NodeId>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
 }
 
@@ -99,12 +121,18 @@ impl<'db> TypedModule<'db> {
         db: &'db dyn salsa::Database,
         ir: &mut IrContext,
         source_uri: &str,
-    ) -> IrModule {
-        self.lower_to_ir_with_options(db, ir, source_uri, AstToIrOptions::production())
+    ) -> FrontendIrModule {
+        let path = ir.paths.intern(source_uri.to_owned());
+        self.lower_module(db, ir, path)
     }
 
-    /// Lower this typed module with explicit optimization selection.
-    pub fn lower_to_ir_with_options(
+    /// Temporary compatibility entry for the pre-#825 driver routing.
+    ///
+    /// New frontend consumers must use [`Self::lower_to_ir`].  This explicit
+    /// legacy entry is configured by `AstToIrOptions`, which apply only to
+    /// that physical compatibility route, until the driver composes shared CPS.
+    #[doc(hidden)]
+    pub fn lower_to_legacy_ir_with_options(
         self,
         db: &'db dyn salsa::Database,
         ir: &mut IrContext,
@@ -112,7 +140,7 @@ impl<'db> TypedModule<'db> {
         options: AstToIrOptions,
     ) -> IrModule {
         let path = ir.paths.intern(source_uri.to_owned());
-        self.lower_module(db, ir, path, options)
+        self.lower_module_legacy(db, ir, path, options)
     }
 }
 

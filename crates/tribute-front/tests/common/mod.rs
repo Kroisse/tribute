@@ -97,20 +97,43 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
+    let constructor_types: std::collections::HashMap<_, _> =
+        result.constructor_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let ability_conventions: std::collections::HashMap<_, _> =
         result.ability_conventions.into_iter().collect();
+    let ability_definitions: std::collections::HashMap<_, _> =
+        result.ability_definitions.into_iter().collect();
+    let handler_operations: std::collections::HashMap<_, _> =
+        result.handler_operations.into_iter().collect();
+    let perform_operations: std::collections::HashMap<_, _> =
+        result.perform_operations.into_iter().collect();
     let mut ir = IrContext::new();
     let module = tribute_front::ast_to_ir::TypedModule {
         ast: tdnr_ast,
         span_map,
         function_types: function_types_map,
+        constructor_types,
         node_types: node_types_map,
         ability_conventions,
+        ability_definitions,
+        handler_operations,
+        perform_operations,
+        lambda_signatures: result.lambda_signatures.into_iter().collect(),
+        exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
         well_known_types: result.well_known_types,
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
-    print_module(&ir, module.op())
+    let validation = tribute_ir::dialect::tribute_control::validate(
+        &ir,
+        module.module,
+        &module.operation_declarations,
+    );
+    assert!(
+        validation.is_ok(),
+        "logical frontend output must validate: {validation}"
+    );
+    print_module(&ir, module.module.op())
 }
 
 #[salsa::tracked]

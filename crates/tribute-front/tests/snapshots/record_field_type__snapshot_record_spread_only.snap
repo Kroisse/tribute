@@ -4,24 +4,21 @@ expression: ir_text
 ---
 core.module @test {
   !Config = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}
+  !Config_1 = adt.typeref() {name = @Config}
+  !t0 = tribute_control.callable(core.i1, !Config_1) {tribute.calling_convention = 0}
 
-  core.module @Config {
-    !Config_1 = adt.typeref() {name = @Config}
-
-    func.func @"Config::debug"(%0: !Config_1) -> core.i1 {
-        %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
-        func.return %1
-    }
-    func.func @"Config::verbose"(%0: !Config_1) -> core.i1 {
-        %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
-        func.return %1
-    }
+  tribute_control.func @"Config::debug"(%0: !Config_1) -> core.i1 convention(direct) {
+      %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
+      tribute_control.return %1
   }
-  func.func @copy_config(%0: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 0} {
-      %1 = adt.struct_get %0 {field = 0, type = !Config} : tribute_rt.anyref
-      %2 = adt.struct_get %0 {field = 1, type = !Config} : tribute_rt.anyref
-      %3 = adt.struct_new %1, %2 {type = !Config} : adt.typeref() {name = @Config}
-      %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
-      func.return %4
+  tribute_control.func @"Config::verbose"(%0: !Config_1) -> core.i1 convention(direct) {
+      %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
+      tribute_control.return %1
+  }
+  tribute_control.func @copy_config(%0: !Config_1) -> !Config_1 convention(cps) {
+      %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
+      %2 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
+      %3 = adt.struct_new %1, %2 {type = !Config} : !Config_1
+      tribute_control.return %3
   }
 }
