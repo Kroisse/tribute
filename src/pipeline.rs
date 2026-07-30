@@ -283,8 +283,14 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         db,
         tdnr_ast,
         result.function_types,
+        result.constructor_types,
         result.node_types,
         result.ability_conventions,
+        ast_typeck::ability_schemas(&result.ability_definitions),
+        result.handler_operations,
+        result.perform_operations,
+        result.lambda_signatures,
+        result.exhaustive_cases,
         result.well_known_types,
         span_map,
     ))
@@ -429,11 +435,19 @@ fn merge_and_lower_to_ir<'db>(
         ast: merged_module,
         span_map: merged_span_map,
         function_types: merged_fn_types,
+        constructor_types: typed.constructor_types(db).iter().cloned().collect(),
         node_types: merged_node_types,
         ability_conventions: merged_ability_conventions,
+        ability_definitions: ast_typeck::ability_definitions_from_schemas(
+            typed.ability_definitions(db),
+        ),
+        handler_operations: typed.handler_operations(db).iter().cloned().collect(),
+        perform_operations: typed.perform_operations(db).iter().cloned().collect(),
+        lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
+        exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
         well_known_types: typed.well_known_types(db),
     }
-    .lower_to_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
+    .lower_to_legacy_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
 
     (ir, module)
 }
@@ -1300,8 +1314,14 @@ pub fn parse_and_lower_ast<'db>(
         db,
         tdnr_ast,
         result.function_types,
+        result.constructor_types,
         result.node_types,
         result.ability_conventions,
+        ast_typeck::ability_schemas(&result.ability_definitions),
+        result.handler_operations,
+        result.perform_operations,
+        result.lambda_signatures,
+        result.exhaustive_cases,
         result.well_known_types,
         span_map,
     ))
@@ -1691,6 +1711,28 @@ mod tests {
         assert!(result.is_some(), "Should compile successfully");
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[salsa_test]
+    fn pre_825_legacy_route_has_no_logical_control_leak(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "legacy-route.trb",
+            "fn identity(value: fn(Int) -> Int) -> Int { value(+1) }\nfn main() { }",
+        );
+        let (ctx, module) = compile_frontend(db, source)
+            .expect("legacy frontend route should lower before shared passes");
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        for forbidden in [
+            "tribute_control.",
+            "tribute_control.callable",
+            "resume_token",
+        ] {
+            assert!(
+                !output.contains(forbidden),
+                "legacy route leaked logical control representation `{forbidden}`:\n{output}"
+            );
+        }
+        assert!(output.contains("func.func"), "{output}");
     }
 
     #[salsa_test]

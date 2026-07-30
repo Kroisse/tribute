@@ -68,7 +68,6 @@ fn nested_gate(stop: Bool) -> ReadOutcome {
                 ReadOutcome::EndOfInput -> ReadOutcome::Line("outer-do-eof")
             }
         }
-        op Throw::throw(_) { ReadOutcome::EndOfInput }
     }
 }
 

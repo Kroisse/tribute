@@ -124,7 +124,7 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
 fn main() {
     let result = handle use_both() {
         do result { result }
-        op State::get() { resume +0 }
+        op State::get() { resume 0 }
         op State::set(v) { resume Nil }
         op Reader::ask() { resume 10 }
     }

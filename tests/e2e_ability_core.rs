@@ -779,7 +779,7 @@ fn wrapper() ->{State(Int)} Int {
 fn run() -> Int {
     handle wrapper() {
         do result { result }
-        op State::get() { resume 42 }
+        op State::get() { resume +42 }
         op State::set(v) { resume Nil }
     }
 }
@@ -818,7 +818,7 @@ fn use_state_int() ->{State(Int)} Int {
 fn run() -> Int {
     handle use_state_int() {
         do result { result }
-        op State::get() { resume 100 }
+        op State::get() { resume +100 }
         op State::set(v) { resume Nil }
     }
 }
