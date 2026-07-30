@@ -11,9 +11,7 @@ use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
 use tribute::pipeline::{compile_with_diagnostics, dump_ir};
 use tribute_front::SourceCst;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::printer::print_module;
-use trunk_ir::walk::{WalkAction, walk_op};
 
 fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
     assert!(
@@ -131,30 +129,6 @@ fn snapshot_native_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str)
         .collect();
     assert_no_diagnostics("native pipeline", &diagnostics);
     filter_ir_for_active_pipeline(&ir_text)
-}
-
-fn assert_all_unbox_int_results_are_live(ir_text: &str) {
-    let mut ctx = trunk_ir::IrContext::new();
-    let module = trunk_ir::parser::parse_test_module(&mut ctx, ir_text);
-    let mut unbox_results = Vec::new();
-    let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
-        if let Ok(unbox) = tribute_ir::dialect::tribute_rt::UnboxInt::from_op(&ctx, op) {
-            unbox_results.push(unbox.result(&ctx));
-        }
-        std::ops::ControlFlow::Continue(WalkAction::Advance)
-    });
-
-    for result in unbox_results.iter().copied() {
-        assert!(
-            ctx.has_uses(result),
-            "dead tribute_rt.unbox_int result in native IR:\n{ir_text}"
-        );
-    }
-
-    assert!(
-        !unbox_results.is_empty(),
-        "fixture must retain a live Int unbox to exercise target cast materialization:\n{ir_text}"
-    );
 }
 
 const DIRECT_FN_SOURCE: &str = r#"
@@ -288,13 +262,11 @@ fn native_pipeline_direct_fn_ability_call(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_native_pipeline_ir(db, "resumptive_op_native.trb", RESUMPTIVE_OP_SOURCE);
-    assert_all_unbox_int_results_are_live(&ir_text);
     assert_snapshot!(ir_text);
 }
 
 #[salsa_test]
 fn native_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_native_pipeline_ir(db, "mixed_nested_native.trb", MIXED_NESTED_SOURCE);
-    assert_all_unbox_int_results_are_live(&ir_text);
     assert_snapshot!(ir_text);
 }

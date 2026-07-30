@@ -815,21 +815,6 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     }
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
-
-    // Materializing conversion placeholders can create pure boxing/unboxing
-    // operations after the initial DCE. Run DCE again so casts made dead by
-    // canonicalization do not survive into either target pipeline.
-    if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
-        let mut pm = PassManager::new();
-        pm.nest::<func_dialect::Func>()
-            .add_pass(trunk_ir::transforms::dce_pass(
-                trunk_ir::transforms::DceConfig::default(),
-            ));
-        install_debug_use_chain_verifier(&mut pm);
-        if let Err(error) = pm.run(ctx, core_module) {
-            tracing::warn!("post-cast cleanup function passes failed: {error}");
-        }
-    }
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
