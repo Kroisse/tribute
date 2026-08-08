@@ -70,6 +70,9 @@ impl Pass for LowerHandleDispatch {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        if ctx.op(target.op_ref()).regions.is_empty() {
+            return Ok(());
+        }
         lower_handle_dispatch(ctx, target).map_err(Into::into)
     }
 }

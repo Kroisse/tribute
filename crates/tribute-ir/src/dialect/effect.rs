@@ -30,10 +30,11 @@ mod effect {
 
     /// Dispatch a general CPS `op` ability operation.
     ///
-    /// `continuation` is the already-constructed continuation closure and
-    /// `payload` is the single packed operation argument value.
+    /// `dispatch` and `resume` retain exact result-indexed CPS closure types;
+    /// `payload` is the single packed source operation argument value. Dispatch
+    /// is a proper-tail transfer and therefore produces no control result.
     #[attr(ability_ref: Type, op_name: Symbol)]
-    fn dispatch_cps(evidence: (), continuation: (), payload: ()) -> result {}
+    fn dispatch_cps(evidence: (), dispatch: (), resume: (), payload: ()) {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
@@ -116,7 +117,8 @@ mod tests {
         let ability = ability_ref(&mut ctx, "Console");
         let evidence = const_i32(&mut ctx, loc, ptr_ty, 0);
         let payload = const_i32(&mut ctx, loc, anyref_ty, 1);
-        let continuation = const_i32(&mut ctx, loc, anyref_ty, 2);
+        let dispatch = const_i32(&mut ctx, loc, anyref_ty, 2);
+        let resume = const_i32(&mut ctx, loc, anyref_ty, 3);
 
         let tail = super::dispatch_tail(
             &mut ctx,
@@ -131,9 +133,9 @@ mod tests {
             &mut ctx,
             loc,
             evidence,
-            continuation,
+            dispatch,
+            resume,
             payload,
-            anyref_ty,
             ability,
             Symbol::new("get"),
         );
@@ -147,8 +149,10 @@ mod tests {
         assert_eq!(tail_wrapper.payload(&ctx), payload);
         assert_eq!(tail_wrapper.ability_ref(&ctx), ability);
         assert_eq!(tail_wrapper.op_name(&ctx), Symbol::new("print"));
-        assert_eq!(cps_wrapper.continuation(&ctx), continuation);
+        assert_eq!(cps_wrapper.dispatch(&ctx), dispatch);
+        assert_eq!(cps_wrapper.resume(&ctx), resume);
         assert_eq!(cps_wrapper.op_name(&ctx), Symbol::new("get"));
+        assert!(ctx.op_results(cps.op_ref()).is_empty());
 
         let tail_printed = print_op(&ctx, tail.op_ref());
         assert!(tail_printed.contains("effect.dispatch_tail"));
