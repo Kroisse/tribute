@@ -1,5 +1,9 @@
 //! Arena-based func dialect.
 
+/// Exact callable signature retained on an indirect transfer after closure
+/// lowering turns the typed callee into a table/function pointer.
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "func.indirect_call_signature";
+
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
 crate::register_isolated_op!(func.func);

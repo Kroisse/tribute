@@ -157,6 +157,27 @@ mod tests {
     }
 
     #[test]
+    fn environment_position_comes_from_convention_not_source_types() {
+        let direct = CallableAbi::new(CallingConvention::Direct, ["evidence"], "result");
+        assert_eq!(
+            direct.interpose_environment(&["evidence"], "env"),
+            ["env", "evidence"]
+        );
+
+        let evidence = CallableAbi::new(CallingConvention::EvidenceDirect, ["source"], "result");
+        assert_eq!(
+            evidence.interpose_environment(&["evidence", "source"], "env"),
+            ["evidence", "env", "source"]
+        );
+
+        let cps = CallableAbi::new(CallingConvention::Cps, ["source"], "result");
+        assert_eq!(
+            cps.interpose_environment(&["evidence", "done", "dispatch", "source"], "env"),
+            ["evidence", "env", "done", "dispatch", "source"]
+        );
+    }
+
+    #[test]
     fn cps_dispatch_is_a_second_hidden_operand() {
         let cps = abi(CallingConvention::Cps);
         assert_eq!(
