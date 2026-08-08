@@ -132,6 +132,7 @@ impl<'db> TypeChecker<'db> {
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
+        let local_generalizations = ctx.take_local_generalizations();
         let func_exhaustive_cases = ctx.take_exhaustive_cases();
         // Save the accumulated effect row from the body before dropping ctx
         let body_effect_row = ctx.current_effect();
@@ -139,6 +140,7 @@ impl<'db> TypeChecker<'db> {
         let deferred_methods = ctx.take_deferred_methods();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
+        self.local_generalizations = local_generalizations;
 
         let mut solver = TypeSolver::new(self.db());
 
@@ -161,9 +163,10 @@ impl<'db> TypeChecker<'db> {
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
 
-        // First, collect ALL unresolved UniVars from the function type, body, and deferred
-        // method callee types. This ensures that UniVars created during body type checking
-        // or post-solve deferred method resolution are included in the generalization mapping.
+        // Keep the established body conversion mapping for non-local
+        // inference artifacts. Local generalizations are selected first when
+        // materializing types, so they cannot become phantom function scheme
+        // parameters.
         let mut all_univars = Vec::new();
         type_subst.collect_univars_from_type(
             self.db(),
@@ -178,12 +181,10 @@ impl<'db> TypeChecker<'db> {
             row_subst,
             &mut all_univars,
         );
-
-        // Create a comprehensive mapping from all UniVars to BoundVars
         let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
             .into_iter()
             .enumerate()
-            .map(|(i, id)| (id, i as u32))
+            .map(|(index, id)| (id, index as u32))
             .collect();
 
         // Only the exact root `main` is an entrypoint. Its omitted effect
@@ -237,6 +238,20 @@ impl<'db> TypeChecker<'db> {
 
         // Apply substitution and generalization to the function type.
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
+
+        // Solver aliases can point at a representative created after a local
+        // scheme was generalized. Preserve both spellings before finalizing
+        // typed references and callable metadata.
+        for (var, binding) in self.local_generalizations.clone() {
+            let resolved = type_subst.apply_with_rows(
+                self.db(),
+                Type::new(self.db(), TypeKind::UniVar { id: var }),
+                row_subst,
+            );
+            if let TypeKind::UniVar { id } = resolved.kind(self.db()) {
+                self.local_generalizations.entry(*id).or_insert(binding);
+            }
+        }
 
         // Validate that root `main` returns Nil.
         if is_root_main
@@ -362,7 +377,7 @@ impl<'db> TypeChecker<'db> {
         // These entries describe concrete expression storage for lowering; the
         // source-logical operation metadata is carried separately on TypedRef.
         for (node_id, ty) in func_node_types {
-            let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
             self.node_types.insert(node_id, substituted);
         }
         for (callee_id, ty) in func_call_callee_types {
@@ -377,15 +392,24 @@ impl<'db> TypeChecker<'db> {
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
-                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                    result: self.apply_subst_to_type(
+                        operation.result,
+                        type_subst,
+                        row_subst,
+                        &var_to_index,
+                    ),
                 },
             );
         }
@@ -397,15 +421,24 @@ impl<'db> TypeChecker<'db> {
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
-                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                    result: self.apply_subst_to_type(
+                        operation.result,
+                        type_subst,
+                        row_subst,
+                        &var_to_index,
+                    ),
                 },
             );
         }
@@ -415,8 +448,12 @@ impl<'db> TypeChecker<'db> {
             .into_iter()
             .collect::<HashMap<_, _>>();
         for (lambda_id, signature) in func_lambda_signatures {
-            let function_type =
-                type_subst.apply_with_rows(self.db(), signature.function_type, row_subst);
+            let function_type = self.apply_subst_to_type(
+                signature.function_type,
+                type_subst,
+                row_subst,
+                &var_to_index,
+            );
             let convention = crate::ast::calling_convention_for_function_type(
                 self.db(),
                 function_type,
@@ -938,7 +975,13 @@ impl<'db> TypeChecker<'db> {
         // First apply the substitution to resolve UniVars
         let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
         // Then apply the generalization mapping to convert remaining UniVars to BoundVars
-        type_subst.apply_generalization(self.db(), substituted, row_subst, var_to_index)
+        type_subst.apply_generalization_with_local_vars(
+            self.db(),
+            substituted,
+            row_subst,
+            var_to_index,
+            &self.local_generalizations,
+        )
     }
 
     /// Apply substitution to a statement.

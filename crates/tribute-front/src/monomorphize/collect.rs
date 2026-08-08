@@ -297,6 +297,7 @@ fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         | TypeKind::Nil
         | TypeKind::Never => true,
         TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::App { .. }
         | TypeKind::Error => false,

@@ -73,6 +73,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Nil
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::Error => false,
     }
 }
@@ -1571,14 +1572,16 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
-        for (name, local_id, binding_ty) in bindings {
+        for (name, local_id, binding_scope, binding_ty) in bindings {
             let scheme = if should_generalize {
-                let (generalized, type_params) = type_subst.generalize_excluding(
-                    self.db(),
-                    binding_ty,
-                    &row_subst,
-                    &environment_type_vars,
-                );
+                let (generalized, type_params, mapping) = type_subst
+                    .generalize_excluding_with_mapping(
+                        self.db(),
+                        binding_ty,
+                        &row_subst,
+                        &environment_type_vars,
+                    );
+                ctx.record_local_generalization(binding_scope, mapping);
                 let effect_params: Vec<_> = collect_effect_vars(self.db(), generalized)
                     .into_iter()
                     .filter(|var| !environment_effect_vars.contains(var))
@@ -1601,12 +1604,12 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
-        bindings: &mut Vec<(Symbol, Option<LocalId>, Type<'db>)>,
+        bindings: &mut Vec<(Symbol, Option<LocalId>, NodeId, Type<'db>)>,
     ) {
         let resolve = |ty| type_subst.apply_with_rows(self.db(), ty, row_subst);
         match &*pattern.kind {
             PatternKind::Bind { name, local_id } => {
-                bindings.push((*name, *local_id, resolve(ty)));
+                bindings.push((*name, *local_id, pattern.id, resolve(ty)));
             }
             PatternKind::Tuple(patterns)
             | PatternKind::Variant {
@@ -1638,7 +1641,7 @@ impl<'db> TypeChecker<'db> {
                             ctx, pattern, field_ty, type_subst, row_subst, bindings,
                         );
                     } else {
-                        bindings.push((field.name, None, field_ty));
+                        bindings.push((field.name, None, field.id, field_ty));
                     }
                 }
             }
@@ -1657,7 +1660,7 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
                 if let Some(name) = rest {
-                    bindings.push((*name, *rest_local_id, resolve(ty)));
+                    bindings.push((*name, *rest_local_id, pattern.id, resolve(ty)));
                 }
             }
             PatternKind::As {
@@ -1666,7 +1669,7 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => {
                 let resolved_ty = resolve(ty);
-                bindings.push((*name, *local_id, resolved_ty));
+                bindings.push((*name, *local_id, pattern.id, resolved_ty));
                 self.collect_pattern_bindings_with_ctx(
                     ctx,
                     pattern,
