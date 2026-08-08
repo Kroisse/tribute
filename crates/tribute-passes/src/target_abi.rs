@@ -230,7 +230,7 @@ fn validate_transfers(
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
         let convention = get_calling_convention(ctx, op);
-        if func::Call::matches(ctx, op) {
+        if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
             let Some(convention) = convention else {
                 continue;
             };
@@ -244,9 +244,36 @@ fn validate_transfers(
                 ));
             }
             let signature = core::Func::from_type_ref(ctx, identity.signature).unwrap();
-            if ctx.op_result_types(op) != [signature.r#return(ctx)] {
+            let params = signature.params(ctx);
+            let operands = ctx.op_operands(op);
+            if operands.len() != params.len()
+                || operands
+                    .iter()
+                    .zip(params)
+                    .any(|(value, ty)| ctx.value_ty(*value) != *ty)
+            {
+                return Err(TargetAbiError::new(
+                    "target ABI: direct transfer operands differ from callee signature",
+                ));
+            }
+            if func::Call::matches(ctx, op) && convention == CallingConvention::Cps {
+                return Err(TargetAbiError::new(
+                    "target ABI: Cps direct transfer must use func.tail_call",
+                ));
+            }
+            if func::Call::matches(ctx, op) && ctx.op_result_types(op) != [signature.r#return(ctx)]
+            {
                 return Err(TargetAbiError::new(
                     "target ABI: direct call result differs from callee signature",
+                ));
+            }
+            if func::TailCall::matches(ctx, op)
+                && (convention != CallingConvention::Cps
+                    || signature.r#return(ctx) != never
+                    || !is_cps_never_caller(ctx, op, never)?)
+            {
+                return Err(TargetAbiError::new(
+                    "target ABI: direct tail call must be a Cps core.never transfer",
                 ));
             }
         }
@@ -289,6 +316,32 @@ fn validate_transfers(
         }
     }
     Ok(())
+}
+
+fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<bool, TargetAbiError> {
+    let mut current = Some(op);
+    while let Some(candidate) = current {
+        if let Ok(function) = func::Func::from_op(ctx, candidate) {
+            let signature =
+                core::Func::from_type_ref(ctx, function.r#type(ctx)).ok_or_else(|| {
+                    TargetAbiError::new(
+                        "target ABI: enclosing function must have a core.func signature",
+                    )
+                })?;
+            return Ok(
+                get_calling_convention(ctx, candidate) == Some(CallingConvention::Cps)
+                    && signature.r#return(ctx) == never,
+            );
+        }
+        current = ctx.op(candidate).parent_block.and_then(|block| {
+            ctx.block(block)
+                .parent_region
+                .and_then(|region| ctx.region(region).parent_op)
+        });
+    }
+    Err(TargetAbiError::new(
+        "target ABI: direct tail call has no enclosing function",
+    ))
 }
 
 fn function_for_symbol(
@@ -593,9 +646,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !cps = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
-  func.func @run(%callee: !cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {tribute.calling_convention = 2}
+  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !cps = closure.closure(core.func(core.never, !evidence, core.i32, core.i32, core.i32)) {tribute.calling_convention = 2}
+  func.func @run(%callee: !cps, %evidence: !evidence, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -609,6 +663,86 @@ mod tests {
             "{ir}"
         );
         assert!(!ir.contains("core.func(core.never"), "{ir}");
+    }
+
+    #[test]
+    fn rejects_malformed_direct_call_without_mutating() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @callee(%value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+    func.return %value
+  }
+  func.func @caller(%value: core.bool) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %result = func.call %value {callee = @callee, tribute.calling_convention = 0} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("direct transfer operands differ"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn rejects_malformed_direct_cps_tail_without_mutating() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%value: core.bool) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call %value {callee = @callee, tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("direct transfer operands differ"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn rejects_direct_tail_outside_a_cps_never_caller_without_mutating() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @callee() -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller() -> core.i32 attributes {tribute.calling_convention = 0} {
+    func.tail_call {callee = @callee, tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error.to_string().contains("Cps core.never transfer"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
