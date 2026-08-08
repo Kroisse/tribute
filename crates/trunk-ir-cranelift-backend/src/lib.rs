@@ -16,6 +16,7 @@
 //! - `validation`: Pre-emit validation (all ops must be clif.*)
 
 pub mod adt_layout;
+mod calling_convention;
 mod errors;
 mod function;
 pub mod passes;

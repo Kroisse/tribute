@@ -84,6 +84,14 @@ trunk-ir (Mid-level)
 WebAssembly Binary
 ```
 
+결과 없는 `scf.switch`는 case의 source 순서를 보존한 `wasm.i32_const` /
+`wasm.i32_eq`와 중첩 `wasm.if`로 내린다. 마지막 else는 반드시 default arm이며,
+이 경로는 `cf.*`나 별도 control carrier를 만들지 않는다.
+
+Cast materialization 뒤 GC type index를 정하기 전에 Wasm target boundary가
+signature, result, block argument, attribute와 nominal layout의 모든 중첩 type leaf를
+물리화한다. 바깥 ADT/nominal identity와 field 순서는 유지한다.
+
 Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect.*`를
 만들며 Marker field 번호나 closure layout을 검사하지 않는다.
 `wasm/evidence_to_wasm`은 evidence lookup/extend helper를 만들고 closure struct

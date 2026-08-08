@@ -25,19 +25,18 @@ use tracing::warn;
 
 use crate::adt_layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
+    get_struct_fields, type_size_align,
 };
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::clif;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{adt, arith, clif, core};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
-use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower ADT operations to clif dialect.
 ///
@@ -117,6 +116,13 @@ impl RewritePattern for StructGetPattern {
             return false;
         }
 
+        let Some((_, field_ty)) =
+            get_struct_fields(ctx, struct_ty).and_then(|fields| fields.get(field_idx).copied())
+        else {
+            warn!("adt_to_clif arena: struct_get field metadata is missing");
+            return false;
+        };
+
         let loc = ctx.op(op).location;
         let offset =
             i32::try_from(layout.field_offsets[field_idx]).expect("field offset exceeds i32");
@@ -129,6 +135,24 @@ impl RewritePattern for StructGetPattern {
             return false;
         };
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
+        let field_native_ty = tc.convert_type_or_identity(ctx, field_ty);
+
+        if type_size_align(ctx, field_native_ty).0 == 0 {
+            if result_ty != core::nil(ctx).as_type_ref() {
+                warn!("adt_to_clif arena: zero-sized struct field has non-Nil result");
+                return false;
+            }
+
+            let result = struct_get.result(ctx);
+            if !ctx.has_uses(result) {
+                rewriter.erase_op_with_unused_results();
+                return true;
+            }
+
+            let unit = arith::r#const(ctx, loc, result_ty, Attribute::Unit);
+            rewriter.replace_op(unit.op_ref());
+            return true;
+        }
 
         let load_op = clif::load(ctx, loc, ref_val, result_ty, offset);
         rewriter.replace_op(load_op.op_ref());
@@ -160,6 +184,17 @@ impl RewritePattern for StructSetPattern {
 
         if field_idx >= layout.field_offsets.len() {
             return false;
+        }
+
+        let Some((_, field_ty)) =
+            get_struct_fields(ctx, struct_ty).and_then(|fields| fields.get(field_idx).copied())
+        else {
+            return false;
+        };
+        let native_ty = tc.convert_type_or_identity(ctx, field_ty);
+        if type_size_align(ctx, native_ty).0 == 0 {
+            rewriter.erase_op(vec![]);
+            return true;
         }
 
         let loc = ctx.op(op).location;
@@ -456,6 +491,57 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn zero_sized_struct_set_does_not_materialize_a_clif_store() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.nil {
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = arith.const {value = unit} : core.nil
+    adt.struct_set %0, %1 {field = 0, type = adt.struct(core.nil) {fields = [[@value, core.nil]], name = @Cell}}
+    func.return
+  }
+}"#,
+        );
+        assert!(!result.contains("adt.struct_set"), "{result}");
+        assert!(!result.contains("clif.store"), "{result}");
+    }
+
+    #[test]
+    fn zero_sized_struct_get_materializes_unit_without_a_clif_load() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.nil {
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = adt.struct_get %0 {field = 0, type = adt.struct(core.nil) {fields = [[@value, core.nil]], name = @Cell}} : core.nil
+    func.return %1
+  }
+}"#,
+        );
+        assert!(!result.contains("adt.struct_get"), "{result}");
+        assert!(!result.contains("clif.load"), "{result}");
+        assert!(
+            result.contains("arith.const {value = unit} : core.nil"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn unused_zero_sized_struct_get_is_erased_without_a_native_value() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.nil {
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = adt.struct_get %0 {field = 0, type = adt.struct(core.nil) {fields = [[@value, core.nil]], name = @Cell}} : core.nil
+    func.return
+  }
+}"#,
+        );
+        assert!(!result.contains("adt.struct_get"), "{result}");
+        assert!(!result.contains("arith.const"), "{result}");
+        assert!(!result.contains("clif.load"), "{result}");
     }
 
     #[test]

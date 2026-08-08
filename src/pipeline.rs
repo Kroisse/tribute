@@ -67,6 +67,7 @@ use salsa::Accumulator;
 use std::path::Path;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
+use tribute_ir::dialect::tribute_control::OperationDeclaration;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
@@ -86,6 +87,14 @@ pub struct DumpIrError {
 
 impl From<PassError> for DumpIrError {
     fn from(error: PassError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<tribute_passes::target_abi::TargetAbiError> for DumpIrError {
+    fn from(error: tribute_passes::target_abi::TargetAbiError) -> Self {
         Self {
             message: error.to_string(),
         }
@@ -186,6 +195,16 @@ impl Default for OptimizationOptions {
 pub enum SharedPipelineStage {
     /// Immediately after AST-to-IR lowering, before shared middle-end passes.
     AfterFrontend,
+    /// Immediately after atomic source-logical control legalization.
+    AfterControlLegalization,
+}
+
+/// Arena frontend output plus the exact semantic declarations consumed by
+/// source-logical control legalization.
+pub struct FrontendCompilation {
+    pub context: IrContext,
+    pub module: Module,
+    pub operation_declarations: Vec<OperationDeclaration>,
 }
 
 /// Stable native-pipeline boundaries available to optimization tests.
@@ -283,8 +302,14 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         db,
         tdnr_ast,
         result.function_types,
-        result.constructor_types,
-        result.node_types,
+        ast_typeck::NominalTypeMetadata {
+            constructor_types: result.constructor_types,
+            type_definitions: result.type_definitions,
+        },
+        ast_typeck::ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
         result.handler_operations,
@@ -339,6 +364,66 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
     Some(prelude_exports)
 }
 
+/// Merge declarations exactly as prelude name injection resolves them: a user
+/// function shadows a prelude function with the same name in the same lexical
+/// module, while unrelated prelude members remain available.
+fn merge_prelude_declarations<'db>(
+    prelude: Vec<tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>>,
+    user: &[tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>],
+) -> Vec<tribute_front::ast::Decl<tribute_front::ast::TypedRef<'db>>> {
+    use tribute_front::ast::Decl;
+
+    fn function_name<'db>(
+        decl: &Decl<tribute_front::ast::TypedRef<'db>>,
+    ) -> Option<trunk_ir::Symbol> {
+        match decl {
+            Decl::Function(function) => Some(function.name),
+            Decl::ExternFunction(function) => Some(function.name),
+            Decl::Struct(_) | Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) | Decl::Module(_) => {
+                None
+            }
+        }
+    }
+
+    let mut merged = Vec::with_capacity(prelude.len() + user.len());
+    let mut folded_modules = std::collections::HashSet::new();
+    for declaration in prelude {
+        match declaration {
+            Decl::Function(_) | Decl::ExternFunction(_) => {
+                let name = function_name(&declaration).expect("function declaration has a name");
+                if user
+                    .iter()
+                    .any(|candidate| function_name(candidate) == Some(name))
+                {
+                    continue;
+                }
+                merged.push(declaration);
+            }
+            Decl::Module(mut prelude_module) => {
+                let user_body = user
+                    .iter()
+                    .find_map(|candidate| match candidate {
+                        Decl::Module(module) if module.name == prelude_module.name => Some(module),
+                        _ => None,
+                    })
+                    .and_then(|module| module.body.as_ref());
+                if let Some(user_body) = user_body
+                    && let Some(prelude_body) = prelude_module.body.take()
+                {
+                    prelude_module.body = Some(merge_prelude_declarations(prelude_body, user_body));
+                    folded_modules.insert(prelude_module.name);
+                }
+                merged.push(Decl::Module(prelude_module));
+            }
+            declaration => merged.push(declaration),
+        }
+    }
+    merged.extend(user.iter().filter(|declaration| {
+        !matches!(declaration, Decl::Module(module) if folded_modules.contains(&module.name))
+    }).cloned());
+    merged
+}
+
 /// Merge prelude decls into user's typed AST and lower to arena IR.
 ///
 /// This performs AST-level prelude merge (prepending prelude decls to user decls),
@@ -349,14 +434,23 @@ fn merge_and_lower_to_ir<'db>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-    options: OptimizationOptions,
-) -> (IrContext, Module) {
+) -> FrontendCompilation {
     use tribute_front::ast::TypedRef;
 
     let user_module = typed.module(db);
     let user_fn_types = typed.function_types(db);
-    let user_node_types = typed.node_types(db);
+    let user_expression_types = typed.expression_types(db);
+    let user_node_types = &user_expression_types.node_types;
+    let user_call_callee_types = &user_expression_types.call_callee_types;
     let user_span_map = typed.span_map(db);
+    let user_nominal_types = typed.nominal_types(db);
+    let user_constructor_types = &user_nominal_types.constructor_types;
+    let user_type_definitions = &user_nominal_types.type_definitions;
+    let user_ability_definitions = typed.ability_definitions(db);
+    let user_handler_operations = typed.handler_operations(db);
+    let user_perform_operations = typed.perform_operations(db);
+    let user_lambda_signatures = typed.lambda_signatures(db);
+    let user_exhaustive_cases = typed.exhaustive_cases(db);
 
     // Merge prelude at AST level
     let user_ability_conventions = typed.ability_conventions(db);
@@ -364,18 +458,36 @@ fn merge_and_lower_to_ir<'db>(
         merged_module,
         merged_fn_types,
         merged_node_types,
+        merged_call_callee_types,
         merged_ability_conventions,
+        merged_constructor_types,
+        merged_type_definitions,
+        merged_ability_definitions,
+        merged_handler_operations,
+        merged_perform_operations,
+        merged_lambda_signatures,
+        merged_exhaustive_cases,
         merged_span_map,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
         let prelude_fn_types = prelude.function_types(db);
-        let prelude_node_types = prelude.node_types(db);
+        let prelude_expression_types = prelude.expression_types(db);
+        let prelude_node_types = &prelude_expression_types.node_types;
+        let prelude_call_callee_types = &prelude_expression_types.call_callee_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
+        let prelude_nominal_types = prelude.nominal_types(db);
+        let prelude_constructor_types = &prelude_nominal_types.constructor_types;
+        let prelude_type_definitions = &prelude_nominal_types.type_definitions;
+        let prelude_ability_definitions = prelude.ability_definitions(db);
+        let prelude_handler_operations = prelude.handler_operations(db);
+        let prelude_perform_operations = prelude.perform_operations(db);
+        let prelude_lambda_signatures = prelude.lambda_signatures(db);
+        let prelude_exhaustive_cases = prelude.exhaustive_cases(db);
         let prelude_span_map = prelude.span_map(db);
 
         // Prepend prelude decls before user decls
-        let mut merged_decls = prelude_module_ast.decls.clone();
-        merged_decls.extend(user_module.decls.iter().cloned());
+        let merged_decls =
+            merge_prelude_declarations(prelude_module_ast.decls.clone(), &user_module.decls);
 
         let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
             user_module.id,
@@ -393,9 +505,43 @@ fn merge_and_lower_to_ir<'db>(
             prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
+        let mut call_callee_types: std::collections::HashMap<_, _> =
+            prelude_call_callee_types.iter().cloned().collect();
+        call_callee_types.extend(user_call_callee_types.iter().cloned());
+
         let mut ability_conventions: std::collections::HashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
+
+        let mut constructor_types: std::collections::HashMap<_, _> =
+            prelude_constructor_types.iter().cloned().collect();
+        constructor_types.extend(user_constructor_types.iter().cloned());
+
+        let mut type_definitions: std::collections::HashMap<_, _> =
+            prelude_type_definitions.iter().cloned().collect();
+        type_definitions.extend(user_type_definitions.iter().cloned());
+
+        let mut ability_definitions: std::collections::HashMap<_, _> =
+            ast_typeck::ability_definitions_from_schemas(prelude_ability_definitions);
+        ability_definitions.extend(ast_typeck::ability_definitions_from_schemas(
+            user_ability_definitions,
+        ));
+
+        let mut handler_operations: std::collections::HashMap<_, _> =
+            prelude_handler_operations.iter().cloned().collect();
+        handler_operations.extend(user_handler_operations.iter().cloned());
+
+        let mut perform_operations: std::collections::HashMap<_, _> =
+            prelude_perform_operations.iter().cloned().collect();
+        perform_operations.extend(user_perform_operations.iter().cloned());
+
+        let mut lambda_signatures: std::collections::HashMap<_, _> =
+            prelude_lambda_signatures.iter().cloned().collect();
+        lambda_signatures.extend(user_lambda_signatures.iter().cloned());
+
+        let mut exhaustive_cases: std::collections::HashSet<_> =
+            prelude_exhaustive_cases.iter().copied().collect();
+        exhaustive_cases.extend(user_exhaustive_cases.iter().copied());
 
         // Merge span maps (user overrides prelude on conflict)
         let merged_span_map = user_span_map.merge(&prelude_span_map);
@@ -404,52 +550,103 @@ fn merge_and_lower_to_ir<'db>(
             merged_ast,
             fn_types,
             node_types,
+            call_callee_types,
             ability_conventions,
+            constructor_types,
+            type_definitions,
+            ability_definitions,
+            handler_operations,
+            perform_operations,
+            lambda_signatures,
+            exhaustive_cases,
             merged_span_map,
         )
     } else {
         let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
         let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
+        let call_callee_types: std::collections::HashMap<_, _> =
+            user_call_callee_types.iter().cloned().collect();
         let ability_conventions: std::collections::HashMap<_, _> =
             user_ability_conventions.iter().cloned().collect();
         (
             user_module.clone(),
             fn_types,
             node_types,
+            call_callee_types,
             ability_conventions,
+            user_constructor_types.iter().cloned().collect(),
+            user_type_definitions.iter().cloned().collect(),
+            ast_typeck::ability_definitions_from_schemas(user_ability_definitions),
+            user_handler_operations.iter().cloned().collect(),
+            user_perform_operations.iter().cloned().collect(),
+            user_lambda_signatures.iter().cloned().collect(),
+            user_exhaustive_cases.iter().copied().collect(),
             user_span_map.clone(),
         )
     };
 
     // Monomorphize generic functions
-    let mono_result =
-        tribute_front::monomorphize::monomorphize_functions(db, merged_module, merged_fn_types);
+    let mono_result = tribute_front::monomorphize::monomorphize_functions(
+        db,
+        merged_module,
+        merged_fn_types,
+        tribute_front::monomorphize::MonomorphizeMetadata {
+            constructor_types: merged_constructor_types,
+            type_definitions: merged_type_definitions,
+            node_types: merged_node_types,
+            call_callee_types: merged_call_callee_types,
+            specialized_call_callee_nodes: Default::default(),
+            ability_conventions: merged_ability_conventions,
+            ability_definitions: merged_ability_definitions,
+            handler_operations: merged_handler_operations,
+            perform_operations: merged_perform_operations,
+            lambda_signatures: merged_lambda_signatures,
+            exhaustive_cases: merged_exhaustive_cases,
+        },
+    );
     let merged_module = mono_result.module;
     let merged_fn_types: std::collections::HashMap<_, _> =
         mono_result.function_types.into_iter().collect();
+    let tribute_front::monomorphize::MonomorphizeMetadata {
+        constructor_types: merged_constructor_types,
+        type_definitions: _,
+        node_types: merged_node_types,
+        call_callee_types: merged_call_callee_types,
+        specialized_call_callee_nodes: merged_specialized_call_callee_nodes,
+        ability_conventions: merged_ability_conventions,
+        ability_definitions: merged_ability_definitions,
+        handler_operations: merged_handler_operations,
+        perform_operations: merged_perform_operations,
+        lambda_signatures: merged_lambda_signatures,
+        exhaustive_cases: merged_exhaustive_cases,
+    } = mono_result.metadata;
 
     // AST → TrunkIR (arena)
     let source_uri = source.uri(db).as_str();
     let mut ir = IrContext::new();
-    let module = ast_to_ir::TypedModule {
+    let frontend = ast_to_ir::TypedModule {
         ast: merged_module,
         span_map: merged_span_map,
         function_types: merged_fn_types,
-        constructor_types: typed.constructor_types(db).iter().cloned().collect(),
+        constructor_types: merged_constructor_types,
         node_types: merged_node_types,
+        call_callee_types: merged_call_callee_types,
+        specialized_call_callee_nodes: merged_specialized_call_callee_nodes,
         ability_conventions: merged_ability_conventions,
-        ability_definitions: ast_typeck::ability_definitions_from_schemas(
-            typed.ability_definitions(db),
-        ),
-        handler_operations: typed.handler_operations(db).iter().cloned().collect(),
-        perform_operations: typed.perform_operations(db).iter().cloned().collect(),
-        lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
-        exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+        ability_definitions: merged_ability_definitions,
+        handler_operations: merged_handler_operations,
+        perform_operations: merged_perform_operations,
+        lambda_signatures: merged_lambda_signatures,
+        exhaustive_cases: merged_exhaustive_cases,
         well_known_types: typed.well_known_types(db),
     }
-    .lower_to_legacy_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
+    .lower_to_ir(db, &mut ir, source_uri);
 
-    (ir, module)
+    FrontendCompilation {
+        context: ir,
+        module: frontend.module,
+        operation_declarations: frontend.operation_declarations,
+    }
 }
 
 /// Run frontend (parse → typecheck → TDNR) and lower to arena IR.
@@ -459,15 +656,14 @@ fn merge_and_lower_to_ir<'db>(
 pub fn compile_frontend(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, Module)> {
-    compile_frontend_with_options(db, source, OptimizationOptions::production())
+) -> Option<FrontendCompilation> {
+    compile_frontend_with_options(db, source)
 }
 
 fn compile_frontend_with_options(
     db: &dyn salsa::Database,
     source: SourceCst,
-    options: OptimizationOptions,
-) -> Option<(IrContext, Module)> {
+) -> Option<FrontendCompilation> {
     let typed = parse_and_lower_ast(db, source)?;
     let has_frontend_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         .iter()
@@ -475,7 +671,7 @@ fn compile_frontend_with_options(
     if has_frontend_errors {
         return None;
     }
-    Some(merge_and_lower_to_ir(db, &typed, source, options))
+    Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
 /// Result of the full compilation pipeline.
@@ -540,9 +736,15 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
     {
         let _span = tracing::info_span!("wasm_gc_to_wasm_after_casts").entered();
         tribute_passes::wasm::lower::finalize_wasm_gc_types(ctx, module)
-            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
             .map_err(wasm_lowering_failure)?;
     }
+
+    tribute_passes::backend_ready::verify_tribute_backend_ready(
+        ctx,
+        module,
+        tribute_passes::backend_ready::TributeBackend::Wasm,
+    )
+    .map_err(|error| CompilationError::ir_validation(error.to_string()))?;
 
     // Phase 3 - Emit WASM binary
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
@@ -563,16 +765,24 @@ pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    let Some(FrontendCompilation {
+        mut context,
+        module,
+        operation_declarations,
+    }) = compile_frontend(db, source)
+    else {
         return Ok(None);
     };
-    let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let core_module = core_dialect::Module::from_op(&context, module.op())
+        .expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
-    pm.run(&mut ctx, core_module)?;
-    Ok(Some((ctx, m)))
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    pm.run(&mut context, core_module)?;
+    Ok(Some((context, module)))
 }
 
 /// Run pipeline through closure lower (for testing).
@@ -583,19 +793,27 @@ pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    let Some(FrontendCompilation {
+        mut context,
+        module,
+        operation_declarations,
+    }) = compile_frontend(db, source)
+    else {
         return Ok(None);
     };
-    let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let core_module = core_dialect::Module::from_op(&context, module.op())
+        .expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+    .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
     pm.nest::<func_dialect::Func>()
         .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
-    pm.run(&mut ctx, core_module)?;
-    Ok(Some((ctx, m)))
+    pm.run(&mut context, core_module)?;
+    Ok(Some((context, module)))
 }
 
 // =============================================================================
@@ -619,21 +837,37 @@ fn run_shared_pipeline(
 fn run_shared_pipeline_with_options(
     db: &dyn salsa::Database,
     source: SourceCst,
-    options: OptimizationOptions,
+    _options: OptimizationOptions,
     stop_after: Option<SharedPipelineStage>,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend_with_options(db, source, options) else {
+    let Some(FrontendCompilation {
+        mut context,
+        module,
+        operation_declarations,
+    }) = compile_frontend_with_options(db, source)
+    else {
         return Ok(None);
     };
 
     if stop_after == Some(SharedPipelineStage::AfterFrontend) {
-        return Ok(Some((ctx, m)));
+        return Ok(Some((context, module)));
     }
 
     // Middle-end passes, sequenced through the PassManager (#268).
     // Registration order == execution order.
-    let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let core_module = core_dialect::Module::from_op(&context, module.op())
+        .expect("frontend output must be a core.module");
+    let mut control_pm = PassManager::new();
+    control_pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations),
+    );
+    install_debug_use_chain_verifier(&mut control_pm);
+    control_pm.run(&mut context, core_module)?;
+
+    if stop_after == Some(SharedPipelineStage::AfterControlLegalization) {
+        return Ok(Some((context, module)));
+    }
+
     let mut structural_pm = PassManager::new();
     structural_pm
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
@@ -646,22 +880,21 @@ fn run_shared_pipeline_with_options(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     install_debug_use_chain_verifier(&mut structural_pm);
-    structural_pm.run(&mut ctx, core_module)?;
+    structural_pm.run(&mut context, core_module)?;
 
     // CPS effect handling, function-local phase: lower_ability_perform produces
     // ability.evidence_lookup ops that resolve_evidence needs to process.
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform)
-        .add_pass(tribute_passes::tail_resumptive::ConvertTailResumptive);
+        .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
     install_debug_use_chain_verifier(&mut ability_pm);
-    ability_pm.run(&mut ctx, core_module)?;
+    ability_pm.run(&mut context, core_module)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
     install_debug_use_chain_verifier(&mut evidence_pm);
-    evidence_pm.run(&mut ctx, core_module)?;
+    evidence_pm.run(&mut context, core_module)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
     // after resolve_evidence expands evidence setup.
@@ -670,9 +903,9 @@ fn run_shared_pipeline_with_options(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
     install_debug_use_chain_verifier(&mut ability_boundary_pm);
-    ability_boundary_pm.run(&mut ctx, core_module)?;
+    ability_boundary_pm.run(&mut context, core_module)?;
 
-    Ok(Some((ctx, m)))
+    Ok(Some((context, module)))
 }
 
 /// Dump shared IR at a named optimization boundary.
@@ -827,6 +1060,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
+    tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
+    tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
+
     run_cleanup_passes(ctx, m);
     Ok(())
 }
@@ -842,6 +1078,10 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
+
+    tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
+    tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
+    tribute_passes::target_abi::lower_native_nil_abi(ctx, m)?;
 
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
@@ -1000,6 +1240,9 @@ fn prepare_module_to_native(
     // Phase 1 - Lower func dialect to clif dialect
     let ownership_summaries;
     {
+        tribute_passes::native::calling_convention::project_to_clif(ctx, module).map_err(
+            |error| trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string()),
+        )?;
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         ownership_summaries = tribute_passes::native::ownership_summary::compute_and_attach(
@@ -1151,6 +1394,15 @@ fn prepare_module_to_native(
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     tribute_passes::native::rc_lowering::lower_rc(ctx, module);
+
+    tribute_passes::backend_ready::verify_tribute_backend_ready(
+        ctx,
+        module,
+        tribute_passes::backend_ready::TributeBackend::Native,
+    )
+    .map_err(|error| {
+        trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+    })?;
 
     // Phase 4 - Validate and emit
     let _emit_span = tracing::info_span!("emit_module_to_native").entered();
@@ -1314,8 +1566,14 @@ pub fn parse_and_lower_ast<'db>(
         db,
         tdnr_ast,
         result.function_types,
-        result.constructor_types,
-        result.node_types,
+        ast_typeck::NominalTypeMetadata {
+            constructor_types: result.constructor_types,
+            type_definitions: result.type_definitions,
+        },
+        ast_typeck::ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
         result.handler_operations,
@@ -1714,15 +1972,30 @@ mod tests {
     }
 
     #[salsa_test]
-    fn pre_825_legacy_route_has_no_logical_control_leak(db: &salsa::DatabaseImpl) {
-        // Temporary pre-#825 compatibility routing: this must continue to
-        // specialize a representative generic source program into physical IR
-        // until the shared logical-control pipeline owns composition. Remove
-        // this fixture with the legacy route.
+    fn production_frontend_route_is_source_logical(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "legacy-route.trb",
             r#"
 struct Packet(a) { value: a }
+
+enum Choice(a) {
+    Pick(a)
+    Skip
+}
+
+pub mod Nested {
+    pub enum Maybe(a) {
+        Just(a)
+        Missing
+    }
+
+    pub fn choose(value: Maybe(a), fallback: a) -> a {
+        case value {
+            Just(item) -> item
+            Missing -> fallback
+        }
+    }
+}
 
 fn select(packet: Packet(a), values: List(a)) -> a {
     let singleton = [packet.value]
@@ -1739,33 +2012,55 @@ fn select(packet: Packet(a), values: List(a)) -> a {
 fn main() {
     let packet = Packet { value: +1 }
     let _ = select(packet, [+2])
+    let _ = case Pick(+3) {
+        Pick(value) -> value
+        Skip -> +0
+    }
+    let _ = Nested::choose(Nested::Just(+4), +0)
 }
 "#,
         );
         let result = compile_frontend(db, source);
         assert!(
             result.is_some(),
-            "legacy frontend route should lower before shared passes: {:#?}",
+            "source-logical frontend route should lower before shared passes: {:#?}",
             parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         );
-        let (ctx, module) = result.unwrap();
-        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        let FrontendCompilation {
+            context,
+            module,
+            operation_declarations: _,
+        } = result.unwrap();
+        let output = trunk_ir::printer::print_module(&context, module.op());
         for forbidden in [
-            "tribute_control.",
-            "tribute_control.callable",
-            "resume_token",
+            "func.func",
+            "func.call",
+            "func.return",
+            "closure.",
+            "ability.legacy_",
         ] {
             assert!(
                 !output.contains(forbidden),
-                "legacy route leaked logical control representation `{forbidden}`:\n{output}"
+                "production frontend leaked physical/legacy representation `{forbidden}`:\n{output}"
             );
         }
-        assert!(output.contains("func.func"), "{output}");
+        assert!(output.contains("tribute_control.func"), "{output}");
         assert!(
             output.contains("Packet$Int")
-                && output.contains("func.func @select(")
-                && output.contains("closure.lambda"),
-            "root pipeline must retain the specialized physical generic layout, callable, and lambda:\n{output}"
+                && output.contains("Choice$Int")
+                && output.contains("Nested::Maybe$Int")
+                && output.contains("tribute_control.func @\"Nested::choose$Int\"(")
+                && output.contains("tribute_control.lambda"),
+            "root pipeline must retain specialized logical generic layouts, constructors, \
+             callables, and lambda:\n{output}"
+        );
+        assert!(
+            output.contains("tag = @Pick")
+                && output.contains("tag = @Just")
+                && !output.contains("tag = @Choice$Int$Pick")
+                && !output.contains("tag = @Nested::Maybe$Int$Just"),
+            "specialized enum constructor identity must not change the runtime variant tag:\n\
+             {output}"
         );
     }
 
@@ -2047,7 +2342,11 @@ fn main() ->{std::io::Io} Nil {
 
         let result = compile_frontend(db, source);
         assert!(result.is_some());
-        let (ctx, m) = result.unwrap();
+        let FrontendCompilation {
+            context: ctx,
+            module: m,
+            ..
+        } = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
@@ -2057,8 +2356,49 @@ fn main() ->{std::io::Io} Nil {
 
         let result = compile_frontend(db, source);
         assert!(result.is_some());
-        let (ctx, m) = result.unwrap();
+        let FrontendCompilation {
+            context: ctx,
+            module: m,
+            ..
+        } = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[salsa_test]
+    fn user_list_member_shadows_prelude_declaration_in_logical_ir(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "list_shadow.trb",
+            r#"
+pub mod List {
+    pub fn prepend(value: Nat, tail: Nat) -> Nat { value + tail }
+}
+
+fn main() {
+    let _value = List::prepend(20, 22)
+    Nil
+}
+"#,
+        );
+        let FrontendCompilation {
+            context, module, ..
+        } = compile_frontend(db, source).unwrap_or_else(|| {
+            panic!(
+                "source-logical frontend output: {:?}",
+                parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+            )
+        });
+        let output = trunk_ir::printer::print_module(&context, module.op());
+        assert_eq!(
+            output
+                .matches(r#"tribute_control.func @"List::prepend""#)
+                .count(),
+            1,
+            "user and prelude declarations must not share one emitted identity: {output}"
+        );
+        assert!(
+            output.contains("List::__tribute_list_prepend_intrinsic"),
+            "the non-shadowed builtin intrinsic identity must remain available: {output}"
+        );
     }
 
     #[salsa_test]
@@ -2079,8 +2419,11 @@ fn main() -> String { "hello" }
             .well_known_types(db)
             .string
             .expect("prelude String identity");
-        let (ctx, module) =
-            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let FrontendCompilation {
+            context: ctx,
+            module,
+            ..
+        } = merge_and_lower_to_ir(db, &typed, source);
         let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
             .string
             .expect("String IR metadata");
@@ -2135,7 +2478,11 @@ fn main() -> String { "hello" }
             "{:?}",
             parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         );
-        let (ctx, m) = result.unwrap();
+        let FrontendCompilation {
+            context: ctx,
+            module: m,
+            ..
+        } = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
@@ -2155,7 +2502,11 @@ fn main() -> String { "hello" }
 
         let result = compile_frontend(db, source);
         assert!(result.is_some());
-        let (ctx, m) = result.unwrap();
+        let FrontendCompilation {
+            context: ctx,
+            module: m,
+            ..
+        } = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 

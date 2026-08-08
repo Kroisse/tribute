@@ -14,8 +14,29 @@
 mod common;
 
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::compile_with_diagnostics;
+use tribute::pipeline::{
+    OptimizationOptions, SharedPipelineStage, compile_with_diagnostics, dump_shared_ir_at_stage,
+};
 use tribute_front::SourceCst;
+
+fn logical_function<'a>(ir: &'a str, name: &str) -> &'a str {
+    let markers = [
+        format!("tribute_control.func @{name}"),
+        format!("func.func @{name}"),
+    ];
+    let start = markers
+        .iter()
+        .filter_map(|marker| ir.find(marker))
+        .min()
+        .unwrap_or_else(|| panic!("missing logical function {name}:\n{ir}"));
+    let function = &ir[start..];
+    let end = ["\n  tribute_control.func @", "\n  func.func @"]
+        .iter()
+        .filter_map(|marker| function[1..].find(marker).map(|offset| offset + 1))
+        .min()
+        .unwrap_or(function.len());
+    &function[..end]
+}
 
 /// Test that pure lambdas inside effectful functions have distinct effect variables.
 ///
@@ -124,6 +145,22 @@ fn main() { }
 "#;
 
     let source = SourceCst::from_source_str(db, "pure_in_effectful.trb", code);
+    let logical = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterFrontend,
+        OptimizationOptions::production(),
+    )
+    .expect("source-logical dump must succeed");
+    let worker = logical_function(&logical, "effectful_using_pure");
+    assert!(
+        worker.contains("tribute_control.lambda(") && worker.contains("convention(direct)"),
+        "a pure callback must remain Direct inside an effectful worker:\n{worker}"
+    );
+    assert!(
+        !worker.contains("core.unrealized_conversion_cast"),
+        "the exact Direct callback parameter must not require a control cast:\n{worker}"
+    );
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -138,6 +175,118 @@ fn main() { }
         "Type checking should succeed - pure lambda should remain pure even in effectful context. \
          Got {} diagnostics. If this fails with a type mismatch, it indicates EffectVar collision.",
         result.diagnostics.len()
+    );
+}
+
+/// A CPS worker sequences its own operation through a continuation, but a
+/// closed pure callback value remains Direct at the independently typed call.
+#[salsa_test]
+fn test_direct_callback_remains_direct_inside_cps_worker(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "direct_callback_in_cps.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn apply_pure(f: fn(Int) ->{} Int, x: Int) ->{} Int {
+    f(x)
+}
+
+fn effectful_using_pure(init: Int) ->{State(Int)} Int {
+    let pure_fn = fn(x: Int) { x * +2 }
+    let _ = State::get()
+    apply_pure(pure_fn, init)
+}
+
+fn main() { }
+"#,
+    );
+    let logical = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterFrontend,
+        OptimizationOptions::production(),
+    )
+    .expect("source-logical dump must succeed");
+    let worker = logical_function(&logical, "effectful_using_pure");
+
+    assert!(
+        worker.contains("convention(cps)"),
+        "the enclosing operation worker must use CPS:\n{worker}"
+    );
+    assert!(
+        worker.contains("tribute_control.lambda(") && worker.contains("convention(direct)"),
+        "the closed callback must keep its Direct callable convention:\n{worker}"
+    );
+    assert!(
+        worker.contains("tribute_control.call") && worker.contains("callee = @apply_pure"),
+        "the Direct callback must feed the exact Direct parameter:\n{worker}"
+    );
+    assert!(
+        !worker.contains("core.unrealized_conversion_cast"),
+        "the logical worker must not cast control callable values:\n{worker}"
+    );
+
+    let post_cps = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterControlLegalization,
+        OptimizationOptions::production(),
+    )
+    .expect("CPS legalization must preserve the direct callback");
+    let worker = logical_function(&post_cps, "effectful_using_pure");
+    assert!(
+        worker.contains("tribute.calling_convention = 2"),
+        "the enclosing worker must remain CPS after legalization:\n{worker}"
+    );
+    assert!(
+        worker.contains("closure.lambda") && worker.contains("tribute.calling_convention = 0"),
+        "the callback closure must remain an ordinary Direct closure:\n{worker}"
+    );
+    assert!(
+        worker.contains("func.tail_call_indirect"),
+        "the enclosing CPS worker must end through its continuation:\n{worker}"
+    );
+    assert!(
+        worker.contains("callee = @apply_pure, tribute.calling_convention = 0"),
+        "the Direct callback call must remain an ordinary Direct call:\n{worker}"
+    );
+}
+
+/// A lambda that evaluates an open effect-polymorphic callback remains Cps;
+/// an empty known row prefix alone is not proof that the body is pure.
+#[salsa_test]
+fn test_open_effect_callback_body_remains_cps(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "open_effect_lambda.trb",
+        r#"
+fn invoke(f: fn(Int) ->{e} Int, value: Int) ->{e} Int { f(value) }
+
+fn relay(g: fn(Int) ->{e} Int, value: Int) ->{e} Int {
+    invoke(fn(inner) { g(inner) }, value)
+}
+
+fn main() { }
+"#,
+    );
+    let logical = dump_shared_ir_at_stage(
+        db,
+        source,
+        SharedPipelineStage::AfterFrontend,
+        OptimizationOptions::production(),
+    )
+    .expect("open-effect lambda must lower as a Cps callable");
+    let relay = logical_function(&logical, "relay");
+    assert!(
+        relay.contains("tribute_control.lambda(") && relay.contains("convention(cps)"),
+        "an open effect row evaluated by the lambda body must retain Cps:\n{relay}"
+    );
+    assert!(
+        !relay.contains("core.unrealized_conversion_cast"),
+        "the open-effect callable already has the exact Cps convention:\n{relay}"
     );
 }
 

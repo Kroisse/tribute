@@ -2,21 +2,26 @@
 //!
 //! This pass converts structured control flow operations to wasm control:
 //! - `scf.if` -> `wasm.if`
+//! - resultless `scf.switch` -> nested `wasm.if` comparisons
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
 //! - `scf.yield` -> `wasm.yield` (tracks region result value)
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
+use std::collections::HashSet;
+
+use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::OpRef;
+use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::Attribute;
 
 /// Lower scf dialect to wasm dialect using arena IR.
 ///
@@ -25,11 +30,206 @@ use trunk_ir::smallvec::smallvec;
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ScfIfPattern)
+        .add_pattern(ScfSwitchPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
         .add_pattern(ScfBreakPattern);
     applicator.apply_partial(ctx, module);
+}
+
+/// A fully validated `scf.switch` shape, collected before any region is
+/// detached.  Post-CPS switches are resultless and their arms end in proper
+/// tail transfers, which maps directly to nested resultless `wasm.if`s.
+struct SwitchShape {
+    discriminant: ValueRef,
+    discriminant_ty: trunk_ir::TypeRef,
+    cases: Vec<(i32, RegionRef)>,
+    default: RegionRef,
+}
+
+/// Pattern for resultless `scf.switch` -> source-order nested `wasm.if`.
+struct ScfSwitchPattern;
+
+impl RewritePattern for ScfSwitchPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !scf::Switch::matches(ctx, op) {
+            return false;
+        }
+        let Some(shape) = validate_switch(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        for (_, region) in &shape.cases {
+            ctx.detach_region(*region);
+        }
+        ctx.detach_region(shape.default);
+
+        if let Some(((value, then_region), remaining_cases)) = shape.cases.split_first() {
+            let else_region = build_switch_chain(
+                ctx,
+                loc,
+                shape.discriminant,
+                shape.discriminant_ty,
+                remaining_cases,
+                shape.default,
+            );
+            let (constant, condition) =
+                switch_condition(ctx, loc, shape.discriminant, shape.discriminant_ty, *value);
+            rewriter.insert_op(constant);
+            rewriter.insert_op(condition);
+            let nil = core::nil(ctx).as_type_ref();
+            let wasm_if = wasm_dialect::r#if(
+                ctx,
+                loc,
+                ctx.op_results(condition)[0],
+                nil,
+                *then_region,
+                else_region,
+            );
+            // `wasm.if` carries a logical nil result even when its physical
+            // block type is empty, whereas resultless `scf.switch` has no IR
+            // result slot.  Insert then erase rather than asking the generic
+            // replacement API to RAUW incompatible result vectors.
+            rewriter.insert_op(wasm_if.op_ref());
+            rewriter.erase_op(vec![]);
+        } else {
+            // A default-only switch is the degenerate structured chain.  Its
+            // sole arm has already been validated as a zero-argument block,
+            // so splice its operations in place without introducing a CFG.
+            let default_block = ctx.region(shape.default).blocks[0];
+            let default_ops = ctx.block(default_block).ops.to_vec();
+            for default_op in default_ops {
+                ctx.detach_op(default_op);
+                rewriter.insert_op(default_op);
+            }
+            rewriter.erase_op(vec![]);
+        }
+        true
+    }
+}
+
+fn validate_switch(ctx: &IrContext, op: OpRef) -> Option<SwitchShape> {
+    let data = ctx.op(op);
+    if ctx.op_operands(op).len() != 1 || !ctx.op_result_types(op).is_empty() {
+        return None;
+    }
+    let discriminant = ctx.op_operands(op)[0];
+    let discriminant_ty = ctx.value_ty(discriminant);
+    let discriminant_data = ctx.types.get(discriminant_ty);
+    if discriminant_data.dialect != Symbol::new("core")
+        || discriminant_data.name != Symbol::new("i32")
+        || data.regions.len() != 1
+    {
+        return None;
+    }
+    let body_blocks = &ctx.region(data.regions[0]).blocks;
+    let [body] = body_blocks.as_slice() else {
+        return None;
+    };
+    if !ctx.block_args(*body).is_empty() {
+        return None;
+    }
+
+    let mut cases = Vec::new();
+    let mut values = HashSet::new();
+    let mut default = None;
+    for &wrapper in &ctx.block(*body).ops {
+        let wrapper_data = ctx.op(wrapper);
+        let region = match wrapper_data.regions.as_slice() {
+            [region] => *region,
+            _ => return None,
+        };
+        let arm_blocks = &ctx.region(region).blocks;
+        let [arm] = arm_blocks.as_slice() else {
+            return None;
+        };
+        if !ctx.block_args(*arm).is_empty()
+            || !ctx.op_operands(wrapper).is_empty()
+            || !ctx.op_result_types(wrapper).is_empty()
+        {
+            return None;
+        }
+        if scf::Case::matches(ctx, wrapper) {
+            let Attribute::Int(value) = wrapper_data.attributes.get(Symbol::new("value"))? else {
+                return None;
+            };
+            let value = i32::try_from(*value).ok()?;
+            if !values.insert(value) {
+                return None;
+            }
+            cases.push((value, region));
+        } else if scf::Default::matches(ctx, wrapper) {
+            if default.replace(region).is_some() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(SwitchShape {
+        discriminant,
+        discriminant_ty,
+        cases,
+        default: default?,
+    })
+}
+
+fn switch_condition(
+    ctx: &mut IrContext,
+    loc: trunk_ir::Location,
+    discriminant: ValueRef,
+    discriminant_ty: trunk_ir::TypeRef,
+    value: i32,
+) -> (OpRef, OpRef) {
+    let constant = wasm_dialect::i32_const(ctx, loc, discriminant_ty, value);
+    let comparison = wasm_dialect::i32_eq(
+        ctx,
+        loc,
+        discriminant,
+        constant.result(ctx),
+        discriminant_ty,
+    );
+    (constant.op_ref(), comparison.op_ref())
+}
+
+fn build_switch_chain(
+    ctx: &mut IrContext,
+    loc: trunk_ir::Location,
+    discriminant: ValueRef,
+    discriminant_ty: trunk_ir::TypeRef,
+    cases: &[(i32, RegionRef)],
+    default: RegionRef,
+) -> RegionRef {
+    let mut fallback = default;
+    for (value, then_region) in cases.iter().rev() {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let (constant, comparison) =
+            switch_condition(ctx, loc, discriminant, discriminant_ty, *value);
+        ctx.push_op(block, constant);
+        ctx.push_op(block, comparison);
+        let condition = ctx.op_results(comparison)[0];
+        let nil = core::nil(ctx).as_type_ref();
+        let nested = wasm_dialect::r#if(ctx, loc, condition, nil, *then_region, fallback);
+        ctx.push_op(block, nested.op_ref());
+        fallback = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+    }
+    fallback
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
@@ -267,3 +467,144 @@ impl RewritePattern for ScfBreakPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::ControlFlow;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    fn lower_text(input: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        lower(&mut ctx, module, TypeConverter::new());
+        let printed = print_module(&ctx, module.op());
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &printed);
+        printed
+    }
+
+    fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
+        let mut count = 0;
+        let dialect = Symbol::from_dynamic(dialect);
+        let name = Symbol::from_dynamic(name);
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            let data = ctx.op(op);
+            if data.dialect == dialect && data.name == name {
+                count += 1;
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        count
+    }
+
+    #[test]
+    fn lowers_ordered_resultless_switch_to_nested_wasm_ifs() {
+        let input = r#"core.module @test {
+  func.func @one() -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @two() -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @dispatch(%tag: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %tag {
+      scf.case {value = 7} {
+        func.tail_call {callee = @one, tribute.calling_convention = 2}
+      }
+      scf.case {value = 9} {
+        func.tail_call {callee = @two, tribute.calling_convention = 2}
+      }
+      scf.default {
+        func.unreachable
+      }
+    }
+  }
+}"#;
+
+        let printed = lower_text(input);
+        assert!(!printed.contains("scf.switch"), "{printed}");
+        assert!(!printed.contains("scf.case"), "{printed}");
+        assert!(!printed.contains("scf.default"), "{printed}");
+        assert_eq!(printed.matches("wasm.if").count(), 2, "{printed}");
+        assert_eq!(printed.matches("wasm.i32_eq").count(), 2, "{printed}");
+        assert!(
+            printed.find("wasm.i32_const {value = 7}").unwrap()
+                < printed.find("wasm.i32_const {value = 9}").unwrap(),
+            "case comparisons must retain source order:\n{printed}"
+        );
+        assert_eq!(printed.matches("func.tail_call").count(), 2, "{printed}");
+        assert_eq!(printed.matches("func.unreachable").count(), 3, "{printed}");
+    }
+
+    #[test]
+    fn lowers_default_only_switch_by_splicing_its_tail_arm() {
+        let input = r#"core.module @test {
+  func.func @dispatch(%tag: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %tag {
+      scf.default {
+        func.unreachable
+      }
+    }
+  }
+}"#;
+
+        let printed = lower_text(input);
+        assert!(!printed.contains("scf.switch"), "{printed}");
+        assert_eq!(printed.matches("wasm.if").count(), 0, "{printed}");
+        assert_eq!(printed.matches("func.unreachable").count(), 1, "{printed}");
+    }
+
+    #[test]
+    fn malformed_switches_remain_byte_identical() {
+        let malformed = [
+            (
+                r#"core.module @test {
+  func.func @dispatch(%tag: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %tag {
+      scf.case {value = 1} { func.unreachable }
+    }
+  }
+}"#,
+                "missing default",
+            ),
+            (
+                r#"core.module @test {
+  func.func @dispatch(%tag: core.i64) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %tag {
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                "non-i32 discriminant",
+            ),
+            (
+                r#"core.module @test {
+  func.func @dispatch(%tag: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %tag {
+      scf.case {value = 1} { func.unreachable }
+      scf.case {value = 1} { func.unreachable }
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                "duplicate case value",
+            ),
+        ];
+
+        for (input, description) in malformed {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, input);
+            let before = print_module(&ctx, module.op());
+            lower(&mut ctx, module, TypeConverter::new());
+            assert_eq!(
+                print_module(&ctx, module.op()),
+                before,
+                "{description} must fail before mutation"
+            );
+            assert_eq!(count_ops(&ctx, module, "scf", "switch"), 1);
+        }
+    }
+}

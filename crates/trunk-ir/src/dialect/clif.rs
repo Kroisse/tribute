@@ -1,5 +1,14 @@
 //! Arena-based clif dialect.
 
+/// Calling-convention metadata consumed by the Cranelift backend.
+///
+/// This is deliberately backend-owned rather than language-owned: frontends
+/// project their proven callable ABI onto either [`CALLING_CONVENTION_PLATFORM`]
+/// or [`CALLING_CONVENTION_TAIL`] before lowering `func.*` to `clif.*`.
+pub const CALLING_CONVENTION_ATTR: &str = "clif.calling_convention";
+pub const CALLING_CONVENTION_PLATFORM: &str = "platform";
+pub const CALLING_CONVENTION_TAIL: &str = "tail";
+
 #[trunk_ir::dialect]
 mod clif {
     // Module

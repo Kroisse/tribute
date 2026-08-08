@@ -61,68 +61,6 @@ fn focused_rc_ops(ir: &str) -> String {
         .join("\n")
 }
 
-fn identity_done_symbols(ir: &str) -> Vec<&str> {
-    let lines: Vec<_> = ir.lines().collect();
-    lines
-        .windows(2)
-        .filter_map(|pair| {
-            let header = pair[0].trim_start();
-            (header.starts_with("func.func ")
-                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
-                && pair[1].trim() == "func.return %2")
-                .then(|| {
-                    header
-                        .strip_prefix("func.func ")
-                        .expect("checked prefix")
-                        .split('(')
-                        .next()
-                        .expect("function header has parameters")
-                })
-        })
-        .collect()
-}
-
-fn focused_identity_done_ir(ir: &str) -> String {
-    let symbols = identity_done_symbols(ir);
-    ir.lines()
-        .filter(|line| symbols.iter().any(|symbol| line.contains(symbol)))
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn normal_done_symbols(ir: &str) -> Vec<&str> {
-    let lines: Vec<_> = ir.lines().collect();
-    lines
-        .windows(3)
-        .filter_map(|window| {
-            let header = window[0].trim_start();
-            (header.starts_with("func.func ")
-                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
-                && window[1].trim()
-                    == "%3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref"
-                && window[2].trim() == "func.return %3")
-                .then(|| {
-                    header
-                        .strip_prefix("func.func ")
-                        .expect("checked prefix")
-                        .split('(')
-                        .next()
-                        .expect("function header has parameters")
-                })
-        })
-        .collect()
-}
-
-fn lambda_function_count(ir: &str) -> usize {
-    ir.lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            line.starts_with("func.func ") && line.contains("::__lambda_")
-        })
-        .count()
-}
-
 #[test]
 fn done_continuation_dedup_preserves_native_execution() {
     let disabled = compile_and_run_native_with_done_continuation_dedup(
@@ -458,71 +396,40 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
 }
 
 #[salsa_test]
-fn done_continuation_dedup_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
+fn done_continuation_policy_isolated_at_frontend(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "done_continuation_dedup_snapshot.trb",
         DONE_CONTINUATION_DEDUP_STATE,
     );
-    let before = dump_shared_ir_at_stage(
+    let baseline = dump_shared_ir_at_stage(
         db,
         source,
         SharedPipelineStage::AfterFrontend,
         OptimizationOptions::baseline(),
     )
-    .expect("unoptimized frontend IR should be available");
-    let after = dump_shared_ir_at_stage(
+    .expect("baseline frontend IR should be available");
+    let production = dump_shared_ir_at_stage(
         db,
         source,
         SharedPipelineStage::AfterFrontend,
         OptimizationOptions::production(),
     )
-    .expect("optimized frontend IR should be available");
+    .expect("production frontend IR should be available");
 
-    let before_symbols = identity_done_symbols(&before);
-    let after_symbols = identity_done_symbols(&after);
-    let before_normal_symbols = normal_done_symbols(&before);
-    let after_normal_symbols = normal_done_symbols(&after);
-    assert!(
-        before_symbols.len() > 1,
-        "fixture must generate duplicate identity done continuations"
-    );
-    assert_eq!(after_symbols.len(), 1);
-    assert!(
-        before_normal_symbols.len() > 1,
-        "fixture must generate duplicate Normal done continuations"
-    );
-    assert_eq!(after_normal_symbols.len(), 1);
-    assert_eq!(
-        lambda_function_count(&before) - before_symbols.len() - before_normal_symbols.len(),
-        lambda_function_count(&after) - after_symbols.len() - after_normal_symbols.len(),
-        "capturing and user-authored lambdas must remain distinct"
-    );
-
-    let before_references: usize = before_symbols
-        .iter()
-        .map(|symbol| before.matches(&format!("func_ref = {symbol}")).count())
-        .sum();
-    let after_references = after
-        .matches(&format!("func_ref = {}", after_symbols[0]))
-        .count();
-    assert_eq!(before_references, after_references);
-
-    let before_normal_references: usize = before_normal_symbols
-        .iter()
-        .map(|symbol| before.matches(&format!("func_ref = {symbol}")).count())
-        .sum();
-    let after_normal_references = after
-        .matches(&format!("func_ref = {}", after_normal_symbols[0]))
-        .count();
-    assert_eq!(before_normal_references, after_normal_references);
-
-    assert_snapshot!(
-        "done_continuation_dedup_before",
-        focused_identity_done_ir(&before)
-    );
-    assert_snapshot!(
-        "done_continuation_dedup_after",
-        focused_identity_done_ir(&after)
-    );
+    assert_eq!(baseline, production);
+    assert!(baseline.contains("tribute_control.func"), "{baseline}");
+    for forbidden in [
+        "func.func",
+        "func.call",
+        "func.return",
+        "__tribute_cps_control",
+        "@Normal",
+        "@Escape",
+    ] {
+        assert!(
+            !baseline.contains(forbidden),
+            "AfterFrontend must remain source-logical and must not contain `{forbidden}`:\n{baseline}"
+        );
+    }
 }

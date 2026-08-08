@@ -99,6 +99,7 @@ insta.workspace = true
 itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
+tribute-core.workspace = true
 
 [profile.dev]
 debug = "line-tables-only"

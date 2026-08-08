@@ -53,18 +53,12 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-/// Prefer a substituted operand type only when it still carries ADT identity.
-/// Erased representations such as `anyref` cannot identify the enum whose
-/// variant is being tested or cast.
-fn resolved_enum_type(ctx: &IrContext, operand_ty: TypeRef, attr_ty: TypeRef) -> TypeRef {
-    let operand = ctx.types.get(operand_ty);
-    if operand.dialect == Symbol::new("adt")
-        && (operand.name == Symbol::new("enum") || operand.name == Symbol::new("typeref"))
-    {
-        operand_ty
-    } else {
-        attr_ty
-    }
+/// The logical variant operation's `type` attribute is its exact enum-layout
+/// identity. Operand types may be an equivalent `adt.typeref` or already have
+/// an erased target representation, neither of which may choose a distinct
+/// WasmGC nominal variant type.
+fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
+    get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
 /// Lower adt dialect to wasm dialect using arena IR.
@@ -208,7 +202,9 @@ impl RewritePattern for VariantNewPattern {
 
         let loc = ctx.op(op).location;
         let tag_sym = variant_new.tag(ctx);
-        let base_type = variant_new.r#type(ctx);
+        let Some(base_type) = canonical_enum_type(ctx, variant_new.r#type(ctx)) else {
+            return false;
+        };
         let fields: Vec<_> = variant_new.fields(ctx).to_vec();
 
         // Create variant-specific type: Expr + Add -> Expr$Add
@@ -280,9 +276,9 @@ impl RewritePattern for VariantIsPattern {
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
-        // Prefer a substituted operand type only while it retains ADT identity.
-        let operand_ty = ctx.value_ty(ref_val);
-        let enum_type = resolved_enum_type(ctx, operand_ty, variant_is.r#type(ctx));
+        let Some(enum_type) = canonical_enum_type(ctx, variant_is.r#type(ctx)) else {
+            return false;
+        };
 
         // Create variant-specific type for the ref.test
         let variant_type = make_variant_type(ctx, enum_type, tag);
@@ -314,10 +310,9 @@ impl RewritePattern for VariantCastPattern {
         let tag = variant_cast.tag(ctx);
         let ref_val = variant_cast.r#ref(ctx);
 
-        // Prefer a substituted operand type only while it retains ADT identity.
-        let operand_ty = ctx.value_ty(ref_val);
-        let attr_type = variant_cast.r#type(ctx);
-        let enum_type = resolved_enum_type(ctx, operand_ty, attr_type);
+        let Some(enum_type) = canonical_enum_type(ctx, variant_cast.r#type(ctx)) else {
+            return false;
+        };
 
         // Create variant-specific type for the ref.cast
         let variant_type = make_variant_type(ctx, enum_type, tag);
@@ -350,17 +345,23 @@ impl RewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
-        let declared_field_ty = get_enum_variants(ctx, variant_get.r#type(ctx))
+        let Some(enum_type) = canonical_enum_type(ctx, variant_get.r#type(ctx)) else {
+            return false;
+        };
+        let Some(declared_field_ty) = get_enum_variants(ctx, enum_type)
             .and_then(|variants| {
                 variants
                     .into_iter()
                     .find(|(tag, _)| *tag == variant_get.tag(ctx))
             })
-            .and_then(|(_, fields)| fields.get(field_idx as usize).copied());
+            .and_then(|(_, fields)| fields.get(field_idx as usize).copied())
+        else {
+            return false;
+        };
         // String::Leaf has the canonical core.bytes layout even though frontend
         // pattern extraction is temporarily erased to anyref. Keep other fields
         // on the normal type-converter path.
-        let result_ty = declared_field_ty
+        let result_ty = Some(declared_field_ty)
             .filter(|ty| {
                 let data = ctx.types.get(*ty);
                 data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
@@ -370,7 +371,7 @@ impl RewritePattern for VariantGetPattern {
         let variant_type = if ctx.types.get(operand_ty).attrs.get_bool("is_variant") == Some(true) {
             operand_ty
         } else {
-            make_variant_type(ctx, variant_get.r#type(ctx), variant_get.tag(ctx))
+            make_variant_type(ctx, enum_type, variant_get.tag(ctx))
         };
 
         // Infer type from the operand (the cast result has the variant-specific type)
@@ -592,21 +593,24 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     #[test]
-    fn resolved_enum_type_rejects_erased_operands() {
+    fn canonical_enum_type_requires_an_exact_enum_layout() {
         let mut ctx = IrContext::new();
+        let _module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !E = adt.enum() {name = @E, variants = []}
+  !ERef = adt.typeref() {name = @E}
+}"#,
+        );
         let enum_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
+            .type_alias_by_name(Symbol::new("E"))
+            .expect("enum layout");
         let typeref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref")).build());
-        let erased_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+            .type_alias_by_name(Symbol::new("ERef"))
+            .expect("enum reference");
 
-        assert_eq!(resolved_enum_type(&ctx, enum_ty, typeref_ty), enum_ty);
-        assert_eq!(resolved_enum_type(&ctx, typeref_ty, enum_ty), typeref_ty);
-        assert_eq!(resolved_enum_type(&ctx, erased_ty, enum_ty), enum_ty);
+        assert_eq!(canonical_enum_type(&ctx, enum_ty), Some(enum_ty));
+        assert_eq!(canonical_enum_type(&ctx, typeref_ty), None);
     }
 
     #[test]
@@ -616,8 +620,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct() {fields = [[@value, core.i32]], name = @S}
-  !E = adt.typeref(core.i32) {name = @E}
-  !EUnresolved = adt.typeref() {name = @E}
+  !E = adt.enum() {name = @E, variants = [[@Some, [core.i32]]]}
+  !ERef = adt.typeref() {name = @E}
   !A = core.array(core.i32)
 
   wasm.func @main() -> core.nil {
@@ -627,10 +631,10 @@ mod tests {
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {type = !E, tag = @Some} : !E
+    %variant = adt.variant_new %one {type = !E, tag = @Some} : !ERef
     %is_some = adt.variant_is %variant {type = !E, tag = @Some} : core.i32
-    %cast = adt.variant_cast %variant {type = !E, tag = @Some} : !E
-    %payload = adt.variant_get %cast {type = !EUnresolved, tag = @Some, field = 0} : core.i32
+    %cast = adt.variant_cast %variant {type = !E, tag = @Some} : !ERef
+    %payload = adt.variant_get %cast {type = !E, tag = @Some, field = 0} : core.i32
 
     %empty = adt.array_new {type = !A} : !A
     %default = adt.array_new %one {type = !A} : !A
@@ -689,5 +693,64 @@ mod tests {
             .get_type("type")
             .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
+    }
+
+    #[test]
+    fn variant_operations_share_the_exact_enum_layout_when_values_use_typerefs() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !ERef = adt.typeref() {name = @E}
+  !E = adt.enum() {name = @E, variants = [[@Leaf, [core.i32]], [@Branch, [!ERef]]]}
+
+  wasm.func @main(%input: !ERef) -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %leaf = adt.variant_new %zero {type = !E, tag = @Leaf} : !ERef
+    %is_leaf = adt.variant_is %input {type = !E, tag = @Leaf} : core.i1
+    %cast = adt.variant_cast %input {type = !E, tag = @Leaf} : !ERef
+    %payload = adt.variant_get %cast {type = !E, tag = @Leaf, field = 0} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let variant_types: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .copied()
+            .filter_map(|op| {
+                let data = ctx.op(op);
+                if data.dialect != wasm_gc_dialect::DIALECT_NAME() {
+                    return None;
+                }
+                match data.name {
+                    name if name == Symbol::new("struct_new")
+                        || name == Symbol::new("struct_get") =>
+                    {
+                        data.attributes.get_type("type")
+                    }
+                    name if name == Symbol::new("ref_test") || name == Symbol::new("ref_cast") => {
+                        data.attributes.get_type("target_type")
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(variant_types.len(), 4);
+        assert!(variant_types.iter().all(|ty| *ty == variant_types[0]));
+        assert_eq!(
+            ctx.types.get(variant_types[0]).attrs.get_type("base_enum"),
+            Some(
+                ctx.type_alias_by_name(Symbol::new("E"))
+                    .expect("enum layout")
+            )
+        );
     }
 }

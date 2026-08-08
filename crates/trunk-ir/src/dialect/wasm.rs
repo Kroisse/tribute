@@ -53,6 +53,9 @@ mod wasm {
     #[attr(callee: Symbol)]
     fn return_call(#[rest] args: ()) {}
 
+    #[attr(type_idx: u32, table: u32)]
+    fn return_call_indirect(#[rest] args: ()) {}
+
     fn unreachable() {}
     fn nop() -> result {}
 

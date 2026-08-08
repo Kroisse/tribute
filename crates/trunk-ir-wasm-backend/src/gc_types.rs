@@ -18,7 +18,15 @@
 //! Index 9+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 
+use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::refs::TypeRef;
 use wasm_encoder::{FieldType, HeapType, RefType, StorageType, ValType};
+
+/// Marks the exact physical array type used for ability evidence.  A bare
+/// `wasm.arrayref` may also represent an unrelated erased source array, so it
+/// must never be inferred to use the Evidence builtin index.
+pub const EVIDENCE_ARRAY_TYPE_ATTR: &str = "wasm.evidence_array";
 
 /// Type index for BoxedF64 (Float wrapper for polymorphic contexts).
 /// This is always index 0 in the GC type section.
@@ -61,6 +69,38 @@ pub const CONTINUATION_IDX: u32 = 7;
 /// This is always index 8 in the GC type section.
 /// Packages captured state and resume value for continuation resume functions.
 pub const RESUME_WRAPPER_IDX: u32 = 8;
+
+/// Return the concrete WasmGC reference representation for a supported
+/// `core.ref` value.
+///
+/// The Bytes backing array is the only `core.ref` form in the Wasm ABI.  Keep
+/// its source-level pointee intact until emission so every consumer resolves
+/// the same concrete builtin array index and nullability.
+pub fn concrete_wasm_ref_type(ctx: &IrContext, ty: TypeRef) -> Option<RefType> {
+    let reference = ctx.types.get(ty);
+    if reference.dialect != Symbol::new("core")
+        || reference.name != Symbol::new("ref")
+        || reference.params.len() != 1
+    {
+        return None;
+    }
+
+    let array = ctx.types.get(reference.params[0]);
+    if array.dialect != Symbol::new("core")
+        || array.name != Symbol::new("array")
+        || array.params.len() != 1
+        || !ctx
+            .types
+            .is_dialect(array.params[0], Symbol::new("core"), Symbol::new("i8"))
+    {
+        return None;
+    }
+
+    Some(RefType {
+        nullable: reference.attrs.get_bool("nullable") == Some(true),
+        heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
+    })
+}
 
 /// First type index available for user-defined types.
 pub const FIRST_USER_TYPE_IDX: u32 = 9;

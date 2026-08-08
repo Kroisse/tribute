@@ -80,6 +80,27 @@ must not require source or shared-IR changes.
 
 ### Native 타겟
 
+#### `Nil` 영-크기 ABI
+
+Native ABI에서 `core.nil`은 Cranelift scalar가 아니다. `core.func`의 `Nil`
+parameter와 대응하는 entry argument, 직접/간접 call 및 tail transfer operand는
+정확히 검증된 callable signature를 기준으로 함께 제거한다. 비어 있는 값은
+`Nil` return marker와 type metadata에만 남으며, 임의의 정수나 pointer로
+물질화하지 않는다.
+
+함수 정의, declaration, `func.constant`, closure callable type, call site는 같은
+signature projection을 사용한다. 일치하지 않는 arity 또는 type은 mutation 전에
+거부한다. 이 규칙은 Wasm의 nullable-reference `Nil` 표현과 공유하지 않는다.
+
+#### CPS proper-tail ABI
+
+검증된 CPS worker, continuation, handler와 `done_k`의 내부 Cranelift signature는
+`Tail` calling convention을 쓴다. 이에 대응하는 `func.tail_call`과
+`func.tail_call_indirect`도 같은 `Tail` signature로 proper-tail transfer한다.
+Direct/EvidenceDirect function, root wrapper, import, runtime, RTTI와 일반 indirect
+call은 target platform ABI를 유지한다. 두 ABI 사이에는 trampoline 또는
+ordinary call 뒤 return fallback이 없다.
+
 ```mermaid
 flowchart TB
     input["TrunkIR Module\n(func.*, arith.*, scf.*, adt.*, evidence runtime calls)"]

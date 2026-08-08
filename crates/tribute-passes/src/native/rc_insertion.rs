@@ -85,6 +85,7 @@ fn is_terminator_op(ctx: &IrContext, op: OpRef) -> bool {
         || clif::Brif::matches(ctx, op)
         || clif::Trap::matches(ctx, op)
         || clif::ReturnCall::matches(ctx, op)
+        || clif::ReturnCallIndirect::matches(ctx, op)
         || clif::BrTable::matches(ctx, op)
 }
 
@@ -501,7 +502,9 @@ fn insert_rc_impl(
             if sym.with_str(|s| s.starts_with(super::rtti::RELEASE_FN_PREFIX)) {
                 continue;
             }
-            let body = func_op.body(ctx);
+            let Some(&body) = ctx.op(func_op.op_ref()).regions.first() else {
+                continue;
+            };
             let function_policy = if borrow_safe_functions.contains(&sym) {
                 borrowed_parameters
             } else {
@@ -535,6 +538,7 @@ fn borrow_safe_functions(ctx: &IrContext, module_ops: &[OpRef]) -> HashSet<Symbo
     for &op in module_ops {
         if let Ok(func_op) = clif::Func::from_op(ctx, op)
             && !ctx.op(op).attributes.contains_key("abi")
+            && !ctx.op(op).regions.is_empty()
         {
             candidates.insert(func_op.sym_name(ctx));
         }
@@ -542,8 +546,10 @@ fn borrow_safe_functions(ctx: &IrContext, module_ops: &[OpRef]) -> HashSet<Symbo
 
     let mut unsafe_callees = HashSet::new();
     for &op in module_ops {
-        if let Ok(func_op) = clif::Func::from_op(ctx, op) {
-            collect_borrow_unsafe_callees(ctx, func_op.body(ctx), &candidates, &mut unsafe_callees);
+        if let Ok(func_op) = clif::Func::from_op(ctx, op)
+            && let Some(&body) = ctx.op(func_op.op_ref()).regions.first()
+        {
+            collect_borrow_unsafe_callees(ctx, body, &candidates, &mut unsafe_callees);
         }
     }
     candidates.retain(|symbol| !unsafe_callees.contains(symbol));
@@ -604,8 +610,9 @@ fn lower_anyref_to_ptr(ctx: &mut IrContext, module: Module) {
                 );
             }
 
-            let body = func_op.body(ctx);
-            lower_anyref_in_region(ctx, body, ptr_ty);
+            if let Some(&body) = ctx.op(func_op.op_ref()).regions.first() {
+                lower_anyref_in_region(ctx, body, ptr_ty);
+            }
         }
     }
 }
@@ -1148,12 +1155,24 @@ fn insert_rc_in_block(
         }
     }
 
-    // Returned values
+    // Values transferred through a function exit. Proper-tail calls never
+    // return to this frame, so their reference operands must remain live for
+    // the callee exactly like an ordinary return value. Releasing a freshly
+    // boxed payload before `return_call_indirect` would otherwise hand the
+    // resumed continuation a freed allocation.
     let mut returned_values: HashSet<ValueRef> = HashSet::new();
-    if let Some(&last_op) = ops.last()
-        && clif::Return::matches(ctx, last_op)
-    {
-        for &operand in ctx.op_operands(last_op) {
+    if let Some(&last_op) = ops.last() {
+        let transfer_operands =
+            if clif::Return::matches(ctx, last_op) || clif::ReturnCall::matches(ctx, last_op) {
+                Some(ctx.op_operands(last_op))
+            } else if clif::ReturnCallIndirect::matches(ctx, last_op) {
+                // Operand zero is the raw function pointer; every remaining
+                // operand belongs to the exact indirect callee signature.
+                Some(&ctx.op_operands(last_op)[1..])
+            } else {
+                None
+            };
+        for &operand in transfer_operands.into_iter().flatten() {
             if ptr_values.contains(&operand) {
                 returned_values.insert(operand);
             }
@@ -1951,9 +1970,28 @@ mod tests {
             concat!(
                 "%1 = tribute_rt.retain %0 : core.ptr\n",
                 "tribute_rt.release %0 {alloc_size = 0}\n",
-                "%1 = tribute_rt.retain %0 : core.ptr\n",
-                "tribute_rt.release %0 {alloc_size = 0}"
+                "%1 = tribute_rt.retain %0 : core.ptr"
             ),
+        );
+    }
+
+    #[test]
+    fn indirect_tail_transfer_keeps_fresh_payload_live() {
+        let output = run_pass_with_policy(
+            r#"core.module @test {
+  clif.func @caller(%0: core.i64) -> core.nil {
+    %1 = clif.call %0 {callee = @__tribute_alloc} : tribute_rt.anyref
+    clif.return_call_indirect %0, %1 {sig = core.func(core.nil, tribute_rt.anyref)}
+  }
+}"#,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+        );
+        let tail = output
+            .find("clif.return_call_indirect")
+            .expect("tail transfer remains present");
+        assert!(
+            !output[..tail].contains("tribute_rt.release %1"),
+            "fresh payload must transfer to the indirect tail callee:\n{output}"
         );
     }
 
