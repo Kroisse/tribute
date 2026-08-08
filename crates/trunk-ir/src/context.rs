@@ -205,6 +205,15 @@ impl IrContext {
         self.type_alias_by_type.insert(ty, name);
     }
 
+    /// Remove one type alias and its reverse lookup entry.
+    pub fn remove_type_alias(&mut self, name: Symbol) -> Option<TypeRef> {
+        let ty = self.type_alias_by_name.remove(&name)?;
+        self.type_alias_by_type.remove(&ty);
+        self.type_aliases
+            .retain(|(candidate, _)| *candidate != name);
+        Some(ty)
+    }
+
     /// Look up a type alias by name.
     pub fn type_alias_by_name(&self, name: Symbol) -> Option<TypeRef> {
         self.type_alias_by_name.get(&name).copied()
@@ -554,6 +563,44 @@ impl IrContext {
         self.block_arg_values[block] = new_list;
 
         new_value
+    }
+
+    /// Remove an unused block argument and return its stable value reference.
+    ///
+    /// Remaining argument values keep their identity while their defining
+    /// indices are updated. Callers must first rewrite every use of the
+    /// removed value; silently dropping a live SSA value would corrupt the
+    /// use-chain.
+    pub fn remove_block_arg(&mut self, block: BlockRef, index: u32) -> ValueRef {
+        let index = index as usize;
+        let values: SmallVec<[ValueRef; 8]> = self.block_arg_values[block]
+            .as_slice(&self.value_pool)
+            .into();
+        assert!(
+            index < values.len(),
+            "remove_block_arg: index {index} out of bounds for {block}"
+        );
+        let removed = values[index];
+        assert!(
+            self.uses[removed].is_empty(),
+            "remove_block_arg: cannot remove live block argument {removed}"
+        );
+
+        self.blocks[block].args.remove(index);
+        let mut remaining = EntityList::new();
+        for (old_index, &value) in values.iter().enumerate() {
+            if old_index == index {
+                continue;
+            }
+            if let ValueDef::BlockArg(value_block, value_index) = self.values[value].def {
+                debug_assert_eq!(value_block, block);
+                self.values[value].def =
+                    ValueDef::BlockArg(value_block, value_index - u32::from(old_index > index));
+            }
+            remaining.push(value, &mut self.value_pool);
+        }
+        self.block_arg_values[block] = remaining;
+        removed
     }
 
     /// Set the type of a block argument.
@@ -1324,6 +1371,40 @@ mod tests {
         assert_eq!(ctx.block_args(block).len(), 1);
         assert_eq!(ctx.block_arg(block, 0), new_arg);
         assert_eq!(ctx.value_def(new_arg), ValueDef::BlockArg(block, 0));
+    }
+
+    #[test]
+    fn remove_unused_block_arg_preserves_remaining_value_identity() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: AttributeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: AttributeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: AttributeMap::new(),
+                },
+            ],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        let first = ctx.block_arg(block, 0);
+        let removed = ctx.block_arg(block, 1);
+        let last = ctx.block_arg(block, 2);
+
+        assert_eq!(ctx.remove_block_arg(block, 1), removed);
+        assert_eq!(ctx.block_args(block), [first, last]);
+        assert_eq!(ctx.value_def(first), ValueDef::BlockArg(block, 0));
+        assert_eq!(ctx.value_def(last), ValueDef::BlockArg(block, 1));
     }
 
     #[test]

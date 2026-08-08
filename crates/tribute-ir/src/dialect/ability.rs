@@ -20,19 +20,18 @@ mod ability {
         {}
     }
 
-    /// Perform an ability operation with an explicit continuation closure.
-    ///
-    /// The continuation closure captures the rest of the computation
-    /// after the effect point.
+    /// Perform a general ability operation through an exact result-indexed
+    /// dispatch and resumption pair.
     ///
     /// ```text
-    /// %yr = ability.perform %continuation, [%args...]
+    /// ability.perform %evidence, %dispatch, %resume, [%args...]
     ///   { ability_ref: @State, op_name: @get }
     /// ```
     ///
-    /// Lowered to: evidence lookup → ShiftInfo construction → YieldResult::Shift.
+    /// Both control closures retain their exact CPS types. Only source values
+    /// are packed for dispatch.
     #[attr(ability_ref: Type, op_name: Symbol)]
-    fn perform(continuation: (), #[rest] values: ()) -> result {}
+    fn perform(evidence: (), dispatch: (), resume: (), #[rest] values: ()) {}
 
     /// Legacy frontend form using the carrier pipeline's null-or-single-value
     /// payload convention until the frontend/pipeline migration is complete.
@@ -82,15 +81,15 @@ mod ability {
     /// Resultless proper-tail handler delimiter emitted by
     /// `tribute_control_to_cps`.
     ///
-    /// `ability_refs` is ordered to match pairs in `dispatchers`. Each pair is
+    /// `prompt_tag` is the runtime-unique identity allocated for this exact
+    /// delimiter. `ability_refs` is ordered to match pairs in `dispatchers`. Each pair is
     /// `(tr_dispatch_fn, handler_dispatch)`, using typed reject closures when a
     /// handled ability has no operation of that kind. `resolve_evidence`
-    /// allocates one runtime-unique prompt identity for the delimiter and
-    /// shares it across every pair. The body entry block receives the extended
+    /// consumes that exact identity and shares it across every pair. The body entry block receives the extended
     /// evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     #[attr(ability_refs: any)]
-    fn handle_dispatch(evidence: (), #[rest] dispatchers: ()) {
+    fn handle_dispatch(evidence: (), prompt_tag: (), #[rest] dispatchers: ()) {
         #[region(body)]
         {}
     }
