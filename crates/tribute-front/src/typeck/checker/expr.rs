@@ -73,6 +73,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Nil
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::Error => false,
     }
 }
@@ -89,6 +90,25 @@ fn effect_row_contains_univar<'db>(db: &'db dyn salsa::Database, row: EffectRow<
     false
 }
 
+/// Resolve only the constraints known while a lambda body was evaluated.
+/// Contextual callback-row equations are deliberately added after this probe:
+/// they describe the slot receiving the closure, not effects evaluated by the
+/// closure value itself.
+fn lexical_lambda_body_is_pure<'db>(
+    ctx: &FunctionInferenceContext<'_, 'db>,
+    effects: &[EffectRow<'db>],
+) -> bool {
+    let mut solver = TypeSolver::new(ctx.db());
+    solver.solve(ctx.constraints_snapshot()).is_ok_and(|()| {
+        effects.iter().all(|effect| {
+            solver
+                .row_subst()
+                .apply(ctx.db(), *effect)
+                .is_pure(ctx.db())
+        })
+    })
+}
+
 impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Expression checking
@@ -101,6 +121,7 @@ impl<'db> TypeChecker<'db> {
         expr: Expr<ResolvedRef<'db>>,
         mode: Mode<'db>,
     ) -> Expr<TypedRef<'db>> {
+        let inferred_before_conversion = ctx.get_node_type(expr.id);
         let ty = match &*expr.kind {
             ExprKind::NatLit(_) => ctx.nat_type(),
             ExprKind::IntLit(_) => ctx.int_type(),
@@ -114,6 +135,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                ctx.record_call_callee_type(callee.id, callee_ty);
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
                 // semantic state, never through the concrete node-type table.
@@ -161,6 +183,7 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Cons { ctor, args } => {
                 let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
+                ctx.record_reference_type(expr.id, ctor_ty);
                 if args.is_empty() {
                     // Unit constructor (e.g., None) - just return the constructor type
                     ctor_ty
@@ -180,6 +203,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 // Get the struct constructor type and extract return type
                 let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+                ctx.record_reference_type(expr.id, ctor_ty);
                 let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
                     // Constructor has function type: fn(fields...) -> StructType
                     *result
@@ -353,6 +377,7 @@ impl<'db> TypeChecker<'db> {
                 // lambda's effect to include State(s).
                 let fresh_effect = ctx.fresh_effect_row();
                 ctx.set_current_effect(fresh_effect);
+                ctx.begin_lexical_lambda_effects();
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
@@ -369,6 +394,8 @@ impl<'db> TypeChecker<'db> {
 
                 // The lambda's effect is what accumulated during body inference
                 let inferred_effect = ctx.current_effect();
+                let (lexical_effects, contains_control_transfer) = ctx.end_lexical_lambda_effects();
+                let body_is_effect_free = lexical_lambda_body_is_pure(ctx, &lexical_effects);
 
                 ctx.pop_scope();
 
@@ -402,10 +429,14 @@ impl<'db> TypeChecker<'db> {
                     lambda_effect,
                     minimum_convention,
                 );
+                ctx.record_inferred_lambda_type(expr.id, lambda_type);
                 ctx.record_lambda_signature(
                     expr.id,
                     crate::typeck::LambdaSignature {
                         function_type: lambda_type,
+                        body_is_effect_free,
+                        contains_control_transfer,
+                        lexical_convention: crate::ast::CallingConvention::Direct,
                         convention: minimum_convention,
                     },
                 );
@@ -526,6 +557,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.canonical_list_type(elem_ty)
             }
             ExprKind::Resume { arg, local_id } => {
+                ctx.record_lexical_lambda_control_transfer();
                 let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
                 if let Some(lid) = local_id
                     && let Some(cont_ty) = ctx.lookup_local(*lid)
@@ -542,6 +574,17 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Error => ctx.error_type(),
+        };
+
+        // The initial inference pass owns expression-level solver variables.
+        // Conversion may recheck an expression to construct TypedRefs, but it
+        // must use that exact instance rather than export a detached second
+        // set of body-local variables.
+        let ty = if let Some(inferred) = inferred_before_conversion {
+            ctx.constrain_eq(ty, inferred);
+            inferred
+        } else {
+            ty
         };
 
         // Check mode: constrain inferred type to match expected type.
@@ -574,18 +617,6 @@ impl<'db> TypeChecker<'db> {
             }
         }
 
-        // If a type was already recorded for this node (e.g., by infer_expr_type_with_ctx),
-        // add a constraint to ensure consistency. This handles cases like Lambda where
-        // type inference may occur twice (once in infer_* and once in check_*).
-        if let ExprKind::Lambda { .. } = &*expr.kind
-            && let Some(inferred_lambda_type) = ctx.get_inferred_lambda_type(expr.id)
-        {
-            ctx.constrain_eq(ty, inferred_lambda_type);
-        }
-        if let Some(existing_ty) = ctx.get_node_type(expr.id) {
-            ctx.constrain_eq(ty, existing_ty);
-        }
-
         let lambda_signature_type = if matches!(&*expr.kind, ExprKind::Lambda { .. }) {
             match &mode {
                 Mode::Check(expected)
@@ -593,7 +624,7 @@ impl<'db> TypeChecker<'db> {
                 {
                     *expected
                 }
-                _ => ty,
+                _ => ctx.get_inferred_lambda_type(expr.id).unwrap_or(ty),
             }
         } else {
             ty
@@ -603,10 +634,18 @@ impl<'db> TypeChecker<'db> {
                 minimum_convention, ..
             } = lambda_signature_type.kind(self.db())
         {
+            let body_is_effect_free = ctx
+                .lambda_signature(expr.id)
+                .is_some_and(|signature| signature.body_is_effect_free);
             ctx.record_checked_lambda_signature(
                 expr.id,
                 crate::typeck::LambdaSignature {
                     function_type: lambda_signature_type,
+                    body_is_effect_free,
+                    contains_control_transfer: ctx
+                        .lambda_signature(expr.id)
+                        .is_some_and(|signature| signature.contains_control_transfer),
+                    lexical_convention: crate::ast::CallingConvention::Direct,
                     convention: *minimum_convention,
                 },
             );
@@ -626,7 +665,15 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr: &Expr<ResolvedRef<'db>>,
     ) -> Type<'db> {
-        match &*expr.kind {
+        // The structural conversion walk revisits expressions after the first
+        // inference walk has established their exact solver instance. Reusing
+        // that instance keeps locally generalized binder provenance attached
+        // to constructor and call arguments instead of allocating detached
+        // conversion-only UniVars.
+        if let Some(ty) = ctx.get_node_type(expr.id) {
+            return ty;
+        }
+        let ty = match &*expr.kind {
             ExprKind::NatLit(_) => ctx.nat_type(),
             ExprKind::IntLit(_) => ctx.int_type(),
             ExprKind::FloatLit(_) => ctx.float_type(),
@@ -638,6 +685,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                ctx.record_call_callee_type(callee.id, callee_ty);
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
@@ -762,6 +810,7 @@ impl<'db> TypeChecker<'db> {
                 let outer_effect = ctx.current_effect();
                 let fresh_effect = ctx.fresh_effect_row();
                 ctx.set_current_effect(fresh_effect);
+                ctx.begin_lexical_lambda_effects();
 
                 ctx.push_scope();
                 for (param, ty) in params.iter().zip(param_types.iter()) {
@@ -773,12 +822,30 @@ impl<'db> TypeChecker<'db> {
 
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
                 let inferred_effect = ctx.current_effect();
+                let (lexical_effects, contains_control_transfer) = ctx.end_lexical_lambda_effects();
+                let body_is_effect_free = lexical_lambda_body_is_pure(ctx, &lexical_effects);
 
                 ctx.pop_scope();
                 ctx.set_current_effect(outer_effect);
 
                 let lambda_type = ctx.func_type(param_types, body_ty, inferred_effect);
                 ctx.record_inferred_lambda_type(expr.id, lambda_type);
+                // Preserve the lexical body-effect observation from the first
+                // inference walk.  A later contextual check reuses this
+                // lambda instance and may equate its open row with an
+                // effectful callback slot; that contextual equation must not
+                // make an otherwise pure closure value CPS, but it also must
+                // not hide an effect already performed by the body.
+                ctx.record_lambda_signature(
+                    expr.id,
+                    crate::typeck::LambdaSignature {
+                        function_type: lambda_type,
+                        body_is_effect_free,
+                        contains_control_transfer,
+                        lexical_convention: crate::ast::CallingConvention::Direct,
+                        convention: crate::ast::CallingConvention::Direct,
+                    },
+                );
                 lambda_type
             }
             ExprKind::Tuple(elems) => {
@@ -797,7 +864,9 @@ impl<'db> TypeChecker<'db> {
                 ctx.canonical_list_type(elem_ty)
             }
             _ => ctx.fresh_type_var(),
-        }
+        };
+        ctx.record_node_type(expr.id, ty);
+        ty
     }
 
     /// Infer the type of a variable reference.
@@ -814,8 +883,12 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     ctx.lookup_local(*id)
                 };
-                let by_name = ctx.lookup_local_by_name(*name);
-                by_id.or(by_name).unwrap_or_else(|| ctx.fresh_type_var())
+                if let Some(ty) = by_id {
+                    ty
+                } else {
+                    ctx.lookup_local_by_name(*name)
+                        .unwrap_or_else(|| ctx.fresh_type_var())
+                }
             }
             ResolvedRef::Function { id } => ctx
                 .instantiate_function(*id)
@@ -947,6 +1020,7 @@ impl<'db> TypeChecker<'db> {
                 // effect row is already the handler body's effect row (assigned in
                 // convert_handler_arm_with_ctx), so it's already accounted for in the
                 // enclosing handle expression's effect propagation.
+                ctx.record_lexical_lambda_control_transfer();
                 ctx.constrain_eq_at(
                     callee_ty,
                     expected_cont_ty,
@@ -1162,14 +1236,30 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
-            ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved)),
+            ExprKind::Var(resolved) => {
+                ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(expr_id), resolved))
+            }
             ExprKind::Call { callee, args } => {
                 let inferred_ability_op_callee = ctx.get_ability_op_callee_type(callee.id);
-                // First, process callee so its type gets recorded
-                let converted_callee = self.check_expr_with_ctx(ctx, callee, Mode::Infer);
+                let inferred_callee = ctx.get_call_callee_type(callee.id);
+                // A direct reference was already instantiated while inferring
+                // this call. Reuse that exact instance instead of revisiting
+                // the reference and allocating an unrelated local-scheme
+                // UniVar during conversion.
+                let Expr {
+                    id: callee_id,
+                    kind: callee_kind,
+                } = callee;
+                let converted_callee = match *callee_kind {
+                    ExprKind::Var(resolved) => Expr::new(
+                        callee_id,
+                        ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(callee_id), resolved)),
+                    ),
+                    kind => self.check_expr_with_ctx(ctx, Expr::new(callee_id, kind), Mode::Infer),
+                };
 
                 // Now get callee's type (recorded during check_expr_with_ctx)
-                let callee_ty = ctx.get_node_type(converted_callee.id);
+                let callee_ty = inferred_callee.or_else(|| ctx.get_node_type(converted_callee.id));
 
                 if let (Some(inferred), Some(converted)) = (inferred_ability_op_callee, callee_ty) {
                     ctx.constrain_eq(inferred, converted);
@@ -1212,7 +1302,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor: self.convert_ref_with_ctx(ctx, ctor),
+                ctor: self.convert_ref_with_ctx(ctx, Some(expr_id), ctor),
                 args: args
                     .into_iter()
                     .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
@@ -1223,7 +1313,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => ExprKind::Record {
-                type_name: self.convert_ref_with_ctx(ctx, type_name),
+                type_name: self.convert_ref_with_ctx(ctx, Some(expr_id), type_name),
                 fields: fields
                     .into_iter()
                     .map(|(name, expr)| (name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))
@@ -1310,10 +1400,16 @@ impl<'db> TypeChecker<'db> {
                     })
                     .collect();
 
-                // Check exhaustiveness
-                if self.check_exhaustiveness(scrutinee_ty, &converted_arms, scrutinee_expr.id) {
-                    ctx.record_exhaustive_case(expr_id);
-                }
+                // The local solver owns the concrete scrutinee type.  Record
+                // this compact case snapshot now and classify it only after
+                // substitution, rather than treating an inference UniVar as
+                // non-exhaustive here.
+                ctx.record_pending_exhaustiveness_case(
+                    expr_id,
+                    scrutinee_expr.id,
+                    scrutinee_ty,
+                    converted_arms.clone(),
+                );
 
                 ExprKind::Case {
                     scrutinee: scrutinee_expr,
@@ -1321,31 +1417,30 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Lambda { params, body } => {
-                // Save and restore effect context for lambda body,
-                // just like in the infer phase. This prevents lambda
-                // body effects from leaking into the enclosing scope.
-                let outer_effect = ctx.current_effect();
-                let fresh_effect = ctx.fresh_effect_row();
-                ctx.set_current_effect(fresh_effect);
+                // Reuse the lambda instance created during inference.  Creating
+                // a second set of parameter/result UniVars while converting the
+                // typed body leaves body-local polymorphism outside the local
+                // generalization that bound the original lambda value.
+                let inferred = ctx
+                    .get_inferred_lambda_type(expr_id)
+                    .expect("lambda conversion must follow lambda inference");
+                let (param_types, lambda_effect) = match inferred.kind(self.db()) {
+                    TypeKind::Func { params, effect, .. } => (params.clone(), *effect),
+                    _ => unreachable!("inferred lambda type must be a function"),
+                };
 
-                // Bind lambda parameters so that references to them in the body
-                // resolve to their concrete types (not fresh UniVars). Without this,
-                // TDNR cannot determine receiver types for method calls inside lambdas.
-                let param_types: Vec<Type<'db>> = params
-                    .iter()
-                    .map(|p| match &p.ty {
-                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
-                        None => ctx.fresh_type_var(),
-                    })
-                    .collect();
+                // Reuse the solved latent row while materializing the typed
+                // body. Its contextual constraints must not revise the
+                // lexical evaluation-effect observation recorded by the first
+                // inference walk above.
+                let outer_effect = ctx.current_effect();
+                ctx.set_current_effect(lambda_effect);
+                ctx.begin_lexical_lambda_effects();
+
+                // Bind the exact inferred parameter types so references in the
+                // converted body use the same local-generalized instance.
                 ctx.push_scope();
                 for (param, ty) in params.iter().zip(param_types.iter()) {
-                    tracing::debug!(
-                        "convert Lambda: binding param '{}' (local_id={:?}) to {:?}",
-                        param.name,
-                        param.local_id,
-                        ty.kind(self.db())
-                    );
                     if let Some(local_id) = param.local_id {
                         ctx.bind_local(local_id, *ty);
                     }
@@ -1353,6 +1448,8 @@ impl<'db> TypeChecker<'db> {
                 }
 
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                let (_, contains_control_transfer) = ctx.end_lexical_lambda_effects();
+                ctx.record_converted_lambda_control_transfer(expr_id, contains_control_transfer);
 
                 ctx.pop_scope();
                 ctx.set_current_effect(outer_effect);
@@ -1382,10 +1479,13 @@ impl<'db> TypeChecker<'db> {
                         .collect(),
                 }
             }
-            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.check_expr_with_ctx(ctx, arg, Mode::Infer),
-                local_id,
-            },
+            ExprKind::Resume { arg, local_id } => {
+                ctx.record_lexical_lambda_control_transfer();
+                ExprKind::Resume {
+                    arg: self.check_expr_with_ctx(ctx, arg, Mode::Infer),
+                    local_id,
+                }
+            }
             ExprKind::Tuple(elements) => ExprKind::Tuple(
                 elements
                     .into_iter()
@@ -1406,9 +1506,18 @@ impl<'db> TypeChecker<'db> {
     fn convert_ref_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node_id: Option<NodeId>,
         resolved: ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = self.infer_var_with_ctx(ctx, &resolved);
+        // A direct call has already selected one exact callee instantiation in
+        // the inference pass. Reusing it prevents conversion from creating an
+        // unrelated raw UniVar for a locally generalized function reference.
+        let ty = node_id
+            .and_then(|node| {
+                ctx.get_reference_type(node)
+                    .or_else(|| ctx.get_call_callee_type(node))
+            })
+            .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved));
         TypedRef { resolved, ty }
     }
 
@@ -1443,6 +1552,7 @@ impl<'db> TypeChecker<'db> {
                 self.generalize_and_bind_pattern_with_ctx(
                     ctx,
                     pattern,
+                    Some(value),
                     value_ty,
                     evaluation_effect,
                 );
@@ -1489,6 +1599,7 @@ impl<'db> TypeChecker<'db> {
                 self.generalize_and_bind_pattern_with_ctx(
                     ctx,
                     &pattern,
+                    None,
                     value_ty,
                     evaluation_effect,
                 );
@@ -1516,6 +1627,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern: &Pattern<ResolvedRef<'db>>,
+        value: Option<&Expr<ResolvedRef<'db>>>,
         value_ty: Type<'db>,
         evaluation_effect: EffectRow<'db>,
     ) {
@@ -1530,6 +1642,10 @@ impl<'db> TypeChecker<'db> {
         let should_generalize = row_subst
             .apply(self.db(), evaluation_effect)
             .is_pure(self.db());
+
+        if should_generalize && let Some(value) = value {
+            self.record_generalized_lambda_owners(ctx, pattern, value);
+        }
 
         let mut environment_type_vars = Vec::new();
         let mut environment_effect_vars = Vec::new();
@@ -1564,14 +1680,16 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
-        for (name, local_id, binding_ty) in bindings {
+        for (name, local_id, binding_scope, binding_ty) in bindings {
             let scheme = if should_generalize {
-                let (generalized, type_params) = type_subst.generalize_excluding(
-                    self.db(),
-                    binding_ty,
-                    &row_subst,
-                    &environment_type_vars,
-                );
+                let (generalized, type_params, mapping) = type_subst
+                    .generalize_excluding_with_mapping(
+                        self.db(),
+                        binding_ty,
+                        &row_subst,
+                        &environment_type_vars,
+                    );
+                ctx.record_local_generalization(binding_scope, mapping);
                 let effect_params: Vec<_> = collect_effect_vars(self.db(), generalized)
                     .into_iter()
                     .filter(|var| !environment_effect_vars.contains(var))
@@ -1581,9 +1699,9 @@ impl<'db> TypeChecker<'db> {
                 TypeScheme::mono(self.db(), binding_ty)
             };
             if let Some(local_id) = local_id {
-                ctx.bind_local_scheme(local_id, scheme);
+                ctx.bind_local_scheme_with_owner(local_id, scheme, binding_scope);
             }
-            ctx.bind_local_scheme_by_name(name, scheme);
+            ctx.bind_local_scheme_by_name_with_owner(name, scheme, binding_scope);
         }
     }
 
@@ -1594,12 +1712,12 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
-        bindings: &mut Vec<(Symbol, Option<LocalId>, Type<'db>)>,
+        bindings: &mut Vec<(Symbol, Option<LocalId>, NodeId, Type<'db>)>,
     ) {
         let resolve = |ty| type_subst.apply_with_rows(self.db(), ty, row_subst);
         match &*pattern.kind {
             PatternKind::Bind { name, local_id } => {
-                bindings.push((*name, *local_id, resolve(ty)));
+                bindings.push((*name, *local_id, pattern.id, resolve(ty)));
             }
             PatternKind::Tuple(patterns)
             | PatternKind::Variant {
@@ -1631,7 +1749,7 @@ impl<'db> TypeChecker<'db> {
                             ctx, pattern, field_ty, type_subst, row_subst, bindings,
                         );
                     } else {
-                        bindings.push((field.name, None, field_ty));
+                        bindings.push((field.name, None, field.id, field_ty));
                     }
                 }
             }
@@ -1650,7 +1768,7 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
                 if let Some(name) = rest {
-                    bindings.push((*name, *rest_local_id, resolve(ty)));
+                    bindings.push((*name, *rest_local_id, pattern.id, resolve(ty)));
                 }
             }
             PatternKind::As {
@@ -1659,7 +1777,7 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => {
                 let resolved_ty = resolve(ty);
-                bindings.push((*name, *local_id, resolved_ty));
+                bindings.push((*name, *local_id, pattern.id, resolved_ty));
                 self.collect_pattern_bindings_with_ctx(
                     ctx,
                     pattern,
@@ -1670,6 +1788,34 @@ impl<'db> TypeChecker<'db> {
                 );
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
+        }
+    }
+
+    fn record_generalized_lambda_owners(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern: &Pattern<ResolvedRef<'db>>,
+        value: &Expr<ResolvedRef<'db>>,
+    ) {
+        match (&*pattern.kind, &*value.kind) {
+            (PatternKind::Bind { .. }, ExprKind::Lambda { .. }) => {
+                ctx.record_local_generalized_lambda(value.id, pattern.id);
+            }
+            (PatternKind::Tuple(patterns), ExprKind::Tuple(values))
+            | (PatternKind::List(patterns), ExprKind::List(values)) => {
+                for (pattern, value) in patterns.iter().zip(values) {
+                    self.record_generalized_lambda_owners(ctx, pattern, value);
+                }
+            }
+            (PatternKind::Variant { fields, .. }, ExprKind::Cons { args, .. }) => {
+                for (pattern, value) in fields.iter().zip(args) {
+                    self.record_generalized_lambda_owners(ctx, pattern, value);
+                }
+            }
+            (PatternKind::As { pattern, .. }, _) => {
+                self.record_generalized_lambda_owners(ctx, pattern, value);
+            }
+            _ => {}
         }
     }
 
@@ -1691,6 +1837,7 @@ impl<'db> TypeChecker<'db> {
             },
             PatternKind::Variant { ctor, fields } => {
                 let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
+                ctx.record_reference_type(pattern.id, ctor_ty);
                 ctx.record_node_type(pattern.id, ctor_ty);
 
                 match ctor_ty.kind(self.db()) {
@@ -1729,7 +1876,9 @@ impl<'db> TypeChecker<'db> {
             }
             PatternKind::Record { type_name, .. } => {
                 if let Some(type_ref) = type_name {
-                    self.infer_var_with_ctx(ctx, type_ref)
+                    let ty = self.infer_var_with_ctx(ctx, type_ref);
+                    ctx.record_reference_type(pattern.id, ty);
+                    ty
                 } else {
                     ctx.fresh_type_var()
                 }
@@ -1845,7 +1994,7 @@ impl<'db> TypeChecker<'db> {
             PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
             PatternKind::Literal(lit) => PatternKind::Literal(lit),
             PatternKind::Variant { ctor, fields } => PatternKind::Variant {
-                ctor: self.convert_ref_with_ctx(ctx, ctor),
+                ctor: self.convert_ref_with_ctx(ctx, Some(pattern.id), ctor),
                 fields: fields
                     .into_iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
@@ -1856,7 +2005,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => PatternKind::Record {
-                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
+                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, Some(pattern.id), t)),
                 fields: fields
                     .into_iter()
                     .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
@@ -2015,7 +2164,7 @@ impl<'db> TypeChecker<'db> {
                     .collect();
 
                 PatternKind::Record {
-                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
+                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, None, t)),
                     fields: converted_fields,
                     rest,
                 }
@@ -2094,14 +2243,14 @@ impl<'db> TypeChecker<'db> {
         arm: HandlerArm<ResolvedRef<'db>>,
         handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
-        let kind = match arm.kind {
+        let (kind, body_ty) = match arm.kind {
             HandlerKind::Do { binding } => {
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
                 ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
                 self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
                 let binding =
                     self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty);
-                HandlerKind::Do { binding }
+                (HandlerKind::Do { binding }, handle_ctx.answer_ty)
             }
             HandlerKind::Fn {
                 ability,
@@ -2119,15 +2268,19 @@ impl<'db> TypeChecker<'db> {
                         handle_ctx,
                     },
                 );
+                let result_ty = operation.result;
                 ctx.record_handler_operation(arm.id, operation);
-                HandlerKind::Fn {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                }
+                (
+                    HandlerKind::Fn {
+                        ability: self.convert_ref_with_ctx(ctx, None, ability),
+                        op,
+                        params: params
+                            .into_iter()
+                            .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                            .collect(),
+                    },
+                    result_ty,
+                )
             }
             HandlerKind::Op {
                 ability,
@@ -2172,21 +2325,27 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
 
-                HandlerKind::Op {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                    resume_local_id,
-                }
+                (
+                    HandlerKind::Op {
+                        ability: self.convert_ref_with_ctx(ctx, None, ability),
+                        op,
+                        params: params
+                            .into_iter()
+                            .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                            .collect(),
+                        resume_local_id,
+                    },
+                    handle_ctx.answer_ty,
+                )
             }
         };
         HandlerArm {
             id: arm.id,
             kind,
-            body: self.check_expr_with_ctx(ctx, arm.body, Mode::Infer),
+            // `fn` arms return the direct operation answer, allowing the
+            // handled computation to continue normally. `do` and resumptive
+            // `op` arms produce the enclosing handle answer.
+            body: self.check_expr_with_ctx(ctx, arm.body, Mode::Check(body_ty)),
         }
     }
 
@@ -2462,7 +2621,7 @@ impl<'db> TypeChecker<'db> {
     /// - If the last arm has a wildcard or bind pattern, it's exhaustive
     /// - If matching an enum, all variants must be covered
     /// - Otherwise, emit a warning for patterns we can't fully analyze
-    fn check_exhaustiveness(
+    pub(super) fn check_exhaustiveness(
         &self,
         scrutinee_ty: Type<'db>,
         arms: &[Arm<TypedRef<'db>>],

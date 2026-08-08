@@ -95,6 +95,10 @@ Monomorph  Uniform Rep
 | 제네릭 함수            | **다형적 재귀** | Uniform representation |
 | Effect만 다형적인 함수 | -               | Evidence passing       |
 
+Uniform representation은 다형적인 **소스 데이터**에만 적용한다. 유지된
+제네릭 본문과 특수화 본문은 결과 인덱스가 있는 `Parent`·`Done`·`Resume`·`Dispatch`
+제어 타입을 정확히 구성하며, 이를 `anyref`로 소거하거나 변환 캐스트하지 않는다.
+
 ---
 
 ## Monomorphization

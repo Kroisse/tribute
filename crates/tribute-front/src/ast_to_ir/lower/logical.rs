@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_core::{set_root_export_convention, set_root_source_result};
 use tribute_ir::dialect::{
     list,
     tribute_control::{self, OperationDeclaration},
@@ -44,6 +45,8 @@ struct Declarations<'db> {
     >,
     lambda_signatures:
         std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
+    call_callee_types: std::collections::HashMap<crate::ast::NodeId, crate::ast::Type<'db>>,
+    specialized_call_callee_nodes: std::collections::HashSet<crate::ast::NodeId>,
     exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
 }
 
@@ -136,6 +139,8 @@ pub(super) fn lower_module<'db>(
         function_types,
         constructor_types,
         node_types,
+        call_callee_types,
+        specialized_call_callee_nodes,
         ability_conventions,
         ability_definitions,
         handler_operations,
@@ -168,8 +173,16 @@ pub(super) fn lower_module<'db>(
         handler_operations,
         perform_operations,
         lambda_signatures,
+        call_callee_types,
+        specialized_call_callee_nodes,
         exhaustive_cases,
     };
+    super::decl::prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
+    super::decl::promote_logical_definition_conventions_to_fixed_point(
+        &mut ctx,
+        &ast.decls,
+        &mut String::new(),
+    );
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut String::new());
     prescan_logical_nominal_layouts(
@@ -280,8 +293,14 @@ fn prescan_logical_nominal_layouts<'db>(
                     .variants
                     .iter()
                     .map(|variant| {
-                        let variant_ctor =
-                            CtorId::new(ctx.db, crate::qualified_symbol(prefix, variant.name));
+                        let variant_ctor = if enumeration.id.variant().is_some() {
+                            CtorId::new(
+                                ctx.db,
+                                Symbol::from_dynamic(&format!("{qualified}${}", variant.name)),
+                            )
+                        } else {
+                            CtorId::new(ctx.db, crate::qualified_symbol(prefix, variant.name))
+                        };
                         let fields = constructor_fields(
                             ctx,
                             constructors,
@@ -456,10 +475,12 @@ fn prescan_source_functions<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                ctx.register_logical_source_function(ctx.qualify_name(function.name));
+                ctx.register_logical_source_function(ctx.canonical_declaration_name(function.name));
             }
             Decl::ExternFunction(function) => {
-                ctx.register_logical_source_function(ctx.qualify_name(function.name));
+                let name = ctx.canonical_declaration_name(function.name);
+                ctx.register_logical_source_function(name);
+                ctx.register_logical_source_extern(name);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
@@ -540,21 +561,17 @@ fn function_signature<'db>(
     ir: &mut IrContext,
     function: &FuncDecl<TypedRef<'db>>,
 ) -> FuncSignature {
-    let qualified = ctx.qualify_name(function.name);
-    let signature = if qualified == function.name {
-        FuncSignature::lookup_logical(ctx, ir, function.name)
-    } else {
-        // Nested declarations are exported under their qualified identity; a
-        // short-name lookup can silently select an unrelated root declaration.
-        FuncSignature::lookup_logical(ctx, ir, qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, function.name))
-    };
-    signature.unwrap_or_else(|| {
+    let qualified = ctx.canonical_declaration_name(function.name);
+    let mut signature = FuncSignature::lookup_logical(ctx, ir, qualified).unwrap_or_else(|| {
         panic!(
             "missing typechecked signature for function {}",
             function.name
         )
-    })
+    });
+    signature.convention = ctx
+        .function_calling_convention(qualified)
+        .unwrap_or(signature.convention);
+    signature
 }
 
 fn lower_function<'db>(
@@ -565,6 +582,13 @@ fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
+    let qualified_name = ctx.canonical_declaration_name(function.name);
+    let root_export_convention = crate::is_root_main(function.name, ctx.module_path().len() == 1)
+        .then(|| {
+            FuncSignature::lookup_logical(ctx, ir, qualified_name)
+                .expect("root main has a typechecked logical signature")
+                .convention
+        });
     let signature = function_signature(ctx, ir, &function);
     let callable = callable_type(
         ir,
@@ -594,12 +618,16 @@ fn lower_function<'db>(
                 scope.bind(id, parameter.name, ir.block_arg(entry, index as u32));
             }
         }
-        let value = lower_expr(
+        let Some(value) = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
             declarations,
-        )
-        .expect("typechecked source expression failed logical IR lowering");
+        ) else {
+            // Type checking has emitted the source diagnostic.  Do not invent
+            // an invalid logical value or publish a partial function body
+            // during error recovery.
+            return;
+        };
         let value = IrBuilder::new(&mut scope, ir, entry).cast_if_needed(
             location,
             value,
@@ -614,10 +642,17 @@ fn lower_function<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
-    let name = ctx.qualify_name(function.name);
-    let function = tribute_control::func_declaration(ir, location, name, callable);
+    let function = tribute_control::func_declaration(ir, location, qualified_name, callable);
     ir.op_mut(function.op_ref()).regions.push(body);
     ir.region_mut(body).parent_op = Some(function.op_ref());
+    if let Some(convention) = root_export_convention {
+        assert!(
+            convention != CallingConvention::Cps,
+            "typechecked root export convention must be Direct or EvidenceDirect"
+        );
+        set_root_export_convention(ir, function.op_ref(), convention);
+        set_root_source_result(ir, function.op_ref(), signature.return_type);
+    }
     ir.push_op(top, function.op_ref());
 }
 
@@ -628,26 +663,21 @@ fn lower_extern<'db>(
     decl: ExternFuncDecl,
 ) {
     let location = ctx.location(decl.id);
-    let qualified = ctx.qualify_name(decl.name);
-    let signature = if qualified == decl.name {
-        FuncSignature::lookup_logical(ctx, ir, decl.name)
-    } else {
-        FuncSignature::lookup_logical(ctx, ir, qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, decl.name))
-    }
-    .unwrap_or_else(|| {
+    let qualified = ctx.canonical_declaration_name(decl.name);
+    let mut signature = FuncSignature::lookup_logical(ctx, ir, qualified).unwrap_or_else(|| {
         panic!(
             "missing typechecked signature for extern function {}",
             decl.name
         )
     });
+    signature.convention = CallingConvention::Direct;
     let callable = callable_type(
         ir,
         signature.return_type,
         signature.param_types,
         signature.convention,
     );
-    let name = ctx.qualify_name(decl.name);
+    let name = ctx.canonical_declaration_name(decl.name);
     let function = tribute_control::func_declaration(ir, location, name, callable);
     ir.op_mut(function.op_ref())
         .attributes
@@ -662,6 +692,7 @@ fn ensure_prelude_declaration(
     signature: &FuncSignature,
 ) {
     if builder.ctx.is_logical_source_function(name)
+        || builder.ctx.has_logical_source_extern_base(name)
         || builder
             .ctx
             .lookup_logical_generated_signature(name)
@@ -1005,7 +1036,22 @@ fn lower_expr<'db>(
         }
         ExprKind::Resume { arg, local_id } => {
             let token = builder.ctx.lookup_resume(local_id?)?;
+            let declared_input_ty =
+                tribute_control::resume_token_parts(builder.ir, builder.ir.value_ty(token))
+                    .map(|(input, _)| input)
+                    .unwrap_or_else(|| {
+                        panic!("missing exact declared input type for resume token")
+                    });
+            let source_input_ty = expr_type(builder, &arg);
+            assert_eq!(
+                source_input_ty, declared_input_ty,
+                "typechecked resume input disagrees with its exact operation declaration"
+            );
             let value = lower_expr(builder, arg, declarations)?;
+            // Literal and erased ADT values use their source representation at
+            // this boundary.  The resume token, derived from the operation
+            // declaration, is the exact authority for restoring that type.
+            let value = builder.cast_if_needed(location, value, declared_input_ty);
             let result_ty = builder
                 .ctx
                 .get_node_type(expr.id)
@@ -1137,8 +1183,25 @@ fn lower_record<'db>(
     // values in declaration layout order.
     let mut values = HashMap::new();
     for (name, field) in fields {
-        if !field_order.contains(&name) || values.contains_key(&name) {
-            panic!("typechecked record has an invalid field layout");
+        if !field_order.contains(&name) {
+            Diagnostic::new(
+                format!("unknown field `{name}` for struct `{struct_name}`"),
+                location.span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
+            .accumulate(builder.db());
+            return None;
+        }
+        if values.contains_key(&name) {
+            Diagnostic::new(
+                format!("duplicate field `{name}`"),
+                location.span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
+            .accumulate(builder.db());
+            return None;
         }
         values.insert(name, lower_expr(builder, field, declarations)?);
     }
@@ -1147,8 +1210,16 @@ fn lower_record<'db>(
         if let Some(value) = values.get(name) {
             ordered.push(*value);
         } else {
-            let base =
-                spread.unwrap_or_else(|| panic!("typechecked record is missing field {name}"));
+            let Some(base) = spread else {
+                Diagnostic::new(
+                    format!("missing field: {name}"),
+                    location.span,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::Lowering,
+                )
+                .accumulate(builder.db());
+                return None;
+            };
             // The layout owns concrete field types.  `struct_get` needs a
             // result type, obtained from the matching getter expression type
             // only after normal typechecking; use layout metadata directly.
@@ -1194,10 +1265,10 @@ fn lower_case_chain<'db>(
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     match arms {
-        // Typechecking has proved this path unreachable (for example the
-        // false branch after exhaustive Bool literal arms).  The arena has no
-        // source-logical unreachable producer, so keep it as an isolated
-        // polymorphic conversion value rather than introducing `func.*`.
+        // A finalized checker proof reaches an empty residual only through
+        // `build_case_else_region`, which has the structured-region context
+        // needed to emit logical bottom. Other empty chains remain ordinary
+        // diagnosed recovery.
         [] => Some(unreachable_case_value(builder, location, result_ty)),
         [last] if exhaustive && last.guard.is_none() => {
             let mut scope = builder.ctx.scope();
@@ -1394,6 +1465,15 @@ fn build_case_else_region<'db>(
         ops: Default::default(),
         parent_region: None,
     });
+    if arms.is_empty() && exhaustive {
+        let unreachable = tribute_control::unreachable(ir, location);
+        ir.push_op(block, unreachable.op_ref());
+        return Some(ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![block],
+            parent_op: None,
+        }));
+    }
     let value = lower_case_chain(
         &mut IrBuilder::new(ctx, ir, block),
         location,
@@ -1468,6 +1548,7 @@ fn lower_call<'db>(
     args: Vec<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
+    let callee_id = callee.id;
     // A resolved variable callee is atomic. Any other callee expression is a
     // strict child and must be evaluated before the argument list.
     let indirect_callee = if matches!(&*callee.kind, ExprKind::Var(_)) {
@@ -1502,6 +1583,9 @@ fn lower_call<'db>(
                         semantic,
                     },
                 );
+                for (value, parameter_ty) in values.iter_mut().zip(&declaration.parameter_types) {
+                    *value = builder.cast_if_needed(location, *value, *parameter_ty);
+                }
                 let perform = op(builder.ir, builder.block, location, "perform", |builder| {
                     builder
                         .operands(values)
@@ -1531,7 +1615,27 @@ fn lower_call<'db>(
                     return Some(value);
                 }
                 let name = id.qualified(builder.ctx.db);
-                let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+                let signature = declarations
+                    .specialized_call_callee_nodes
+                    .contains(&callee_id)
+                    .then(|| {
+                        declarations
+                            .call_callee_types
+                            .get(&callee_id)
+                            .copied()
+                            .unwrap_or_else(|| {
+                                panic!("missing exact specialized call-callee metadata for {name}")
+                            })
+                    })
+                    .map(|callee_type| {
+                        FuncSignature::from_logical_type(builder.ctx, builder.ir, callee_type)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "typechecked call-callee metadata is not a callable for {name}"
+                                )
+                            })
+                    })
+                    .or_else(|| FuncSignature::lookup_logical(builder.ctx, builder.ir, name))
                     .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
                 ensure_prelude_declaration(builder, location, name, &signature);
                 if values.len() != signature.param_types.len() {

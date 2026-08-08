@@ -261,6 +261,68 @@ fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl)
     );
 }
 
+/// The comparison result starts as an inference variable.  Exhaustiveness is
+/// decided only after solving it to Bool, so source-logical lowering selects
+/// the final arm without manufacturing a Nil conversion for an empty else.
+#[salsa_test]
+fn inferred_case_scrutinee_is_classified_after_solving(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "inferred_exhaustive_case.trb",
+        r#"
+fn select(value: Nat) -> Nat {
+    case value == 0 {
+        True -> 1
+        False -> 2
+    }
+}
+
+fn main() { }
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let select = checked_logical_function(&ir, "select");
+    assert!(
+        select.contains("scf.if"),
+        "expected structured case lowering:\n{select}"
+    );
+    assert!(
+        !select.contains("core.unrealized_conversion_cast"),
+        "a solved exhaustive Bool case must not manufacture a Nil cast:\n{select}"
+    );
+}
+
+#[salsa_test]
+fn finalized_exhaustive_guarded_residual_uses_logical_bottom(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "guarded_exhaustive_case.trb",
+        r#"
+fn select(value: Bool) -> Int {
+    case value {
+        True -> 1
+        False -> 2
+        True if value -> 3
+    }
+}
+
+fn main() { }
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let select = checked_logical_function(&ir, "select");
+    assert!(
+        select.contains("tribute_control.unreachable"),
+        "the finalized guarded residual must terminate logically:\n{select}"
+    );
+    assert!(
+        !select.contains("core.unrealized_conversion_cast"),
+        "a proven logical residual must not manufacture a Nil cast:\n{select}"
+    );
+}
+
 #[salsa_test]
 fn nested_main_is_not_a_root_convention_special_case(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -670,23 +732,30 @@ fn main() {
         pure_header.contains("convention(direct)"),
         "pure worker must remain Direct:\n{pure_header}"
     );
-    for name in ["apply_closed", "main"] {
-        let header = ir_text
-            .lines()
-            .find(|line| {
-                line.trim_start()
-                    .starts_with(&format!("tribute_control.func @{name}("))
-            })
-            .unwrap_or_else(|| panic!("missing lowered worker {name}"));
-        assert!(
-            header.contains("convention(direct)"),
-            "{name} must stay Direct:\n{header}"
-        );
-    }
+    let apply_closed_header = ir_text
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("tribute_control.func @apply_closed(")
+        })
+        .expect("missing lowered apply_closed worker");
+    assert!(
+        apply_closed_header.contains("convention(direct)"),
+        "apply_closed must stay Direct:\n{apply_closed_header}"
+    );
+    let main_header = ir_text
+        .lines()
+        .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
+        .expect("missing lowered root main");
+    assert!(
+        main_header.contains("convention(cps)")
+            && main_header.contains("tribute.root_export_convention = 0"),
+        "open-callback root must use a Cps worker while preserving its Direct export contract:\n{main_header}"
+    );
 }
 
-/// An `Io` root keeps its EvidenceDirect ABI while the frontend delimiter
-/// closes the CPS implementation convention of an open callback worker.
+/// An `Io` root preserves EvidenceDirect only as its external export contract;
+/// its worker promotes to Cps when open callback evaluation requires it.
 #[salsa_test]
 fn test_open_callback_evidence_root_main_stays_evidence_direct(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -710,8 +779,9 @@ fn main() ->{std::io::Io} Nil {
         .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
         .expect("missing lowered root main");
     assert!(
-        main_header.contains("convention(evidence_direct)"),
-        "Io root main must remain EvidenceDirect, not Cps:\n{main_header}"
+        main_header.contains("convention(cps)")
+            && main_header.contains("tribute.root_export_convention = 1"),
+        "Io root must use a Cps worker while preserving its EvidenceDirect export contract:\n{main_header}"
     );
 }
 
@@ -811,6 +881,73 @@ fn main() { }
     assert!(
         !ir.contains("tribute_control.call {callee = @\"Nested::apply\"}"),
         "lowering must not reinterpret the local as the nested function:\n{ir}"
+    );
+}
+
+/// Monomorphized nested declarations already carry their source-qualified
+/// identity. Convention prescan and fixed-point promotion must use that same
+/// identity rather than qualifying it a second time. A same-short-name root
+/// declaration ensures lookup cannot silently fall back to the wrong worker.
+#[salsa_test]
+fn nested_generic_worker_uses_one_canonical_declaration_identity(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "nested_generic_identity.trb",
+        r#"
+struct Box(a) { value: a }
+
+fn unwrap(value: Box(a)) ->{} a { value.value }
+
+mod Nested {
+    struct Box(a) { value: a }
+
+    fn unwrap(value: Box(a)) ->{} a { value.value }
+
+    fn use_nested() ->{} Int {
+        unwrap(Box { value: +41 })
+    }
+}
+
+fn main() {
+    let _root = unwrap(Box { value: +1 })
+    let _nested = Nested::use_nested()
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    assert_logical_boundary(&ir);
+    assert!(
+        !ir.contains("Nested::Nested::"),
+        "an already-qualified synthetic declaration must never be qualified twice:\n{ir}"
+    );
+
+    let nested_specializations: Vec<_> = ir
+        .lines()
+        .filter(|line| {
+            line.trim_start()
+                .starts_with("tribute_control.func @\"Nested::Box::value\"")
+        })
+        .collect();
+    assert_eq!(
+        nested_specializations.len(),
+        1,
+        "the nested specialization must have one exact declaration:\n{ir}"
+    );
+    assert!(
+        nested_specializations[0].contains("convention(direct)"),
+        "the concrete-pure nested worker must remain Direct:\n{}",
+        nested_specializations[0]
+    );
+    assert!(
+        ir.lines().any(|line| line
+            .trim_start()
+            .starts_with("tribute_control.func @\"Box::value\"")),
+        "the same-short-name root specialization must remain distinct:\n{ir}"
+    );
+    assert!(
+        logical_function(&ir, "Nested::unwrap").contains("callee = @\"Nested::Box::value\""),
+        "the nested caller must target the exact qualified synthetic declaration:\n{ir}"
     );
 }
 

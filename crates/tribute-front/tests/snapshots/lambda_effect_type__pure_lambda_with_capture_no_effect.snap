@@ -9,14 +9,18 @@ core.module @test {
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @main() -> core.i32 convention(direct) {
+  tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.i32} {
       %0 = arith.const {value = 10} : core.i32
-      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(cps) captures [%0] {
+      %1 = tribute_control.lambda(%2: core.i32) -> core.i32 convention(direct) captures [%0] {
           %3 = arith.addi %2, %0 : core.i32
           tribute_control.return %3
       }
       %4 = arith.const {value = 32} : core.i32
-      %5 = tribute_control.call %1, %4 {callee = @apply} : core.i32
-      tribute_control.return %5
+      %5 = tribute_control.lambda(%6: core.i32) -> core.i32 convention(cps) captures [%1] {
+          %7 = tribute_control.call_indirect %1, %6 : core.i32
+          tribute_control.return %7
+      }
+      %8 = tribute_control.call %5, %4 {callee = @apply} : core.i32
+      tribute_control.return %8
   }
 }

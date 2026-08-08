@@ -6,16 +6,18 @@
 
 use std::collections::{HashMap, HashSet};
 
+use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, CtorId, Decl, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, HandlerKind, Module,
-    ModuleDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId, TypeKind, TypeScheme,
-    TypedRef,
+    Arm, CtorId, Decl, Effect, EffectRow, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm,
+    HandlerKind, Module, ModuleDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId,
+    TypeKind, TypeScheme, TypedRef,
 };
 
 use super::collect::extract_type_args;
 use super::mangle::mangle_type_name;
+use crate::typeck::subst::substitute_bound_vars;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
 pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
@@ -29,8 +31,16 @@ pub fn rewrite_module<'db>(
     module: Module<TypedRef<'db>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
     rewrite_map: &RewriteMap<'db>,
+    call_callee_types: &mut HashMap<crate::ast::NodeId, Type<'db>>,
+    specialized_call_callee_nodes: &mut HashSet<crate::ast::NodeId>,
 ) -> Module<TypedRef<'db>> {
-    let mut rewriter = make_rewriter(db, function_types, rewrite_map);
+    let mut rewriter = make_rewriter(
+        db,
+        function_types,
+        rewrite_map,
+        call_callee_types,
+        specialized_call_callee_nodes,
+    );
     let decls = module
         .decls
         .into_iter()
@@ -45,8 +55,16 @@ pub fn rewrite_decls<'db>(
     decls: Vec<Decl<TypedRef<'db>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
     rewrite_map: &RewriteMap<'db>,
+    call_callee_types: &mut HashMap<crate::ast::NodeId, Type<'db>>,
+    specialized_call_callee_nodes: &mut HashSet<crate::ast::NodeId>,
 ) -> Vec<Decl<TypedRef<'db>>> {
-    let mut rewriter = make_rewriter(db, function_types, rewrite_map);
+    let mut rewriter = make_rewriter(
+        db,
+        function_types,
+        rewrite_map,
+        call_callee_types,
+        specialized_call_callee_nodes,
+    );
     decls
         .into_iter()
         .map(|d| rewriter.rewrite_decl(d))
@@ -57,12 +75,16 @@ fn make_rewriter<'a, 'db>(
     db: &'db dyn salsa::Database,
     function_types: &[(Symbol, TypeScheme<'db>)],
     rewrite_map: &'a RewriteMap<'db>,
+    call_callee_types: &'a mut HashMap<crate::ast::NodeId, Type<'db>>,
+    specialized_call_callee_nodes: &'a mut HashSet<crate::ast::NodeId>,
 ) -> CallSiteRewriter<'a, 'db> {
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
     CallSiteRewriter {
         db,
         scheme_map,
         rewrite_map,
+        call_callee_types,
+        specialized_call_callee_nodes,
     }
 }
 
@@ -70,17 +92,24 @@ struct CallSiteRewriter<'a, 'db> {
     db: &'db dyn salsa::Database,
     scheme_map: HashMap<Symbol, TypeScheme<'db>>,
     rewrite_map: &'a RewriteMap<'db>,
+    call_callee_types: &'a mut HashMap<crate::ast::NodeId, Type<'db>>,
+    specialized_call_callee_nodes: &'a mut HashSet<crate::ast::NodeId>,
 }
 
 impl<'a, 'db> CallSiteRewriter<'a, 'db> {
-    fn try_rewrite_ref(&self, typed_ref: &TypedRef<'db>) -> Option<TypedRef<'db>> {
+    fn try_rewrite_ref(
+        &mut self,
+        node: crate::ast::NodeId,
+        typed_ref: &TypedRef<'db>,
+    ) -> Option<TypedRef<'db>> {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return None;
         };
         let entries = self.rewrite_map.get(id)?;
         let qualified = id.qualified(self.db);
         let scheme = self.scheme_map.get(&qualified)?;
-        let type_args = extract_type_args(self.db, *scheme, typed_ref.ty)?;
+        let concrete = self.call_callee_types.get(&node).copied()?;
+        let type_args = extract_type_args(self.db, *scheme, concrete)?;
 
         // Find the matching mangled name
         let mangled = entries.iter().find_map(|(args, name)| {
@@ -91,15 +120,24 @@ impl<'a, 'db> CallSiteRewriter<'a, 'db> {
             }
         })?;
 
+        let specialized_type = substitute_bound_vars(self.db, scheme.body(self.db), &type_args)
+            .unwrap_or_else(|index, max| {
+                panic!(
+                    "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
+                    qualified, index, max
+                )
+            });
+        self.call_callee_types.insert(node, specialized_type);
+        self.specialized_call_callee_nodes.insert(node);
         let specialized_id = FuncDefId::new(self.db, mangled);
         Some(TypedRef::new(
             ResolvedRef::Function { id: specialized_id },
-            typed_ref.ty,
+            specialized_type,
         ))
     }
 
-    fn rewrite_typed_ref(&self, tr: TypedRef<'db>) -> TypedRef<'db> {
-        self.try_rewrite_ref(&tr).unwrap_or(tr)
+    fn rewrite_typed_ref(&mut self, node: crate::ast::NodeId, tr: TypedRef<'db>) -> TypedRef<'db> {
+        self.try_rewrite_ref(node, &tr).unwrap_or(tr)
     }
 
     fn rewrite_decl(&mut self, decl: Decl<TypedRef<'db>>) -> Decl<TypedRef<'db>> {
@@ -125,7 +163,7 @@ impl<'a, 'db> CallSiteRewriter<'a, 'db> {
 
     fn rewrite_expr(&mut self, expr: Expr<TypedRef<'db>>) -> Expr<TypedRef<'db>> {
         let kind = match *expr.kind {
-            ExprKind::Var(tr) => ExprKind::Var(self.rewrite_typed_ref(tr)),
+            ExprKind::Var(tr) => ExprKind::Var(self.rewrite_typed_ref(expr.id, tr)),
             ExprKind::Call { callee, args } => ExprKind::Call {
                 callee: self.rewrite_expr(callee),
                 args: args.into_iter().map(|a| self.rewrite_expr(a)).collect(),
@@ -353,7 +391,8 @@ pub fn rewrite_type<'db>(
         } => {
             let new_params: Vec<_> = params.iter().map(|p| rewrite_type(db, *p, map)).collect();
             let new_result = rewrite_type(db, *result, map);
-            if new_params == *params && new_result == *result {
+            let new_effect = rewrite_effect_row(db, *effect, map);
+            if new_params == *params && new_result == *result && new_effect == *effect {
                 return ty;
             }
             Type::new(
@@ -361,7 +400,7 @@ pub fn rewrite_type<'db>(
                 TypeKind::Func {
                     params: new_params,
                     result: new_result,
-                    effect: *effect,
+                    effect: new_effect,
                     minimum_convention: *minimum_convention,
                 },
             )
@@ -394,7 +433,8 @@ pub fn rewrite_type<'db>(
         } => {
             let new_arg = rewrite_type(db, *arg, map);
             let new_result = rewrite_type(db, *result, map);
-            if new_arg == *arg && new_result == *result {
+            let new_effect = rewrite_effect_row(db, *effect, map);
+            if new_arg == *arg && new_result == *result && new_effect == *effect {
                 return ty;
             }
             Type::new(
@@ -402,7 +442,7 @@ pub fn rewrite_type<'db>(
                 TypeKind::Continuation {
                     arg: new_arg,
                     result: new_result,
-                    effect: *effect,
+                    effect: new_effect,
                 },
             )
         }
@@ -416,8 +456,33 @@ pub fn rewrite_type<'db>(
         | TypeKind::Nil
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::Error => ty,
+    }
+}
+
+fn rewrite_effect_row<'db>(
+    db: &'db dyn salsa::Database,
+    effect: EffectRow<'db>,
+    map: &TypeRewriteMap<'db>,
+) -> EffectRow<'db> {
+    let rewritten: Vec<_> = effect
+        .effects(db)
+        .iter()
+        .map(|entry| Effect {
+            ability_id: entry.ability_id,
+            args: entry
+                .args
+                .iter()
+                .map(|arg| rewrite_type(db, *arg, map))
+                .collect(),
+        })
+        .collect();
+    if rewritten == *effect.effects(db) {
+        effect
+    } else {
+        EffectRow::new(db, rewritten, effect.rest(db))
     }
 }
 
@@ -455,7 +520,7 @@ fn rewrite_typed_ref_type<'db>(
 
 fn find_mangled_for_ctor<'db>(
     db: &'db dyn salsa::Database,
-    _ctor_id: CtorId<'db>,
+    ctor_id: CtorId<'db>,
     ty: Type<'db>,
     map: &TypeRewriteMap<'db>,
 ) -> Option<Symbol> {
@@ -470,7 +535,14 @@ fn find_mangled_for_ctor<'db>(
             let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(*mangled)
+            if ctor_id.qualified(db) == id.qualified(db) {
+                Some(*mangled)
+            } else {
+                Some(Symbol::from_dynamic(&format!(
+                    "{mangled}${}",
+                    ctor_id.qualified(db).last_segment()
+                )))
+            }
         }
         _ => None,
     }

@@ -128,10 +128,14 @@ impl<'db> TypeChecker<'db> {
         let constraints = ctx.take_constraints();
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
+        let func_call_callee_types = ctx.take_call_callee_types();
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
-        let func_exhaustive_cases = ctx.take_exhaustive_cases();
+        let func_local_generalizations = ctx.take_local_generalizations();
+        let func_local_generalized_bindings = ctx.take_local_generalized_bindings();
+        let func_local_generalized_lambdas = ctx.take_local_generalized_lambdas();
+        let pending_exhaustiveness_cases = ctx.take_pending_exhaustiveness_cases();
         // Save the accumulated effect row from the body before dropping ctx
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
@@ -159,31 +163,6 @@ impl<'db> TypeChecker<'db> {
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
-
-        // First, collect ALL unresolved UniVars from the function type, body, and deferred
-        // method callee types. This ensures that UniVars created during body type checking
-        // or post-solve deferred method resolution are included in the generalization mapping.
-        let mut all_univars = Vec::new();
-        type_subst.collect_univars_from_type(
-            self.db(),
-            instantiated_func_ty,
-            row_subst,
-            &mut all_univars,
-        );
-        self.collect_univars_from_body(&body, type_subst, row_subst, &mut all_univars);
-        self.collect_univars_from_deferred_resolutions(
-            &deferred_resolutions,
-            type_subst,
-            row_subst,
-            &mut all_univars,
-        );
-
-        // Create a comprehensive mapping from all UniVars to BoundVars
-        let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
-            .into_iter()
-            .enumerate()
-            .map(|(i, id)| (id, i as u32))
-            .collect();
 
         // Only the exact root `main` is an entrypoint. Its omitted effect
         // annotation is closed over the effects actually performed by its body:
@@ -236,6 +215,24 @@ impl<'db> TypeChecker<'db> {
 
         // Apply substitution and generalization to the function type.
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
+
+        // A function scheme quantifies only type variables exposed by its
+        // callable interface. Local inference artifacts must remain local:
+        // quantifying them creates phantom scheme parameters that no call site
+        // can instantiate, which in turn erases exact higher-order CPS types.
+        let mut interface_univars = Vec::new();
+        type_subst.collect_univars_from_type(
+            self.db(),
+            substituted_ty,
+            row_subst,
+            &mut interface_univars,
+        );
+        let mut var_to_index: HashMap<UniVarId<'db>, u32> = interface_univars
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index as u32))
+            .collect();
+        type_subst.propagate_bound_var_aliases(self.db(), &mut var_to_index);
 
         // Validate that root `main` returns Nil.
         if is_root_main
@@ -338,8 +335,8 @@ impl<'db> TypeChecker<'db> {
         let generalized =
             type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
 
-        // Create type params for all generalized UniVars
-        let type_params: Vec<crate::ast::TypeParam> = (0..var_to_index.len())
+        // Create type parameters only for generalized interface variables.
+        let type_params: Vec<crate::ast::TypeParam> = (0..interface_univars.len())
             .map(|_| crate::ast::TypeParam::anonymous())
             .collect();
 
@@ -347,6 +344,145 @@ impl<'db> TypeChecker<'db> {
         let new_scheme = TypeScheme::new(self.db(), type_params, effect_params, generalized);
         // Update the function's type scheme with the generalized version
         self.env.register_function(func_id, new_scheme);
+
+        // Local generalization happens against a solved constraint snapshot.
+        // The function-wide solve may have subsequently compressed its UniVar
+        // representative, so record both the lexical variable and its final
+        // unresolved representative before materializing typed references.
+        let mut resolved_local_generalizations = func_local_generalizations.clone();
+        for (var, binding) in func_local_generalizations {
+            let original = Type::new(self.db(), TypeKind::UniVar { id: var });
+            let resolved = type_subst.apply_with_rows(self.db(), original, row_subst);
+            let mut representatives = Vec::new();
+            type_subst.collect_univars_from_type(
+                self.db(),
+                resolved,
+                row_subst,
+                &mut representatives,
+            );
+            for representative in representatives {
+                resolved_local_generalizations
+                    .entry(representative)
+                    .or_insert(binding);
+            }
+        }
+        // Conversion can revisit a value with a compressed representative.
+        // Recover only from the exact binding pattern that introduced the
+        // scheme; sibling tuple/record bindings deliberately do not share a
+        // scope or index space.
+        for (scope, _) in func_local_generalized_bindings {
+            let Some(binding_ty) = func_node_types
+                .iter()
+                .find_map(|(node, ty)| (*node == scope).then_some(*ty))
+            else {
+                continue;
+            };
+            let mut representatives = Vec::new();
+            type_subst.collect_univars_from_type(
+                self.db(),
+                binding_ty,
+                row_subst,
+                &mut representatives,
+            );
+            for (index, representative) in representatives.into_iter().enumerate() {
+                resolved_local_generalizations
+                    .entry(representative)
+                    .or_insert((scope, index as u32));
+            }
+        }
+        for (lambda, scope) in func_local_generalized_lambdas {
+            let Some(signature) = func_lambda_signatures.get(&lambda) else {
+                continue;
+            };
+            let mut representatives = Vec::new();
+            type_subst.collect_univars_from_type(
+                self.db(),
+                signature.function_type,
+                row_subst,
+                &mut representatives,
+            );
+            for (index, representative) in representatives.into_iter().enumerate() {
+                resolved_local_generalizations
+                    .entry(representative)
+                    .or_insert((scope, index as u32));
+            }
+        }
+        type_subst
+            .propagate_local_generalization_aliases(self.db(), &mut resolved_local_generalizations);
+        self.local_generalizations = resolved_local_generalizations;
+
+        // Finalization is the last point at which solver variables are allowed
+        // to exist.  A body-only variable which is neither part of the
+        // callable interface nor a recorded local scheme is ambiguous source
+        // typing, not a lowering representation.  Diagnose it here and
+        // materialize typed Error recovery consistently in the body and every
+        // exported semantic table below.
+        self.unresolved_body_univars = if self.finalization_audit_enabled {
+            collect_finalization_univars(
+                self.db(),
+                type_subst,
+                row_subst,
+                &body,
+                &func_node_types,
+                &func_call_callee_types,
+                &func_handler_operations,
+                &func_perform_operations,
+                &func_lambda_signatures,
+                &deferred_resolutions,
+            )
+            .into_iter()
+            .filter(|id| {
+                !var_to_index.contains_key(id) && !self.local_generalizations.contains_key(id)
+            })
+            .collect()
+        } else {
+            HashSet::new()
+        };
+        if !self.unresolved_body_univars.is_empty() {
+            Diagnostic::new(
+                format!(
+                    "cannot infer a concrete type for {} body-local expression{}",
+                    self.unresolved_body_univars.len(),
+                    if self.unresolved_body_univars.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+
+        // Exhaustiveness is a property of the finalized scrutinee type.  The
+        // pending record avoids a second body traversal while preserving the
+        // original scrutinee span for the established diagnostics.
+        for pending in pending_exhaustiveness_cases {
+            let scrutinee_type = self.apply_subst_to_type(
+                pending.scrutinee_type,
+                type_subst,
+                row_subst,
+                &var_to_index,
+            );
+            let arms = pending
+                .arms
+                .into_iter()
+                .map(|arm| {
+                    self.apply_subst_to_arm(
+                        arm,
+                        type_subst,
+                        row_subst,
+                        &var_to_index,
+                        &deferred_resolutions,
+                    )
+                })
+                .collect_vec();
+            if self.check_exhaustiveness(scrutinee_type, &arms, pending.diagnostic_span) {
+                self.exhaustive_cases.push(pending.case);
+            }
+        }
 
         // 6. Apply substitution and generalization to all TypedRef types in the body
         let body = self.apply_subst_to_body(
@@ -357,12 +493,17 @@ impl<'db> TypeChecker<'db> {
             &deferred_resolutions,
         );
 
-        // 7. Collect node types from this function's context and apply substitution.
-        // These entries describe concrete expression storage for lowering; the
-        // source-logical operation metadata is carried separately on TypedRef.
+        // 7. Apply the same interface generalization to every semantic table
+        // consumed by monomorphization/lowering. Keeping call metadata as raw
+        // UniVars would make a specialized recursive call appear unresolved
+        // even though the corresponding TypedRef carries BoundVars.
         for (node_id, ty) in func_node_types {
-            let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
             self.node_types.insert(node_id, substituted);
+        }
+        for (callee_id, ty) in func_call_callee_types {
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
+            self.call_callee_types.insert(callee_id, substituted);
         }
         for (arm_id, operation) in func_handler_operations {
             self.handler_operations.insert(
@@ -372,15 +513,24 @@ impl<'db> TypeChecker<'db> {
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
-                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                    result: self.apply_subst_to_type(
+                        operation.result,
+                        type_subst,
+                        row_subst,
+                        &var_to_index,
+                    ),
                 },
             );
         }
@@ -392,15 +542,24 @@ impl<'db> TypeChecker<'db> {
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| type_subst.apply_with_rows(self.db(), ty, row_subst))
+                        .map(|ty| {
+                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        })
                         .collect(),
-                    result: type_subst.apply_with_rows(self.db(), operation.result, row_subst),
+                    result: self.apply_subst_to_type(
+                        operation.result,
+                        type_subst,
+                        row_subst,
+                        &var_to_index,
+                    ),
                 },
             );
         }
@@ -410,23 +569,37 @@ impl<'db> TypeChecker<'db> {
             .into_iter()
             .collect::<HashMap<_, _>>();
         for (lambda_id, signature) in func_lambda_signatures {
-            let function_type =
-                type_subst.apply_with_rows(self.db(), signature.function_type, row_subst);
-            let convention = crate::ast::calling_convention_for_function_type(
-                self.db(),
-                function_type,
-                &ability_conventions,
-            )
-            .expect("lambda semantic signature must remain a function type");
+            let function_type = self.apply_subst_to_type(
+                signature.function_type,
+                type_subst,
+                row_subst,
+                &var_to_index,
+            );
+            let convention = if signature.contains_control_transfer {
+                crate::ast::CallingConvention::Cps
+            } else if signature.body_is_effect_free {
+                signature.lexical_convention
+            } else {
+                crate::ast::calling_convention_for_function_type(
+                    self.db(),
+                    function_type,
+                    &ability_conventions,
+                )
+                .expect("lambda semantic signature must remain a function type")
+            };
             self.lambda_signatures.insert(
                 lambda_id,
                 crate::typeck::LambdaSignature {
                     function_type,
+                    body_is_effect_free: signature.body_is_effect_free,
+                    contains_control_transfer: signature.contains_control_transfer,
+                    lexical_convention: signature.lexical_convention,
                     convention,
                 },
             );
         }
-        self.exhaustive_cases.extend(func_exhaustive_cases);
+        self.local_generalizations.clear();
+        self.unresolved_body_univars.clear();
 
         FuncDecl {
             id: func.id,
@@ -932,8 +1105,17 @@ impl<'db> TypeChecker<'db> {
     ) -> Type<'db> {
         // First apply the substitution to resolve UniVars
         let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
-        // Then apply the generalization mapping to convert remaining UniVars to BoundVars
-        type_subst.apply_generalization(self.db(), substituted, row_subst, var_to_index)
+        // Then apply the enclosing function and local-let mappings. The latter
+        // are deliberately scope-tagged so they cannot become function scheme
+        // parameters during specialization.
+        type_subst.apply_generalization_with_local_vars(
+            self.db(),
+            substituted,
+            row_subst,
+            var_to_index,
+            &self.local_generalizations,
+            &self.unresolved_body_univars,
+        )
     }
 
     /// Apply substitution to a statement.
@@ -1156,224 +1338,262 @@ impl<'db> TypeChecker<'db> {
                 .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index)),
         }
     }
+}
 
-    // =========================================================================
-    // UniVar collection from body
-    // =========================================================================
-
-    /// Collect all unresolved UniVars from the body expression.
-    fn collect_univars_from_body(
-        &self,
-        body: &Expr<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        self.collect_univars_from_expr_kind(&body.kind, type_subst, row_subst, out);
+/// Collect every solver variable that could otherwise escape one function's
+/// finalization boundary.  The typed tree is walked separately from the
+/// semantic tables because constructors, record names, case patterns and
+/// handler ability references carry `TypedRef`s outside ordinary expressions.
+#[allow(clippy::too_many_arguments)] // The audited output surfaces are explicit by design.
+fn collect_finalization_univars<'db>(
+    db: &'db dyn salsa::Database,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+    body: &Expr<TypedRef<'db>>,
+    node_types: &HashMap<crate::ast::NodeId, Type<'db>>,
+    call_callee_types: &HashMap<crate::ast::NodeId, Type<'db>>,
+    handler_operations: &HashMap<
+        crate::ast::NodeId,
+        crate::typeck::InstantiatedHandlerOperation<'db>,
+    >,
+    perform_operations: &HashMap<
+        crate::ast::NodeId,
+        crate::typeck::InstantiatedPerformOperation<'db>,
+    >,
+    lambda_signatures: &HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
+    deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
+) -> Vec<UniVarId<'db>> {
+    let mut out = Vec::new();
+    collect_expr_univars(db, type_subst, row_subst, body, &mut out);
+    for ty in node_types.values().chain(call_callee_types.values()) {
+        collect_type_univars(type_subst, db, *ty, row_subst, &mut out);
     }
-
-    fn collect_univars_from_deferred_resolutions(
-        &self,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        let mut node_ids: Vec<_> = deferred_resolutions.keys().copied().collect();
-        node_ids.sort();
-        for node_id in node_ids {
-            let (_, callee_ty) = deferred_resolutions[&node_id];
-            type_subst.collect_univars_from_type(self.db(), callee_ty, row_subst, out);
+    for operation in handler_operations.values() {
+        for ty in operation
+            .ability_args
+            .iter()
+            .chain(operation.params.iter())
+            .chain(std::iter::once(&operation.result))
+        {
+            collect_type_univars(type_subst, db, *ty, row_subst, &mut out);
         }
     }
+    for operation in perform_operations.values() {
+        for ty in operation
+            .ability_args
+            .iter()
+            .chain(operation.params.iter())
+            .chain(std::iter::once(&operation.result))
+        {
+            collect_type_univars(type_subst, db, *ty, row_subst, &mut out);
+        }
+    }
+    for signature in lambda_signatures.values() {
+        collect_type_univars(type_subst, db, signature.function_type, row_subst, &mut out);
+    }
+    for (_, ty) in deferred_resolutions.values() {
+        collect_type_univars(type_subst, db, *ty, row_subst, &mut out);
+    }
+    out
+}
 
-    fn collect_univars_from_expr_kind(
-        &self,
-        kind: &ExprKind<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match kind {
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::Nil
-            | ExprKind::RuneLit(_)
-            | ExprKind::Error => {}
+fn collect_type_univars<'db>(
+    type_subst: &TypeSubst<'db>,
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    row_subst: &RowSubst<'db>,
+    out: &mut Vec<UniVarId<'db>>,
+) {
+    type_subst.collect_univars_from_type(db, ty, row_subst, out);
+}
 
-            ExprKind::Var(typed_ref) => {
-                type_subst.collect_univars_from_type(self.db(), typed_ref.ty, row_subst, out);
+fn collect_typed_ref_univars<'db>(
+    db: &'db dyn salsa::Database,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+    typed_ref: &TypedRef<'db>,
+    out: &mut Vec<UniVarId<'db>>,
+) {
+    collect_type_univars(type_subst, db, typed_ref.ty, row_subst, out);
+}
+
+fn collect_expr_univars<'db>(
+    db: &'db dyn salsa::Database,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+    expr: &Expr<TypedRef<'db>>,
+    out: &mut Vec<UniVarId<'db>>,
+) {
+    match &*expr.kind {
+        ExprKind::Var(typed_ref) => {
+            collect_typed_ref_univars(db, type_subst, row_subst, typed_ref, out);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_expr_univars(db, type_subst, row_subst, callee, out);
+            for arg in args {
+                collect_expr_univars(db, type_subst, row_subst, arg, out);
             }
-            ExprKind::Call { callee, args } => {
-                self.collect_univars_from_body(callee, type_subst, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
+        }
+        ExprKind::Cons { ctor, args } => {
+            collect_typed_ref_univars(db, type_subst, row_subst, ctor, out);
+            for arg in args {
+                collect_expr_univars(db, type_subst, row_subst, arg, out);
             }
-            ExprKind::Cons { ctor, args } => {
-                type_subst.collect_univars_from_type(self.db(), ctor.ty, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
+        }
+        ExprKind::Record {
+            type_name,
+            fields,
+            spread,
+        } => {
+            collect_typed_ref_univars(db, type_subst, row_subst, type_name, out);
+            for (_, field) in fields {
+                collect_expr_univars(db, type_subst, row_subst, field, out);
             }
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => {
-                type_subst.collect_univars_from_type(self.db(), type_name.ty, row_subst, out);
-                for (_, expr) in fields {
-                    self.collect_univars_from_body(expr, type_subst, row_subst, out);
-                }
-                if let Some(e) = spread {
-                    self.collect_univars_from_body(e, type_subst, row_subst, out);
-                }
+            if let Some(spread) = spread {
+                collect_expr_univars(db, type_subst, row_subst, spread, out);
             }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.collect_univars_from_body(receiver, type_subst, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_expr_univars(db, type_subst, row_subst, receiver, out);
+            for arg in args {
+                collect_expr_univars(db, type_subst, row_subst, arg, out);
             }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.collect_univars_from_body(lhs, type_subst, row_subst, out);
-                self.collect_univars_from_body(rhs, type_subst, row_subst, out);
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    self.collect_univars_from_stmt(stmt, type_subst, row_subst, out);
-                }
-                self.collect_univars_from_body(value, type_subst, row_subst, out);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.collect_univars_from_body(scrutinee, type_subst, row_subst, out);
-                for arm in arms {
-                    self.collect_univars_from_pattern(&arm.pattern, type_subst, row_subst, out);
-                    if let Some(g) = &arm.guard {
-                        self.collect_univars_from_body(g, type_subst, row_subst, out);
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Let { pattern, value, .. } => {
+                        collect_pattern_univars(db, type_subst, row_subst, pattern, out);
+                        collect_expr_univars(db, type_subst, row_subst, value, out);
                     }
-                    self.collect_univars_from_body(&arm.body, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Lambda { body, .. } => {
-                self.collect_univars_from_body(body, type_subst, row_subst, out);
-            }
-            ExprKind::Handle { body, handlers } => {
-                self.collect_univars_from_body(body, type_subst, row_subst, out);
-                for handler in handlers {
-                    match &handler.kind {
-                        HandlerKind::Do { binding } => {
-                            self.collect_univars_from_pattern(binding, type_subst, row_subst, out);
-                        }
-                        HandlerKind::Fn {
-                            ability, params, ..
-                        }
-                        | HandlerKind::Op {
-                            ability, params, ..
-                        } => {
-                            type_subst.collect_univars_from_type(
-                                self.db(),
-                                ability.ty,
-                                row_subst,
-                                out,
-                            );
-                            for p in params {
-                                self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                            }
-                        }
-                    }
-                    self.collect_univars_from_body(&handler.body, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Resume { arg, .. } => {
-                self.collect_univars_from_body(arg, type_subst, row_subst, out);
-            }
-            ExprKind::Tuple(elems) | ExprKind::List(elems) => {
-                for elem in elems {
-                    self.collect_univars_from_body(elem, type_subst, row_subst, out);
-                }
-            }
-        }
-    }
-
-    fn collect_univars_from_stmt(
-        &self,
-        stmt: &Stmt<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                self.collect_univars_from_pattern(pattern, type_subst, row_subst, out);
-                self.collect_univars_from_body(value, type_subst, row_subst, out);
-            }
-            Stmt::Expr { expr, .. } => {
-                self.collect_univars_from_body(expr, type_subst, row_subst, out);
-            }
-        }
-    }
-
-    fn collect_univars_from_pattern(
-        &self,
-        pattern: &Pattern<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match &*pattern.kind {
-            PatternKind::Wildcard
-            | PatternKind::Bind { .. }
-            | PatternKind::Literal(_)
-            | PatternKind::Error => {}
-            PatternKind::Variant { ctor, fields } => {
-                type_subst.collect_univars_from_type(self.db(), ctor.ty, row_subst, out);
-                for f in fields {
-                    self.collect_univars_from_pattern(f, type_subst, row_subst, out);
-                }
-            }
-            PatternKind::Record {
-                type_name, fields, ..
-            } => {
-                if let Some(t) = type_name {
-                    type_subst.collect_univars_from_type(self.db(), t.ty, row_subst, out);
-                }
-                for f in fields {
-                    if let Some(p) = &f.pattern {
-                        self.collect_univars_from_pattern(p, type_subst, row_subst, out);
+                    Stmt::Expr { expr, .. } => {
+                        collect_expr_univars(db, type_subst, row_subst, expr, out);
                     }
                 }
             }
-            PatternKind::Tuple(pats) | PatternKind::List(pats) => {
-                for p in pats {
-                    self.collect_univars_from_pattern(p, type_subst, row_subst, out);
+            collect_expr_univars(db, type_subst, row_subst, value, out);
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            collect_expr_univars(db, type_subst, row_subst, scrutinee, out);
+            for arm in arms {
+                collect_pattern_univars(db, type_subst, row_subst, &arm.pattern, out);
+                if let Some(guard) = &arm.guard {
+                    collect_expr_univars(db, type_subst, row_subst, guard, out);
                 }
-            }
-            PatternKind::ListRest { head, .. } => {
-                for p in head {
-                    self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                }
-            }
-            PatternKind::As { pattern, .. } => {
-                self.collect_univars_from_pattern(pattern, type_subst, row_subst, out);
+                collect_expr_univars(db, type_subst, row_subst, &arm.body, out);
             }
         }
+        ExprKind::Lambda { body, .. } => {
+            collect_expr_univars(db, type_subst, row_subst, body, out);
+        }
+        ExprKind::Handle { body, handlers } => {
+            collect_expr_univars(db, type_subst, row_subst, body, out);
+            for handler in handlers {
+                collect_handler_univars(db, type_subst, row_subst, handler, out);
+            }
+        }
+        ExprKind::Resume { arg, .. } => {
+            collect_expr_univars(db, type_subst, row_subst, arg, out);
+        }
+        ExprKind::Tuple(elements) | ExprKind::List(elements) => {
+            for element in elements {
+                collect_expr_univars(db, type_subst, row_subst, element, out);
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_expr_univars(db, type_subst, row_subst, lhs, out);
+            collect_expr_univars(db, type_subst, row_subst, rhs, out);
+        }
+        ExprKind::NatLit(_)
+        | ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::Nil
+        | ExprKind::RuneLit(_)
+        | ExprKind::Error => {}
+    }
+}
+
+fn collect_handler_univars<'db>(
+    db: &'db dyn salsa::Database,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+    handler: &HandlerArm<TypedRef<'db>>,
+    out: &mut Vec<UniVarId<'db>>,
+) {
+    match &handler.kind {
+        HandlerKind::Do { binding } => {
+            collect_pattern_univars(db, type_subst, row_subst, binding, out);
+        }
+        HandlerKind::Fn {
+            ability, params, ..
+        }
+        | HandlerKind::Op {
+            ability, params, ..
+        } => {
+            collect_typed_ref_univars(db, type_subst, row_subst, ability, out);
+            for param in params {
+                collect_pattern_univars(db, type_subst, row_subst, param, out);
+            }
+        }
+    }
+    collect_expr_univars(db, type_subst, row_subst, &handler.body, out);
+}
+
+fn collect_pattern_univars<'db>(
+    db: &'db dyn salsa::Database,
+    type_subst: &TypeSubst<'db>,
+    row_subst: &RowSubst<'db>,
+    pattern: &Pattern<TypedRef<'db>>,
+    out: &mut Vec<UniVarId<'db>>,
+) {
+    match &*pattern.kind {
+        PatternKind::Variant { ctor, fields } => {
+            collect_typed_ref_univars(db, type_subst, row_subst, ctor, out);
+            for field in fields {
+                collect_pattern_univars(db, type_subst, row_subst, field, out);
+            }
+        }
+        PatternKind::Record {
+            type_name, fields, ..
+        } => {
+            if let Some(type_name) = type_name {
+                collect_typed_ref_univars(db, type_subst, row_subst, type_name, out);
+            }
+            for field in fields {
+                if let Some(pattern) = &field.pattern {
+                    collect_pattern_univars(db, type_subst, row_subst, pattern, out);
+                }
+            }
+        }
+        PatternKind::Tuple(patterns) | PatternKind::List(patterns) => {
+            for pattern in patterns {
+                collect_pattern_univars(db, type_subst, row_subst, pattern, out);
+            }
+        }
+        PatternKind::ListRest { head, .. } => {
+            for pattern in head {
+                collect_pattern_univars(db, type_subst, row_subst, pattern, out);
+            }
+        }
+        PatternKind::As { pattern, .. } => {
+            collect_pattern_univars(db, type_subst, row_subst, pattern, out);
+        }
+        PatternKind::Wildcard
+        | PatternKind::Bind { .. }
+        | PatternKind::Literal(_)
+        | PatternKind::Error => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    use crate::ast::{EffectRow, NodeId, SpanMap, Type, TypeDefId, TypeKind};
-    use crate::typeck::{TypeChecker, TypeSolver};
+    use crate::ast::{NodeId, Type, TypeDefId, TypeKind};
 
     use super::super::super::solver::SolveError;
     use super::{ConstraintOriginKind, format_solve_error, solve_error_context};
@@ -1430,69 +1650,5 @@ mod tests {
             ),
             "canonical compiler-owned type `List(Int)` is distinct from source-declared type `List(Int)`"
         );
-    }
-
-    #[salsa_test]
-    fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::DatabaseImpl) {
-        let mut solver = TypeSolver::new(db);
-        let first_solver_var = solver.fresh_type_var(db);
-        let second_solver_var = solver.fresh_type_var(db);
-        let first_callee_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![Type::new(db, TypeKind::Nat)],
-                result: first_solver_var,
-                effect: EffectRow::pure(db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let second_callee_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![Type::new(db, TypeKind::Nat)],
-                result: second_solver_var,
-                effect: EffectRow::pure(db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let mut deferred_resolutions = HashMap::new();
-        deferred_resolutions.insert(
-            NodeId::from_raw(2),
-            (
-                crate::ast::FuncDefId::new(db, Symbol::new("Box::flat_map")),
-                second_callee_ty,
-            ),
-        );
-        deferred_resolutions.insert(
-            NodeId::from_raw(1),
-            (
-                crate::ast::FuncDefId::new(db, Symbol::new("Box::map")),
-                first_callee_ty,
-            ),
-        );
-
-        let checker = TypeChecker::new(db, SpanMap::default());
-        let mut collected = Vec::new();
-        checker.collect_univars_from_deferred_resolutions(
-            &deferred_resolutions,
-            solver.type_subst(),
-            solver.row_subst(),
-            &mut collected,
-        );
-
-        let TypeKind::UniVar {
-            id: first_solver_id,
-        } = first_solver_var.kind(db)
-        else {
-            panic!("fresh solver variable should be a UniVar");
-        };
-        let TypeKind::UniVar {
-            id: second_solver_id,
-        } = second_solver_var.kind(db)
-        else {
-            panic!("fresh solver variable should be a UniVar");
-        };
-        assert_eq!(collected, vec![*first_solver_id, *second_solver_id]);
     }
 }

@@ -92,8 +92,25 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         ast: typed,
         span_map: checked.span_map(db).clone(),
         function_types: checked.function_types(db).iter().cloned().collect(),
-        constructor_types: checked.constructor_types(db).iter().cloned().collect(),
-        node_types: checked.node_types(db).iter().cloned().collect(),
+        constructor_types: checked
+            .nominal_types(db)
+            .constructor_types
+            .iter()
+            .cloned()
+            .collect(),
+        node_types: checked
+            .expression_types(db)
+            .node_types
+            .iter()
+            .cloned()
+            .collect(),
+        call_callee_types: checked
+            .expression_types(db)
+            .call_callee_types
+            .iter()
+            .cloned()
+            .collect(),
+        specialized_call_callee_nodes: Default::default(),
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),

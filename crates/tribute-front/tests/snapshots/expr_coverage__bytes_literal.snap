@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @data() -> core.bytes convention(cps) {
+  tribute_control.func @data() -> core.bytes convention(direct) {
       %0 = adt.bytes_const {value = b"payload"} : core.bytes
       tribute_control.return %0
   }

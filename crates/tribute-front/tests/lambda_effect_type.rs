@@ -56,6 +56,39 @@ fn main() -> Int {
     assert_snapshot!(ir_text);
 }
 
+/// A pure body remains Direct even when root promotion makes the receiving
+/// callback slot Cps; lowering inserts an explicit logical wrapper instead of
+/// a control callable conversion cast.
+#[salsa_test]
+fn test_pure_lambda_contextualized_to_cps_slot_stays_direct(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+
+fn main() -> Int {
+    apply(fn(n) { n + 1 }, 41)
+}
+"#,
+    );
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let main = ir_text
+        .split("tribute_control.func @main")
+        .nth(1)
+        .expect("fixture must lower main");
+    assert!(
+        main.matches("tribute_control.lambda(").count() == 2
+            && main.contains("convention(direct)")
+            && main.matches("convention(cps)").count() >= 2,
+        "the pure closure and its structural Cps wrapper must remain distinct:\n{main}"
+    );
+    assert!(
+        !main.contains("core.unrealized_conversion_cast"),
+        "the Direct-to-Cps boundary must not use a control callable cast:\n{main}"
+    );
+}
+
 // ========================================================================
 // Effectful Lambda Tests - Effect Type Expected
 // ========================================================================

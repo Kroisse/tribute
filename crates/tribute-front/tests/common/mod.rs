@@ -100,6 +100,8 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let constructor_types: std::collections::HashMap<_, _> =
         result.constructor_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
+    let call_callee_types: std::collections::HashMap<_, _> =
+        result.call_callee_types.into_iter().collect();
     let ability_conventions: std::collections::HashMap<_, _> =
         result.ability_conventions.into_iter().collect();
     let ability_definitions: std::collections::HashMap<_, _> =
@@ -115,6 +117,8 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         constructor_types,
         node_types: node_types_map,
+        call_callee_types,
+        specialized_call_callee_nodes: Default::default(),
         ability_conventions,
         ability_definitions,
         handler_operations,

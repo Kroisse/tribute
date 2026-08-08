@@ -86,6 +86,13 @@ pub enum TypeKind<'db> {
     /// Index 0 refers to the innermost binder, following De Bruijn convention.
     BoundVar { index: u32 },
 
+    /// Type variable quantified by a local `let` binding.
+    ///
+    /// Unlike [`Self::BoundVar`], this retains the binding node that owns the
+    /// quantifier. It is valid only in typed bodies and semantic metadata;
+    /// function `TypeScheme`s never contain it.
+    LocalBoundVar { scope: NodeId, index: u32 },
+
     /// Unification variable (unknown during inference).
     ///
     /// These are created during type checking and resolved by unification.
@@ -230,6 +237,7 @@ impl fmt::Display for TypeKind<'_> {
                 write!(f, "#({elems})")
             }
             Self::BoundVar { index } => write!(f, "_{}", index),
+            Self::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
             Self::UniVar { .. } => f.write_str("_"),
             Self::App { ctor, args } => {
                 let args = args

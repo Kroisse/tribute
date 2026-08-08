@@ -15,7 +15,7 @@ core.module @test {
       %2 = arith.addi %0, %1 : core.i32
       tribute_control.return %2
   }
-  tribute_control.func @main() -> core.nil convention(direct) {
+  tribute_control.func @main() -> core.nil convention(direct) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.nil} {
       %0 = arith.const {value = unit} : core.nil
       tribute_control.return %0
   }

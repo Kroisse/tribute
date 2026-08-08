@@ -15,7 +15,7 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
       tribute_control.return %1
   }
-  tribute_control.func @copy_config(%0: !Config_1) -> !Config_1 convention(cps) {
+  tribute_control.func @copy_config(%0: !Config_1) -> !Config_1 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
       %2 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
       %3 = adt.struct_new %1, %2 {type = !Config} : !Config_1

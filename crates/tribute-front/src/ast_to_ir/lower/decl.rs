@@ -136,7 +136,7 @@ pub(super) fn prescan_struct_fields<'db>(
 /// does not by itself require the definition's worker to use CPS. Concrete
 /// residual effects still contribute their ability-level requirements.
 /// Explicit annotations use the convention derived from their closed row.
-fn prescan_definition_conventions<'db>(
+pub(super) fn prescan_definition_conventions<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     decls: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
@@ -144,7 +144,7 @@ fn prescan_definition_conventions<'db>(
     for decl in decls {
         match decl {
             Decl::Function(func_decl) => {
-                let qualified = crate::qualified_symbol(prefix, func_decl.name);
+                let qualified = crate::canonical_declaration_symbol(prefix, func_decl.name);
                 let scheme = ctx
                     .lookup_function_type(qualified)
                     .or_else(|| ctx.lookup_function_type(func_decl.name));
@@ -190,7 +190,7 @@ fn prescan_definition_conventions<'db>(
 /// body invokes an open-effect callback or a named worker promoted in a prior
 /// pass.  Re-evaluate every body against the current definition map until no
 /// worker changes; conventions only ever strengthen to Cps.
-fn promote_definition_conventions_to_fixed_point<'db>(
+pub(super) fn promote_definition_conventions_to_fixed_point<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     decls: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
@@ -204,6 +204,58 @@ fn promote_definition_conventions_to_fixed_point<'db>(
     }
 }
 
+/// Promote source-logical workers until every handler and transitive CPS call
+/// is represented by a CPS worker convention.
+///
+/// The target-owned root ABI wrapper is constructed after shared legalization,
+/// so root `main` is intentionally not exempt at this boundary.
+pub(super) fn promote_logical_definition_conventions_to_fixed_point<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+) {
+    loop {
+        let mut changed = false;
+        promote_logical_definition_conventions_pass(ctx, decls, prefix, &mut changed);
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn promote_logical_definition_conventions_pass<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    changed: &mut bool,
+) {
+    for decl in decls {
+        match decl {
+            Decl::Function(function) => {
+                let qualified = crate::canonical_declaration_symbol(prefix, function.name);
+                let Some(convention) = ctx.function_calling_convention(qualified) else {
+                    continue;
+                };
+                if convention != CallingConvention::Cps
+                    && expr::logical_evaluation_control_class(ctx, &function.body)
+                        == expr::EvaluationControlClass::Cps
+                {
+                    ctx.register_definition_convention(qualified, CallingConvention::Cps);
+                    *changed = true;
+                }
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, module.name);
+                    promote_logical_definition_conventions_pass(ctx, body, prefix, changed);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn promote_definition_conventions_pass<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     decls: &[Decl<TypedRef<'db>>],
@@ -213,7 +265,7 @@ fn promote_definition_conventions_pass<'db>(
     for decl in decls {
         match decl {
             Decl::Function(func_decl) => {
-                let qualified = crate::qualified_symbol(prefix, func_decl.name);
+                let qualified = crate::canonical_declaration_symbol(prefix, func_decl.name);
                 let Some(convention) = ctx.function_calling_convention(qualified) else {
                     continue;
                 };
@@ -267,6 +319,8 @@ impl<'db> TypedModule<'db> {
             perform_operations: _,
             lambda_signatures: _,
             exhaustive_cases: _,
+            call_callee_types: _,
+            specialized_call_callee_nodes: _,
         } = self;
         let module_location = span_map.get_or_default(ast.id);
         let location = Location::new(path, module_location);
