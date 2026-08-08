@@ -416,6 +416,7 @@ pub fn rewrite_type<'db>(
         | TypeKind::Nil
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::Error => ty,
     }

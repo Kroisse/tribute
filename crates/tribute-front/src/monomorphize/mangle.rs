@@ -79,6 +79,10 @@ fn write_type_mangled(
             f.write_str("$1")
         }
         TypeKind::BoundVar { index } => write!(f, "T{index}"),
+        // Local binders are source-body metadata. Monomorphization retains the
+        // existing uniform representation boundary, where both kinds of
+        // quantified variables use their index only.
+        TypeKind::LocalBoundVar { index, .. } => write!(f, "T{index}"),
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }
