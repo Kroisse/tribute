@@ -84,53 +84,26 @@ fn register_type(type_idx_by_type: &mut HashMap<TypeRef, u32>, idx: u32, ty: Typ
     type_idx_by_type.entry(ty).or_insert(idx);
 }
 
-/// Get the canonical type name for comparison.
-///
-/// For variant instance types, returns the base enum's name.
-/// For adt.enum/struct types, returns the name attribute.
-fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
-    let data = ctx.types.get(ty);
-
-    // Check if this is a variant instance type (adt type with "base_enum" attr)
-    if data.dialect == Symbol::new("adt")
-        && let Some(base_enum) = data.attrs.get_type("base_enum")
-    {
-        let base_data = ctx.types.get(base_enum);
-        if let Some(name_sym) = base_data.attrs.get_symbol("name") {
-            return Some(name_sym);
-        }
-    }
-
-    // Check if this is an adt.enum type
-    if data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("enum")
-        && let Some(name_sym) = data.attrs.get_symbol("name")
-    {
-        return Some(name_sym);
-    }
-
-    // Check if this is an adt.struct type
-    if data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("struct")
-        && let Some(name_sym) = data.attrs.get_symbol("name")
-    {
-        return Some(name_sym);
-    }
-
-    None
-}
-
 /// Normalize a type for GC struct field comparison.
 ///
 /// Normalizes tribute_rt types and variant instances to their canonical form.
-fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
+fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.types.get(ty);
 
-    // Normalize variant instance types to their base enum
+    // `_closure` is the target-private builtin closure layout. Logical closure
+    // references and its materialized struct declaration must share this one
+    // physical field representation.
+    if helpers::is_closure_struct_type(ctx, ty) {
+        return intern_named_adt_struct(ctx, "_closure");
+    }
+
+    // Recursive ADT references and concrete variants share the physical WasmGC
+    // struct supertype. Keeping either logical representation here would make
+    // equivalent field descriptions depend on visitation order.
     if data.dialect == Symbol::new("adt")
-        && let Some(base_enum) = data.attrs.get_type("base_enum")
+        && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
     {
-        return base_enum;
+        return intern_wasm_structref(ctx);
     }
 
     // Note: tribute_rt types (int, nat, bool, float, any, intref) should be
@@ -139,7 +112,7 @@ fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
 }
 
 /// Check if two types are semantically equivalent for GC struct fields.
-fn types_equivalent_for_gc(ctx: &IrContext, ty1: TypeRef, ty2: TypeRef) -> bool {
+fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> bool {
     // First try direct comparison
     if ty1 == ty2 {
         return true;
@@ -148,15 +121,6 @@ fn types_equivalent_for_gc(ctx: &IrContext, ty1: TypeRef, ty2: TypeRef) -> bool 
     let ty1_norm = normalize_type_for_gc(ctx, ty1);
     let ty2_norm = normalize_type_for_gc(ctx, ty2);
     if ty1_norm == ty2_norm {
-        return true;
-    }
-    // Compare canonical names for user-defined types
-    // (e.g., adt.struct with name=Foo vs adt.enum with base_enum Foo)
-    if let (Some(name1), Some(name2)) = (
-        get_canonical_type_name(ctx, ty1),
-        get_canonical_type_name(ctx, ty2),
-    ) && name1 == name2
-    {
         return true;
     }
     // anyref is a supertype of all concrete GC reference types (adt.struct,
@@ -188,7 +152,7 @@ fn types_equivalent_for_gc(ctx: &IrContext, ty1: TypeRef, ty2: TypeRef) -> bool 
 
 /// Record a struct field type
 fn record_struct_field(
-    ctx: &IrContext,
+    ctx: &mut IrContext,
     type_idx: u32,
     builder: &mut GcTypeBuilder,
     field_idx: u32,
@@ -210,10 +174,27 @@ fn record_struct_field(
     if let Some(existing) = builder.fields[idx] {
         // Check if types are semantically equivalent
         if !types_equivalent_for_gc(ctx, existing, ty) {
+            let existing_data = ctx.types.get(existing);
+            let new_data = ctx.types.get(ty);
             return Err(CompilationError::type_error(format!(
-                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?}, new={:?}",
-                existing, ty
+                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?} ({}.{}), new={:?} ({}.{})",
+                existing,
+                existing_data.dialect,
+                existing_data.name,
+                ty,
+                new_data.dialect,
+                new_data.name,
             )));
+        }
+        // `anyref` is the widest compatible reference type. Otherwise, keep
+        // the physical struct supertype rather than an equivalent concrete
+        // ADT reference, independent of visitation order.
+        let existing_is_anyref = helpers::is_type(ctx, existing, "wasm", "anyref");
+        let new_is_anyref = helpers::is_type(ctx, ty, "wasm", "anyref");
+        let existing_is_structref = helpers::is_type(ctx, existing, "wasm", "structref");
+        let new_is_structref = helpers::is_type(ctx, ty, "wasm", "structref");
+        if new_is_anyref || (!existing_is_anyref && new_is_structref && !existing_is_structref) {
+            builder.fields[idx] = Some(ty);
         }
     } else {
         debug!(
@@ -253,6 +234,16 @@ fn type_to_field_type(
     Ok(FieldType {
         element_type: StorageType::Val(val_type),
         mutable: true,
+    })
+}
+
+/// Create the physical WasmGC struct supertype used for recursive ADT fields.
+fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
+    ctx.types.intern(TypeData {
+        dialect: Symbol::new("wasm"),
+        name: Symbol::new("structref"),
+        params: Default::default(),
+        attrs: Default::default(),
     })
 }
 
@@ -601,4 +592,99 @@ pub(crate) fn collect_gc_types(
     result.extend(user_types);
 
     Ok((result, type_idx_by_type))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::types::{Attribute, TypeDataBuilder};
+
+    #[test]
+    fn record_struct_field_widens_concrete_to_anyref() {
+        let mut ctx = IrContext::new();
+        let concrete = intern_wasm_structref(&mut ctx);
+        let anyref = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let mut builder = GcTypeBuilder::new();
+
+        record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)
+            .expect("concrete field records");
+        record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, anyref)
+            .expect("anyref field widens compatible concrete field");
+
+        assert_eq!(builder.fields, vec![Some(anyref)]);
+    }
+
+    #[test]
+    fn variant_types_normalize_to_wasm_structref() {
+        let mut ctx = IrContext::new();
+        let enum_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .build(),
+        );
+        let variant_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("List$Cons"))
+                .attr("is_variant", Attribute::Bool(true))
+                .attr("base_enum", Attribute::Type(enum_ty))
+                .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
+                .build(),
+        );
+        let structref = intern_wasm_structref(&mut ctx);
+
+        assert_eq!(normalize_type_for_gc(&mut ctx, variant_ty), structref);
+        assert!(types_equivalent_for_gc(&mut ctx, variant_ty, structref));
+    }
+
+    #[test]
+    fn record_struct_field_canonicalizes_typeref_and_variant_to_structref() {
+        let mut ctx = IrContext::new();
+        let enum_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .build(),
+        );
+        let typeref_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .build(),
+        );
+        let variant_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("List$Cons"))
+                .attr("is_variant", Attribute::Bool(true))
+                .attr("base_enum", Attribute::Type(enum_ty))
+                .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
+                .build(),
+        );
+        let structref = intern_wasm_structref(&mut ctx);
+
+        for (first, second) in [(typeref_ty, variant_ty), (variant_ty, typeref_ty)] {
+            let mut builder = GcTypeBuilder::new();
+            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, first)
+                .expect("first equivalent field records");
+            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, second)
+                .expect("second equivalent field records");
+            assert_eq!(builder.fields, vec![Some(structref)]);
+        }
+    }
+
+    #[test]
+    fn same_named_adt_layouts_are_not_gc_equivalent() {
+        let mut ctx = IrContext::new();
+        let canonical = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .attr("layout", Attribute::Bool(true))
+                .build(),
+        );
+        let unrelated = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .attr("layout", Attribute::Bool(false))
+                .build(),
+        );
+
+        assert!(!types_equivalent_for_gc(&mut ctx, canonical, unrelated));
+    }
 }
