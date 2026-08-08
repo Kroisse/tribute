@@ -345,6 +345,7 @@ impl RewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
+        let tag = variant_get.tag(ctx);
         let Some(enum_type) = canonical_enum_type(ctx, variant_get.r#type(ctx)) else {
             return false;
         };
@@ -352,7 +353,7 @@ impl RewritePattern for VariantGetPattern {
             .and_then(|variants| {
                 variants
                     .into_iter()
-                    .find(|(tag, _)| *tag == variant_get.tag(ctx))
+                    .find(|(variant_tag, _)| *variant_tag == tag)
             })
             .and_then(|(_, fields)| fields.get(field_idx as usize).copied())
         else {
@@ -369,9 +370,15 @@ impl RewritePattern for VariantGetPattern {
             .unwrap_or_else(|| variant_get.result_ty(ctx));
         let operand_ty = ctx.value_ty(ref_val);
         let variant_type = if ctx.types.get(operand_ty).attrs.get_bool("is_variant") == Some(true) {
+            let operand_attrs = &ctx.types.get(operand_ty).attrs;
+            if operand_attrs.get_type("base_enum") != Some(enum_type)
+                || operand_attrs.get_symbol("variant_tag") != Some(tag)
+            {
+                return false;
+            }
             operand_ty
         } else {
-            make_variant_type(ctx, enum_type, variant_get.tag(ctx))
+            make_variant_type(ctx, enum_type, tag)
         };
 
         // Infer type from the operand (the cast result has the variant-specific type)
@@ -749,8 +756,11 @@ mod tests {
             .type_alias_by_name(Symbol::new("List"))
             .expect("list layout");
         let cons = make_variant_type(&mut ctx, list, Symbol::new("Cons"));
+        let empty = make_variant_type(&mut ctx, list, Symbol::new("Empty"));
 
         assert_eq!(variant_types.len(), 5);
+        assert_eq!(variant_types[0], empty);
+        assert_ne!(variant_types[0], cons);
         assert!(variant_types.iter().skip(1).all(|ty| *ty == cons));
         assert_eq!(ctx.types.get(cons).attrs.get_type("base_enum"), Some(list));
 
@@ -781,11 +791,54 @@ mod tests {
             })
             .collect();
         assert_eq!(indexed_variant_ops.len(), 5);
+        assert_ne!(indexed_variant_ops[0], indexed_variant_ops[1]);
         assert!(
             indexed_variant_ops
                 .iter()
                 .skip(1)
                 .all(|idx| *idx == indexed_variant_ops[1])
+        );
+    }
+
+    #[test]
+    fn variant_get_with_mismatched_variant_provenance_stays_unlowered() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !ARef = adt.typeref() {name = @A}
+  !BRef = adt.typeref() {name = @B}
+  !A = adt.enum() {name = @A, variants = [[@Some, [core.i32]], [@Other, [core.i32]]]}
+  !B = adt.enum() {name = @B, variants = [[@Some, [core.i32]]]}
+
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %from_b = adt.variant_new %zero {type = !B, tag = @Some} : !BRef
+    %wrong_enum = adt.variant_get %from_b {type = !A, tag = @Some, field = 0} : core.i32
+    %from_a_other = adt.variant_new %zero {type = !A, tag = @Other} : !ARef
+    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = @Some, field = 0} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let remaining_variant_gets = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter(|&&op| adt::VariantGet::from_op(&ctx, op).is_ok())
+            .count();
+        assert_eq!(remaining_variant_gets, 2);
+        assert!(
+            ctx.block(block)
+                .ops
+                .iter()
+                .all(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).is_err())
         );
     }
 }

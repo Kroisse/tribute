@@ -184,6 +184,11 @@ fn record_struct_field(
                 new_data.name,
             )));
         }
+        // `anyref` is the physical field type when either path requires it.
+        // Keep the wider representation independent of visitation order.
+        if helpers::is_type(ctx, ty, "wasm", "anyref") {
+            builder.fields[idx] = Some(ty);
+        }
     } else {
         debug!(
             "GC: record_struct_field type_idx={} setting field {} to {:?}",
@@ -586,6 +591,44 @@ pub(crate) fn collect_gc_types(
 mod tests {
     use super::*;
     use trunk_ir::types::{Attribute, TypeDataBuilder};
+
+    #[test]
+    fn record_struct_field_widens_concrete_to_anyref() {
+        let mut ctx = IrContext::new();
+        let concrete = intern_wasm_structref(&mut ctx);
+        let anyref = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let mut builder = GcTypeBuilder::new();
+
+        record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)
+            .expect("concrete field records");
+        record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, anyref)
+            .expect("anyref field widens compatible concrete field");
+
+        assert_eq!(builder.fields, vec![Some(anyref)]);
+    }
+
+    #[test]
+    fn variant_types_normalize_to_wasm_structref() {
+        let mut ctx = IrContext::new();
+        let enum_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .build(),
+        );
+        let variant_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("List$Cons"))
+                .attr("is_variant", Attribute::Bool(true))
+                .attr("base_enum", Attribute::Type(enum_ty))
+                .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
+                .build(),
+        );
+        let structref = intern_wasm_structref(&mut ctx);
+
+        assert_eq!(normalize_type_for_gc(&mut ctx, variant_ty), structref);
+        assert!(types_equivalent_for_gc(&mut ctx, variant_ty, structref));
+    }
 
     #[test]
     fn same_named_adt_layouts_are_not_gc_equivalent() {
