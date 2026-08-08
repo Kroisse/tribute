@@ -3,7 +3,7 @@
 //! This module handles WebAssembly function call operations:
 //! - wasm.call (direct function call)
 //! - wasm.call_indirect (indirect function call via i32 table index)
-//! - wasm.return_call (tail call)
+//! - wasm.return_call / wasm.return_call_indirect (tail calls)
 
 use tracing::debug;
 use trunk_ir::IrContext;
@@ -260,6 +260,45 @@ pub(crate) fn handle_return_call(
     emit_operands(ctx, operands, emit_ctx, function)?;
 
     function.instruction(&Instruction::ReturnCall(target));
+    Ok(())
+}
+
+/// Handle `wasm.return_call_indirect` using its exact physical signature.
+pub(crate) fn handle_return_call_indirect(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let signature = helpers::exact_return_call_indirect_signature(ctx, op)?;
+    let type_index = module_info
+        .type_idx_by_type
+        .get(&signature)
+        .copied()
+        .ok_or_else(|| {
+            CompilationError::invalid_module(
+                "wasm.return_call_indirect function type not registered in type section",
+            )
+        })?;
+    let table_index = ctx
+        .op(op)
+        .attributes
+        .get("table")
+        .map(|_| attr_u32(&ctx.op(op).attributes, Symbol::new("table")))
+        .transpose()?
+        .unwrap_or(0);
+    let operands = ctx.op_operands(op);
+
+    // WebAssembly evaluates arguments before the table index.
+    for &arg in operands.iter().skip(1) {
+        emit_value(ctx, arg, emit_ctx, function)?;
+    }
+    emit_value(ctx, operands[0], emit_ctx, function)?;
+    function.instruction(&Instruction::ReturnCallIndirect {
+        type_index,
+        table_index,
+    });
     Ok(())
 }
 
