@@ -53,12 +53,31 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
+use crate::emit::helpers;
+
 /// The logical variant operation's `type` attribute is its exact enum-layout
 /// identity. Operand types may be an equivalent `adt.typeref` or already have
 /// an erased target representation, neither of which may choose a distinct
 /// WasmGC nominal variant type.
 fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
+}
+
+/// Convert logical enum field types that remain in enum attributes to their
+/// existing Wasm physical representation.
+fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    let data = ctx.types.get(ty);
+    if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
+        return ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build());
+    }
+    if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref") {
+        return ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+    }
+    ty
 }
 
 /// Lower adt dialect to wasm dialect using arena IR.
@@ -359,15 +378,21 @@ impl RewritePattern for VariantGetPattern {
         else {
             return false;
         };
+        let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
+        let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
         // String::Leaf has the canonical core.bytes layout even though frontend
-        // pattern extraction is temporarily erased to anyref. Keep other fields
-        // on the normal type-converter path.
-        let result_ty = Some(declared_field_ty)
-            .filter(|ty| {
-                let data = ctx.types.get(*ty);
-                data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
-            })
-            .unwrap_or_else(|| variant_get.result_ty(ctx));
+        // pattern extraction is temporarily erased to wasm.anyref. All other
+        // variant_get results must agree with their declared enum field type.
+        let declared_is_bytes = {
+            let data = ctx.types.get(declared_field_ty);
+            data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
+        };
+        let is_bytes_anyref_erasure =
+            declared_is_bytes && helpers::is_type(ctx, requested_result_ty, "wasm", "anyref");
+        if requested_result_ty != declared_field_ty && !is_bytes_anyref_erasure {
+            return false;
+        }
+        let result_ty = declared_field_ty;
         let operand_ty = ctx.value_ty(ref_val);
         let variant_type = if ctx.types.get(operand_ty).attrs.get_bool("is_variant") == Some(true) {
             let operand_attrs = &ctx.types.get(operand_ty).attrs;
@@ -839,6 +864,66 @@ mod tests {
                 .ops
                 .iter()
                 .all(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).is_err())
+        );
+    }
+
+    #[test]
+    fn variant_get_requires_declared_result_type_except_bytes_anyref_erasure() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !ERef = adt.typeref() {name = @E}
+  !BoxRef = adt.typeref() {name = @Box}
+  !NodeRef = adt.typeref() {name = @Node}
+  !StringRef = adt.typeref() {name = @String}
+  !E = adt.enum() {name = @E, variants = [[@Some, [core.i32]]]}
+  !Box = adt.enum() {name = @Box, variants = [[@Next, [!NodeRef]]]}
+  !Node = adt.enum() {name = @Node, variants = [[@Node, []]]}
+  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]]]}
+
+  wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
+    %valid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i32
+    %invalid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i64
+    %node = adt.variant_get %box {type = !Box, tag = @Next, field = 0} : wasm.structref
+    %bytes = adt.variant_get %string {type = !String, tag = @Leaf, field = 0} : wasm.anyref
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let lowered_result_types: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).ok())
+            .map(|op| op.result_ty(&ctx))
+            .collect();
+        assert_eq!(lowered_result_types.len(), 3);
+        assert!(lowered_result_types.iter().any(|&ty| {
+            let data = ctx.types.get(ty);
+            data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
+        }));
+        assert!(lowered_result_types.iter().any(|&ty| {
+            let data = ctx.types.get(ty);
+            data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
+        }));
+        assert!(lowered_result_types.iter().any(|&ty| {
+            let data = ctx.types.get(ty);
+            data.dialect == Symbol::new("wasm") && data.name == Symbol::new("structref")
+        }));
+        assert_eq!(
+            ctx.block(block)
+                .ops
+                .iter()
+                .filter(|&&op| adt::VariantGet::from_op(&ctx, op).is_ok())
+                .count(),
+            1,
         );
     }
 }
