@@ -7,6 +7,13 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
+/// Exact physical callable contract carried by an indirect transfer after its
+/// typed closure callee becomes a table/function pointer.
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str =
+    trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR;
+/// Typed closure provenance retained only on the canonical runtime closure
+/// pack produced by shared closure lowering.
+pub const CLOSURE_CALLABLE_TYPE_ATTR: &str = "tribute.closure_callable_type";
 pub const CPS_PARENT_RESULT_ATTR: &str = "tribute.cps_parent_result";
 
 /// The ABI strength required to call a function.
@@ -75,6 +82,32 @@ pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConve
         .get_u8(CALLING_CONVENTION_ATTR)
         .ok()??;
     code.try_into().ok()
+}
+
+/// Attach the exact physical callable signature for an indirect transfer.
+pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) {
+    ctx.op_mut(op).attributes.insert(
+        Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+        Attribute::Type(signature),
+    );
+}
+
+/// Read the exact callable signature preserved for an indirect transfer.
+pub fn get_indirect_call_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    ctx.op(op).attributes.get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+}
+
+/// Record the typed closure used to construct a runtime closure pair.
+pub fn set_closure_callable_type(ctx: &mut IrContext, op: OpRef, closure: TypeRef) {
+    ctx.op_mut(op).attributes.insert(
+        Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR),
+        Attribute::Type(closure),
+    );
+}
+
+/// Read typed closure provenance from a runtime closure pack.
+pub fn get_closure_callable_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    ctx.op(op).attributes.get_type(CLOSURE_CALLABLE_TYPE_ATTR)
 }
 
 /// Result-indexed CPS completion target `Done<R>`.
