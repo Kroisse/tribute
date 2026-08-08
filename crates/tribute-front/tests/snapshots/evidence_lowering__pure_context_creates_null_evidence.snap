@@ -7,7 +7,7 @@ core.module @test {
       %0 = tribute_control.perform {ability_ref = core.ability_ref() {name = @Ask}, op_name = @ask, operation_kind = @op} : core.i32
       tribute_control.return %0
   }
-  tribute_control.func @main() -> core.nil convention(direct) {
+  tribute_control.func @main() -> core.nil convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.nil} {
       %0 = tribute_control.handle : core.i32 {
           %1 = tribute_control.call {callee = @use_ask} : core.i32
           tribute_control.yield %1

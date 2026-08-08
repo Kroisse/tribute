@@ -1483,6 +1483,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-core",
  "tribute-front",
  "tribute-ir",
  "tribute-passes",
@@ -1547,6 +1548,7 @@ dependencies = [
  "tribute-core",
  "tribute-ir",
  "trunk-ir",
+ "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
 ]
 

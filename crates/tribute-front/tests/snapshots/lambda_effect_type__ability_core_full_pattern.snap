@@ -5,7 +5,8 @@ expression: ir_text
 core.module @test {
   !t0 = tribute_control.callable(tribute_rt.anyref) {tribute.calling_convention = 2}
   !t1 = tribute_control.callable(core.i32) {tribute.calling_convention = 2}
-  !t2 = core.ability_ref(tribute_rt.anyref) {name = @State}
+  !t2 = tribute_control.callable(tribute_rt.anyref) {tribute.calling_convention = 0}
+  !t3 = core.ability_ref(tribute_rt.anyref) {name = @State}
 
   tribute_control.func @counter() -> core.i32 convention(cps) {
       %0 = tribute_control.perform {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get, operation_kind = @op} : core.i32
@@ -22,29 +23,37 @@ core.module @test {
         ^bb2(%4: tribute_rt.anyref):
           tribute_control.yield %4
       } {
-          tribute_control.handler {ability_ref = !t2, kind = @op, op_name = @get, operation_result_type = tribute_rt.anyref} {
+          tribute_control.handler {ability_ref = !t3, kind = @op, op_name = @get, operation_result_type = tribute_rt.anyref} {
             ^bb4(%5: tribute_control.resume_token(tribute_rt.anyref, tribute_rt.anyref)):
-              %6 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%1, %5] {
+              %6 = tribute_control.lambda() -> tribute_rt.anyref convention(direct) captures [%1, %5] {
                   %7 = tribute_control.resume %5, %1 : tribute_rt.anyref
                   tribute_control.return %7
               }
-              %8 = tribute_control.call %6, %1 {callee = @run_state} : tribute_rt.anyref
-              tribute_control.yield %8
-          }
-          tribute_control.handler {ability_ref = !t2, kind = @op, op_name = @set, operation_result_type = core.nil} {
-            ^bb6(%9: tribute_rt.anyref, %10: tribute_control.resume_token(core.nil, tribute_rt.anyref)):
-              %11 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%10] {
-                  %12 = arith.const {value = unit} : core.nil
-                  %13 = tribute_control.resume %10, %12 : tribute_rt.anyref
-                  tribute_control.return %13
+              %8 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%6] {
+                  %9 = tribute_control.call_indirect %6 : tribute_rt.anyref
+                  tribute_control.return %9
               }
-              %14 = tribute_control.call %11, %9 {callee = @run_state} : tribute_rt.anyref
-              tribute_control.yield %14
+              %10 = tribute_control.call %8, %1 {callee = @run_state} : tribute_rt.anyref
+              tribute_control.yield %10
+          }
+          tribute_control.handler {ability_ref = !t3, kind = @op, op_name = @set, operation_result_type = core.nil} {
+            ^bb7(%11: tribute_rt.anyref, %12: tribute_control.resume_token(core.nil, tribute_rt.anyref)):
+              %13 = tribute_control.lambda() -> tribute_rt.anyref convention(direct) captures [%12] {
+                  %14 = arith.const {value = unit} : core.nil
+                  %15 = tribute_control.resume %12, %14 : tribute_rt.anyref
+                  tribute_control.return %15
+              }
+              %16 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%13] {
+                  %17 = tribute_control.call_indirect %13 : tribute_rt.anyref
+                  tribute_control.return %17
+              }
+              %18 = tribute_control.call %16, %11 {callee = @run_state} : tribute_rt.anyref
+              tribute_control.yield %18
           }
       }
       tribute_control.return %2
   }
-  tribute_control.func @main() -> core.i32 convention(direct) {
+  tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.i32} {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.call {callee = @counter} : core.i32
           %2 = tribute_control.call {callee = @counter} : core.i32

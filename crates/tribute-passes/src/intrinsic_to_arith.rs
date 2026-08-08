@@ -295,9 +295,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
             parent_op: None,
         });
 
-        // Detach old body region before replacing
-        let old_body = func_op.body(ctx);
-        ctx.detach_region(old_body);
+        // Logical externs remain body-less declarations. The temporary legacy
+        // route materializes an unreachable body, so accept either shape while
+        // replacing the declaration with the same concrete implementation.
+        if let Some(old_body) = ctx.op(op).regions.first().copied() {
+            ctx.detach_region(old_body);
+        }
 
         let new_func = func::func(ctx, loc, sym_name, func_ty, body).op_ref();
         // Do NOT copy the "intrinsic" abi — this is now a real function

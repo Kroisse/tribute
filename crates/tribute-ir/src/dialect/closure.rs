@@ -234,11 +234,21 @@ fn parse_closure_lambda<'a>(
     };
 
     // closure.closure<core.func<...>>
+    //
+    // Physical closure.lambda operations carry their exact calling convention
+    // on both the operation and the outer closure type. The custom syntax
+    // prints the operation dictionary only, so reconstruct the durable type
+    // provenance from that exact attribute during parsing.
+    let closure_type_attrs = attributes
+        .iter()
+        .find(|(key, _)| *key == crate::dialect::tribute_control::CALLING_CONVENTION_ATTR)
+        .map(|(key, value)| vec![(*key, value.clone())])
+        .unwrap_or_default();
     let closure_raw_ty = RawType::Concrete {
         dialect: "closure",
         name: "closure",
         params: vec![func_raw_ty],
-        attrs: vec![],
+        attrs: closure_type_attrs,
     };
 
     Ok(RawOperation {
@@ -566,6 +576,35 @@ mod tests {
     func.return %0
   }
 }"#,
+        );
+    }
+
+    #[test]
+    fn test_lambda_parser_preserves_calling_convention_on_closure_type() {
+        let input = r#"core.module @test {
+  func.func @main() -> core.i32 {
+    %0 = closure.lambda(%1: core.i32) -> core.i32 {tribute.calling_convention = 2} {
+        func.return %1
+    }
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let module_entry = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let function =
+            trunk_ir::dialect::func::Func::from_op(&ctx, ctx.block(module_entry).ops[0]).unwrap();
+        let function_entry = ctx.region(function.body(&ctx)).blocks[0];
+        let lambda = super::Lambda::from_op(&ctx, ctx.block(function_entry).ops[0]).unwrap();
+        let closure_ty = ctx.value_ty(lambda.result(&ctx));
+
+        assert_eq!(
+            ctx.types
+                .get(closure_ty)
+                .attrs
+                .get_u8(crate::dialect::tribute_control::CALLING_CONVENTION_ATTR)
+                .unwrap(),
+            Some(2)
         );
     }
 

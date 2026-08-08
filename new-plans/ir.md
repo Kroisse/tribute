@@ -75,6 +75,11 @@ operation을 recursively legal로 표시해서 nested illegal operation을 가�
 
 최종 native/Wasm 경계는 `tribute.calling_convention = 2` (`Cps`)인 worker와 생성된
 continuation/`done_k`/handler-dispatch의 result가 비어 있는지도 검사한다.
+타겟 signature lowering은 `func.func`의 operation convention, convention이
+명시된 outer `closure.closure` type, `func.constant`의 exact target symbol만
+provenance로 인정한다. Tag 없는 nested `core.func<core.never, ...>`는 CPS라고
+추측하지 않고 거부하며, 같은 구조의 Direct/EvidenceDirect source `Never`
+callable은 바꾸지 않는다.
 CPS control result 역할의 `anyref`, nominal `__tribute_cps_control` enum과
 result-producing CPS dispatch는 illegal이다. Boxed source value, effect payload,
 closure environment와 dispatch field의 일반 `anyref` 사용은 허용한다.
@@ -164,13 +169,18 @@ resolution을 검사하며 physical `core.func`나 `closure.closure`를 componen
 | `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
+| `tribute_control.unreachable` | exhaustive residual region을 value 없이 종료 |
 
 `func.tail_call`, `func.tail_call_indirect`, `func.constant`, `func.unreachable`의
 logical 복제는 없다. Tail 형상은 legalization 결과이고 named function value는
 `func_ref`가 표현한다. Legalization은 알려진 target에 `func.tail_call`, closure,
 continuation과 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
-`func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은
-reject adapter 같은 compiler helper 안에서만 legalization 뒤에 사용한다.
+`func.constant`는 후속 physical closure lowering이 만든다.
+
+`tribute_control.unreachable`은 operand, result, region이 없는 terminator다.
+Checker가 exhaustive로 증명한 residual `scf.if` arm에서만 사용하며,
+`core.nil`이나 conversion cast로 result를 위조하지 않는다. Legalization은 이를
+`func.unreachable`으로 바꾼다.
 
 이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
 소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는

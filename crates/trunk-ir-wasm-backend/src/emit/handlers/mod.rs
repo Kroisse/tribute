@@ -16,7 +16,9 @@ pub(super) use array_handlers::{
     handle_array_copy, handle_array_get, handle_array_get_s, handle_array_get_u, handle_array_new,
     handle_array_new_default, handle_array_set,
 };
-pub(super) use call_handlers::{handle_call, handle_call_indirect, handle_return_call};
+pub(super) use call_handlers::{
+    handle_call, handle_call_indirect, handle_return_call, handle_return_call_indirect,
+};
 pub(super) use const_handlers::{
     handle_f32_const, handle_f64_const, handle_i32_const, handle_i64_const,
 };

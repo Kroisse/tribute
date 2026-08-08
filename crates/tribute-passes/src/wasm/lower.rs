@@ -27,6 +27,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use super::const_to_wasm::ConstAnalysis;
 use super::io::IoAnalysis;
 use super::type_converter::{self, wasm_type_converter};
+use super::type_physicalization::physicalize_wasm_target_types;
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, STEP_IDX, STEP_TAG_DONE};
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
@@ -36,6 +37,7 @@ pub enum WasmLowerError {
     Conversion(ConversionError),
     Pass(PassError),
     Const(super::const_to_wasm::ConstValidationError),
+    TypePhysicalization(super::type_physicalization::WasmTypePhysicalizationError),
 }
 
 impl fmt::Display for WasmLowerError {
@@ -44,6 +46,7 @@ impl fmt::Display for WasmLowerError {
             Self::Conversion(error) => error.fmt(f),
             Self::Pass(error) => error.fmt(f),
             Self::Const(error) => error.fmt(f),
+            Self::TypePhysicalization(error) => error.fmt(f),
         }
     }
 }
@@ -54,6 +57,7 @@ impl std::error::Error for WasmLowerError {
             Self::Conversion(error) => Some(error),
             Self::Pass(error) => Some(error),
             Self::Const(error) => Some(error),
+            Self::TypePhysicalization(error) => Some(error),
         }
     }
 }
@@ -73,6 +77,12 @@ impl From<PassError> for WasmLowerError {
 impl From<super::const_to_wasm::ConstValidationError> for WasmLowerError {
     fn from(error: super::const_to_wasm::ConstValidationError) -> Self {
         Self::Const(error)
+    }
+}
+
+impl From<super::type_physicalization::WasmTypePhysicalizationError> for WasmLowerError {
+    fn from(error: super::type_physicalization::WasmTypePhysicalizationError) -> Self {
+        Self::TypePhysicalization(error)
     }
 }
 
@@ -192,7 +202,8 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
 }
 
 /// Assign module-local GC indices after all type-conversion materialization.
-pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
+    physicalize_wasm_target_types(ctx, module)?;
     trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .with_target(wasm_emission_ready_target())
@@ -814,7 +825,7 @@ mod tests {
     fn wasm_start_passes_empty_evidence_to_evidence_direct_main() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
+        let evidence_ty = type_converter::evidence_wasm_type(&mut ctx);
         let nil_ty = intern_type(&mut ctx, "core", "nil");
         let const_analysis = ConstAnalysis {
             allocations: vec![],

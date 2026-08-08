@@ -15,8 +15,8 @@ use trunk_ir::Symbol;
 
 use super::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 use crate::ast::{
-    CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
-    UniVarId, UniVarSource,
+    Arm, CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind,
+    TypeScheme, TypedRef, UniVarId, UniVarSource,
 };
 
 use super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
@@ -32,6 +32,16 @@ pub(crate) struct HandleContext<'db> {
     pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
+}
+
+/// A case whose coverage must be decided after this function's constraints
+/// have been solved.  Inference-time scrutinee types may still be UniVars, so
+/// classifying them while converting the expression would lose a valid proof.
+pub(crate) struct PendingExhaustivenessCase<'db> {
+    pub case: NodeId,
+    pub diagnostic_span: NodeId,
+    pub scrutinee_type: Type<'db>,
+    pub arms: Vec<Arm<TypedRef<'db>>>,
 }
 
 /// Function-level type inference context.
@@ -63,16 +73,39 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Types of local variables (by LocalId), organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
     local_scopes: Vec<HashMap<LocalId, TypeScheme<'db>>>,
+    local_scheme_owners: Vec<HashMap<LocalId, NodeId>>,
 
     /// Types of local variables by name, organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
     name_scopes: Vec<HashMap<Symbol, TypeScheme<'db>>>,
+    name_scheme_owners: Vec<HashMap<Symbol, NodeId>>,
 
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
+    /// The inference instance selected for each call's callee expression.
+    /// Unlike `node_types`, this is recorded on the first call inference and
+    /// is not replaced when typed-expression conversion revisits the callee.
+    call_callee_types: HashMap<NodeId, Type<'db>>,
+
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+
+    /// Function-local quantifiers introduced by pure `let` generalization.
+    ///
+    /// These remain distinct from the enclosing function scheme's BoundVars
+    /// when the completed typed body is materialized.
+    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+
+    /// Exact binding-pattern provenance for locally generalized schemes.
+    /// Final conversion can use the pattern's own type to recover a solver
+    /// representative without conflating sibling destructuring bindings.
+    local_generalized_bindings: Vec<(NodeId, HashMap<UniVarId<'db>, u32>)>,
+
+    /// Lambda value nodes aligned with a locally generalized binding pattern.
+    /// Conversion may revisit the lambda after binding; this exact source
+    /// provenance keeps that second instance in the binding's local scope.
+    local_generalized_lambdas: HashMap<NodeId, NodeId>,
 
     /// Exact instantiated metadata for ability-operation call expressions.
     perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
@@ -83,6 +116,12 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// concrete node-type table consumed by legacy lowering.
     ability_op_callee_types: HashMap<NodeId, Type<'db>>,
 
+    /// Exact first-pass types for syntax-level references without their own
+    /// expression node, such as constructors and nominal record references.
+    /// Conversion must reuse these instances instead of instantiating a fresh
+    /// declaration scheme after local generalization has fixed lexical owners.
+    reference_types: HashMap<NodeId, Type<'db>>,
+
     /// Inference-time lambda expression types. Call conversion revisits lambda
     /// children, so this keeps their call-constrained instance separate from
     /// the concrete node-type table used by legacy lowering.
@@ -91,8 +130,19 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Source-logical callable signatures for lambda nodes.
     lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
 
-    /// Case expressions whose typechecking coverage analysis proved exhaustive.
-    exhaustive_cases: Vec<NodeId>,
+    /// Effects evaluated by the innermost lambda body.  This is deliberately
+    /// separate from `current_effect`: a contextual callback-row constraint may
+    /// widen a lambda's latent effect row after its body has been checked, but
+    /// cannot make a pure closure value effectful.
+    lexical_lambda_effects: Vec<Vec<EffectRow<'db>>>,
+
+    /// Continuation transfers observed while checking each nested lambda body.
+    /// This must not be inferred from the lambda's contextually widened row.
+    lexical_lambda_control_transfers: Vec<bool>,
+
+    /// Cases awaiting the function-local solver result before coverage is
+    /// classified and diagnostics are emitted.
+    pending_exhaustiveness_cases: Vec<PendingExhaustivenessCase<'db>>,
 
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
@@ -156,14 +206,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             func_id,
             // Start with one scope (the function's top-level scope)
             local_scopes: vec![HashMap::new()],
+            local_scheme_owners: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
+            name_scheme_owners: vec![HashMap::new()],
             node_types: HashMap::new(),
+            call_callee_types: HashMap::new(),
             handler_operations: HashMap::new(),
+            local_generalizations: HashMap::new(),
+            local_generalized_bindings: Vec::new(),
+            local_generalized_lambdas: HashMap::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
+            reference_types: HashMap::new(),
             inferred_lambda_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
-            exhaustive_cases: Vec::new(),
+            lexical_lambda_effects: Vec::new(),
+            lexical_lambda_control_transfers: Vec::new(),
+            pending_exhaustiveness_cases: Vec::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
@@ -225,7 +284,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Push a new scope. Call this when entering a lambda body or case arm.
     pub fn push_scope(&mut self) {
         self.local_scopes.push(HashMap::new());
+        self.local_scheme_owners.push(HashMap::new());
         self.name_scopes.push(HashMap::new());
+        self.name_scheme_owners.push(HashMap::new());
     }
 
     /// Pop the current scope. Call this when exiting a lambda body or case arm.
@@ -233,7 +294,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         // Never pop the last scope (function's top-level scope)
         if self.local_scopes.len() > 1 {
             self.local_scopes.pop();
+            self.local_scheme_owners.pop();
             self.name_scopes.pop();
+            self.name_scheme_owners.pop();
         }
     }
 
@@ -264,15 +327,36 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         if let Some(scope) = self.local_scopes.last_mut() {
             scope.insert(local, scheme);
         }
+        if let Some(owners) = self.local_scheme_owners.last_mut() {
+            owners.remove(&local);
+        }
+    }
+
+    pub fn bind_local_scheme_with_owner(
+        &mut self,
+        local: LocalId,
+        scheme: TypeScheme<'db>,
+        owner: NodeId,
+    ) {
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(local, scheme);
+        }
+        if let Some(owners) = self.local_scheme_owners.last_mut() {
+            owners.insert(local, owner);
+        }
     }
 
     /// Look up the type of a local variable.
     ///
     /// Searches from innermost to outermost scope.
     pub fn lookup_local(&mut self, local: LocalId) -> Option<Type<'db>> {
-        for scope in self.local_scopes.iter().rev() {
-            if let Some(scheme) = scope.get(&local).copied() {
-                return Some(self.instantiate_scheme(scheme));
+        for index in (0..self.local_scopes.len()).rev() {
+            if let Some(scheme) = self.local_scopes[index].get(&local).copied() {
+                let owner = self.local_scheme_owners[index].get(&local).copied();
+                return Some(match owner {
+                    Some(owner) => self.instantiate_local_scheme(scheme, owner),
+                    None => self.instantiate_scheme(scheme),
+                });
             }
         }
         None
@@ -288,15 +372,36 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         if let Some(scope) = self.name_scopes.last_mut() {
             scope.insert(name, scheme);
         }
+        if let Some(owners) = self.name_scheme_owners.last_mut() {
+            owners.remove(&name);
+        }
+    }
+
+    pub fn bind_local_scheme_by_name_with_owner(
+        &mut self,
+        name: Symbol,
+        scheme: TypeScheme<'db>,
+        owner: NodeId,
+    ) {
+        if let Some(scope) = self.name_scopes.last_mut() {
+            scope.insert(name, scheme);
+        }
+        if let Some(owners) = self.name_scheme_owners.last_mut() {
+            owners.insert(name, owner);
+        }
     }
 
     /// Look up a local variable by name.
     ///
     /// Searches from innermost to outermost scope.
     pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
-        for scope in self.name_scopes.iter().rev() {
-            if let Some(scheme) = scope.get(&name).copied() {
-                return Some(self.instantiate_scheme(scheme));
+        for index in (0..self.name_scopes.len()).rev() {
+            if let Some(scheme) = self.name_scopes[index].get(&name).copied() {
+                let owner = self.name_scheme_owners[index].get(&name).copied();
+                return Some(match owner {
+                    Some(owner) => self.instantiate_local_scheme(scheme, owner),
+                    None => self.instantiate_scheme(scheme),
+                });
             }
         }
         None
@@ -349,6 +454,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.node_types)
     }
 
+    pub fn record_call_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {
+        self.call_callee_types.entry(callee).or_insert(ty);
+    }
+
+    pub fn take_call_callee_types(&mut self) -> HashMap<NodeId, Type<'db>> {
+        std::mem::take(&mut self.call_callee_types)
+    }
+
+    pub fn get_call_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
+        self.call_callee_types.get(&callee).copied()
+    }
+
     /// Record the exact semantic operation selected for a handler arm.
     pub fn record_handler_operation(
         &mut self,
@@ -363,6 +480,46 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
     ) -> HashMap<NodeId, InstantiatedHandlerOperation<'db>> {
         std::mem::take(&mut self.handler_operations)
+    }
+
+    /// Record the variable-to-local-scheme mapping produced for one pure
+    /// binding. `scope` is the exact binding-pattern node, not the enclosing
+    /// destructuring pattern: every local quantifier therefore has a unique
+    /// lexical owner even when each component scheme starts indexing at zero.
+    pub fn record_local_generalization(
+        &mut self,
+        scope: NodeId,
+        mapping: HashMap<UniVarId<'db>, u32>,
+    ) {
+        if !mapping.is_empty() {
+            self.local_generalized_bindings
+                .push((scope, mapping.clone()));
+        }
+        for (var, index) in mapping {
+            self.local_generalizations
+                .entry(var)
+                .or_insert((scope, index));
+        }
+    }
+
+    pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {
+        std::mem::take(&mut self.local_generalizations)
+    }
+
+    pub fn take_local_generalized_bindings(
+        &mut self,
+    ) -> Vec<(NodeId, HashMap<UniVarId<'db>, u32>)> {
+        std::mem::take(&mut self.local_generalized_bindings)
+    }
+
+    pub fn record_local_generalized_lambda(&mut self, lambda: NodeId, scope: NodeId) {
+        self.local_generalized_lambdas
+            .entry(lambda)
+            .or_insert(scope);
+    }
+
+    pub fn take_local_generalized_lambdas(&mut self) -> HashMap<NodeId, NodeId> {
+        std::mem::take(&mut self.local_generalized_lambdas)
     }
 
     pub fn record_perform_operation(
@@ -390,7 +547,19 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.ability_op_callee_types.get(&callee).copied()
     }
 
+    pub fn record_reference_type(&mut self, node: NodeId, ty: Type<'db>) {
+        self.reference_types.entry(node).or_insert(ty);
+    }
+
+    pub fn get_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
+        self.reference_types.get(&node).copied()
+    }
+
     pub fn record_inferred_lambda_type(&mut self, lambda: NodeId, ty: Type<'db>) {
+        // The first inference establishes the lambda value's lexical scheme.
+        // Conversion may revisit the expression to construct the typed body,
+        // but must constrain against this instance rather than replace it with
+        // unrelated fresh variables.
         self.inferred_lambda_types.entry(lambda).or_insert(ty);
     }
 
@@ -402,14 +571,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.lambda_signatures.entry(lambda).or_insert(signature);
     }
 
+    pub fn lambda_signature(&self, lambda: NodeId) -> Option<&LambdaSignature<'db>> {
+        self.lambda_signatures.get(&lambda)
+    }
+
     /// Replace an inference-time lambda seed with the contextual function
     /// type used while checking the expression.  The latter is authoritative:
     /// it carries the expected polymorphic result/effect slots before solving.
     pub fn record_checked_lambda_signature(
         &mut self,
         lambda: NodeId,
-        signature: LambdaSignature<'db>,
+        mut signature: LambdaSignature<'db>,
     ) {
+        if let Some(inferred) = self.lambda_signatures.get(&lambda) {
+            signature.body_is_effect_free = inferred.body_is_effect_free;
+            signature.contains_control_transfer = inferred.contains_control_transfer;
+            signature.lexical_convention = inferred.lexical_convention;
+        }
         self.lambda_signatures.insert(lambda, signature);
     }
 
@@ -417,14 +595,26 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.lambda_signatures)
     }
 
-    pub fn record_exhaustive_case(&mut self, case: NodeId) {
-        if !self.exhaustive_cases.contains(&case) {
-            self.exhaustive_cases.push(case);
-        }
+    pub fn record_pending_exhaustiveness_case(
+        &mut self,
+        case: NodeId,
+        diagnostic_span: NodeId,
+        scrutinee_type: Type<'db>,
+        arms: Vec<Arm<TypedRef<'db>>>,
+    ) {
+        self.pending_exhaustiveness_cases
+            .push(PendingExhaustivenessCase {
+                case,
+                diagnostic_span,
+                scrutinee_type,
+                arms,
+            });
     }
 
-    pub fn take_exhaustive_cases(&mut self) -> Vec<NodeId> {
-        std::mem::take(&mut self.exhaustive_cases)
+    pub(crate) fn take_pending_exhaustiveness_cases(
+        &mut self,
+    ) -> Vec<PendingExhaustivenessCase<'db>> {
+        std::mem::take(&mut self.pending_exhaustiveness_cases)
     }
 
     // =========================================================================
@@ -476,6 +666,33 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
         };
 
+        let quantified_rows = scheme.effect_params(self.db);
+        let db = self.db;
+        subst::freshen_effect_vars(db, instantiated, quantified_rows, || self.fresh_row_var())
+    }
+
+    /// Instantiate a locally generalized scheme and retain the exact lexical
+    /// quantifier owner for each fresh type variable.  The variables remain
+    /// ordinary inference variables during checking; finalization uses this
+    /// provenance only if a typed reference still needs the local scheme.
+    fn instantiate_local_scheme(&mut self, scheme: TypeScheme<'db>, owner: NodeId) -> Type<'db> {
+        let params = scheme.type_params(self.db);
+        let instantiated = if params.is_empty() {
+            scheme.body(self.db)
+        } else {
+            let fresh_vars: Vec<Type<'db>> = (0..params.len())
+                .map(|index| {
+                    let ty = self.fresh_type_var();
+                    if let TypeKind::UniVar { id } = ty.kind(self.db) {
+                        self.local_generalizations
+                            .entry(*id)
+                            .or_insert((owner, index as u32));
+                    }
+                    ty
+                })
+                .collect();
+            self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
+        };
         let quantified_rows = scheme.effect_params(self.db);
         let db = self.db;
         subst::freshen_effect_vars(db, instantiated, quantified_rows, || self.fresh_row_var())
@@ -607,6 +824,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     fn merge_effect_with_origin(&mut self, effect: EffectRow<'db>, origin: Option<NodeId>) {
+        if !effect.is_pure(self.db)
+            && let Some(effects) = self.lexical_lambda_effects.last_mut()
+        {
+            effects.push(effect);
+        }
         let db = self.db;
         let current = self.current_effect;
 
@@ -705,6 +927,57 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e3));
             }
+        }
+    }
+
+    /// Begin collecting the effects evaluated directly by one lambda body.
+    pub fn begin_lexical_lambda_effects(&mut self) {
+        self.lexical_lambda_effects.push(Vec::new());
+        self.lexical_lambda_control_transfers.push(false);
+    }
+
+    /// Finish the innermost lambda-body effect capture.
+    pub fn end_lexical_lambda_effects(&mut self) -> (Vec<EffectRow<'db>>, bool) {
+        let effects = self
+            .lexical_lambda_effects
+            .pop()
+            .expect("lambda effect capture must be balanced");
+        let control_transfer = self
+            .lexical_lambda_control_transfers
+            .pop()
+            .expect("lambda control-transfer capture must be balanced");
+        (effects, control_transfer)
+    }
+
+    /// A continuation invocation transfers control even though its effect row
+    /// is accounted for by the enclosing handler.  It cannot make the lambda
+    /// value an ordinary Direct closure.
+    pub fn record_lexical_lambda_control_transfer(&mut self) {
+        if let Some(control_transfer) = self.lexical_lambda_control_transfers.last_mut() {
+            *control_transfer = true;
+        }
+        if !self.lexical_lambda_effects.is_empty() {
+            let effect = EffectRow::open(self.db, self.fresh_row_var());
+            self.lexical_lambda_effects
+                .last_mut()
+                .expect("nonempty lambda effect capture")
+                .push(effect);
+        }
+    }
+
+    /// Typed-expression conversion can encounter a continuation call after
+    /// the first inference walk has seeded the lambda signature.  Preserve
+    /// that exact control fact without revisiting body-effect purity under the
+    /// contextual latent row.
+    pub fn record_converted_lambda_control_transfer(
+        &mut self,
+        lambda: NodeId,
+        contains_control_transfer: bool,
+    ) {
+        if contains_control_transfer
+            && let Some(signature) = self.lambda_signatures.get_mut(&lambda)
+        {
+            signature.contains_control_transfer = true;
         }
     }
 

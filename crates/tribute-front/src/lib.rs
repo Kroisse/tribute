@@ -48,6 +48,19 @@ pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
     }
 }
 
+/// Resolve a declaration's canonical emitted identity.
+///
+/// Simple source names inherit the current module prefix. Synthetic
+/// monomorphized names already contain their qualified source path and must
+/// remain exact so prescan, convention analysis, lookup, and emission agree.
+pub fn canonical_declaration_symbol(prefix: &mut String, name: Symbol) -> Symbol {
+    if name.with_str(|text| text.contains("::")) {
+        name
+    } else {
+        qualified_symbol(prefix, name)
+    }
+}
+
 /// Build a qualified symbol from parsed path segments.
 pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
     let (&name, prefix) = path.split_last()?;
@@ -71,4 +84,23 @@ pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
 /// Whether a declaration is the exact root program entrypoint.
 pub(crate) fn is_root_main(name: Symbol, is_root_module: bool) -> bool {
     is_root_module && name == Symbol::new("main")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_declaration_identity_qualifies_only_simple_source_names() {
+        let mut nested = "Nested".to_string();
+        assert_eq!(
+            canonical_declaration_symbol(&mut nested, Symbol::new("run")),
+            Symbol::new("Nested::run")
+        );
+        assert_eq!(
+            canonical_declaration_symbol(&mut nested, Symbol::new("Nested::run$I32")),
+            Symbol::new("Nested::run$I32")
+        );
+        assert_eq!(nested, "Nested");
+    }
 }

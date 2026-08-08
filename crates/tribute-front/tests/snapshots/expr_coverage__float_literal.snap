@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @pi() -> core.f64 convention(cps) {
+  tribute_control.func @pi() -> core.f64 convention(direct) {
       %0 = arith.const {value = 3.14} : core.f64
       tribute_control.return %0
   }

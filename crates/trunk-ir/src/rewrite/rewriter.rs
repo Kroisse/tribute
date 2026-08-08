@@ -15,6 +15,8 @@ pub(crate) struct Mutations {
     pub(crate) replacement: Option<OpRef>,
     /// If set, the operation is erased and its results mapped to these values.
     pub(crate) erase_values: Option<Vec<ValueRef>>,
+    /// Erase the operation only when every result is unused.
+    pub(crate) erase_unused_results: bool,
     /// Operations to add at module level.
     pub(crate) module_ops: Vec<OpRef>,
 }
@@ -32,6 +34,7 @@ pub struct PatternRewriter<'a> {
     prefix_ops: Vec<OpRef>,
     replacement: Option<OpRef>,
     erase_values: Option<Vec<ValueRef>>,
+    erase_unused_results: bool,
     module_ops: Vec<OpRef>,
 }
 
@@ -43,6 +46,7 @@ impl<'a> PatternRewriter<'a> {
             prefix_ops: Vec::new(),
             replacement: None,
             erase_values: None,
+            erase_unused_results: false,
             module_ops: Vec::new(),
         }
     }
@@ -68,7 +72,7 @@ impl<'a> PatternRewriter<'a> {
     /// then remove the old op from its block and insert the new one.
     pub fn replace_op(&mut self, new_op: OpRef) {
         debug_assert!(
-            self.replacement.is_none() && self.erase_values.is_none(),
+            self.replacement.is_none() && self.erase_values.is_none() && !self.erase_unused_results,
             "replace_op called after replace_op or erase_op"
         );
         self.replacement = Some(new_op);
@@ -80,10 +84,22 @@ impl<'a> PatternRewriter<'a> {
     /// The applicator will RAUW each old result to the corresponding value.
     pub fn erase_op(&mut self, replacement_values: Vec<ValueRef>) {
         debug_assert!(
-            self.replacement.is_none() && self.erase_values.is_none(),
+            self.replacement.is_none() && self.erase_values.is_none() && !self.erase_unused_results,
             "erase_op called after replace_op or erase_op"
         );
         self.erase_values = Some(replacement_values);
+    }
+
+    /// Erase the current operation without replacing its results.
+    ///
+    /// Every result must be unused. This is the result-bearing analogue of
+    /// erasing a resultless terminator and avoids self-RAUW placeholders.
+    pub fn erase_op_with_unused_results(&mut self) {
+        debug_assert!(
+            self.replacement.is_none() && self.erase_values.is_none() && !self.erase_unused_results,
+            "erase_op_with_unused_results called after replace_op or erase_op"
+        );
+        self.erase_unused_results = true;
     }
 
     /// Add an operation at module level (e.g., an outlined function).
@@ -98,6 +114,7 @@ impl<'a> PatternRewriter<'a> {
         !self.prefix_ops.is_empty()
             || self.replacement.is_some()
             || self.erase_values.is_some()
+            || self.erase_unused_results
             || !self.module_ops.is_empty()
     }
 
@@ -107,6 +124,7 @@ impl<'a> PatternRewriter<'a> {
             prefix_ops: self.prefix_ops,
             replacement: self.replacement,
             erase_values: self.erase_values,
+            erase_unused_results: self.erase_unused_results,
             module_ops: self.module_ops,
         }
     }
@@ -217,6 +235,16 @@ pub(crate) fn apply_mutations(
             ctx.remove_op_from_block(block, original_op);
         }
         ctx.remove_op(original_op);
+    } else if mutations.erase_unused_results {
+        let old_results: Vec<ValueRef> = ctx.op_results(original_op).to_vec();
+        assert!(
+            old_results.iter().all(|result| !ctx.has_uses(*result)),
+            "erase_op_with_unused_results: operation has a live result"
+        );
+        if let Some(block) = parent_block {
+            ctx.remove_op_from_block(block, original_op);
+        }
+        ctx.remove_op(original_op);
     }
 
     // 3. Add module-level ops
@@ -224,5 +252,70 @@ pub(crate) fn apply_mutations(
         for module_op in mutations.module_ops {
             ctx.push_op(module_block, module_op);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{BlockData, IrContext};
+    use crate::dialect::{arith, func};
+    use crate::location::Span;
+    use crate::symbol::Symbol;
+    use crate::types::{Attribute, Location, TypeDataBuilder};
+
+    fn context_and_location() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("rewriter-test.trunkir".to_string());
+        (ctx, Location::new(path, Span::new(0, 0)))
+    }
+
+    fn i32_type(ctx: &mut IrContext) -> crate::refs::TypeRef {
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    }
+
+    #[test]
+    fn erase_op_with_unused_results_removes_result_bearing_op() {
+        let (mut ctx, location) = context_and_location();
+        let i32_type = i32_type(&mut ctx);
+        let constant = arith::r#const(&mut ctx, location, i32_type, Attribute::Int(1));
+        let block = ctx.create_block(BlockData {
+            location,
+            args: Default::default(),
+            ops: Default::default(),
+            parent_region: None,
+        });
+        ctx.push_op(block, constant.op_ref());
+
+        let converter = TypeConverter::new();
+        let mut rewriter = PatternRewriter::new(&converter);
+        rewriter.erase_op_with_unused_results();
+        apply_mutations(&mut ctx, constant.op_ref(), rewriter.take_mutations(), None);
+
+        assert!(ctx.block(block).ops.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "erase_op_with_unused_results: operation has a live result")]
+    fn erase_op_with_unused_results_rejects_live_result() {
+        let (mut ctx, location) = context_and_location();
+        let i32_type = i32_type(&mut ctx);
+        let constant = arith::r#const(&mut ctx, location, i32_type, Attribute::Int(1));
+        let constant_result = constant.result(&ctx);
+        let ret = func::r#return(&mut ctx, location, [constant_result]);
+        let block = ctx.create_block(BlockData {
+            location,
+            args: Default::default(),
+            ops: Default::default(),
+            parent_region: None,
+        });
+        ctx.push_op(block, constant.op_ref());
+        ctx.push_op(block, ret.op_ref());
+
+        let converter = TypeConverter::new();
+        let mut rewriter = PatternRewriter::new(&converter);
+        rewriter.erase_op_with_unused_results();
+        apply_mutations(&mut ctx, constant.op_ref(), rewriter.take_mutations(), None);
     }
 }

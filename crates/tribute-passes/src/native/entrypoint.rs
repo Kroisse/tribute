@@ -147,6 +147,12 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
 /// Rewrites `callee` attributes (on func.call / func.tail_call) and
 /// `func_ref` attributes (on func.constant).
 fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old_sym: Symbol, new_sym: Symbol) {
+    // A nested core.module owns an independent symbol scope. Its local @main
+    // references must not be rewritten while adapting the immediate root.
+    if core::Module::from_op(ctx, op).is_ok() {
+        return;
+    }
+
     // Rewrite callee attribute
     let callee_key = Symbol::new("callee");
     let func_ref_key = Symbol::new("func_ref");
@@ -309,11 +315,13 @@ fn build_entrypoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::target_abi::ROOT_WRAPPER_ATTR;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
     use trunk_ir::dialect::arith;
     use trunk_ir::dialect::func;
     use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
@@ -467,6 +475,98 @@ mod tests {
             3,
             "Expected exactly 3 functions, got: {:?}",
             names
+        );
+    }
+
+    #[test]
+    fn entrypoint_preserves_root_wrapper_identity_across_native_rename() {
+        let (mut ctx, loc) = test_ctx();
+        let module = make_main_module(&mut ctx, loc);
+        let original = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| {
+                func::Func::from_op(&ctx, op)
+                    .is_ok_and(|function| function.sym_name(&ctx) == Symbol::new("main"))
+            })
+            .expect("source root wrapper");
+        ctx.op_mut(original)
+            .attributes
+            .insert(Symbol::new(ROOT_WRAPPER_ATTR), Attribute::Bool(true));
+
+        generate_native_entrypoint(&mut ctx, module, false);
+
+        let renamed = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| {
+                func::Func::from_op(&ctx, op)
+                    .is_ok_and(|function| function.sym_name(&ctx) == Symbol::new("_tribute_main"))
+            })
+            .expect("renamed root wrapper");
+        assert_eq!(
+            ctx.op(renamed).attributes.get_bool(ROOT_WRAPPER_ATTR),
+            Some(true)
+        );
+        let c_entrypoint = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| {
+                func::Func::from_op(&ctx, op)
+                    .is_ok_and(|function| function.sym_name(&ctx) == Symbol::new("main"))
+            })
+            .expect("C entrypoint");
+        assert!(
+            !ctx.op(c_entrypoint)
+                .attributes
+                .contains_key(ROOT_WRAPPER_ATTR)
+        );
+    }
+
+    #[test]
+    fn entrypoint_does_not_rewrite_nested_local_main_references() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    func.return
+  }
+  core.module @nested {
+    func.func @main() -> core.nil {
+      %local = func.call {callee = @main} : core.nil
+      func.return %local
+    }
+  }
+}"#,
+        );
+
+        generate_native_entrypoint(&mut ctx, module, false);
+
+        let nested = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| core::Module::from_op(&ctx, op).is_ok())
+            .expect("nested module");
+        let nested_body = core::Module::from_op(&ctx, nested).unwrap().body(&ctx);
+        let nested_function = ctx.block(ctx.region(nested_body).blocks[0]).ops[0];
+        let nested_call = ctx
+            .block(
+                ctx.region(
+                    func::Func::from_op(&ctx, nested_function)
+                        .unwrap()
+                        .body(&ctx),
+                )
+                .blocks[0],
+            )
+            .ops
+            .iter()
+            .copied()
+            .find(|&op| func::Call::from_op(&ctx, op).is_ok())
+            .expect("nested local main call");
+        assert_eq!(
+            ctx.op(nested_call).attributes.get_symbol("callee"),
+            Some(Symbol::new("main"))
         );
     }
 

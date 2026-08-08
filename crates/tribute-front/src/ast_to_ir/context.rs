@@ -108,6 +108,9 @@ pub struct IrLoweringCtx<'db> {
     logical_generated_signatures: HashMap<Symbol, LogicalGeneratedSignature>,
     /// Source declarations collected before logical lowering begins.
     logical_source_functions: HashSet<Symbol>,
+    /// Source extern declarations, retained separately so a monomorphized
+    /// intrinsic call can use its base ABI declaration.
+    logical_source_externs: HashSet<Symbol>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<Symbol>,
     /// Ability-level calling-convention requirements.
@@ -189,6 +192,7 @@ impl<'db> IrLoweringCtx<'db> {
             function_types,
             logical_generated_signatures: HashMap::new(),
             logical_source_functions: HashSet::new(),
+            logical_source_externs: HashSet::new(),
             logical_emitted_externs: HashSet::new(),
             ability_conventions,
             definition_conventions: HashMap::new(),
@@ -353,6 +357,22 @@ impl<'db> IrLoweringCtx<'db> {
         self.logical_source_functions.contains(&name)
     }
 
+    pub(crate) fn register_logical_source_extern(&mut self, name: Symbol) {
+        self.logical_source_externs.insert(name);
+    }
+
+    pub(crate) fn has_logical_source_extern_base(&self, name: Symbol) -> bool {
+        if self.logical_source_externs.contains(&name) {
+            return true;
+        }
+        name.with_str(|text| {
+            text.split_once('$').is_some_and(|(base, _)| {
+                self.logical_source_externs
+                    .contains(&Symbol::from_dynamic(base))
+            })
+        })
+    }
+
     /// Returns true exactly once for each prelude declaration that must be
     /// materialized in the logical module.
     pub(crate) fn mark_logical_extern_emitted(&mut self, name: Symbol) -> bool {
@@ -478,6 +498,22 @@ impl<'db> IrLoweringCtx<'db> {
         prefix.push_str("::");
         name.with_str(|s| prefix.push_str(s));
         Symbol::from_dynamic(&prefix)
+    }
+
+    /// Resolve a declaration's one canonical emitted identity.
+    ///
+    /// Source declarations use simple names and inherit the current nested
+    /// module. Synthetic monomorphized declarations already contain their
+    /// source-qualified path and must remain unchanged.
+    pub fn canonical_declaration_name(&self, name: Symbol) -> Symbol {
+        let mut prefix = self
+            .module_path
+            .iter()
+            .skip(1)
+            .map(Symbol::to_string)
+            .collect::<Vec<_>>()
+            .join("::");
+        crate::canonical_declaration_symbol(&mut prefix, name)
     }
 
     /// Generate a unique lambda name qualified with module path.
@@ -624,7 +660,7 @@ impl<'db> IrLoweringCtx<'db> {
                 // Legacy frontend CPS has no logical bottom representation.
                 self.anyref_type(ir)
             }
-            TypeKind::BoundVar { .. } => {
+            TypeKind::BoundVar { .. } | TypeKind::LocalBoundVar { .. } => {
                 // Quantified type variable in TypeScheme body → type-erased any
                 self.anyref_type(ir)
             }
@@ -660,7 +696,9 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => core::never(ir).as_type_ref(),
-            TypeKind::BoundVar { .. } | TypeKind::UniVar { .. } => self.anyref_type(ir),
+            TypeKind::BoundVar { .. }
+            | TypeKind::LocalBoundVar { .. }
+            | TypeKind::UniVar { .. } => self.anyref_type(ir),
             TypeKind::Named { name, .. }
                 if self.get_type(*name).is_some()
                     || self.logical_nominal_declarations.contains(name) =>
@@ -746,6 +784,9 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Never => "never".into(),
             TypeKind::Error => "error".into(),
             TypeKind::BoundVar { index } => logical_key("bound", [index.to_string()]),
+            TypeKind::LocalBoundVar { scope, index } => {
+                logical_key("local_bound", [scope.raw().to_string(), index.to_string()])
+            }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
             TypeKind::Named { id, name, args } => {
                 let mut parts = vec![self.logical_nominal_key(*id, *name)];
@@ -1367,6 +1408,14 @@ mod tests {
         assert_eq!(
             ctx.qualify_name(Symbol::new("run")),
             Symbol::new("Nested::run")
+        );
+        assert_eq!(
+            ctx.canonical_declaration_name(Symbol::new("run")),
+            Symbol::new("Nested::run")
+        );
+        assert_eq!(
+            ctx.canonical_declaration_name(Symbol::new("Nested::run$Int")),
+            Symbol::new("Nested::run$Int")
         );
         ctx.exit_module();
 

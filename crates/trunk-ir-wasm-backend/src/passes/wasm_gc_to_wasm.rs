@@ -13,7 +13,8 @@ use trunk_ir::rewrite::{
 
 use crate::gc_types::{
     BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, CONTINUATION_IDX,
-    EVIDENCE_IDX, FIRST_USER_TYPE_IDX, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
+    EVIDENCE_ARRAY_TYPE_ATTR, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, MARKER_IDX, RESUME_WRAPPER_IDX,
+    STEP_IDX,
 };
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
@@ -64,6 +65,13 @@ fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
         Some(MARKER_IDX)
     } else if is_evidence_array(ctx, ty) {
         Some(EVIDENCE_IDX)
+    } else if is_abstract_heap_type(ctx, ty)
+        && ctx.types.get(ty).name == Symbol::new("arrayref")
+        && ctx.types.get(ty).attrs.get_bool(EVIDENCE_ARRAY_TYPE_ATTR) == Some(true)
+    {
+        // EvidenceDirect entry construction preserves this exact marker after
+        // source evidence becomes its physical abstract array representation.
+        Some(EVIDENCE_IDX)
     } else if named_adt(ctx, ty, "_Continuation") {
         Some(CONTINUATION_IDX)
     } else if named_adt(ctx, ty, "_ResumeWrapper") {
@@ -93,7 +101,9 @@ fn collect_typed_ops(ctx: &IrContext, region: RegionRef, types: &mut Vec<TypeRef
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             let mut push = |ty| {
-                if !types.contains(&ty) && !is_abstract_heap_type(ctx, ty) {
+                if !types.contains(&ty)
+                    && (builtin_type_idx(ctx, ty).is_some() || !is_abstract_heap_type(ctx, ty))
+                {
                     types.push(ty);
                 }
             };
@@ -450,6 +460,70 @@ mod tests {
             .map(|op| op.type_idx(&ctx))
             .collect();
         assert_eq!(indices, vec![Some(FIRST_USER_TYPE_IDX), None]);
+    }
+
+    #[test]
+    fn lowers_marked_evidence_array_allocation_to_the_builtin_index() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !evidence = wasm.arrayref() {wasm.evidence_array = true}
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+        let evidence = ctx
+            .type_aliases()
+            .iter()
+            .find_map(|(name, ty)| (*name == Symbol::new("evidence")).then_some(*ty))
+            .expect("textual evidence type alias");
+        let func = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op(func).regions[0]).blocks[0];
+        let zero = ctx.block(block).ops[0];
+        let location = ctx.op(zero).location;
+        let size = ctx.op_result(zero, 0);
+        let return_op = ctx.block(block).ops[1];
+        let allocation = wasm_gc::array_new_default(&mut ctx, location, size, evidence, evidence);
+        ctx.insert_op_before(block, return_op, allocation.op_ref());
+
+        lower(&mut ctx, module);
+
+        let allocation = ctx
+            .block(block)
+            .ops
+            .iter()
+            .find_map(|&op| wasm::ArrayNewDefault::from_op(&ctx, op).ok())
+            .expect("typed evidence allocation should lower");
+        assert_eq!(allocation.type_idx(&ctx), EVIDENCE_IDX);
+    }
+
+    #[test]
+    fn generic_abstract_array_does_not_claim_the_evidence_index() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %array = wasm_gc.array_new_default %zero {type = wasm.arrayref} : wasm.arrayref
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module);
+
+        let func = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op(func).regions[0]).blocks[0];
+        assert!(
+            ctx.block(block)
+                .ops
+                .iter()
+                .any(|&op| { wasm_gc::ArrayNewDefault::from_op(&ctx, op).is_ok() })
+        );
     }
 
     #[test]

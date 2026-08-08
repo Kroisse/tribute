@@ -3,256 +3,469 @@ source: tests/active_pipeline_goldens.rs
 expression: ir_text
 ---
 core.module @resumptive_op {
-  !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
-  !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
-  !"Result$T0$T1" = adt.enum() {name = @"Result$T0$T1", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Option$T0" = adt.enum() {name = @"Option$T0", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
-  !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
+  !String = adt.typeref() {name = @String}
+  !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
+  !String_1 = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [!String, !String, core.i32]]]}
+  !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
+  !__tribute_parent_ty6 = adt.typeref() {name = @__tribute_parent_ty6, tribute.cps_parent_result = core.i32}
+  !Result_1 = adt.typeref() {name = @Result}
+  !"String::Cursor_1" = adt.typeref() {name = @"String::Cursor"}
+  !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [!String, !"String::Cursor_1"]], [@CursorChunk, [core.bytes, core.i32, core.i32, !"String::Cursor_1"]]]}
+  !__tribute_parent_ty25_1 = adt.typeref() {name = @__tribute_parent_ty25, tribute.cps_parent_result = !Result_1}
+  !t7 = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
+  !Option_1 = adt.typeref() {name = @Option}
+  !__tribute_parent_ty17_1 = adt.typeref() {name = @__tribute_parent_ty17, tribute.cps_parent_result = !Option_1}
+  !__tribute_parent_ty5_1 = adt.typeref() {name = @__tribute_parent_ty5, tribute.cps_parent_result = !String}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
-  !t2 = core.func(tribute_rt.anyref, tribute_rt.anyref)
-  !t1 = closure.closure(!t2)
-  !"bump::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32], [@_1, tribute_rt.anyref]], name = @"bump::__clam_0::__clam_0::env"}
-  !"run_state::__clam_1::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"run_state::__clam_1::__clam_0::env"}
-  !"run_state::__clam_1::__clam_1::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"run_state::__clam_1::__clam_1::env"}
-  !"Result::map_err::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map_err::__clam_0::env"}
-  !"Option::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Option::map::__clam_0::env"}
-  !"Result::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map::__clam_0::env"}
-  !"bump::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"bump::__clam_0::env"}
+  !"Result$Int$Int::ParseError" = adt.typeref() {name = @"Result$Int$Int::ParseError"}
+  !t20 = core.func(core.never, tribute_rt.anyref, !Result_1)
+  !t24 = core.func(core.never, !Result_1)
+  !t6 = closure.closure(!t24) {tribute.calling_convention = 2}
+  !t37 = core.func(core.never, tribute_rt.anyref, !Option_1)
+  !t38 = core.func(core.never, tribute_rt.anyref, core.i32)
+  !t39 = core.func(core.never, !Option_1)
+  !t14 = closure.closure(!t39) {tribute.calling_convention = 2}
+  !t40 = core.func(core.never, !String)
+  !t17 = closure.closure(!t40) {tribute.calling_convention = 2}
+  !t41 = core.func(core.never, tribute_rt.anyref)
+  !__tribute_one_shot_state_13 = adt.struct() {fields = [[@consumed, core.i1]], name = @__tribute_one_shot_state_13}
+  !__tribute_one_shot_state_14 = adt.struct() {fields = [[@consumed, core.i1]], name = @__tribute_one_shot_state_14}
+  !"bump::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"bump::__clam_0::__clam_0::env"}
+  !__tribute_ability_payload_50641714 = adt.struct() {fields = [[@arg0, core.i32]], name = @__tribute_ability_payload_50641714}
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
-  !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
-  !"Result$T1$T0" = adt.enum() {name = @"Result$T1$T0", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !t4 = core.ability_ref() {name = @"abilities::Throw"}
-  !"Result$T3$T4" = adt.enum() {name = @"Result$T3$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Result$T6$T5" = adt.enum() {name = @"Result$T6$T5", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Option$T2" = adt.enum() {name = @"Option$T2", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
+  !t48 = closure.closure(core.func(core.never, core.nil)) {tribute.calling_convention = 2}
+  !__tribute_parent_ty57_1 = adt.typeref() {name = @__tribute_parent_ty57, tribute.cps_parent_result = core.nil}
+  !t49 = core.func(core.never, tribute_rt.anyref, !String)
+  !"Int::ParseError_1" = adt.typeref() {name = @"Int::ParseError"}
+  !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, !String]], name = @"std::io::SystemError"}
+  !__tribute_parent_ty0_1 = adt.typeref() {name = @__tribute_parent_ty0, tribute.cps_parent_result = tribute_rt.anyref}
+  !__tribute_ability_payload_7590c57e = adt.struct() {fields = [], name = @__tribute_ability_payload_7590c57e}
+  !"std::io::SystemError_1" = adt.typeref() {name = @"std::io::SystemError"}
+  !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [!"std::io::SystemError_1"]]]}
+  !"std::io::Error_1" = adt.typeref() {name = @"std::io::Error"}
+  !__tribute_ability_payload_0efb32ee = adt.struct() {fields = [[@arg0, !"std::io::Error_1"]], name = @__tribute_ability_payload_0efb32ee}
+  !t60 = core.ability_ref(!"std::io::Error_1") {name = @"abilities::Throw"}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
-  !t3 = closure.closure(core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref))
-  !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
-  !"Result$T2$T3" = adt.enum() {name = @"Result$T2$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Result$T4$T3" = adt.enum() {name = @"Result$T4$T3", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Result$T5$T4" = adt.enum() {name = @"Result$T5$T4", variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
-  !"Option$T1" = adt.enum() {name = @"Option$T1", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
-  !"Option$T3" = adt.enum() {name = @"Option$T3", variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
-
+  !t13 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty6, core.i32)
+  !t16 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty6, tribute_rt.anyref)
+  !t19 = core.func(core.never, !t0, !__tribute_parent_ty6, tribute_rt.anyref)
+  !t10 = closure.closure(!t19) {tribute.calling_convention = 2}
+  !t18 = core.func(core.never, !t0, tribute_rt.anyref, !t10, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t21 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty25_1, !Result_1)
+  !t22 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty25_1, tribute_rt.anyref)
+  !t23 = core.func(core.never, !t0, !__tribute_parent_ty25_1, tribute_rt.anyref)
+  !t9 = closure.closure(!t23) {tribute.calling_convention = 2}
+  !t25 = core.func(core.never, !t0, !t10, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t1 = closure.closure(!t25) {tribute.calling_convention = 2}
+  !__tribute_parent_ty6_1 = adt.struct() {fields = [[@done, !t7], [@dispatch, !t1]], name = @__tribute_parent_ty6, tribute.cps_parent_result = core.i32}
+  !t26 = core.func(core.never, !t0, !__tribute_parent_ty6, core.i32)
+  !t3 = closure.closure(!t26) {tribute.calling_convention = 2}
+  !"run_state::__clam_2::__clam_1::env" = adt.struct() {fields = [[@_0, !t7], [@_1, !t1], [@_2, !t3], [@_3, !t0]], name = @"run_state::__clam_2::__clam_1::env"}
+  !"run_state::__clam_3::__clam_1::env" = adt.struct() {fields = [[@_0, !t7], [@_1, !t1], [@_2, !t3], [@_3, !t0]], name = @"run_state::__clam_3::__clam_1::env"}
+  !"run_state::__clam_1::env" = adt.struct() {fields = [[@_0, !t7], [@_1, !t1], [@_2, !t3], [@_3, !t0]], name = @"run_state::__clam_1::env"}
+  !"run_state::__clam_9::env" = adt.struct() {fields = [[@_0, !t7], [@_1, !t1], [@_2, !t3], [@_3, !t0]], name = @"run_state::__clam_9::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_1::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_1::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_15::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_dispatch_adapter_15::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_16::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_dispatch_adapter_16::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_17::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_dispatch_adapter_17::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_19::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_dispatch_adapter_19::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_20::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"__tribute_make_dispatch_adapter_20::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_5::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_5::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_7::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_7::__clam_0::__clam_0::__clam_0::env"}
+  !"run_state::__clam_7::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, !__tribute_parent_ty6]], name = @"run_state::__clam_7::env"}
+  !t28 = closure.closure(core.func(core.never, !t0, !__tribute_parent_ty6, !t0, !t3)) {tribute.calling_convention = 2}
+  !t29 = closure.closure(core.func(core.never, !t0, closure.closure(core.func(core.never, !t0, !__tribute_parent_ty57_1, tribute_rt.anyref)) {tribute.calling_convention = 2}, core.i32, core.i32, core.i32, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !t31 = core.func(core.never, !t0, tribute_rt.anyref, !t9, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t32 = closure.closure(core.func(core.never, !t0, !__tribute_parent_ty0_1, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !t34 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty17_1, !Option_1)
+  !t35 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty5_1, !String)
+  !t36 = core.func(core.never, !t0, !__tribute_parent_ty5_1, tribute_rt.anyref)
+  !t33 = closure.closure(!t36) {tribute.calling_convention = 2}
+  !"__tribute_make_dispatch_adapter_15::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_15::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_16::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_16::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_17::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_17::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_19::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_19::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_20::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_20::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_5::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t32]], name = @"__tribute_make_dispatch_adapter_5::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_7::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t32]], name = @"__tribute_make_dispatch_adapter_7::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_15::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t1]], name = @"__tribute_make_dispatch_adapter_15::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_16::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t1]], name = @"__tribute_make_dispatch_adapter_16::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_17::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t1]], name = @"__tribute_make_dispatch_adapter_17::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_19::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t1]], name = @"__tribute_make_dispatch_adapter_19::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_20::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t1]], name = @"__tribute_make_dispatch_adapter_20::__clam_0::env"}
+  !"bump::__clam_1::env" = adt.struct() {fields = [[@_0, !__tribute_one_shot_state_14], [@_1, !t3]], name = @"bump::__clam_1::env"}
+  !t42 = closure.closure(core.func(core.never, !t0, !__tribute_parent_ty57_1, core.i32)) {tribute.calling_convention = 2}
+  !"main::__clam_1::env" = adt.struct() {fields = [[@_0, !t48], [@_1, !t29], [@_2, !t42], [@_3, !t0]], name = @"main::__clam_1::env"}
+  !"__tribute_make_dispatch_adapter_21::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t42], [@_1, !t0], [@_2, !__tribute_parent_ty57_1]], name = @"__tribute_make_dispatch_adapter_21::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_21::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t42], [@_1, !t10]], name = @"__tribute_make_dispatch_adapter_21::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_21::__clam_0::env" = adt.struct() {fields = [[@_0, !t42], [@_1, !t29]], name = @"__tribute_make_dispatch_adapter_21::__clam_0::env"}
+  !t43 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty17_1, tribute_rt.anyref)
+  !t44 = core.func(core.never, !t0, !__tribute_parent_ty17_1, tribute_rt.anyref)
+  !t15 = closure.closure(!t44) {tribute.calling_convention = 2}
+  !"__tribute_make_dispatch_adapter_1::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t15], [@_1, !t0], [@_2, !__tribute_parent_ty17_1]], name = @"__tribute_make_dispatch_adapter_1::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_1::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t15], [@_1, !t32]], name = @"__tribute_make_dispatch_adapter_1::__clam_0::__clam_0::env"}
+  !__tribute_parent_ty57 = adt.struct() {fields = [[@done, !t48], [@dispatch, !t29]], name = @__tribute_parent_ty57, tribute.cps_parent_result = core.nil}
+  !t45 = core.func(core.never, !t0, tribute_rt.anyref, !t15, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t46 = core.func(core.never, !t0, !t9, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t2 = closure.closure(!t46) {tribute.calling_convention = 2}
+  !__tribute_parent_ty25 = adt.struct() {fields = [[@done, !t6], [@dispatch, !t2]], name = @__tribute_parent_ty25, tribute.cps_parent_result = !Result_1}
+  !"Result::map_err::__clam_3::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t9], [@_3, !t0]], name = @"Result::map_err::__clam_3::env"}
+  !"Result::map::__clam_3::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t9], [@_3, !t0]], name = @"Result::map::__clam_3::env"}
+  !"__tribute_make_dispatch_adapter_5::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_5::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_7::__clam_0::env" = adt.struct() {fields = [[@_0, !t9], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_7::__clam_0::env"}
+  !t47 = core.func(core.never, !t0, !__tribute_parent_ty25_1, !Result_1)
+  !t8 = closure.closure(!t47) {tribute.calling_convention = 2}
+  !"Result::and_then::__clam_1::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t8], [@_3, !t0]], name = @"Result::and_then::__clam_1::env"}
+  !"Result::and_then::__clam_3::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t8], [@_3, !t0]], name = @"Result::and_then::__clam_3::env"}
+  !"Result::map_err::__clam_1::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t8], [@_3, !t0]], name = @"Result::map_err::__clam_1::env"}
+  !"Result::map::__clam_1::env" = adt.struct() {fields = [[@_0, !t6], [@_1, !t2], [@_2, !t8], [@_3, !t0]], name = @"Result::map::__clam_1::env"}
+  !"__tribute_make_dispatch_adapter_4::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_4::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_6::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_6::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_8::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_8::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_9::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t0], [@_2, !__tribute_parent_ty25_1]], name = @"__tribute_make_dispatch_adapter_9::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_4::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t9]], name = @"__tribute_make_dispatch_adapter_4::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_6::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t9]], name = @"__tribute_make_dispatch_adapter_6::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_8::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t9]], name = @"__tribute_make_dispatch_adapter_8::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_9::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t9]], name = @"__tribute_make_dispatch_adapter_9::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_4::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_4::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_6::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_6::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_8::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_8::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_9::__clam_0::env" = adt.struct() {fields = [[@_0, !t8], [@_1, !t2]], name = @"__tribute_make_dispatch_adapter_9::__clam_0::env"}
+  !t52 = core.func(core.never, !t0, tribute_rt.anyref, !t33, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t53 = core.func(core.never, !t0, !t15, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t4 = closure.closure(!t53) {tribute.calling_convention = 2}
+  !__tribute_parent_ty17 = adt.struct() {fields = [[@done, !t14], [@dispatch, !t4]], name = @__tribute_parent_ty17, tribute.cps_parent_result = !Option_1}
+  !"Option::map::__clam_3::env" = adt.struct() {fields = [[@_0, !t14], [@_1, !t4], [@_2, !t15], [@_3, !t0]], name = @"Option::map::__clam_3::env"}
+  !"__tribute_make_dispatch_adapter_1::__clam_0::env" = adt.struct() {fields = [[@_0, !t15], [@_1, !t4]], name = @"__tribute_make_dispatch_adapter_1::__clam_0::env"}
+  !t54 = core.func(core.never, !t0, !t32, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t30 = closure.closure(!t54) {tribute.calling_convention = 2}
+  !t50 = closure.closure(core.func(core.never, !t0, closure.closure(!t41) {tribute.calling_convention = 2}, !t30, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !t51 = core.func(core.never, !t0, tribute_rt.anyref, closure.closure(!t41) {tribute.calling_convention = 2}, !t30, tribute_rt.anyref)
+  !t55 = core.func(core.never, !t0, !t33, core.i32, core.i32, core.i32, tribute_rt.anyref)
+  !t5 = closure.closure(!t55) {tribute.calling_convention = 2}
+  !__tribute_parent_ty5 = adt.struct() {fields = [[@done, !t17], [@dispatch, !t5]], name = @__tribute_parent_ty5, tribute.cps_parent_result = !String}
+  !t56 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty5_1, tribute_rt.anyref)
+  !t57 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty0_1, tribute_rt.anyref)
+  !t58 = core.func(core.never, !t0, !__tribute_parent_ty17_1, !Option_1)
+  !t11 = closure.closure(!t58) {tribute.calling_convention = 2}
+  !"Option::and_then::__clam_1::env" = adt.struct() {fields = [[@_0, !t14], [@_1, !t4], [@_2, !t11], [@_3, !t0]], name = @"Option::and_then::__clam_1::env"}
+  !"Option::and_then::__clam_3::env" = adt.struct() {fields = [[@_0, !t14], [@_1, !t4], [@_2, !t11], [@_3, !t0]], name = @"Option::and_then::__clam_3::env"}
+  !"Option::map::__clam_1::env" = adt.struct() {fields = [[@_0, !t14], [@_1, !t4], [@_2, !t11], [@_3, !t0]], name = @"Option::map::__clam_1::env"}
+  !"__tribute_make_dispatch_adapter_0::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t0], [@_2, !__tribute_parent_ty17_1]], name = @"__tribute_make_dispatch_adapter_0::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_2::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t0], [@_2, !__tribute_parent_ty17_1]], name = @"__tribute_make_dispatch_adapter_2::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_3::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t0], [@_2, !__tribute_parent_ty17_1]], name = @"__tribute_make_dispatch_adapter_3::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t15]], name = @"__tribute_make_dispatch_adapter_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_2::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t15]], name = @"__tribute_make_dispatch_adapter_2::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_3::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t15]], name = @"__tribute_make_dispatch_adapter_3::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t4]], name = @"__tribute_make_dispatch_adapter_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_2::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t4]], name = @"__tribute_make_dispatch_adapter_2::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_3::__clam_0::env" = adt.struct() {fields = [[@_0, !t11], [@_1, !t4]], name = @"__tribute_make_dispatch_adapter_3::__clam_0::env"}
+  !t59 = core.func(core.never, !t0, !__tribute_parent_ty5_1, !String)
+  !t12 = closure.closure(!t59) {tribute.calling_convention = 2}
+  !"std::io::read_line::__clam_1::env" = adt.struct() {fields = [[@_0, !t17], [@_1, !t5], [@_2, !t12], [@_3, !t0]], name = @"std::io::read_line::__clam_1::env"}
+  !"std::io::read_line::__clam_3::env" = adt.struct() {fields = [[@_0, !t17], [@_1, !t5], [@_2, !t12], [@_3, !t0]], name = @"std::io::read_line::__clam_3::env"}
+  !"std::io::read_line::__clam_6::env" = adt.struct() {fields = [[@_0, !t17], [@_1, !t5], [@_2, !t12], [@_3, !t0]], name = @"std::io::read_line::__clam_6::env"}
+  !"__tribute_make_dispatch_adapter_10::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t0], [@_2, !__tribute_parent_ty5_1]], name = @"__tribute_make_dispatch_adapter_10::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_11::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t0], [@_2, !__tribute_parent_ty5_1]], name = @"__tribute_make_dispatch_adapter_11::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_12::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t0], [@_2, !__tribute_parent_ty5_1]], name = @"__tribute_make_dispatch_adapter_12::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_10::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t33]], name = @"__tribute_make_dispatch_adapter_10::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_11::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t33]], name = @"__tribute_make_dispatch_adapter_11::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_12::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t33]], name = @"__tribute_make_dispatch_adapter_12::__clam_0::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_10::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t5]], name = @"__tribute_make_dispatch_adapter_10::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_11::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t5]], name = @"__tribute_make_dispatch_adapter_11::__clam_0::env"}
+  !"__tribute_make_dispatch_adapter_12::__clam_0::env" = adt.struct() {fields = [[@_0, !t12], [@_1, !t5]], name = @"__tribute_make_dispatch_adapter_12::__clam_0::env"}
+  !__tribute_parent_ty0 = adt.struct() {fields = [[@done, closure.closure(!t41) {tribute.calling_convention = 2}], [@dispatch, !t30]], name = @__tribute_parent_ty0, tribute.cps_parent_result = tribute_rt.anyref}
+  !t62 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty57_1, core.i32)
+  !t63 = core.func(core.never, !t0, tribute_rt.anyref, !__tribute_parent_ty6, core.nil)
+  !t64 = core.func(core.never, !t0, !__tribute_parent_ty6, core.nil)
+  !t61 = closure.closure(!t64) {tribute.calling_convention = 2}
+  !t27 = closure.closure(core.func(core.never, !t0, !__tribute_parent_ty6, !t0, core.i32, !t61)) {tribute.calling_convention = 2}
+  !"__tribute_make_local_dispatch_18::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32], [@_1, !t3], [@_2, !t0], [@_3, !t28], [@_4, !t27], [@_5, !__tribute_parent_ty6], [@_6, !t1]], name = @"__tribute_make_local_dispatch_18::__clam_0::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, core.i32], [@_3, !t28], [@_4, !t27], [@_5, !t10]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_0::__clam_0::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_1::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, core.i32], [@_3, !t28], [@_4, !t27], [@_5, !t10]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_1::__clam_0::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, core.i32], [@_3, !t28], [@_4, !t27], [@_5, !t10]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_0::env"}
+  !"__tribute_make_local_dispatch_18::__clam_0::__clam_1::env" = adt.struct() {fields = [[@_0, !t3], [@_1, !t0], [@_2, core.i32], [@_3, !t28], [@_4, !t27], [@_5, !t10]], name = @"__tribute_make_local_dispatch_18::__clam_0::__clam_1::env"}
+  !"bump::__clam_0::__clam_1::env" = adt.struct() {fields = [[@_0, !__tribute_one_shot_state_13], [@_1, !t61]], name = @"bump::__clam_0::__clam_1::env"}
+  !"std::io::ReadLineResult_1" = adt.typeref() {name = @"std::io::ReadLineResult"}
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
       func.unreachable
   }
-
   func.func @__tribute_evidence_extend(%0: !t0, %1: !_Marker) -> !t0 {
       func.unreachable
   }
-
   func.func @__tribute_evidence_lookup(%0: !t0, %1: core.i32) -> !_Marker {
       func.unreachable
   }
-    !"std::io::SystemError_1" = adt.typeref() {name = @"std::io::SystemError"}
-
-  func.func @bump(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
-      %2 = adt.struct_new %1 {type = !"bump::__clam_0::env"} : !"bump::__clam_0::env"
-      %3 = func.constant {func_ref = @"bump::__clam_0"} : !t2
-      %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
-      %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %7 = effect.dispatch_cps %0, %6, %5 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      func.return %7
-  }
-
-  func.func @"resumptive_op::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      func.return %2
-  }
-
-  func.func @"resumptive_op::__lambda_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-      func.return %3
-  }
-
-  func.func @run_state() -> core.i32 attributes {tribute.calling_convention = 0} {
-      %0 = arith.const {value = 0} : core.i32
-      %1 = adt.array_new %0 {type = !t0} : !t0
-      %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t2
-      %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
-      %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"run_state::__clam_0"} : !t2
-      %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
-      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %9 = func.constant {func_ref = @"resumptive_op::__lambda_1"} : !t2
+  func.func @bump(%0: !t0, %1: !t7, %2: !t1) -> core.never attributes {tribute.calling_convention = 2} {
+      %3 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %4 = func.constant {func_ref = @"bump::__clam_0"} : !t26
+      %5 = adt.struct_new %4, %3 {type = !_closure} : !_closure
+      %6 = arith.const {value = 0} : core.i1
+      %7 = adt.struct_new %6 {type = !__tribute_one_shot_state_14} : !__tribute_one_shot_state_14
+      %8 = adt.struct_new %7, %5 {type = !"bump::__clam_1::env"} : !"bump::__clam_1::env"
+      %9 = func.constant {func_ref = @"bump::__clam_1"} : !t19
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
-      %11 = adt.ref_null {type = !t0} : !t0
-      %12 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
-      %13 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
-      %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %15 = func.constant {func_ref = @"run_state::__clam_1"} : core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref)
-      %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
-      %17 = arith.const {value = 0} : tribute_rt.anyref
-      %18 = func.call {callee = @__tribute_next_tag} : core.i32
-      %19 = effect.extend %1, %18, %17, %16 {ability_ref = core.ability_ref() {name = @State}} : !t0
-      %20 = func.call_indirect %12, %19, %13, %10 : tribute_rt.anyref
-      %21 = adt.variant_is %20 {tag = @Normal, type = !__tribute_cps_control} : core.i1
-      %22 = scf.if %21 : tribute_rt.anyref {
-          %23 = adt.variant_cast %20 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-          %24 = adt.variant_get %23 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-          %25 = core.unrealized_conversion_cast %24 : core.i32
-          %26 = core.unrealized_conversion_cast %25 : tribute_rt.anyref
-          %27 = adt.ref_null {type = !t0} : !t0
-          %28 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
-          %29 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-          %30 = func.call_indirect %28, %19, %29, %26 : tribute_rt.anyref
-          scf.yield %30
-      } {
-          %31 = adt.variant_cast %20 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-          %32 = adt.variant_get %31 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
-          %33 = adt.variant_get %31 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-          %34 = arith.cmpi %32, %18 {predicate = @eq} : core.i1
-          %35 = scf.if %34 : tribute_rt.anyref {
-              %36 = adt.ref_null {type = !t0} : !t0
-              %37 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
-              %38 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-              %39 = func.call_indirect %37, %36, %38, %33 : tribute_rt.anyref
-              scf.yield %39
-          } {
-              scf.yield %20
-          }
-          scf.yield %35
-      }
-      %40 = core.unrealized_conversion_cast %22 : core.i32
-      func.return %40
+      %11 = adt.struct_new {type = !__tribute_ability_payload_7590c57e} : !__tribute_ability_payload_7590c57e
+      %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
+      effect.dispatch_cps %0, %2, %10, %12 {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get}
   }
-
-  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
-      %0 = func.call {callee = @run_state, tribute.calling_convention = 0} : core.i32
-      %1 = arith.const {value = unit} : core.nil
-      func.return %1
+  func.func @run_state(%0: !t0, %1: !t7, %2: !t1) -> core.never attributes {tribute.calling_convention = 2} {
+      %3 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %4 = func.constant {func_ref = @"run_state::__clam_0"} : !t26
+      %5 = adt.struct_new %4, %3 {type = !_closure} : !_closure
+      %6 = adt.struct_new %1, %2, %5, %0 {type = !"run_state::__clam_1::env"} : !"run_state::__clam_1::env"
+      %7 = func.constant {func_ref = @"run_state::__clam_1"} : core.func(core.never, core.i32)
+      %8 = adt.struct_new %7, %6 {type = !_closure} : !_closure
+      %9 = func.call %5, %2 {callee = @__tribute_make_dispatch_adapter_15, tribute.calling_convention = 0} : !t1
+      %10 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %11 = func.constant {func_ref = @"run_state::__clam_2"} : core.func(core.never, !t0, !__tribute_parent_ty6, !t0, !t3)
+      %12 = adt.struct_new %11, %10 {type = !_closure} : !_closure
+      %13 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %14 = func.constant {func_ref = @"run_state::__clam_3"} : core.func(core.never, !t0, !__tribute_parent_ty6, !t0, core.i32, !t61)
+      %15 = adt.struct_new %14, %13 {type = !_closure} : !_closure
+      %16 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %17 = func.constant {func_ref = @"run_state::__clam_4"} : core.func(tribute_rt.anyref, !t0, core.i32, tribute_rt.anyref)
+      %18 = adt.struct_new %17, %16 {type = !_closure} : !_closure
+      %19 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %20 = func.constant {func_ref = @"run_state::__clam_5"} : core.func(core.never, !t0, !__tribute_parent_ty6, core.i32, tribute_rt.anyref)
+      %21 = adt.struct_new %20, %19 {type = !_closure} : !_closure
+      %22 = func.call {callee = @__tribute_next_tag} : core.i32
+      %23 = effect.extend %0, %22, %18, %21 {ability_ref = core.ability_ref(core.i32) {name = @State}} : !t0
+      %24 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %25 = func.constant {func_ref = @"run_state::__clam_6"} : !t26
+      %26 = adt.struct_new %25, %24 {type = !_closure} : !_closure
+      %27 = adt.struct_new %8, %9 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %28 = adt.struct_new %26, %23, %27 {type = !"run_state::__clam_7::env"} : !"run_state::__clam_7::env"
+      %29 = func.constant {func_ref = @"run_state::__clam_7"} : core.func(core.never, core.i32)
+      %30 = adt.struct_new %29, %28 {type = !_closure} : !_closure
+      %31 = func.call %27, %0, %22, %26, %12, %15 {callee = @__tribute_make_local_dispatch_18, tribute.calling_convention = 0} : !t1
+      %32 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %33 = func.constant {func_ref = @"run_state::__clam_8"} : !t26
+      %34 = adt.struct_new %33, %32 {type = !_closure} : !_closure
+      %35 = adt.struct_new %30, %31, %34, %23 {type = !"run_state::__clam_9::env"} : !"run_state::__clam_9::env"
+      %36 = func.constant {func_ref = @"run_state::__clam_9"} : core.func(core.never, core.i32)
+      %37 = adt.struct_new %36, %35 {type = !_closure} : !_closure
+      %38 = func.call %34, %31 {callee = @__tribute_make_dispatch_adapter_20, tribute.calling_convention = 0} : !t1
+      func.tail_call %23, %37, %38 {callee = @bump, tribute.calling_convention = 2}
   }
-
-  func.func @"bump::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_cast %1 {type = !"bump::__clam_0::env"} : !"bump::__clam_0::env"
-      %4 = adt.struct_get %3 {field = 0, type = !"bump::__clam_0::env"} : tribute_rt.anyref
-      %5 = core.unrealized_conversion_cast %2 : core.i32
+  func.func @main(%0: !t0, %1: !t48, %2: !t29) -> core.never attributes {tribute.calling_convention = 2, tribute.root_export_convention = 0, tribute.root_source_result = core.nil} {
+      %3 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %4 = func.constant {func_ref = @"main::__clam_0"} : core.func(core.never, !t0, !__tribute_parent_ty57_1, core.i32)
+      %5 = adt.struct_new %4, %3 {type = !_closure} : !_closure
+      %6 = adt.struct_new %1, %2, %5, %0 {type = !"main::__clam_1::env"} : !"main::__clam_1::env"
+      %7 = func.constant {func_ref = @"main::__clam_1"} : core.func(core.never, core.i32)
+      %8 = adt.struct_new %7, %6 {type = !_closure} : !_closure
+      %9 = func.call %5, %2 {callee = @__tribute_make_dispatch_adapter_21, tribute.calling_convention = 0} : !t1
+      func.tail_call %0, %8, %9 {callee = @run_state, tribute.calling_convention = 2}
+  }
+  func.func @"bump::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
       %6 = arith.const {value = 1} : core.i32
-      %7 = arith.addi %5, %6 : core.i32
-      %8 = adt.struct_new %5, %4 {type = !"bump::__clam_0::__clam_0::env"} : !"bump::__clam_0::__clam_0::env"
-      %9 = func.constant {func_ref = @"bump::__clam_0::__clam_0"} : !t2
+      %7 = arith.addi %3, %6 : core.i32
+      %8 = adt.struct_new %3 {type = !"bump::__clam_0::__clam_0::env"} : !"bump::__clam_0::__clam_0::env"
+      %9 = func.constant {func_ref = @"bump::__clam_0::__clam_0"} : !t64
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
-      %11 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
-      %12 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
-      %13 = effect.dispatch_cps %0, %12, %11 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
-      func.return %13
+      %11 = arith.const {value = 0} : core.i1
+      %12 = adt.struct_new %11 {type = !__tribute_one_shot_state_13} : !__tribute_one_shot_state_13
+      %13 = adt.struct_new %12, %10 {type = !"bump::__clam_0::__clam_1::env"} : !"bump::__clam_0::__clam_1::env"
+      %14 = func.constant {func_ref = @"bump::__clam_0::__clam_1"} : !t19
+      %15 = adt.struct_new %14, %13 {type = !_closure} : !_closure
+      %16 = adt.struct_new %7 {type = !__tribute_ability_payload_50641714} : !__tribute_ability_payload_50641714
+      %17 = core.unrealized_conversion_cast %16 : tribute_rt.anyref
+      effect.dispatch_cps %0, %5, %15, %17 {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @set}
   }
-
-  func.func @"run_state::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_null {type = !t0} : !t0
-      %4 = func.call %0, %2 {callee = @bump} : tribute_rt.anyref
-      func.return %4
-  }
-
-  func.func @"run_state::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref, %3: core.i32, %4: core.i32, %5: tribute_rt.anyref) -> tribute_rt.anyref {
-      %6 = arith.const {value = 1972422014} : core.i32
-      %7 = arith.cmpi %4, %6 {predicate = @eq} : core.i1
-      %8 = scf.if %7 : tribute_rt.anyref {
-          %9 = adt.struct_new %3 {type = !"run_state::__clam_1::__clam_0::env"} : !"run_state::__clam_1::__clam_0::env"
-          %10 = func.constant {func_ref = @"run_state::__clam_1::__clam_0"} : !t2
-          %11 = adt.struct_new %10, %9 {type = !_closure} : !_closure
-          %12 = arith.const {value = 10} : core.i32
-          %13 = core.unrealized_conversion_cast %2 : !t1
-          %14 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
-          %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
-          %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-          %17 = func.call_indirect %15, %0, %16, %14 : tribute_rt.anyref
-          %18 = adt.variant_is %17 {tag = @Normal, type = !__tribute_cps_control} : core.i1
-          %19 = scf.if %18 : tribute_rt.anyref {
-              %20 = adt.variant_cast %17 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-              %21 = adt.variant_get %20 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-              %22 = core.unrealized_conversion_cast %21 : core.i32
-              %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
-              %24 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
-              %25 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-              %26 = func.call_indirect %24, %0, %25, %23 : tribute_rt.anyref
-              %27 = adt.variant_cast %26 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-              %28 = adt.variant_get %27 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
-              %29 = adt.variant_get %27 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-              %30 = arith.cmpi %28, %3 {predicate = @eq} : core.i1
-              %31 = scf.if %30 : tribute_rt.anyref {
-                  %32 = adt.variant_new %29 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                  scf.yield %32
-              } {
-                  scf.yield %26
-              }
-              scf.yield %31
-          } {
-              scf.yield %17
-          }
-          scf.yield %19
+  func.func @"bump::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: tribute_rt.anyref) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.ref_cast %1 {type = !"bump::__clam_1::env"} : !"bump::__clam_1::env"
+      %5 = adt.struct_get %4 {field = 0, type = !"bump::__clam_1::env"} : !__tribute_one_shot_state_14
+      %6 = adt.struct_get %4 {field = 1, type = !"bump::__clam_1::env"} : !t3
+      %7 = core.unrealized_conversion_cast %3 : core.i32
+      %8 = adt.struct_get %5 {field = 0, type = !__tribute_one_shot_state_14} : core.i1
+      %9 = scf.if %8 : core.never {
+          func.unreachable
       } {
-          %33 = arith.const {value = 1} : core.i1
-          %34 = scf.if %33 : tribute_rt.anyref {
-              %35 = adt.struct_new %3 {type = !"run_state::__clam_1::__clam_1::env"} : !"run_state::__clam_1::__clam_1::env"
-              %36 = func.constant {func_ref = @"run_state::__clam_1::__clam_1"} : !t2
-              %37 = adt.struct_new %36, %35 {type = !_closure} : !_closure
-              %38 = arith.const {value = unit} : core.nil
-              %39 = core.unrealized_conversion_cast %2 : !t1
-              %40 = core.unrealized_conversion_cast %38 : tribute_rt.anyref
-              %41 = adt.struct_get %39 {field = 0, type = !_closure} : core.i32
-              %42 = adt.struct_get %39 {field = 1, type = !_closure} : tribute_rt.anyref
-              %43 = func.call_indirect %41, %0, %42, %40 : tribute_rt.anyref
-              %44 = adt.variant_is %43 {tag = @Normal, type = !__tribute_cps_control} : core.i1
-              %45 = scf.if %44 : tribute_rt.anyref {
-                  %46 = adt.variant_cast %43 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %47 = adt.variant_get %46 {field = 0, tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %48 = core.unrealized_conversion_cast %47 : core.i32
-                  %49 = core.unrealized_conversion_cast %48 : tribute_rt.anyref
-                  %50 = adt.struct_get %37 {field = 0, type = !_closure} : core.i32
-                  %51 = adt.struct_get %37 {field = 1, type = !_closure} : tribute_rt.anyref
-                  %52 = func.call_indirect %50, %0, %51, %49 : tribute_rt.anyref
-                  %53 = adt.variant_cast %52 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %54 = adt.variant_get %53 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
-                  %55 = adt.variant_get %53 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-                  %56 = arith.cmpi %54, %3 {predicate = @eq} : core.i1
-                  %57 = scf.if %56 : tribute_rt.anyref {
-                      %58 = adt.variant_new %55 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
-                      scf.yield %58
-                  } {
-                      scf.yield %52
-                  }
-                  scf.yield %57
-              } {
-                  scf.yield %43
-              }
-              scf.yield %45
-          } {
+          %10 = arith.const {value = 1} : core.i1
+          adt.struct_set %5, %10 {field = 0, type = !__tribute_one_shot_state_14}
+          %11 = adt.struct_get %6 {field = 0, type = !_closure} : core.i32
+          %12 = adt.struct_get %6 {field = 1, type = !_closure} : tribute_rt.anyref
+          func.tail_call_indirect %11, %0, %12, %2, %7 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+      }
+  }
+  func.func @"run_state::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %7, %3 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_1"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"run_state::__clam_1::env"} : !"run_state::__clam_1::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"run_state::__clam_1::env"} : !t7
+      %4 = adt.struct_get %2 {field = 1, type = !"run_state::__clam_1::env"} : !t1
+      %5 = adt.struct_get %2 {field = 2, type = !"run_state::__clam_1::env"} : !t3
+      %6 = adt.struct_get %2 {field = 3, type = !"run_state::__clam_1::env"} : !t0
+      %7 = adt.struct_new %3, %4 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %8 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %6, %9, %7, %1 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_2"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: !t0, %4: !t3) -> core.never attributes {tribute.calling_convention = 2} {
+      %5 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %6 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %7 = arith.const {value = 10} : core.i32
+      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %9 = func.constant {func_ref = @"run_state::__clam_2::__clam_0"} : !t26
+      %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
+      %11 = adt.struct_new %5, %6, %10, %3 {type = !"run_state::__clam_2::__clam_1::env"} : !"run_state::__clam_2::__clam_1::env"
+      %12 = func.constant {func_ref = @"run_state::__clam_2::__clam_1"} : core.func(core.never, core.i32)
+      %13 = adt.struct_new %12, %11 {type = !_closure} : !_closure
+      %14 = func.call %10, %6 {callee = @__tribute_make_dispatch_adapter_16, tribute.calling_convention = 0} : !t1
+      %15 = adt.struct_new %13, %14 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %16 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %17 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %16, %3, %17, %15, %7 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_3"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: !t0, %4: core.i32, %5: !t61) -> core.never attributes {tribute.calling_convention = 2} {
+      %6 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %7 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %8 = arith.const {value = unit} : core.nil
+      %9 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %10 = func.constant {func_ref = @"run_state::__clam_3::__clam_0"} : !t26
+      %11 = adt.struct_new %10, %9 {type = !_closure} : !_closure
+      %12 = adt.struct_new %6, %7, %11, %3 {type = !"run_state::__clam_3::__clam_1::env"} : !"run_state::__clam_3::__clam_1::env"
+      %13 = func.constant {func_ref = @"run_state::__clam_3::__clam_1"} : core.func(core.never, core.i32)
+      %14 = adt.struct_new %13, %12 {type = !_closure} : !_closure
+      %15 = func.call %11, %7 {callee = @__tribute_make_dispatch_adapter_17, tribute.calling_convention = 0} : !t1
+      %16 = adt.struct_new %14, %15 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %17 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %18 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %17, %3, %18, %16, %8 {func.indirect_call_signature = !t63, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_4"(%0: !t0, %1: tribute_rt.anyref, %2: core.i32, %3: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 1} {
+      scf.switch %2 {
+          scf.default {
               func.unreachable
           }
-          scf.yield %34
       }
-      func.return %8
   }
-
-  func.func @"bump::__clam_0::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_cast %1 {type = !"bump::__clam_0::__clam_0::env"} : !"bump::__clam_0::__clam_0::env"
-      %4 = adt.struct_get %3 {field = 0, type = !"bump::__clam_0::__clam_0::env"} : core.i32
-      %5 = adt.struct_get %3 {field = 1, type = !"bump::__clam_0::__clam_0::env"} : tribute_rt.anyref
-      %6 = core.unrealized_conversion_cast %2 : core.nil
-      %7 = core.unrealized_conversion_cast %5 : !t1
-      %8 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %9 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
-      %10 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
-      %11 = func.call_indirect %9, %0, %10, %8 : tribute_rt.anyref
-      func.return %11
+  func.func @"run_state::__clam_5"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32, %4: tribute_rt.anyref) -> core.never attributes {tribute.calling_convention = 2} {
+      func.unreachable
   }
-
-  func.func @"run_state::__clam_1::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_cast %1 {type = !"run_state::__clam_1::__clam_0::env"} : !"run_state::__clam_1::__clam_0::env"
-      %4 = adt.struct_get %3 {field = 0, type = !"run_state::__clam_1::__clam_0::env"} : core.i32
-      %5 = adt.variant_new %4, %2 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-      func.return %5
+  func.func @"run_state::__clam_6"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %7, %3 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
   }
-
-  func.func @"run_state::__clam_1::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
-      %3 = adt.ref_cast %1 {type = !"run_state::__clam_1::__clam_1::env"} : !"run_state::__clam_1::__clam_1::env"
-      %4 = adt.struct_get %3 {field = 0, type = !"run_state::__clam_1::__clam_1::env"} : core.i32
-      %5 = adt.variant_new %4, %2 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
-      func.return %5
+  func.func @"run_state::__clam_7"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"run_state::__clam_7::env"} : !"run_state::__clam_7::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"run_state::__clam_7::env"} : !t3
+      %4 = adt.struct_get %2 {field = 1, type = !"run_state::__clam_7::env"} : !t0
+      %5 = adt.struct_get %2 {field = 2, type = !"run_state::__clam_7::env"} : !__tribute_parent_ty6
+      %6 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %4, %7, %5, %1 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_8"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %7, %3 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_9"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"run_state::__clam_9::env"} : !"run_state::__clam_9::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"run_state::__clam_9::env"} : !t7
+      %4 = adt.struct_get %2 {field = 1, type = !"run_state::__clam_9::env"} : !t1
+      %5 = adt.struct_get %2 {field = 2, type = !"run_state::__clam_9::env"} : !t3
+      %6 = adt.struct_get %2 {field = 3, type = !"run_state::__clam_9::env"} : !t0
+      %7 = adt.struct_new %3, %4 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %8 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %6, %9, %7, %1 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+  }
+  func.func @"main::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty57_1, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty57} : !t48
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty57} : !t29
+      %6 = arith.const {value = unit} : core.nil
+      %7 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %8 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %7, %8, %6 {func.indirect_call_signature = core.func(core.never, tribute_rt.anyref, core.nil), tribute.calling_convention = 2}
+  }
+  func.func @"main::__clam_1"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"main::__clam_1::env"} : !"main::__clam_1::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"main::__clam_1::env"} : !t48
+      %4 = adt.struct_get %2 {field = 1, type = !"main::__clam_1::env"} : !t29
+      %5 = adt.struct_get %2 {field = 2, type = !"main::__clam_1::env"} : !t42
+      %6 = adt.struct_get %2 {field = 3, type = !"main::__clam_1::env"} : !t0
+      %7 = adt.struct_new %3, %4 {type = !__tribute_parent_ty57} : !__tribute_parent_ty57_1
+      %8 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %6, %9, %7, %1 {func.indirect_call_signature = !t62, tribute.calling_convention = 2}
+  }
+  func.func @"bump::__clam_0::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.ref_cast %1 {type = !"bump::__clam_0::__clam_0::env"} : !"bump::__clam_0::__clam_0::env"
+      %5 = adt.struct_get %4 {field = 0, type = !"bump::__clam_0::__clam_0::env"} : core.i32
+      %6 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %7 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %8 = adt.struct_get %6 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %6 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %9, %5 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
+  }
+  func.func @"bump::__clam_0::__clam_1"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: tribute_rt.anyref) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.ref_cast %1 {type = !"bump::__clam_0::__clam_1::env"} : !"bump::__clam_0::__clam_1::env"
+      %5 = adt.struct_get %4 {field = 0, type = !"bump::__clam_0::__clam_1::env"} : !__tribute_one_shot_state_13
+      %6 = adt.struct_get %4 {field = 1, type = !"bump::__clam_0::__clam_1::env"} : !t61
+      %7 = core.unrealized_conversion_cast %3 : core.nil
+      %8 = adt.struct_get %5 {field = 0, type = !__tribute_one_shot_state_13} : core.i1
+      %9 = scf.if %8 : core.never {
+          func.unreachable
+      } {
+          %10 = arith.const {value = 1} : core.i1
+          adt.struct_set %5, %10 {field = 0, type = !__tribute_one_shot_state_13}
+          %11 = adt.struct_get %6 {field = 0, type = !_closure} : core.i32
+          %12 = adt.struct_get %6 {field = 1, type = !_closure} : tribute_rt.anyref
+          func.tail_call_indirect %11, %0, %12, %2, %7 {func.indirect_call_signature = !t63, tribute.calling_convention = 2}
+      }
+  }
+  func.func @"run_state::__clam_2::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %7, %3 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_2::__clam_1"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"run_state::__clam_2::__clam_1::env"} : !"run_state::__clam_2::__clam_1::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"run_state::__clam_2::__clam_1::env"} : !t7
+      %4 = adt.struct_get %2 {field = 1, type = !"run_state::__clam_2::__clam_1::env"} : !t1
+      %5 = adt.struct_get %2 {field = 2, type = !"run_state::__clam_2::__clam_1::env"} : !t3
+      %6 = adt.struct_get %2 {field = 3, type = !"run_state::__clam_2::__clam_1::env"} : !t0
+      %7 = adt.struct_new %3, %4 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %8 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %6, %9, %7, %1 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_3::__clam_0"(%0: !t0, %1: tribute_rt.anyref, %2: !__tribute_parent_ty6, %3: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %4 = adt.struct_get %2 {field = 0, type = !__tribute_parent_ty6_1} : !t7
+      %5 = adt.struct_get %2 {field = 1, type = !__tribute_parent_ty6_1} : !t1
+      %6 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %6, %7, %3 {func.indirect_call_signature = !t38, tribute.calling_convention = 2}
+  }
+  func.func @"run_state::__clam_3::__clam_1"(%0: tribute_rt.anyref, %1: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+      %2 = adt.ref_cast %0 {type = !"run_state::__clam_3::__clam_1::env"} : !"run_state::__clam_3::__clam_1::env"
+      %3 = adt.struct_get %2 {field = 0, type = !"run_state::__clam_3::__clam_1::env"} : !t7
+      %4 = adt.struct_get %2 {field = 1, type = !"run_state::__clam_3::__clam_1::env"} : !t1
+      %5 = adt.struct_get %2 {field = 2, type = !"run_state::__clam_3::__clam_1::env"} : !t3
+      %6 = adt.struct_get %2 {field = 3, type = !"run_state::__clam_3::__clam_1::env"} : !t0
+      %7 = adt.struct_new %3, %4 {type = !__tribute_parent_ty6_1} : !__tribute_parent_ty6
+      %8 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
+      %9 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
+      func.tail_call_indirect %8, %6, %9, %7, %1 {func.indirect_call_signature = !t13, tribute.calling_convention = 2}
   }
 }

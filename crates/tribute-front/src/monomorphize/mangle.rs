@@ -79,6 +79,9 @@ fn write_type_mangled(
             f.write_str("$1")
         }
         TypeKind::BoundVar { index } => write!(f, "T{index}"),
+        TypeKind::LocalBoundVar { .. } => {
+            panic!("mangle_name requires function-scoped concrete types")
+        }
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }

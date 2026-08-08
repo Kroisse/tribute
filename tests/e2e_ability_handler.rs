@@ -86,60 +86,73 @@ fn main() {
 "#
 }
 
-#[test]
-fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume() {
-    for (name, stdin, expected) in [
+fn read_outcome_cases() -> [(&'static str, &'static [u8], &'static str); 2] {
+    [
         (
             "input",
-            b"typed\n".as_slice(),
+            b"typed\n",
             "line:typed\nline:resumed-suffix-inner-do-outer-do\nline:outer-do-eof\n",
         ),
         (
             "eof",
-            b"".as_slice(),
+            b"",
             "eof\nline:resumed-suffix-inner-do-outer-do\nline:outer-do-eof\n",
         ),
-    ] {
-        let profiles = [
-            (
-                "production",
-                common::compile_and_run_native_with_stdin(
-                    &format!("cps_control_read_outcome_{name}_production.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-            (
-                "baseline",
-                common::compile_and_run_native_with_stdin_baseline_optimizations(
-                    &format!("cps_control_read_outcome_{name}_baseline.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-            (
-                "asan",
-                common::compile_and_run_native_with_stdin_asan(
-                    &format!("cps_control_read_outcome_{name}_asan.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-        ];
-        for (profile, output) in profiles {
-            assert!(
-                output.status.success(),
-                "{name}/{profile}: exit={:?}, stderr='{}'",
-                output.status,
-                String::from_utf8_lossy(&output.stderr),
-            );
-            assert_eq!(
-                String::from_utf8_lossy(&output.stdout),
-                expected,
-                "{name}/{profile}"
-            );
-        }
+    ]
+}
+
+fn assert_read_outcome_cases(profile: &str, outputs: Vec<std::process::Output>) {
+    let cases = read_outcome_cases();
+    assert_eq!(outputs.len(), cases.len());
+    for ((name, _, expected), output) in cases.iter().zip(outputs) {
+        assert!(
+            output.status.success(),
+            "{name}/{profile}: exit={:?}, stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            *expected,
+            "{name}/{profile}"
+        );
     }
+}
+
+#[test]
+fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume_production() {
+    let cases = read_outcome_cases();
+    let inputs: Vec<_> = cases.iter().map(|(_, stdin, _)| *stdin).collect();
+    let outputs = common::compile_and_run_native_with_stdin_cases(
+        "cps_control_read_outcome_production.trb",
+        cps_control_read_outcome_program(),
+        &inputs,
+    );
+    assert_read_outcome_cases("production", outputs);
+}
+
+#[test]
+fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume_baseline() {
+    let cases = read_outcome_cases();
+    let inputs: Vec<_> = cases.iter().map(|(_, stdin, _)| *stdin).collect();
+    let outputs = common::compile_and_run_native_with_stdin_cases_baseline_optimizations(
+        "cps_control_read_outcome_baseline.trb",
+        cps_control_read_outcome_program(),
+        &inputs,
+    );
+    assert_read_outcome_cases("baseline", outputs);
+}
+
+#[test]
+fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume_asan() {
+    let cases = read_outcome_cases();
+    let inputs: Vec<_> = cases.iter().map(|(_, stdin, _)| *stdin).collect();
+    let outputs = common::compile_and_run_native_with_stdin_cases_asan(
+        "cps_control_read_outcome_asan.trb",
+        cps_control_read_outcome_program(),
+        &inputs,
+    );
+    assert_read_outcome_cases("asan", outputs);
 }
 
 fn cps_control_outer_nonresumptive_crosses_inner_handle_program() -> &'static str {
@@ -743,6 +756,34 @@ fn main() {
     assert_native_output("fn_handler_arm.trb", code, "42");
 }
 
+/// Tail-resumptive `fn` arms return their own operation result, not the
+/// enclosing handle answer. A `Nil` operation therefore cannot overwrite the
+/// preceding `Nat` call's source value.
+#[test]
+fn test_fn_handler_arm_preserves_each_operation_result_type() {
+    let code = r#"ability Console {
+    fn read() -> Nat
+    fn print(value: Nat) -> Nil
+}
+
+fn use_console() ->{Console} Nat {
+    let value = Console::read()
+    Console::print(value)
+    value
+}
+
+fn main() {
+    let result = handle use_console() {
+        do value { value }
+        fn Console::read() { 42 }
+        fn Console::print(value) { Nil }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("fn_handler_arm_result_types.trb", code, "42");
+}
+
 // =============================================================================
 // Handler Result Transformation Tests
 // =============================================================================
@@ -846,6 +887,194 @@ fn main() {
 }
 "#;
     assert_native_output("handler_transforms_resumed_result.trb", code, "42");
+}
+
+/// A resumed body reaches the completion exactly once before its answer is
+/// returned to the outer continuation.
+#[test]
+fn test_handler_one_resume_runs_nonidentity_completion_once() {
+    let code = r#"ability Ask {
+    op ask() -> Nat
+}
+
+fn body() ->{Ask} Nat {
+    Ask::ask() + 1
+}
+
+fn main() {
+    let result = handle body() {
+        do value { value + value }
+        op Ask::ask() { resume 10 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_one_resume_completion_once.trb", code, "22");
+}
+
+/// The handle body and answer types are independent. The effectful callee is
+/// separately declared, so the CPS call boundary must retain the answer-indexed
+/// Done/Dispatch ABI instead of equating it with the body's String result.
+#[test]
+fn test_handler_resumed_callee_can_change_answer_type() {
+    let code = r#"ability Ask {
+    op ask() -> String
+}
+
+fn separately_compiled() ->{Ask} String {
+    Ask::ask()
+}
+
+fn main() {
+    let answer = handle separately_compiled() {
+        do _body { 7 }
+        op Ask::ask() { resume "payload" }
+    }
+    __tribute_print_nat(answer)
+}
+"#;
+    assert_native_output("handler_resumed_answer_type_change.trb", code, "7");
+}
+
+/// Each re-entrant resume owns an immutable arm-local suffix.  The second
+/// perform completes and runs its suffix before the first resumed suffix is
+/// re-entered; no mutable delimiter slot may overwrite the outer suffix.
+#[test]
+fn test_handler_reentrant_resumes_preserve_suffix_stack() {
+    let code = r#"ability Ask {
+    op ask() -> Nat
+}
+
+fn twice() ->{Ask} Nat {
+    let first = Ask::ask()
+    first + Ask::ask()
+}
+
+fn main() {
+    let result = handle twice() {
+        do value { value + 1 }
+        op Ask::ask() {
+            let resumed = resume 10
+            resumed + 100
+        }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    // The inner resume completes to 21, then its arm-local suffix yields
+    // 121.  That is the resumed result observed by the suspended outer arm,
+    // whose own suffix must still run and yield 221.
+    assert_native_output("handler_reentrant_resume_suffix_stack.trb", code, "221");
+}
+
+/// A foreign operation reached by a resumed inner body must use the Parent
+/// captured by that resume.  Its outer handler returns to the suspended inner
+/// arm suffix rather than the initial handle entry flow.
+#[test]
+fn test_handler_resumed_foreign_dispatch_preserves_arm_suffix() {
+    let code = r#"ability Inner {
+    op ask() -> Nat
+}
+
+ability Outer {
+    op ask() -> Nat
+}
+
+fn body() ->{Inner, Outer} Nat {
+    let inner = Inner::ask()
+    inner + Outer::ask()
+}
+
+fn run_inner() ->{Inner, Outer} Nat {
+    handle body() {
+        do value { value + 1 }
+        op Inner::ask() {
+            let resumed = resume 10
+            resumed + 100
+        }
+    }
+}
+
+fn main() {
+    let result = handle run_inner() {
+        do value { value }
+        op Outer::ask() { resume 5 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_resumed_foreign_dispatch_suffix.trb", code, "116");
+}
+
+/// The call-boundary adapter must rebuild its dispatcher from the dynamic
+/// Parent supplied to the resumed callback, not from the call site's initial
+/// dispatch capture. This exercises the same re-entrant suffix stack through
+/// a first-class CPS call.
+#[test]
+fn test_handler_indirect_reentrant_resumes_preserve_suffix_stack() {
+    let code = r#"ability Ask {
+    op ask() -> Nat
+}
+
+fn twice() ->{Ask} Nat {
+    let first = Ask::ask()
+    first + Ask::ask()
+}
+
+fn apply(f: fn() ->{Ask} Nat) ->{Ask} Nat {
+    f()
+}
+
+fn main() {
+    let result = handle apply(twice) {
+        do value { value + 1 }
+        op Ask::ask() {
+            let resumed = resume 10
+            resumed + 100
+        }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output(
+        "handler_indirect_reentrant_resume_suffix_stack.trb",
+        code,
+        "221",
+    );
+}
+
+/// A re-entrant body can produce Nat while the handle answer and every
+/// arm-local resume suffix produce String. Parent<A> therefore cannot be
+/// conflated with the body's result index.
+#[test]
+fn test_handler_answer_changing_reentrant_resumes_preserve_suffix_stack() {
+    let code = r#"use std::io::print_line
+
+ability Ask {
+    op ask() -> Nat
+}
+
+fn twice() ->{Ask} Nat {
+    let first = Ask::ask()
+    first + Ask::ask()
+}
+
+fn main() {
+    let result = handle twice() {
+        do _value { "done" }
+        op Ask::ask() {
+            let resumed = resume 10
+            resumed <> "!"
+        }
+    }
+    print_line(result)
+}
+"#;
+    assert_native_output(
+        "handler_answer_changing_reentrant_resume_suffix_stack.trb",
+        code,
+        "done!!",
+    );
 }
 
 // =============================================================================

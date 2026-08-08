@@ -13,12 +13,12 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::TypeData;
+use trunk_ir::types::{Attribute, TypeData, TypeDataBuilder};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
-    self, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX,
-    RESUME_WRAPPER_IDX, STEP_IDX,
+    self, CONTINUATION_IDX, EVIDENCE_ARRAY_TYPE_ATTR, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -101,17 +101,12 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
         }
     }
 
-    // Check if this is an adt.enum type
+    // A typeref and its declaration carry the same explicit nominal identity.
+    // Both are valid field descriptions for an ADT reference at this boundary.
     if data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("enum")
-        && let Some(name_sym) = data.attrs.get_symbol("name")
-    {
-        return Some(name_sym);
-    }
-
-    // Check if this is an adt.struct type
-    if data.dialect == Symbol::new("adt")
-        && data.name == Symbol::new("struct")
+        && ["enum", "struct", "typeref"]
+            .into_iter()
+            .any(|name| data.name == Symbol::new(name))
         && let Some(name_sym) = data.attrs.get_symbol("name")
     {
         return Some(name_sym);
@@ -123,14 +118,15 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
 /// Normalize a type for GC struct field comparison.
 ///
 /// Normalizes tribute_rt types and variant instances to their canonical form.
-fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
+fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.types.get(ty);
 
-    // Normalize variant instance types to their base enum
-    if data.dialect == Symbol::new("adt")
-        && let Some(base_enum) = data.attrs.get_type("base_enum")
-    {
-        return base_enum;
+    // A concrete variant can inhabit a recursively typed field only through
+    // the physical struct supertype.  Keeping its logical base enum here
+    // would make the GC definition record `anyref` while uses expect the
+    // `structref` selected by signature physicalization.
+    if data.dialect == Symbol::new("adt") && data.attrs.get_type("base_enum").is_some() {
+        return intern_wasm_structref(ctx);
     }
 
     // Note: tribute_rt types (int, nat, bool, float, any, intref) should be
@@ -139,7 +135,7 @@ fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
 }
 
 /// Check if two types are semantically equivalent for GC struct fields.
-fn types_equivalent_for_gc(ctx: &IrContext, ty1: TypeRef, ty2: TypeRef) -> bool {
+fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> bool {
     // First try direct comparison
     if ty1 == ty2 {
         return true;
@@ -188,7 +184,7 @@ fn types_equivalent_for_gc(ctx: &IrContext, ty1: TypeRef, ty2: TypeRef) -> bool 
 
 /// Record a struct field type
 fn record_struct_field(
-    ctx: &IrContext,
+    ctx: &mut IrContext,
     type_idx: u32,
     builder: &mut GcTypeBuilder,
     field_idx: u32,
@@ -210,9 +206,16 @@ fn record_struct_field(
     if let Some(existing) = builder.fields[idx] {
         // Check if types are semantically equivalent
         if !types_equivalent_for_gc(ctx, existing, ty) {
+            let existing_data = ctx.types.get(existing);
+            let new_data = ctx.types.get(ty);
             return Err(CompilationError::type_error(format!(
-                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?}, new={:?}",
-                existing, ty
+                "struct type index {type_idx} field {field_idx} type mismatch: existing={:?} ({}.{}), new={:?} ({}.{})",
+                existing,
+                existing_data.dialect,
+                existing_data.name,
+                ty,
+                new_data.dialect,
+                new_data.name,
             )));
         }
     } else {
@@ -256,11 +259,23 @@ fn type_to_field_type(
     })
 }
 
-/// Create a wasm.arrayref TypeRef.
-fn intern_wasm_arrayref(ctx: &mut IrContext) -> TypeRef {
+/// Create the exact Wasm array reference used by evidence storage.
+///
+/// A bare `wasm.arrayref` can be an unrelated source array and must not claim
+/// the Evidence builtin index.
+fn intern_wasm_evidence_arrayref(ctx: &mut IrContext) -> TypeRef {
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("arrayref"))
+            .attr(EVIDENCE_ARRAY_TYPE_ATTR, Attribute::Bool(true))
+            .build(),
+    )
+}
+
+/// Create a wasm.structref TypeRef.
+fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
     ctx.types.intern(TypeData {
         dialect: Symbol::new("wasm"),
-        name: Symbol::new("arrayref"),
+        name: Symbol::new("structref"),
         params: Default::default(),
         attrs: Default::default(),
     })
@@ -291,12 +306,8 @@ pub(crate) fn collect_gc_types(
     // Step marker type needs to be registered so wasm.if can use it
     let step_ty = intern_named_adt_struct(ctx, "_Step");
     type_idx_by_type.insert(step_ty, STEP_IDX);
-    // Abstract wasm.arrayref maps to EVIDENCE_IDX because type_converter lowers
-    // all core::Array types to wasm::Arrayref (which erases element type info).
-    // Currently the only array in the system is the evidence array, so this is safe.
-    // TODO: if user-defined arrays are added, this will need per-element-type indices.
-    let arrayref_ty = intern_wasm_arrayref(ctx);
-    type_idx_by_type.insert(arrayref_ty, EVIDENCE_IDX);
+    let evidence_arrayref_ty = intern_wasm_evidence_arrayref(ctx);
+    type_idx_by_type.insert(evidence_arrayref_ty, EVIDENCE_IDX);
     // Marker ADT type needs to be registered so wasm.struct_new for Marker reuses MARKER_IDX
     // instead of creating a separate user type index.
     let marker_ty = intern_named_adt_struct(ctx, "_Marker");
@@ -601,4 +612,35 @@ pub(crate) fn collect_gc_types(
     result.extend(user_types);
 
     Ok((result, type_idx_by_type))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn canonical_nominal_typeref_and_definition_share_a_gc_field_layout() {
+        let mut ctx = IrContext::new();
+        let source = r#"core.module @test {
+  !String = adt.enum() {name = @String, variants = []}
+  !StringRef = adt.typeref() {name = @String}
+  !Box = adt.struct() {fields = [[@value, !StringRef]], name = @Box}
+
+  wasm.func @main() -> core.nil {
+    %ref = wasm.ref_null {heap_type = @anyref} : !StringRef
+    %definition = wasm.ref_null {heap_type = @anyref} : !String
+    %first = wasm.struct_new %ref {type_idx = TYPE_INDEX} : !Box
+    %second = wasm.struct_new %definition {type_idx = TYPE_INDEX} : !Box
+    wasm.return
+  }
+}"#;
+        let module = parse_test_module(
+            &mut ctx,
+            &source.replace("TYPE_INDEX", &FIRST_USER_TYPE_IDX.to_string()),
+        );
+
+        let (types, _) = collect_gc_types(&mut ctx, module).expect("matching nominal field types");
+        assert!(types.len() > FIRST_USER_TYPE_IDX as usize);
+    }
 }

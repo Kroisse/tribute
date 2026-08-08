@@ -129,8 +129,11 @@ pub(crate) fn collect_call_indirect_types(
                     )?;
                 }
 
-                // Check if this is a call_indirect
-                if wasm_dialect::CallIndirect::matches(ctx, op) {
+                // Ordinary and proper-tail indirect calls share table/type-index
+                // machinery. Proper-tail transfers use the physical void result.
+                let is_call_indirect = wasm_dialect::CallIndirect::matches(ctx, op);
+                let is_return_call_indirect = wasm_dialect::ReturnCallIndirect::matches(ctx, op);
+                if is_call_indirect || is_return_call_indirect {
                     // Build function type from operands and results
                     let operands: Vec<_> = ctx.op_operands(op).to_vec();
 
@@ -181,11 +184,19 @@ pub(crate) fn collect_call_indirect_types(
                     // WebAssembly GC has separate type hierarchies for anyref and funcref,
                     // so we can't cast between them.
                     let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
-                    let mut result_ty = match result_types.first().copied() {
-                        Some(ty) => ty,
-                        None => continue, // Skip if no result
+                    let mut result_ty = if is_return_call_indirect {
+                        ctx.types.intern(TypeData {
+                            dialect: Symbol::new("core"),
+                            name: Symbol::new("nil"),
+                            params: Default::default(),
+                            attrs: Default::default(),
+                        })
+                    } else {
+                        match result_types.first().copied() {
+                            Some(ty) => ty,
+                            None => continue,
+                        }
                     };
-
                     // If result type is anyref but enclosing function returns funcref,
                     // use funcref as the result type. This is needed because WebAssembly GC has
                     // separate type hierarchies for anyref and funcref - you can't cast between them.
@@ -329,7 +340,9 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
                 }
 
                 // Check if this is a call_indirect
-                if wasm_dialect::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op)
+                    || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
+                {
                     return true;
                 }
             }

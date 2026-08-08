@@ -101,6 +101,10 @@ pub struct TypedModule<'db> {
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
+    /// Exact instantiated callable types for direct source calls.
+    pub call_callee_types: HashMap<NodeId, Type<'db>>,
+    /// Exact call sites whose callee metadata was specialized by monomorphization.
+    pub specialized_call_callee_nodes: std::collections::HashSet<NodeId>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     pub handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,

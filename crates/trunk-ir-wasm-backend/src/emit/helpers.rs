@@ -12,7 +12,7 @@ use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
+use crate::gc_types::{BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX, concrete_wasm_ref_type};
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -123,12 +123,8 @@ pub(crate) fn type_to_valtype(
             nullable: false,
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
-    } else if is_bytes_array_ref(ctx, ty) {
-        let nullable = ctx.types.get(ty).attrs.get_bool("nullable") == Some(true);
-        Ok(ValType::Ref(RefType {
-            nullable,
-            heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
-        }))
+    } else if let Some(reference) = concrete_wasm_ref_type(ctx, ty) {
+        Ok(ValType::Ref(reference))
     } else if is_type(ctx, ty, "core", "ptr") {
         Ok(ValType::I32)
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
@@ -204,21 +200,6 @@ pub(crate) fn type_to_valtype(
             data.dialect, data.name
         )))
     }
-}
-
-fn is_bytes_array_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let reference = ctx.types.get(ty);
-    if reference.dialect != Symbol::new("core")
-        || reference.name != Symbol::new("ref")
-        || reference.params.len() != 1
-    {
-        return false;
-    }
-    let array = ctx.types.get(reference.params[0]);
-    array.dialect == Symbol::new("core")
-        && array.name == Symbol::new("array")
-        && array.params.len() == 1
-        && is_type(ctx, array.params[0], "core", "i8")
 }
 
 /// Convert an IR return type to WebAssembly result types.
@@ -346,6 +327,8 @@ pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gc_types::BYTES_ARRAY_IDX;
+    use trunk_ir::dialect::core;
     use trunk_ir::types::TypeDataBuilder;
 
     #[test]
@@ -370,5 +353,26 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn bytes_backing_reference_uses_concrete_array_index_and_nullability() {
+        let mut ctx = IrContext::new();
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let array_ty = core::array(&mut ctx, i8_ty).as_type_ref();
+
+        for (nullable, expected_nullable) in [(false, false), (true, true)] {
+            let reference = core::r#ref(&mut ctx, array_ty, nullable).as_type_ref();
+            assert_eq!(
+                type_to_valtype(&ctx, reference, &HashMap::new())
+                    .expect("Bytes backing reference is supported"),
+                ValType::Ref(RefType {
+                    nullable: expected_nullable,
+                    heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
+                })
+            );
+        }
     }
 }

@@ -81,6 +81,19 @@ pub struct LambdaSignature<'db> {
     /// The solved full source function type.  Retaining its effect row avoids
     /// confusing the ABI lower bound with the selected convention.
     pub function_type: Type<'db>,
+    /// Whether the lambda body introduced no effect beyond its fresh lexical
+    /// accumulator. Contextual effect-row unification may widen the semantic
+    /// function type, but must not turn a pure closure value into CPS.
+    pub body_is_effect_free: bool,
+    /// Whether checking the lambda body observed a continuation transfer.
+    /// This is control, not an ordinary effect-row observation, and therefore
+    /// remains Cps even when a contextual row is otherwise empty.
+    pub contains_control_transfer: bool,
+    /// The convention justified by evaluating this lambda body before its
+    /// callable type is unified with a contextual callback slot.  A pure
+    /// Direct closure can later be strengthened structurally for a CPS slot,
+    /// but contextual widening must not rewrite the closure itself to CPS.
+    pub lexical_convention: CallingConvention,
     pub convention: CallingConvention,
 }
 
@@ -188,6 +201,18 @@ impl WellKnownTypes<'_> {
 /// both can be derived from a single type checking invocation.
 /// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
 /// can look up source spans without a separate plumbing path.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct NominalTypeMetadata<'db> {
+    pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
+    pub type_definitions: Vec<(Symbol, TypeScheme<'db>)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ExpressionTypeMetadata<'db> {
+    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub call_callee_types: Vec<(NodeId, Type<'db>)>,
+}
+
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
@@ -197,16 +222,16 @@ pub struct TypeCheckOutput<'db> {
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
     #[returns(ref)]
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
-    /// Constructor schemes used to build logical nominal layouts without
-    /// reinterpreting source annotations.
+    /// Exact constructor and nominal definition schemes. Definition scheme
+    /// bodies carry the authoritative `TypeDefId`, including empty enums.
     #[returns(ref)]
-    pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
+    pub nominal_types: NominalTypeMetadata<'db>,
     /// Node types collected during type checking.
     /// Maps NodeId to its inferred type (after substitution but before generalization).
     /// Used by IR lowering to get lambda effect types.
     /// Stored as Vec for Salsa compatibility (HashMap doesn't implement Hash).
     #[returns(ref)]
-    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
     /// Ability-level calling-convention requirements.
     #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
@@ -295,8 +320,14 @@ pub fn typecheck_module<'db>(
         db,
         result.module,
         result.function_types,
-        result.constructor_types,
-        result.node_types,
+        NominalTypeMetadata {
+            constructor_types: result.constructor_types,
+            type_definitions: result.type_definitions,
+        },
+        ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ability_schemas(&result.ability_definitions),
         result.handler_operations,

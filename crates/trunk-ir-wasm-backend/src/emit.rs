@@ -25,7 +25,8 @@ use handlers::{
     handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_if,
     handle_local_get, handle_local_set, handle_local_tee, handle_loop, handle_memory_grow,
     handle_memory_size, handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test,
-    handle_return_call, handle_struct_get, handle_struct_new, handle_struct_set,
+    handle_return_call, handle_return_call_indirect, handle_struct_get, handle_struct_new,
+    handle_struct_set,
 };
 use helpers::*;
 use value_emission::*;
@@ -1003,6 +1004,8 @@ fn emit_op_nested(
         handle_call_indirect(ctx, op, emit_ctx, module_info, function)
     } else if let Ok(return_call_op) = wasm_dialect::ReturnCall::from_op(ctx, op) {
         handle_return_call(ctx, return_call_op, emit_ctx, module_info, function)
+    } else if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
+        handle_return_call_indirect(ctx, op, emit_ctx, module_info, function)
     } else if let Ok(local_op) = wasm_dialect::LocalGet::from_op(ctx, op) {
         handle_local_get(ctx, local_op, emit_ctx, function)
     } else if let Ok(local_op) = wasm_dialect::LocalSet::from_op(ctx, op) {
@@ -1166,7 +1169,9 @@ fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bo
 fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if wasm_dialect::CallIndirect::matches(ctx, op) {
+            if wasm_dialect::CallIndirect::matches(ctx, op)
+                || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
+            {
                 return true;
             }
             for &nested_region in &ctx.op(op).regions {

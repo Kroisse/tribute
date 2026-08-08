@@ -2,6 +2,12 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
+- message: cannot infer a concrete type for 2 body-local expressions
+  span:
+    start: 138
+    end: 388
+  severity: Error
+  phase: TypeChecking
 - message: "handler arm has 2 parameter(s), but operation 'set' expects 1"
   span:
     start: 337

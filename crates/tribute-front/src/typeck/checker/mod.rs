@@ -24,7 +24,7 @@ mod collect;
 mod expr;
 mod func_check;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::{Span, Symbol};
 
@@ -47,8 +47,12 @@ pub struct ModuleCheckResult<'db> {
     /// Constructor type schemes retain exact nominal field types for logical
     /// layout construction.
     pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
+    /// Exact nominal definition schemes keyed by resolved declaration name.
+    pub type_definitions: Vec<(trunk_ir::Symbol, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
     pub node_types: Vec<(NodeId, Type<'db>)>,
+    /// Exact, solved callee inference instances for call-site monomorphization.
+    pub call_callee_types: Vec<(NodeId, Type<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
@@ -93,11 +97,23 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
+    call_callee_types: HashMap<NodeId, Type<'db>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: Vec<NodeId>,
+    /// Local `let` quantifiers for the function currently being materialized.
+    /// These are kept separate from the exported function TypeScheme.
+    local_generalizations: HashMap<crate::ast::UniVarId<'db>, (NodeId, u32)>,
+    /// Unresolved body-only variables discovered by finalization. They become
+    /// typed `Error` recovery nodes after a diagnostic, never raw solver
+    /// variables in the exported typed AST or semantic metadata.
+    unresolved_body_univars: HashSet<crate::ast::UniVarId<'db>>,
+    /// Prelude checking exports declaration schemes only, not typed bodies or
+    /// body semantic tables. Its legacy implementation bodies therefore do
+    /// not participate in the user-facing typed-output finalization audit.
+    finalization_audit_enabled: bool,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
 }
@@ -131,10 +147,14 @@ impl<'db> TypeChecker<'db> {
             prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
+            call_callee_types: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
             exhaustive_cases: Vec::new(),
+            local_generalizations: HashMap::new(),
+            unresolved_body_univars: HashSet::new(),
+            finalization_audit_enabled: true,
             effect_annotation_origins: HashMap::new(),
         }
     }
@@ -190,6 +210,7 @@ impl<'db> TypeChecker<'db> {
         module: Module<ResolvedRef<'db>>,
     ) -> ModuleCheckResult<'db> {
         self.collect_declarations(&module);
+        self.finalization_audit_enabled = false;
         let string_type = self.prelude_well_known_type(&module, StringType);
         self.env.set_prelude_string_type(string_type);
         self.check_collected_module(module)
@@ -228,6 +249,7 @@ impl<'db> TypeChecker<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
+        let type_definitions = self.env.export_type_defs();
         let ability_conventions = self.env.export_ability_conventions();
         let ability_definitions = self.env.export_ability_defs();
         let well_known_types = self.env.well_known_types();
@@ -236,6 +258,8 @@ impl<'db> TypeChecker<'db> {
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
+        let mut call_callee_types: Vec<_> = self.call_callee_types.into_iter().collect();
+        call_callee_types.sort_by_key(|(id, _)| *id);
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
@@ -252,7 +276,9 @@ impl<'db> TypeChecker<'db> {
             },
             function_types,
             constructor_types,
+            type_definitions,
             node_types,
+            call_callee_types,
             ability_conventions,
             handler_operations,
             perform_operations,
@@ -274,6 +300,7 @@ impl<'db> TypeChecker<'db> {
         // Phase 1: Collect type definitions and function signatures
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
+        self.finalization_audit_enabled = false;
         let string_type = self.prelude_well_known_type(&module, StringType);
         self.env.set_prelude_string_type(string_type);
 

@@ -209,6 +209,57 @@ pub fn compile_and_run_native_with_stdin_asan(
     )
 }
 
+/// Compile one native test profile once, then run it for each supplied stdin
+/// case. This keeps multi-input semantic tests below the per-test timeout
+/// without changing their compiler, optimization, or sanitizer coverage.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin_cases(
+    source_name: &str,
+    source_code: &str,
+    inputs: &[&[u8]],
+) -> Vec<Output> {
+    compile_and_run_native_with_stdin_cases_impl(
+        source_name,
+        source_code,
+        false,
+        NativeTestOptimizations::production(),
+        inputs,
+    )
+}
+
+/// Like [`compile_and_run_native_with_stdin_cases`], using baseline
+/// optimization choices.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin_cases_baseline_optimizations(
+    source_name: &str,
+    source_code: &str,
+    inputs: &[&[u8]],
+) -> Vec<Output> {
+    compile_and_run_native_with_stdin_cases_impl(
+        source_name,
+        source_code,
+        false,
+        NativeTestOptimizations::baseline(),
+        inputs,
+    )
+}
+
+/// Like [`compile_and_run_native_with_stdin_cases`], with ASan enabled.
+#[allow(dead_code)]
+pub fn compile_and_run_native_with_stdin_cases_asan(
+    source_name: &str,
+    source_code: &str,
+    inputs: &[&[u8]],
+) -> Vec<Output> {
+    compile_and_run_native_with_stdin_cases_impl(
+        source_name,
+        source_code,
+        true,
+        NativeTestOptimizations::production(),
+        inputs,
+    )
+}
+
 /// Compile and run Tribute source after closing native stdin.
 #[cfg(unix)]
 #[allow(dead_code)]
@@ -310,6 +361,43 @@ fn compile_and_run_native_impl(
     test_optimizations: NativeTestOptimizations,
     stdin: NativeStdin<'_>,
 ) -> Output {
+    with_compiled_native(
+        source_name,
+        source_code,
+        sanitize_address,
+        test_optimizations,
+        |exec_path| run_native_binary(exec_path, stdin),
+    )
+}
+
+fn compile_and_run_native_with_stdin_cases_impl(
+    source_name: &str,
+    source_code: &str,
+    sanitize_address: bool,
+    test_optimizations: NativeTestOptimizations,
+    inputs: &[&[u8]],
+) -> Vec<Output> {
+    with_compiled_native(
+        source_name,
+        source_code,
+        sanitize_address,
+        test_optimizations,
+        |exec_path| {
+            inputs
+                .iter()
+                .map(|input| run_native_binary(exec_path, NativeStdin::Bytes(input)))
+                .collect()
+        },
+    )
+}
+
+fn with_compiled_native<T>(
+    source_name: &str,
+    source_code: &str,
+    sanitize_address: bool,
+    test_optimizations: NativeTestOptimizations,
+    run: impl FnOnce(&std::path::Path) -> T,
+) -> T {
     use tribute::database::parse_with_thread_local;
 
     let source_rope = Rope::from_str(source_code);
@@ -347,46 +435,49 @@ fn compile_and_run_native_impl(
             std::fs::set_permissions(&exec_path, perms).expect("Failed to set permissions");
         }
 
-        // Run the executable
-        let mut command = Command::new(&exec_path);
-        match stdin {
-            NativeStdin::Bytes(input) => {
-                let mut child = command
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"));
-                let mut child_stdin = child.stdin.take().expect("piped stdin");
-                let input = input.to_vec();
-                let writer = std::thread::spawn(move || child_stdin.write_all(&input));
-                let output = child.wait_with_output().expect("wait for native binary");
-                writer
-                    .join()
-                    .expect("native stdin writer panicked")
-                    .expect("write native stdin");
-                output
-            }
-            #[cfg(unix)]
-            NativeStdin::Closed => {
-                use std::os::unix::process::CommandExt;
-
-                unsafe {
-                    command.pre_exec(|| {
-                        if close(0) == 0 {
-                            Ok(())
-                        } else {
-                            Err(std::io::Error::last_os_error())
-                        }
-                    });
-                }
-                command
-                    .output()
-                    .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
-            }
-            NativeStdin::Null => command
-                .output()
-                .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}")),
-        }
+        run(&exec_path)
     })
+}
+
+fn run_native_binary(exec_path: &std::path::Path, stdin: NativeStdin<'_>) -> Output {
+    let mut command = Command::new(exec_path);
+    match stdin {
+        NativeStdin::Bytes(input) => {
+            let mut child = command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"));
+            let mut child_stdin = child.stdin.take().expect("piped stdin");
+            let input = input.to_vec();
+            let writer = std::thread::spawn(move || child_stdin.write_all(&input));
+            let output = child.wait_with_output().expect("wait for native binary");
+            writer
+                .join()
+                .expect("native stdin writer panicked")
+                .expect("write native stdin");
+            output
+        }
+        #[cfg(unix)]
+        NativeStdin::Closed => {
+            use std::os::unix::process::CommandExt;
+
+            unsafe {
+                command.pre_exec(|| {
+                    if close(0) == 0 {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::last_os_error())
+                    }
+                });
+            }
+            command
+                .output()
+                .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
+        }
+        NativeStdin::Null => command
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}")),
+    }
 }

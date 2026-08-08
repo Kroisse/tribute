@@ -2,12 +2,12 @@
 //!
 //! Solves type constraints using union-find based unification.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{
-    Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
+    Effect, EffectRow, EffectVar, NodeId, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
     collect_effect_vars,
 };
 
@@ -154,6 +154,58 @@ impl<'db> TypeSubst<'db> {
         self.map.get(&var).copied()
     }
 
+    /// Extend lexical local-generalization provenance across direct solver
+    /// aliases.  Unification may orient an equality from a fresh conversion
+    /// variable to an already-owned local variable; both spellings denote the
+    /// same quantifier at finalization.
+    pub fn propagate_local_generalization_aliases(
+        &self,
+        db: &'db dyn salsa::Database,
+        local_vars: &mut HashMap<UniVarId<'db>, (NodeId, u32)>,
+    ) {
+        loop {
+            let mut changed = false;
+            for (alias, ty) in &self.map {
+                let TypeKind::UniVar { id } = ty.kind(db) else {
+                    continue;
+                };
+                if let Some(owner) = local_vars.get(id).copied()
+                    && local_vars.insert(*alias, owner).is_none()
+                {
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Extend a function-interface generalization map across direct solver
+    /// aliases created while the body is converted after signature inference.
+    pub fn propagate_bound_var_aliases(
+        &self,
+        db: &'db dyn salsa::Database,
+        bound_vars: &mut HashMap<UniVarId<'db>, u32>,
+    ) {
+        loop {
+            let mut changed = false;
+            for (alias, ty) in &self.map {
+                let TypeKind::UniVar { id } = ty.kind(db) else {
+                    continue;
+                };
+                if let Some(index) = bound_vars.get(id).copied()
+                    && bound_vars.insert(*alias, index).is_none()
+                {
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
     /// Apply the substitution to a type.
     ///
     /// Note: This delegates to `apply_with_rows` with an empty row substitution.
@@ -286,7 +338,8 @@ impl<'db> TypeSubst<'db> {
             .collect();
 
         // Pass 2: replace UniVars with BoundVars
-        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+        let generalized =
+            self.replace_univars_with_bound(db, ty, row_subst, &var_to_index, None, None);
 
         // Build type params (anonymous — names not tracked through UniVar)
         let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
@@ -302,6 +355,20 @@ impl<'db> TypeSubst<'db> {
         row_subst: &RowSubst<'db>,
         excluded: &[UniVarId<'db>],
     ) -> (Type<'db>, Vec<TypeParam>) {
+        let (generalized, type_params, _) =
+            self.generalize_excluding_with_mapping(db, ty, row_subst, excluded);
+        (generalized, type_params)
+    }
+
+    /// Generalize unresolved variables except those free in the environment,
+    /// retaining the exact variable-to-local-scheme mapping.
+    pub fn generalize_excluding_with_mapping(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        excluded: &[UniVarId<'db>],
+    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
         let mut univars = Vec::new();
         self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
         univars.retain(|id| !excluded.contains(id));
@@ -311,9 +378,10 @@ impl<'db> TypeSubst<'db> {
             .enumerate()
             .map(|(index, &id)| (id, index as u32))
             .collect();
-        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+        let generalized =
+            self.replace_univars_with_bound(db, ty, row_subst, &var_to_index, None, None);
         let type_params = univars.iter().map(|_| TypeParam::anonymous()).collect();
-        (generalized, type_params)
+        (generalized, type_params, var_to_index)
     }
 
     /// Generalize a type and return the UniVar → BoundVar index mapping.
@@ -342,7 +410,8 @@ impl<'db> TypeSubst<'db> {
             .collect();
 
         // Pass 2: replace UniVars with BoundVars
-        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+        let generalized =
+            self.replace_univars_with_bound(db, ty, row_subst, &var_to_index, None, None);
 
         // Build type params (anonymous — names not tracked through UniVar)
         let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
@@ -361,7 +430,31 @@ impl<'db> TypeSubst<'db> {
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
-        self.replace_univars_with_bound(db, ty, row_subst, var_to_index)
+        self.replace_univars_with_bound(db, ty, row_subst, var_to_index, None, None)
+    }
+
+    /// Apply function-interface and local-let generalization mappings.
+    ///
+    /// Local quantifiers are deliberately distinct from function scheme
+    /// parameters so a body-only variable cannot become a phantom callable
+    /// parameter during later monomorphization.
+    pub fn apply_generalization_with_local_vars(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        var_to_index: &HashMap<UniVarId<'db>, u32>,
+        local_vars: &HashMap<UniVarId<'db>, (NodeId, u32)>,
+        unresolved_body_vars: &HashSet<UniVarId<'db>>,
+    ) -> Type<'db> {
+        self.replace_univars_with_bound(
+            db,
+            ty,
+            row_subst,
+            var_to_index,
+            Some(local_vars),
+            Some(unresolved_body_vars),
+        )
     }
 
     /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
@@ -458,6 +551,8 @@ impl<'db> TypeSubst<'db> {
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        local_vars: Option<&HashMap<UniVarId<'db>, (NodeId, u32)>>,
+        unresolved_body_vars: Option<&HashSet<UniVarId<'db>>>,
     ) -> Type<'db> {
         match ty.kind(db) {
             TypeKind::UniVar { id } => {
@@ -467,8 +562,19 @@ impl<'db> TypeSubst<'db> {
                 // we want to generalize X (which is in the mapping), not Y (which may not be).
                 if let Some(&index) = var_to_index.get(id) {
                     Type::new(db, TypeKind::BoundVar { index })
+                } else if let Some(&(scope, index)) = local_vars.and_then(|vars| vars.get(id)) {
+                    Type::new(db, TypeKind::LocalBoundVar { scope, index })
+                } else if unresolved_body_vars.is_some_and(|vars| vars.contains(id)) {
+                    Type::new(db, TypeKind::Error)
                 } else if let Some(subst_ty) = self.get(*id) {
-                    self.replace_univars_with_bound(db, subst_ty, row_subst, var_to_index)
+                    self.replace_univars_with_bound(
+                        db,
+                        subst_ty,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                        unresolved_body_vars,
+                    )
                 } else {
                     ty
                 }
@@ -476,7 +582,16 @@ impl<'db> TypeSubst<'db> {
             TypeKind::Named { id, name, args } => {
                 let new_args: Vec<_> = args
                     .iter()
-                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
+                    .map(|a| {
+                        self.replace_univars_with_bound(
+                            db,
+                            *a,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                            unresolved_body_vars,
+                        )
+                    })
                     .collect();
                 Type::new(
                     db,
@@ -495,13 +610,35 @@ impl<'db> TypeSubst<'db> {
             } => {
                 let new_params: Vec<_> = params
                     .iter()
-                    .map(|p| self.replace_univars_with_bound(db, *p, row_subst, var_to_index))
+                    .map(|p| {
+                        self.replace_univars_with_bound(
+                            db,
+                            *p,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                            unresolved_body_vars,
+                        )
+                    })
                     .collect();
-                let new_result =
-                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
+                let new_result = self.replace_univars_with_bound(
+                    db,
+                    *result,
+                    row_subst,
+                    var_to_index,
+                    local_vars,
+                    unresolved_body_vars,
+                );
                 let applied_row = row_subst.apply(db, *effect);
                 let new_effect = map_effect_row_type_args(db, applied_row, |a| {
-                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
+                    self.replace_univars_with_bound(
+                        db,
+                        a,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                        unresolved_body_vars,
+                    )
                 });
                 Type::new(
                     db,
@@ -516,15 +653,40 @@ impl<'db> TypeSubst<'db> {
             TypeKind::Tuple(elems) => {
                 let new_elems: Vec<_> = elems
                     .iter()
-                    .map(|e| self.replace_univars_with_bound(db, *e, row_subst, var_to_index))
+                    .map(|e| {
+                        self.replace_univars_with_bound(
+                            db,
+                            *e,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                            unresolved_body_vars,
+                        )
+                    })
                     .collect();
                 Type::new(db, TypeKind::Tuple(new_elems))
             }
             TypeKind::App { ctor, args } => {
-                let new_ctor = self.replace_univars_with_bound(db, *ctor, row_subst, var_to_index);
+                let new_ctor = self.replace_univars_with_bound(
+                    db,
+                    *ctor,
+                    row_subst,
+                    var_to_index,
+                    local_vars,
+                    unresolved_body_vars,
+                );
                 let new_args: Vec<_> = args
                     .iter()
-                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
+                    .map(|a| {
+                        self.replace_univars_with_bound(
+                            db,
+                            *a,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                            unresolved_body_vars,
+                        )
+                    })
                     .collect();
                 Type::new(
                     db,
@@ -539,12 +701,32 @@ impl<'db> TypeSubst<'db> {
                 result,
                 effect,
             } => {
-                let new_arg = self.replace_univars_with_bound(db, *arg, row_subst, var_to_index);
-                let new_result =
-                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
+                let new_arg = self.replace_univars_with_bound(
+                    db,
+                    *arg,
+                    row_subst,
+                    var_to_index,
+                    local_vars,
+                    unresolved_body_vars,
+                );
+                let new_result = self.replace_univars_with_bound(
+                    db,
+                    *result,
+                    row_subst,
+                    var_to_index,
+                    local_vars,
+                    unresolved_body_vars,
+                );
                 let applied_row = row_subst.apply(db, *effect);
                 let new_effect = map_effect_row_type_args(db, applied_row, |a| {
-                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
+                    self.replace_univars_with_bound(
+                        db,
+                        a,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                        unresolved_body_vars,
+                    )
                 });
                 Type::new(
                     db,

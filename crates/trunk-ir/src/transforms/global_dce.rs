@@ -4,7 +4,7 @@
 //! Reachability roots include:
 //! - Functions named "main" or "_start"
 //! - Functions referenced by `wasm.export_func`
-//! - Functions with `abi` attribute (externally callable)
+//! - Body-bearing functions with an `abi` attribute (externally callable)
 //! - Custom entry points from configuration
 //!
 //! Builds a call graph by analyzing `func.call`, `func.tail_call`, and
@@ -181,9 +181,13 @@ impl GlobalDcePass {
                         self.reachability_roots.insert(func_name);
                     }
 
-                    // Treat abi functions as entry points so their callees
-                    // are also considered reachable.
-                    if ctx.op(op).attributes.contains_key(self.syms.abi) {
+                    // Body-bearing ABI functions are externally callable
+                    // entry points. A bodyless ABI declaration is an import:
+                    // retain it only when a call or function reference reaches
+                    // it, unless another explicit entry/export rule selected it.
+                    if ctx.op(op).attributes.contains_key(self.syms.abi)
+                        && !ctx.op(op).regions.is_empty()
+                    {
                         self.reachability_roots.insert(func_name);
                     }
 
@@ -438,6 +442,15 @@ mod tests {
         func::func(ctx, loc, sym_name, fn_ty, body).op_ref()
     }
 
+    fn build_bodyless_abi_decl(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
+        let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
+            .attr("type", Attribute::Type(fn_type(ctx)))
+            .attr("abi", Attribute::String("C".to_owned()))
+            .build(ctx);
+        ctx.create_op(data)
+    }
+
     fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
         let i32_ty = i32_type(ctx);
@@ -617,41 +630,68 @@ mod tests {
     }
 
     #[test]
-    fn preserves_extern_declarations() {
+    fn removes_unreferenced_bodyless_abi_declaration() {
+        let (mut ctx, loc) = test_ctx();
+        let main = build_simple_func(&mut ctx, loc, "main");
+        let extern_op = build_bodyless_abi_decl(&mut ctx, loc, "extern_fn");
+        assert!(ctx.op(extern_op).regions.is_empty());
+
+        let module = build_module(&mut ctx, loc, vec![main, extern_op]);
+
+        let result = eliminate_dead_functions(&mut ctx, module);
+
+        assert_eq!(result.removed_count, 1);
+        assert_eq!(result.removed_functions, vec![Symbol::new("extern_fn")]);
+        assert_eq!(count_funcs(&ctx, module), 1);
+    }
+
+    #[test]
+    fn keeps_bodyless_abi_declarations_referenced_by_call_edges() {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
-        let main = build_simple_func(&mut ctx, loc, "main");
+        let direct = build_bodyless_abi_decl(&mut ctx, loc, "direct_import");
+        let tail = build_bodyless_abi_decl(&mut ctx, loc, "tail_import");
+        let first_class = build_bodyless_abi_decl(&mut ctx, loc, "first_class_import");
 
-        // Build an unreachable extern func with abi attribute
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
+        let i32_ty = i32_type(&mut ctx);
+        let call = func::call(
+            &mut ctx,
+            loc,
+            std::iter::empty(),
+            i32_ty,
+            Symbol::new("direct_import"),
+        );
+        ctx.push_op(entry, call.op_ref());
+        let constant = func::constant(&mut ctx, loc, fn_ty, Symbol::new("first_class_import"));
+        ctx.push_op(entry, constant.op_ref());
+        let tail_call =
+            OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("tail_call"))
+                .attr("callee", Attribute::Symbol(Symbol::new("tail_import")))
+                .build(&mut ctx);
+        let tail_call = ctx.create_op(tail_call);
+        ctx.push_op(entry, tail_call);
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
-            .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", Attribute::String("C".to_owned()))
-            .region(body)
-            .build(&mut ctx);
-        let extern_op = ctx.create_op(extern_data);
-
-        let module = build_module(&mut ctx, loc, vec![main, extern_op]);
+        let main = func::func(&mut ctx, loc, Symbol::new("main"), fn_ty, body).op_ref();
+        let module = build_module(&mut ctx, loc, vec![direct, tail, first_class, main]);
 
         let result = eliminate_dead_functions(&mut ctx, module);
 
         assert_eq!(result.removed_count, 0);
-        assert_eq!(count_funcs(&ctx, module), 2);
+        assert_eq!(count_funcs(&ctx, module), 4);
     }
 
     #[test]
-    fn abi_function_callees_are_reachable() {
+    fn body_bearing_abi_function_and_its_callees_are_reachable() {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
 
@@ -690,6 +730,7 @@ mod tests {
             .region(body)
             .build(&mut ctx);
         let extern_op = ctx.create_op(extern_data);
+        assert!(!ctx.op(extern_op).regions.is_empty());
 
         let module = build_module(&mut ctx, loc, vec![main, helper, extern_op]);
 

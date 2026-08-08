@@ -25,7 +25,9 @@
 use std::collections::HashMap;
 
 use tribute_core::{
-    CallableAbi, CallingConvention, get_calling_convention, set_calling_convention,
+    CallingConvention, get_calling_convention, get_physical_closure_convention,
+    interpose_physical_environment, physical_closure_type, physical_environment_index,
+    set_calling_convention,
 };
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -166,6 +168,7 @@ fn lower_single_lambda(
 
     // === Build the lifted function ===
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let has_evidence_param = physical_environment_index(&orig_param_types, &evidence_ty) == 1;
     let implicit_evidence = convention
         .is_none()
         .then(|| nearest_physical_evidence_arg(ctx, lambda_ref, evidence_ty))
@@ -181,6 +184,7 @@ fn lower_single_lambda(
             env_struct_ty,
             orig_param_types: &orig_param_types,
             convention,
+            has_evidence_param,
             evidence_ty,
             implicit_evidence,
             anyref_ty,
@@ -189,15 +193,8 @@ fn lower_single_lambda(
 
     // Source lambdas carry explicit convention metadata. Synthetic legacy
     // continuations still use the compatibility ABI `(evidence, env, args...)`.
-    let all_param_tys = if let Some(convention) = convention {
-        let source_offset =
-            usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
-        let abi = CallableAbi::new(
-            convention,
-            orig_param_types[source_offset..].iter().copied(),
-            func_result_ty,
-        );
-        abi.interpose_environment(&orig_param_types, anyref_ty)
+    let all_param_tys = if convention.is_some() {
+        interpose_physical_environment(&orig_param_types, &evidence_ty, anyref_ty)
     } else {
         let mut params = Vec::with_capacity(orig_param_types.len() + 2);
         params.push(ability::evidence_adt_type_ref(ctx));
@@ -234,7 +231,18 @@ fn lower_single_lambda(
     // Create closure.new replacing the lambda.
     let closure_func_ty =
         core::func(ctx, func_result_ty, orig_param_types.iter().copied()).as_type_ref();
-    let closure_ty = closure::closure(ctx, closure_func_ty).as_type_ref();
+    if let Some(type_convention) = get_physical_closure_convention(ctx, result_ty) {
+        assert_eq!(
+            Some(type_convention),
+            convention,
+            "closure.lambda operation/type convention mismatch"
+        );
+    }
+    let closure_ty = if let Some(convention) = convention {
+        physical_closure_type(ctx, closure_func_ty, convention)
+    } else {
+        closure::closure(ctx, closure_func_ty).as_type_ref()
+    };
     let closure_new_op = closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     if let Some(convention) = convention {
         set_calling_convention(ctx, closure_new_op.op_ref(), convention);
@@ -263,6 +271,7 @@ struct LiftBodyParams<'a> {
     env_struct_ty: Option<TypeRef>,
     orig_param_types: &'a [TypeRef],
     convention: Option<CallingConvention>,
+    has_evidence_param: bool,
     evidence_ty: TypeRef,
     implicit_evidence: Option<ValueRef>,
     anyref_ty: TypeRef,
@@ -281,6 +290,7 @@ fn build_lifted_body(
     let env_struct_ty = params.env_struct_ty;
     let orig_param_types = params.orig_param_types;
     let convention = params.convention;
+    let has_evidence_param = params.has_evidence_param;
     let evidence_ty = params.evidence_ty;
     let implicit_evidence = params.implicit_evidence;
     let anyref_ty = params.anyref_ty;
@@ -293,7 +303,7 @@ fn build_lifted_body(
     // --- Pass 1: Create new entry block with the physical closure ABI. ---
     let mut new_entry_args = Vec::new();
     match convention {
-        Some(convention) if convention.needs_evidence() => {
+        Some(_) if has_evidence_param => {
             new_entry_args.push(BlockArgData {
                 ty: orig_param_types[0],
                 attrs: ctx.block(orig_entry).args[0].attrs.clone(),
@@ -311,7 +321,7 @@ fn build_lifted_body(
         ty: anyref_ty,
         attrs: make_bind_name_attrs("__env"),
     });
-    let source_start = usize::from(convention.is_some_and(CallingConvention::needs_evidence));
+    let source_start = usize::from(has_evidence_param);
     for (i, &param_ty) in orig_param_types.iter().enumerate().skip(source_start) {
         new_entry_args.push(BlockArgData {
             ty: param_ty,
@@ -332,7 +342,7 @@ fn build_lifted_body(
     for i in 0..orig_param_count {
         let old_arg = ctx.block_arg(orig_entry, i as u32);
         let new_index = match convention {
-            Some(convention) if convention.needs_evidence() && i == 0 => 0,
+            Some(_) if has_evidence_param && i == 0 => 0,
             Some(_) => i + 1,
             None => i + 2,
         };
@@ -350,7 +360,7 @@ fn build_lifted_body(
     }
 
     // Insert env extraction ops at the start of the new entry block.
-    let env_index = u32::from(convention.is_none_or(CallingConvention::needs_evidence));
+    let env_index = u32::from(convention.is_none() || has_evidence_param);
     let raw_env_val = ctx.block_arg(new_entry, env_index);
     if let Some(env_ty) = env_struct_ty {
         let cast_op = adt::ref_cast(ctx, location, raw_env_val, env_ty, env_ty);

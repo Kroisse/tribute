@@ -91,9 +91,43 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
         .add_pattern(BytesLenPattern)
         .add_pattern(BytesGetOrPanicPattern)
         .add_pattern(BytesRangeEqualPattern)
-        .add_pattern(BytesConcatPattern);
+        .add_pattern(BytesConcatPattern)
+        .add_pattern(BytesIntrinsicFuncDeclPattern);
 
     applicator.apply_partial(ctx, module);
+}
+
+/// Remove the exact intrinsic declaration after every call has been lowered.
+struct BytesIntrinsicFuncDeclPattern;
+
+impl RewritePattern for BytesIntrinsicFuncDeclPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(function) = wasm_dialect::Func::from_op(ctx, op) else {
+            return false;
+        };
+        let name = function.sym_name(ctx);
+        let lowered_here = [
+            "__bytes_len",
+            "__bytes_get_or_panic",
+            "__bytes_concat",
+            "__tribute_bytes_len",
+            "__tribute_bytes_concat",
+            "__tribute_bytes_range_equal",
+            "__tribute_bytes_slice_or_panic",
+        ]
+        .iter()
+        .any(|candidate| name == Symbol::new(candidate));
+        if !ctx.op(op).regions.is_empty() || !lowered_here {
+            return false;
+        }
+        rewriter.erase_op(vec![]);
+        true
+    }
 }
 
 // =============================================================================

@@ -6,6 +6,7 @@
 //! - `func.call_indirect` -> `wasm.call_indirect`
 //! - `func.return` -> `wasm.return`
 //! - `func.tail_call` -> `wasm.return_call`
+//! - `func.tail_call_indirect` -> `wasm.return_call_indirect`
 //! - `func.unreachable` -> `wasm.unreachable`
 //! - `func.constant` -> `wasm.i32_const` (function table index)
 //!
@@ -16,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -25,10 +25,15 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
 };
-use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{BlockData, RegionData};
+use trunk_ir::{OperationDataBuilder, Symbol};
 
 use trunk_ir::smallvec::smallvec;
+
+// Closure lowering preserves this generic func-dialect provenance until the
+// target ABI consumes it. Wasm derives its final type index during collection.
+const INDIRECT_CALL_SIGNATURE_ATTR: &str = func::INDIRECT_CALL_SIGNATURE_ATTR;
 
 /// Lower func dialect to wasm dialect using arena IR.
 ///
@@ -46,6 +51,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncCallIndirectPattern)
             .add_pattern(FuncReturnPattern)
             .add_pattern(FuncTailCallPattern)
+            .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
                 table_indices: HashMap::new(),
@@ -73,6 +79,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
+        .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern {
             table_indices: table_indices.clone(),
@@ -186,8 +193,20 @@ impl RewritePattern for FuncFuncPattern {
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name(ctx);
         let func_type = func_op.r#type(ctx);
-        let body = func_op.body(ctx);
         let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
+        let Some(&body) = ctx.op(op).regions.first() else {
+            let mut builder =
+                OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
+                    .attr("sym_name", Attribute::Symbol(sym_name))
+                    .attr("type", Attribute::Type(func_type));
+            for (name, value) in attrs_to_preserve {
+                builder = builder.attr(name, value);
+            }
+            let new_data = builder.build(ctx);
+            let new_op = ctx.create_op(new_data);
+            rewriter.replace_op(new_op);
+            return true;
+        };
 
         // Detach body region so it can be reused in the new wasm.func
         ctx.detach_region(body);
@@ -218,9 +237,18 @@ impl RewritePattern for FuncCallPattern {
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
-        let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+        let result_types: Vec<TypeRef> = ctx
+            .op_result_types(op)
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| rewriter.result_type(ctx, op, index))
+            .collect();
+        let attrs_to_preserve = clone_attrs_except(ctx, op, &["callee"]);
 
         let new_op = wasm_dialect::call(ctx, loc, args, result_types, callee);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(attrs_to_preserve);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -246,10 +274,18 @@ impl RewritePattern for FuncCallIndirectPattern {
         let loc = ctx.op(op).location;
         let all_operands: Vec<_> = ctx.op_operands(op).to_vec();
         let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+        let attrs_to_preserve = clone_attrs_except(
+            ctx,
+            op,
+            &["type_idx", "table", INDIRECT_CALL_SIGNATURE_ATTR],
+        );
 
         // Build wasm.call_indirect with same operands
         // The emit phase will resolve the type_idx and table attributes
         let new_op = wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(attrs_to_preserve);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -295,8 +331,47 @@ impl RewritePattern for FuncTailCallPattern {
         let loc = ctx.op(op).location;
         let callee = tail_call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
+        let attrs_to_preserve = clone_attrs_except(ctx, op, &["callee"]);
 
         let new_op = wasm_dialect::return_call(ctx, loc, args, callee);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(attrs_to_preserve);
+        rewriter.replace_op(new_op.op_ref());
+        true
+    }
+}
+
+/// Pattern for `func.tail_call_indirect` -> `wasm.return_call_indirect`
+struct FuncTailCallIndirectPattern;
+
+impl RewritePattern for FuncTailCallIndirectPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if func::TailCallIndirect::from_op(ctx, op).is_err() || !ctx.op_result_types(op).is_empty()
+        {
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let operands = ctx.op_operands(op).to_vec();
+        if operands.is_empty() {
+            return false;
+        }
+        let attrs_to_preserve = clone_attrs_except(
+            ctx,
+            op,
+            &["type_idx", "table", INDIRECT_CALL_SIGNATURE_ATTR],
+        );
+
+        let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(attrs_to_preserve);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -380,8 +455,8 @@ fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::dialect::core;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::types::Attribute;
 
     #[test]
     fn func_to_wasm_preserves_custom_function_attributes() {
@@ -407,5 +482,113 @@ mod tests {
             ctx.op(lowered).attributes.get("custom"),
             Some(&Attribute::Int(7))
         );
+    }
+
+    #[test]
+    fn func_to_wasm_preserves_root_wrapper_and_call_identity_markers() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    %call = func.call {callee = @__tribute_cps_main} : core.nil
+    func.return %call
+  }
+}"#,
+        );
+        let wrapper = module.ops(&ctx)[0];
+        let body = func::Func::from_op(&ctx, wrapper).unwrap().body(&ctx);
+        let root_call = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        ctx.op_mut(wrapper)
+            .attributes
+            .insert(Symbol::new("tribute.root_wrapper"), Attribute::Bool(true));
+        ctx.op_mut(root_call)
+            .attributes
+            .insert(Symbol::new("tribute.root_cps_call"), Attribute::Bool(true));
+        ctx.op_mut(root_call)
+            .attributes
+            .insert(Symbol::new("tribute.calling_convention"), Attribute::Int(2));
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let wrapper = module.ops(&ctx)[0];
+        assert!(wasm_dialect::Func::from_op(&ctx, wrapper).is_ok());
+        assert_eq!(
+            ctx.op(wrapper).attributes.get_bool("tribute.root_wrapper"),
+            Some(true)
+        );
+        let body = wasm_dialect::Func::from_op(&ctx, wrapper)
+            .unwrap()
+            .body(&ctx);
+        let root_call = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        assert!(wasm_dialect::Call::from_op(&ctx, root_call).is_ok());
+        assert_eq!(
+            ctx.op(root_call)
+                .attributes
+                .get_bool("tribute.root_cps_call"),
+            Some(true)
+        );
+        assert_eq!(
+            ctx.op(root_call)
+                .attributes
+                .get_i128("tribute.calling_convention"),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn func_to_wasm_consumes_indirect_callable_provenance() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%callee: core.i32, %argument: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %argument
+  }
+}"#,
+        );
+        let function = module.ops(&ctx)[0];
+        let body = func::Func::from_op(&ctx, function).unwrap().body(&ctx);
+        let tail = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        let nil_ty = core::nil(&mut ctx).as_type_ref();
+        let i32_ty = intern_i32_type(&mut ctx);
+        let signature = core::func(&mut ctx, nil_ty, [i32_ty]).as_type_ref();
+        ctx.op_mut(tail).attributes.insert(
+            Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+            Attribute::Type(signature),
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let function = module.ops(&ctx)[0];
+        let body = wasm_dialect::Func::from_op(&ctx, function)
+            .unwrap()
+            .body(&ctx);
+        let tail = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        assert!(wasm_dialect::ReturnCallIndirect::from_op(&ctx, tail).is_ok());
+        assert!(
+            !ctx.op(tail)
+                .attributes
+                .contains_key(INDIRECT_CALL_SIGNATURE_ATTR)
+        );
+    }
+
+    #[test]
+    fn func_to_wasm_preserves_bodyless_declaration_scope() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @decl(%value: core.i32) -> core.i32 attributes {abi = "C"}
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let lowered = module.ops(&ctx)[0];
+        let declaration = wasm_dialect::Func::from_op(&ctx, lowered).unwrap();
+        assert!(ctx.op(lowered).regions.is_empty());
+        assert_eq!(ctx.op(lowered).attributes.get_text("abi").unwrap(), "C");
+        assert_eq!(ctx.types.get(declaration.r#type(&ctx)).params.len(), 2);
     }
 }

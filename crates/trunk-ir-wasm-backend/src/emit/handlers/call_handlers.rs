@@ -4,6 +4,7 @@
 //! - wasm.call (direct function call)
 //! - wasm.call_indirect (indirect function call via i32 table index)
 //! - wasm.return_call (tail call)
+//! - wasm.return_call_indirect (indirect tail call)
 
 use tracing::debug;
 use trunk_ir::IrContext;
@@ -192,32 +193,22 @@ pub(crate) fn handle_call_indirect(
         ctx.types.get(result_ty).name
     );
 
-    // Get or compute type_idx
+    // The lowering pattern leaves a placeholder `type_idx = 0` on this op.
+    // Resolve the exact collected signature index at emission time.
     let attrs = &ctx.op(op).attributes;
-    let type_idx = match attr_u32(attrs, Symbol::new("type_idx")) {
-        Ok(idx) => {
-            debug!("call_indirect emit: using type_idx from attribute: {}", idx);
-            idx
-        }
-        Err(_) => {
-            // Look up type index
-            let idx = module_info
-                .type_idx_by_type
-                .get(&func_type)
-                .copied()
-                .ok_or_else(|| {
-                    debug!(
-                        "call_indirect emit: func_type not found in type_idx_by_type! func_type={:?}",
-                        func_type
-                    );
-                    CompilationError::invalid_module(
-                        "wasm.call_indirect function type not registered in type section",
-                    )
-                })?;
-            debug!("call_indirect emit: looked up type_idx: {}", idx);
-            idx
-        }
-    };
+    let type_idx = module_info
+        .type_idx_by_type
+        .get(&func_type)
+        .copied()
+        .ok_or_else(|| {
+            debug!(
+                "call_indirect emit: func_type not found in type_idx_by_type! func_type={:?}",
+                func_type
+            );
+            CompilationError::invalid_module(
+                "wasm.call_indirect function type not registered in type section",
+            )
+        })?;
 
     // call_indirect with i32 table index
     // IR operand order: [table_idx, arg1, arg2, ...]
@@ -263,6 +254,71 @@ pub(crate) fn handle_return_call(
     Ok(())
 }
 
+/// Handle wasm.return_call_indirect operation (indirect tail call).
+pub(crate) fn handle_return_call_indirect(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
+    function: &mut Function,
+) -> CompilationResult<()> {
+    let operands = ctx.op_operands(op);
+    if operands.is_empty() {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect requires at least a table index operand",
+        ));
+    }
+    if !ctx.op_result_types(op).is_empty() {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect must not produce a result",
+        ));
+    }
+
+    let table_index = operands[0];
+    let table_index_ty = helpers::value_type(ctx, table_index);
+    if !helpers::is_type(ctx, table_index_ty, "core", "i32") {
+        let data = ctx.types.get(table_index_ty);
+        return Err(CompilationError::invalid_module(format!(
+            "return_call_indirect first operand must be i32 table index, got {}.{}",
+            data.dialect, data.name
+        )));
+    }
+
+    let param_types: Vec<TypeRef> = operands
+        .iter()
+        .skip(1)
+        .map(|value| helpers::value_type(ctx, *value))
+        .collect();
+    let func_type = find_void_func_type_in_registry(ctx, &param_types, module_info)?;
+    // The lowering pattern leaves a placeholder `type_idx = 0` on this op.
+    // Tail calls must use the index assigned to the exact collected signature;
+    // unlike ordinary calls, an attribute here is never authoritative.
+    let type_index = module_info
+        .type_idx_by_type
+        .get(&func_type)
+        .copied()
+        .ok_or_else(|| {
+            CompilationError::invalid_module(
+                "wasm.return_call_indirect function type not registered in type section",
+            )
+        })?;
+    let attrs = &ctx.op(op).attributes;
+    let table = match attrs.get("table") {
+        Some(_) => attr_u32(attrs, Symbol::new("table"))?,
+        None => 0,
+    };
+
+    for &operand in operands.iter().skip(1) {
+        emit_value(ctx, operand, emit_ctx, function)?;
+    }
+    emit_value(ctx, table_index, emit_ctx, function)?;
+    function.instruction(&Instruction::ReturnCallIndirect {
+        type_index,
+        table_index: table,
+    });
+    Ok(())
+}
+
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -305,4 +361,128 @@ fn find_func_type_in_registry(
     Err(CompilationError::invalid_module(
         "wasm.call_indirect function type not registered in type section",
     ))
+}
+
+fn find_void_func_type_in_registry(
+    ctx: &IrContext,
+    params: &[TypeRef],
+    module_info: &ModuleInfo,
+) -> CompilationResult<TypeRef> {
+    for &ty_ref in module_info.type_idx_by_type.keys() {
+        if helpers::func_type_parts(ctx, ty_ref).is_some_and(|(ty_params, ty_result)| {
+            helpers::is_nil_type(ctx, ty_result) && ty_params == params
+        }) {
+            return Ok(ty_ref);
+        }
+    }
+    for &ty_ref in module_info.func_types.values() {
+        if helpers::func_type_parts(ctx, ty_ref).is_some_and(|(ty_params, ty_result)| {
+            helpers::is_nil_type(ctx, ty_result) && ty_params == params
+        }) {
+            return Ok(ty_ref);
+        }
+    }
+    Err(CompilationError::invalid_module(
+        "wasm.return_call_indirect void function type not registered in type section",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use trunk_ir::Span;
+    use trunk_ir::refs::PathRef;
+    use trunk_ir::types::{Location, TypeDataBuilder};
+    use wasm_encoder::ValType;
+
+    use crate::emit::CommonTypes;
+
+    use super::*;
+
+    #[test]
+    fn return_call_indirect_emits_registered_nonzero_type_index() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let nil_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+        let func_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(nil_ty)
+                .build(),
+        );
+        let table = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
+        let table_result = table.result(&ctx);
+        let tail = wasm_dialect::return_call_indirect(&mut ctx, location, vec![table_result], 0, 0);
+        let emit_ctx = FunctionEmitContext {
+            value_locals: HashMap::from([(table_result, 0)]),
+            effective_types: HashMap::new(),
+            func_return_type: None,
+        };
+        let module_info = ModuleInfo {
+            type_idx_by_type: HashMap::from([(func_ty, 7)]),
+            ..ModuleInfo::default()
+        };
+        let mut function = Function::new([(1, ValType::I32)]);
+
+        handle_return_call_indirect(&ctx, tail.op_ref(), &emit_ctx, &module_info, &mut function)
+            .expect("tail indirect call should emit");
+
+        let body = function.into_raw_body();
+        assert!(
+            body.ends_with(&[0x13, 0x07, 0x00]),
+            "registered type index must be emitted in return_call_indirect"
+        );
+    }
+
+    #[test]
+    fn call_indirect_emits_registered_nonzero_type_index() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let anyref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let funcref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("funcref")).build());
+        let func_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(i32_ty)
+                .build(),
+        );
+        let table = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
+        let table_result = table.result(&ctx);
+        let call =
+            wasm_dialect::call_indirect(&mut ctx, location, vec![table_result], vec![i32_ty], 0, 0);
+        let call_result = call.results(&ctx)[0];
+        let emit_ctx = FunctionEmitContext {
+            value_locals: HashMap::from([(table_result, 0), (call_result, 1)]),
+            effective_types: HashMap::new(),
+            func_return_type: None,
+        };
+        let module_info = ModuleInfo {
+            type_idx_by_type: HashMap::from([(func_ty, 7)]),
+            common_types: CommonTypes {
+                anyref: Some(anyref_ty),
+                funcref: Some(funcref_ty),
+                ..CommonTypes::default()
+            },
+            ..ModuleInfo::default()
+        };
+        let mut function = Function::new([(2, ValType::I32)]);
+
+        handle_call_indirect(&ctx, call.op_ref(), &emit_ctx, &module_info, &mut function)
+            .expect("ordinary indirect call should emit");
+
+        let body = function.into_raw_body();
+        assert!(body.windows(3).any(|window| window == [0x11, 0x07, 0x00]));
+        assert!(!body.windows(3).any(|window| window == [0x13, 0x07, 0x00]));
+    }
 }

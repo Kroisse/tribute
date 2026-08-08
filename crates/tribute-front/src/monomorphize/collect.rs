@@ -14,8 +14,9 @@ pub fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+    call_callee_types: &HashMap<crate::ast::NodeId, Type<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut collector = InstantiationCollector::new(db, function_types);
+    let mut collector = InstantiationCollector::new(db, function_types, call_callee_types);
     collector.visit_module(module);
     collector.instantiations
 }
@@ -66,11 +67,13 @@ fn extract_recursive<'db>(
             TypeKind::Func {
                 params: sp,
                 result: sr,
+                effect: se,
                 ..
             },
             TypeKind::Func {
                 params: cp,
                 result: cr,
+                effect: ce,
                 ..
             },
         ) => {
@@ -83,6 +86,7 @@ fn extract_recursive<'db>(
                 }
             }
             extract_recursive(db, *sr, *cr, type_args)
+                && extract_effect_args(db, *se, *ce, type_args)
         }
         (
             TypeKind::Named {
@@ -118,16 +122,42 @@ fn extract_recursive<'db>(
     }
 }
 
-struct InstantiationCollector<'db> {
+fn extract_effect_args<'db>(
+    db: &'db dyn salsa::Database,
+    scheme: crate::ast::EffectRow<'db>,
+    concrete: crate::ast::EffectRow<'db>,
+    type_args: &mut [Option<Type<'db>>],
+) -> bool {
+    let scheme_effects = scheme.effects(db);
+    let concrete_effects = concrete.effects(db);
+    if concrete_effects.len() < scheme_effects.len()
+        || (scheme.rest(db).is_none()
+            && (scheme_effects.len() != concrete_effects.len() || concrete.rest(db).is_some()))
+    {
+        return false;
+    }
+    scheme_effects.iter().zip(concrete_effects).all(|(s, c)| {
+        s.ability_id == c.ability_id
+            && s.args.len() == c.args.len()
+            && s.args
+                .iter()
+                .zip(&c.args)
+                .all(|(s, c)| extract_recursive(db, *s, *c, type_args))
+    })
+}
+
+struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
 }
 
-impl<'db> InstantiationCollector<'db> {
+impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+        call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -138,19 +168,29 @@ impl<'db> InstantiationCollector<'db> {
             db,
             schemes,
             instantiations: HashMap::new(),
+            call_callee_types,
         }
     }
 
-    fn try_record(&mut self, typed_ref: &TypedRef<'db>) {
+    fn try_record(&mut self, node: crate::ast::NodeId, typed_ref: &TypedRef<'db>) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
         let Some(scheme) = self.schemes.get(id) else {
             return;
         };
-        let Some(type_args) = extract_type_args(self.db, *scheme, typed_ref.ty) else {
+        let Some(concrete) = self.call_callee_types.get(&node).copied() else {
             return;
         };
+        let Some(type_args) = extract_type_args(self.db, *scheme, concrete) else {
+            return;
+        };
+        if !type_args
+            .iter()
+            .all(|type_arg| is_concrete_type(self.db, *type_arg))
+        {
+            return;
+        }
         self.instantiations
             .entry(*id)
             .or_default()
@@ -180,7 +220,7 @@ impl<'db> InstantiationCollector<'db> {
     fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
         match expr.kind.as_ref() {
             ExprKind::Var(typed_ref) => {
-                self.try_record(typed_ref);
+                self.try_record(expr.id, typed_ref);
             }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee);
@@ -273,9 +313,18 @@ impl<'db> InstantiationCollector<'db> {
 pub fn collect_type_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
+    type_definitions: &HashMap<trunk_ir::Symbol, TypeScheme<'db>>,
+    node_types: &HashMap<crate::ast::NodeId, Type<'db>>,
+    function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let generic_types = collect_generic_type_ids(db, module);
+    let generic_types = collect_generic_type_ids(db, module, type_definitions);
     let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
+    for &ty in node_types.values() {
+        collect_from_type(db, ty, &generic_types, &mut result);
+    }
+    for (_, scheme) in function_types {
+        collect_from_type(db, scheme.body(db), &generic_types, &mut result);
+    }
 
     let mut visitor = TypeInstantiationVisitor {
         db,
@@ -290,10 +339,11 @@ pub fn collect_type_instantiations<'db>(
 fn collect_generic_type_ids<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
+    type_definitions: &HashMap<trunk_ir::Symbol, TypeScheme<'db>>,
 ) -> HashSet<TypeDefId<'db>> {
     let mut ids = HashSet::new();
     let mut prefix = String::new();
-    collect_generic_type_ids_inner(db, &module.decls, &mut prefix, &mut ids);
+    collect_generic_type_ids_inner(db, &module.decls, &mut prefix, type_definitions, &mut ids);
     ids
 }
 
@@ -301,27 +351,51 @@ fn collect_generic_type_ids_inner<'db>(
     db: &'db dyn salsa::Database,
     decls: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
+    type_definitions: &HashMap<trunk_ir::Symbol, TypeScheme<'db>>,
     ids: &mut HashSet<TypeDefId<'db>>,
 ) {
     for decl in decls {
         match decl {
             Decl::Struct(s) if !s.type_params.is_empty() => {
                 let qualified = crate::qualified_symbol(prefix, s.name);
-                ids.insert(TypeDefId::source(db, qualified, s.id));
+                let scheme = type_definitions
+                    .get(&qualified)
+                    .expect("generic struct must have an exact nominal definition scheme");
+                ids.insert(
+                    nominal_result_id(db, scheme.body(db))
+                        .expect("generic struct definition must contain a nominal type"),
+                );
             }
             Decl::Enum(e) if !e.type_params.is_empty() => {
                 let qualified = crate::qualified_symbol(prefix, e.name);
-                ids.insert(TypeDefId::source(db, qualified, e.id));
+                let scheme = type_definitions
+                    .get(&qualified)
+                    .expect("generic enum must have an exact nominal definition scheme");
+                ids.insert(
+                    nominal_result_id(db, scheme.body(db))
+                        .expect("generic enum definition must contain a nominal type"),
+                );
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let saved = crate::push_prefix(prefix, m.name);
-                    collect_generic_type_ids_inner(db, body, prefix, ids);
+                    collect_generic_type_ids_inner(db, body, prefix, type_definitions, ids);
                     prefix.truncate(saved);
                 }
             }
             _ => {}
         }
+    }
+}
+
+fn nominal_result_id<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<TypeDefId<'db>> {
+    let result = match ty.kind(db) {
+        TypeKind::Func { result, .. } => *result,
+        _ => ty,
+    };
+    match result.kind(db) {
+        TypeKind::Named { id, .. } => Some(*id),
+        _ => None,
     }
 }
 
@@ -334,7 +408,10 @@ fn collect_from_type<'db>(
 ) {
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } => {
-            if !args.is_empty() && generic_types.contains(id) {
+            if !args.is_empty()
+                && generic_types.contains(id)
+                && args.iter().all(|arg| is_concrete_type(db, *arg))
+            {
                 result.entry(*id).or_default().insert(args.clone());
             }
             // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
@@ -345,12 +422,18 @@ fn collect_from_type<'db>(
         TypeKind::Func {
             params,
             result: ret,
+            effect,
             ..
         } => {
             for p in params {
                 collect_from_type(db, *p, generic_types, result);
             }
             collect_from_type(db, *ret, generic_types, result);
+            for ability in effect.effects(db) {
+                for argument in &ability.args {
+                    collect_from_type(db, *argument, generic_types, result);
+                }
+            }
         }
         TypeKind::Tuple(elems) => {
             for e in elems {
@@ -371,6 +454,41 @@ fn collect_from_type<'db>(
         }
         // Primitives and variables: no nested Named types
         _ => {}
+    }
+}
+
+fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    match ty.kind(db) {
+        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => {
+            args.iter().all(|arg| is_concrete_type(db, *arg))
+        }
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } => {
+            params.iter().all(|param| is_concrete_type(db, *param))
+                && is_concrete_type(db, *result)
+                && effect
+                    .effects(db)
+                    .iter()
+                    .all(|entry| entry.args.iter().all(|arg| is_concrete_type(db, *arg)))
+        }
+        TypeKind::App { .. }
+        | TypeKind::Continuation { .. }
+        | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
+        | TypeKind::UniVar { .. }
+        | TypeKind::Error => false,
+        TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::Never => true,
     }
 }
 
@@ -498,7 +616,10 @@ impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{EffectRow, TypeParam, TypeScheme};
+    use crate::ast::{
+        AbilityId, Effect, EffectRow, EffectVar, EnumDecl, NodeId, TypeParam, TypeParamDecl,
+        TypeScheme,
+    };
 
     use super::*;
 
@@ -621,6 +742,292 @@ mod tests {
 
         let result = extract_type_args(&db, scheme, concrete);
         assert_eq!(result, Some(vec![int]));
+    }
+
+    #[test]
+    fn test_extract_param_present_only_in_ordered_effect_row() {
+        let db = TestDb::default();
+        let state = AbilityId::source(&db, trunk_ir::Symbol::new("State"));
+        let audit = AbilityId::source(&db, trunk_ir::Symbol::new("Audit"));
+        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let nil = Type::new(&db, TypeKind::Nil);
+        let scheme_effect = EffectRow::new(
+            &db,
+            vec![
+                Effect {
+                    ability_id: state,
+                    args: vec![bv0],
+                },
+                Effect {
+                    ability_id: audit,
+                    args: vec![],
+                },
+            ],
+            None,
+        );
+        let scheme = make_scheme(
+            &db,
+            1,
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result: nil,
+                    effect: scheme_effect,
+                    minimum_convention: crate::ast::CallingConvention::Direct,
+                },
+            ),
+        );
+
+        let int = Type::new(&db, TypeKind::Int);
+        let concrete_effect = EffectRow::new(
+            &db,
+            vec![
+                Effect {
+                    ability_id: state,
+                    args: vec![int],
+                },
+                Effect {
+                    ability_id: audit,
+                    args: vec![],
+                },
+            ],
+            None,
+        );
+        let concrete = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: concrete_effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        assert_eq!(extract_type_args(&db, scheme, concrete), Some(vec![int]));
+
+        let reversed = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::new(
+                    &db,
+                    vec![
+                        Effect {
+                            ability_id: audit,
+                            args: vec![],
+                        },
+                        Effect {
+                            ability_id: state,
+                            args: vec![int],
+                        },
+                    ],
+                    None,
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        assert_eq!(extract_type_args(&db, scheme, reversed), None);
+    }
+
+    #[test]
+    fn test_extract_open_effect_row_accepts_ordered_concrete_suffix() {
+        let db = TestDb::default();
+        let state = AbilityId::source(&db, trunk_ir::Symbol::new("State"));
+        let audit = AbilityId::source(&db, trunk_ir::Symbol::new("Audit"));
+        let trace = AbilityId::source(&db, trunk_ir::Symbol::new("Trace"));
+        let scheme_tail = EffectVar { id: 10 };
+        let concrete_tail = EffectVar { id: 20 };
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let nil = Type::new(&db, TypeKind::Nil);
+        let scheme = TypeScheme::new(
+            &db,
+            vec![TypeParam::anonymous()],
+            vec![scheme_tail],
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result: nil,
+                    effect: EffectRow::new(
+                        &db,
+                        vec![
+                            Effect {
+                                ability_id: state,
+                                args: vec![bound],
+                            },
+                            Effect {
+                                ability_id: audit,
+                                args: vec![],
+                            },
+                        ],
+                        Some(scheme_tail),
+                    ),
+                    minimum_convention: crate::ast::CallingConvention::Direct,
+                },
+            ),
+        );
+        let int = Type::new(&db, TypeKind::Int);
+        let concrete = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::new(
+                    &db,
+                    vec![
+                        Effect {
+                            ability_id: state,
+                            args: vec![int],
+                        },
+                        Effect {
+                            ability_id: audit,
+                            args: vec![],
+                        },
+                        Effect {
+                            ability_id: trace,
+                            args: vec![],
+                        },
+                    ],
+                    Some(concrete_tail),
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        assert_eq!(extract_type_args(&db, scheme, concrete), Some(vec![int]));
+    }
+
+    #[test]
+    fn test_extract_open_effect_row_rejects_wrong_ordered_prefix() {
+        let db = TestDb::default();
+        let state = AbilityId::source(&db, trunk_ir::Symbol::new("State"));
+        let audit = AbilityId::source(&db, trunk_ir::Symbol::new("Audit"));
+        let scheme_tail = EffectVar { id: 30 };
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let nil = Type::new(&db, TypeKind::Nil);
+        let scheme = TypeScheme::new(
+            &db,
+            vec![TypeParam::anonymous()],
+            vec![scheme_tail],
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result: nil,
+                    effect: EffectRow::new(
+                        &db,
+                        vec![
+                            Effect {
+                                ability_id: state,
+                                args: vec![bound],
+                            },
+                            Effect {
+                                ability_id: audit,
+                                args: vec![],
+                            },
+                        ],
+                        Some(scheme_tail),
+                    ),
+                    minimum_convention: crate::ast::CallingConvention::Direct,
+                },
+            ),
+        );
+        let int = Type::new(&db, TypeKind::Int);
+        let reordered = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::new(
+                    &db,
+                    vec![
+                        Effect {
+                            ability_id: audit,
+                            args: vec![],
+                        },
+                        Effect {
+                            ability_id: state,
+                            args: vec![int],
+                        },
+                    ],
+                    Some(EffectVar { id: 31 }),
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        assert_eq!(extract_type_args(&db, scheme, reordered), None);
+    }
+
+    #[test]
+    fn test_extract_closed_effect_row_rejects_extra_effects_and_open_tail() {
+        let db = TestDb::default();
+        let state = AbilityId::source(&db, trunk_ir::Symbol::new("State"));
+        let audit = AbilityId::source(&db, trunk_ir::Symbol::new("Audit"));
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let nil = Type::new(&db, TypeKind::Nil);
+        let scheme = make_scheme(
+            &db,
+            1,
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result: nil,
+                    effect: EffectRow::single(
+                        &db,
+                        Effect {
+                            ability_id: state,
+                            args: vec![bound],
+                        },
+                    ),
+                    minimum_convention: crate::ast::CallingConvention::Direct,
+                },
+            ),
+        );
+        let int = Type::new(&db, TypeKind::Int);
+        let extra_effect = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::new(
+                    &db,
+                    vec![
+                        Effect {
+                            ability_id: state,
+                            args: vec![int],
+                        },
+                        Effect {
+                            ability_id: audit,
+                            args: vec![],
+                        },
+                    ],
+                    None,
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        let open_tail = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::new(
+                    &db,
+                    vec![Effect {
+                        ability_id: state,
+                        args: vec![int],
+                    }],
+                    Some(EffectVar { id: 40 }),
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        assert_eq!(extract_type_args(&db, scheme, extra_effect), None);
+        assert_eq!(extract_type_args(&db, scheme, open_tail), None);
     }
 
     #[test]
@@ -752,6 +1159,140 @@ mod tests {
         assert_eq!(result.len(), 1);
         let option_insts = result.get(&option_id).unwrap();
         assert!(option_insts.contains(&vec![int]));
+    }
+
+    #[test]
+    fn test_collect_empty_generic_enum_uses_exact_definition_identity() {
+        let db = TestDb::default();
+        let declaration = NodeId::from_raw(1);
+        let name = trunk_ir::Symbol::new("Empty");
+        let id = TypeDefId::source(&db, name, declaration);
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let generic = Type::new(
+            &db,
+            TypeKind::Named {
+                id,
+                name,
+                args: vec![bound],
+            },
+        );
+        let module = Module::<TypedRef<'_>>::new(
+            NodeId::from_raw(2),
+            None,
+            vec![Decl::Enum(EnumDecl {
+                id: declaration,
+                is_pub: false,
+                name,
+                type_params: vec![TypeParamDecl {
+                    id: NodeId::from_raw(3),
+                    name: trunk_ir::Symbol::new("a"),
+                    bounds: vec![],
+                }],
+                variants: vec![],
+            })],
+        );
+        let definitions = HashMap::from([(name, make_scheme(&db, 1, generic))]);
+        let int = Type::new(&db, TypeKind::Int);
+        let empty_int = Type::new(
+            &db,
+            TypeKind::Named {
+                id,
+                name,
+                args: vec![int],
+            },
+        );
+        let signature = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![empty_int],
+                result: Type::new(&db, TypeKind::Nil),
+                effect: pure_effect(&db),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+        let function_types = vec![(
+            trunk_ir::Symbol::new("consume_empty"),
+            TypeScheme::mono(&db, signature),
+        )];
+
+        let instantiations = collect_type_instantiations(
+            &db,
+            &module,
+            &definitions,
+            &HashMap::new(),
+            &function_types,
+        );
+        assert_eq!(instantiations.get(&id), Some(&HashSet::from([vec![int]])));
+    }
+
+    #[test]
+    fn test_collect_nominal_instantiation_present_only_in_function_effect() {
+        let db = TestDb::default();
+        let declaration = NodeId::from_raw(10);
+        let name = trunk_ir::Symbol::new("Token");
+        let id = TypeDefId::source(&db, name, declaration);
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let generic = Type::new(
+            &db,
+            TypeKind::Named {
+                id,
+                name,
+                args: vec![bound],
+            },
+        );
+        let module = Module::<TypedRef<'_>>::new(
+            NodeId::from_raw(11),
+            None,
+            vec![Decl::Enum(EnumDecl {
+                id: declaration,
+                is_pub: false,
+                name,
+                type_params: vec![TypeParamDecl {
+                    id: NodeId::from_raw(12),
+                    name: trunk_ir::Symbol::new("a"),
+                    bounds: vec![],
+                }],
+                variants: vec![],
+            })],
+        );
+        let definitions = HashMap::from([(name, make_scheme(&db, 1, generic))]);
+        let int = Type::new(&db, TypeKind::Int);
+        let token_int = Type::new(
+            &db,
+            TypeKind::Named {
+                id,
+                name,
+                args: vec![int],
+            },
+        );
+        let signature = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: Type::new(&db, TypeKind::Nil),
+                effect: EffectRow::new(
+                    &db,
+                    vec![Effect {
+                        ability_id: AbilityId::source(&db, trunk_ir::Symbol::new("Witness")),
+                        args: vec![token_int],
+                    }],
+                    None,
+                ),
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        );
+
+        let instantiations = collect_type_instantiations(
+            &db,
+            &module,
+            &definitions,
+            &HashMap::new(),
+            &[(
+                trunk_ir::Symbol::new("effect_only"),
+                TypeScheme::mono(&db, signature),
+            )],
+        );
+        assert_eq!(instantiations.get(&id), Some(&HashSet::from([vec![int]])));
     }
 
     #[test]

@@ -2,31 +2,43 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
+use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, Decl, EnumDecl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, FuncDefId, HandlerArm,
-    HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl, Type, TypeAnnotation,
-    TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef, VariantDecl,
+    HandlerKind, Module, NodeId, Param, ParamDecl, Pattern, PatternKind, Stmt, StructDecl, Type,
+    TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
 
 use super::mangle::{mangle_name, mangle_type_name};
 
+type GeneratedFunctionSpecializations<'db> = (
+    Vec<FuncDecl<TypedRef<'db>>>,
+    Vec<(Symbol, TypeScheme<'db>)>,
+    Vec<FunctionSpecialization<'db>>,
+);
+
 /// Generate specialized copies of generic functions for each instantiation.
 ///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
 /// `(Symbol, TypeScheme)` entries for `function_types`.
-pub fn generate_specializations<'db>(
+pub(crate) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-) -> (Vec<FuncDecl<TypedRef<'db>>>, Vec<(Symbol, TypeScheme<'db>)>) {
+) -> GeneratedFunctionSpecializations<'db> {
     let func_decls = collect_func_decls(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
-    let mut entries: Vec<(Symbol, FuncDecl<TypedRef<'db>>, TypeScheme<'db>)> = Vec::new();
+    let mut entries: Vec<(
+        Symbol,
+        FuncDecl<TypedRef<'db>>,
+        TypeScheme<'db>,
+        FunctionSpecialization<'db>,
+    )> = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
@@ -40,20 +52,17 @@ pub fn generate_specializations<'db>(
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
             let specialized = specialize_func_decl(db, func, type_args, mangled);
-            let specialized_scheme = TypeScheme::new(
-                db,
-                vec![],
-                scheme.effect_params(db).clone(),
-                substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or_else(
-                    |index, max| {
-                        panic!(
-                            "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
-                            qualified, index, max
-                        )
-                    },
-                ),
-            );
-            entries.push((mangled, specialized, specialized_scheme));
+            let specialized_scheme = specialize_function_scheme(db, qualified, *scheme, type_args);
+            entries.push((
+                mangled,
+                specialized,
+                specialized_scheme,
+                FunctionSpecialization {
+                    type_args: type_args.clone(),
+                    variant: type_args_variant(type_args),
+                    node_origins: collect_semantic_node_ids(func),
+                },
+            ));
         }
     }
 
@@ -62,12 +71,75 @@ pub fn generate_specializations<'db>(
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len());
-    for (name, decl, scheme) in entries {
+    let mut specializations = Vec::with_capacity(entries.len());
+    for (name, decl, scheme, specialization) in entries {
         new_decls.push(decl);
         new_function_types.push((name, scheme));
+        specializations.push(specialization);
     }
 
-    (new_decls, new_function_types)
+    (new_decls, new_function_types, specializations)
+}
+
+#[derive(Clone)]
+pub(crate) struct FunctionSpecialization<'db> {
+    pub type_args: Vec<Type<'db>>,
+    pub variant: NonZero<u64>,
+    pub node_origins: HashSet<NodeId>,
+}
+
+/// Generate exact semantic signatures for rewritten generic extern calls.
+///
+/// The source ABI declaration intentionally remains at its unmangled base
+/// symbol. Target-specific intrinsic lowering authorizes specialized call
+/// names through that base declaration, so this function must not synthesize
+/// declarations for names the runtime does not export.
+pub fn generate_extern_specialization_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    function_types: &[(Symbol, TypeScheme<'db>)],
+) -> Vec<(Symbol, TypeScheme<'db>)> {
+    let externs = collect_extern_names(module);
+    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
+    let mut entries = Vec::new();
+
+    for (func_id, type_arg_sets) in instantiations {
+        let qualified = func_id.qualified(db);
+        if !externs.contains(&qualified) {
+            continue;
+        }
+        let Some(scheme) = scheme_map.get(&qualified) else {
+            continue;
+        };
+        for type_args in type_arg_sets {
+            let mangled = mangle_name(db, qualified, type_args);
+            let specialized_scheme = specialize_function_scheme(db, qualified, *scheme, type_args);
+            entries.push((mangled, specialized_scheme));
+        }
+    }
+
+    entries.sort_by_key(|entry| entry.0);
+    entries
+}
+
+fn specialize_function_scheme<'db>(
+    db: &'db dyn salsa::Database,
+    qualified: Symbol,
+    scheme: TypeScheme<'db>,
+    type_args: &[Type<'db>],
+) -> TypeScheme<'db> {
+    TypeScheme::new(
+        db,
+        vec![],
+        scheme.effect_params(db).clone(),
+        substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or_else(|index, max| {
+            panic!(
+                "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
+                qualified, index, max
+            )
+        }),
+    )
 }
 
 // ============================================================================
@@ -79,8 +151,9 @@ pub fn generate_struct_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
 ) -> Vec<StructDecl> {
-    let struct_decls = collect_struct_decls(db, module);
+    let struct_decls = collect_struct_decls(db, module, type_definitions);
     let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
@@ -107,8 +180,9 @@ pub fn generate_enum_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
 ) -> Vec<EnumDecl> {
-    let enum_decls = collect_enum_decls(db, module);
+    let enum_decls = collect_enum_decls(db, module, type_definitions);
     let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
@@ -128,6 +202,56 @@ pub fn generate_enum_specializations<'db>(
 
     entries.sort_by_key(|e| e.0);
     entries.into_iter().map(|(_, decl)| decl).collect()
+}
+
+#[derive(Clone)]
+pub(crate) struct ConstructorSpecialization<'db> {
+    pub source: crate::ast::CtorId<'db>,
+    pub specialized: crate::ast::CtorId<'db>,
+    pub type_args: Vec<Type<'db>>,
+}
+
+pub(crate) fn generate_constructor_specializations<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
+) -> Vec<ConstructorSpecialization<'db>> {
+    let structs = collect_struct_decls(db, module, type_definitions);
+    let enums = collect_enum_decls(db, module, type_definitions);
+    let mut result = Vec::new();
+
+    for (owner, argument_sets) in instantiations {
+        for type_args in argument_sets {
+            let mangled_owner = mangle_type_name(db, *owner, owner.qualified(db), type_args);
+            if structs.contains_key(owner) {
+                result.push(ConstructorSpecialization {
+                    source: crate::ast::CtorId::new(db, owner.qualified(db)),
+                    specialized: crate::ast::CtorId::new(db, mangled_owner),
+                    type_args: type_args.clone(),
+                });
+                continue;
+            }
+            let Some(enumeration) = enums.get(owner) else {
+                continue;
+            };
+            for variant in &enumeration.variants {
+                let source = owner
+                    .qualified(db)
+                    .parent_path()
+                    .map_or(variant.name, |prefix| prefix.join_path(variant.name));
+                let specialized =
+                    Symbol::from_dynamic(&format!("{mangled_owner}${}", variant.name));
+                result.push(ConstructorSpecialization {
+                    source: crate::ast::CtorId::new(db, source),
+                    specialized: crate::ast::CtorId::new(db, specialized),
+                    type_args: type_args.clone(),
+                });
+            }
+        }
+    }
+    result.sort_by_key(|entry| entry.specialized.qualified(db));
+    result
 }
 
 fn specialize_struct_decl<'db>(
@@ -151,7 +275,7 @@ fn specialize_struct_decl<'db>(
                 id: f.id.with_variant(variant),
                 is_pub: f.is_pub,
                 name: f.name,
-                ty: substitute_annotation(db, &f.ty, &param_names, type_args),
+                ty: substitute_annotation(db, &f.ty, &param_names, type_args, variant),
             })
             .collect(),
     }
@@ -184,7 +308,7 @@ fn specialize_enum_decl<'db>(
                         id: f.id.with_variant(variant),
                         is_pub: f.is_pub,
                         name: f.name,
-                        ty: substitute_annotation(db, &f.ty, &param_names, type_args),
+                        ty: substitute_annotation(db, &f.ty, &param_names, type_args, variant),
                     })
                     .collect(),
             })
@@ -201,6 +325,7 @@ fn substitute_annotation<'db>(
     ann: &TypeAnnotation,
     param_names: &[Symbol],
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> TypeAnnotation {
     let kind = match &ann.kind {
         TypeAnnotationKind::Named(name) => {
@@ -208,15 +333,21 @@ fn substitute_annotation<'db>(
             if let Some(idx) = param_names.iter().position(|p| p == name)
                 && let Some(ty) = type_args.get(idx)
             {
-                return type_to_annotation(db, *ty, ann.id);
+                return type_to_annotation(db, *ty, ann.id.with_variant(variant));
             }
             ann.kind.clone()
         }
         TypeAnnotationKind::App { ctor, args } => TypeAnnotationKind::App {
-            ctor: Box::new(substitute_annotation(db, ctor, param_names, type_args)),
+            ctor: Box::new(substitute_annotation(
+                db,
+                ctor,
+                param_names,
+                type_args,
+                variant,
+            )),
             args: args
                 .iter()
-                .map(|a| substitute_annotation(db, a, param_names, type_args))
+                .map(|a| substitute_annotation(db, a, param_names, type_args, variant))
                 .collect(),
         },
         TypeAnnotationKind::Func {
@@ -226,22 +357,34 @@ fn substitute_annotation<'db>(
         } => TypeAnnotationKind::Func {
             params: params
                 .iter()
-                .map(|p| substitute_annotation(db, p, param_names, type_args))
+                .map(|p| substitute_annotation(db, p, param_names, type_args, variant))
                 .collect(),
-            result: Box::new(substitute_annotation(db, result, param_names, type_args)),
-            abilities: abilities.clone(),
+            result: Box::new(substitute_annotation(
+                db,
+                result,
+                param_names,
+                type_args,
+                variant,
+            )),
+            abilities: abilities
+                .iter()
+                .map(|ability| substitute_annotation(db, ability, param_names, type_args, variant))
+                .collect(),
         },
         TypeAnnotationKind::Tuple(elems) => TypeAnnotationKind::Tuple(
             elems
                 .iter()
-                .map(|e| substitute_annotation(db, e, param_names, type_args))
+                .map(|e| substitute_annotation(db, e, param_names, type_args, variant))
                 .collect(),
         ),
         TypeAnnotationKind::Path(_) | TypeAnnotationKind::Infer | TypeAnnotationKind::Error => {
             ann.kind.clone()
         }
     };
-    TypeAnnotation { id: ann.id, kind }
+    TypeAnnotation {
+        id: ann.id.with_variant(variant),
+        kind,
+    }
 }
 
 /// Convert a semantic Type to a TypeAnnotation.
@@ -338,10 +481,11 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 fn collect_struct_decls<'a, 'db>(
     db: &'db dyn salsa::Database,
     module: &'a Module<TypedRef<'db>>,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
 ) -> HashMap<TypeDefId<'db>, &'a StructDecl> {
     let mut map = HashMap::new();
     let mut prefix = String::new();
-    collect_struct_decls_inner(db, &module.decls, &mut prefix, &mut map);
+    collect_struct_decls_inner(db, &module.decls, &mut prefix, type_definitions, &mut map);
     map
 }
 
@@ -349,18 +493,23 @@ fn collect_struct_decls_inner<'a, 'db>(
     db: &'db dyn salsa::Database,
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
     map: &mut HashMap<TypeDefId<'db>, &'a StructDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Struct(s) => {
                 let qualified = crate::qualified_symbol(prefix, s.name);
-                map.insert(TypeDefId::source(db, qualified, s.id), s);
+                if let Some(scheme) = type_definitions.get(&qualified)
+                    && let Some(owner) = nominal_result_id(db, scheme.body(db))
+                {
+                    map.insert(owner, s);
+                }
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let len = crate::push_prefix(prefix, m.name);
-                    collect_struct_decls_inner(db, body, prefix, map);
+                    collect_struct_decls_inner(db, body, prefix, type_definitions, map);
                     prefix.truncate(len);
                 }
             }
@@ -372,10 +521,11 @@ fn collect_struct_decls_inner<'a, 'db>(
 fn collect_enum_decls<'a, 'db>(
     db: &'db dyn salsa::Database,
     module: &'a Module<TypedRef<'db>>,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
 ) -> HashMap<TypeDefId<'db>, &'a EnumDecl> {
     let mut map = HashMap::new();
     let mut prefix = String::new();
-    collect_enum_decls_inner(db, &module.decls, &mut prefix, &mut map);
+    collect_enum_decls_inner(db, &module.decls, &mut prefix, type_definitions, &mut map);
     map
 }
 
@@ -383,23 +533,39 @@ fn collect_enum_decls_inner<'a, 'db>(
     db: &'db dyn salsa::Database,
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
+    type_definitions: &HashMap<Symbol, TypeScheme<'db>>,
     map: &mut HashMap<TypeDefId<'db>, &'a EnumDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Enum(e) => {
                 let qualified = crate::qualified_symbol(prefix, e.name);
-                map.insert(TypeDefId::source(db, qualified, e.id), e);
+                if let Some(scheme) = type_definitions.get(&qualified)
+                    && let Some(owner) = nominal_result_id(db, scheme.body(db))
+                {
+                    map.insert(owner, e);
+                }
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
                     let len = crate::push_prefix(prefix, m.name);
-                    collect_enum_decls_inner(db, body, prefix, map);
+                    collect_enum_decls_inner(db, body, prefix, type_definitions, map);
                     prefix.truncate(len);
                 }
             }
             _ => {}
         }
+    }
+}
+
+fn nominal_result_id<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<TypeDefId<'db>> {
+    let result = match ty.kind(db) {
+        TypeKind::Func { result, .. } => *result,
+        _ => ty,
+    };
+    match result.kind(db) {
+        TypeKind::Named { id, .. } => Some(*id),
+        _ => None,
     }
 }
 
@@ -439,6 +605,35 @@ fn collect_func_decls_inner<'a, 'db>(
     }
 }
 
+fn collect_extern_names<'db>(module: &Module<TypedRef<'db>>) -> HashSet<Symbol> {
+    let mut names = HashSet::new();
+    let mut prefix = String::new();
+    collect_extern_names_inner(&module.decls, &mut prefix, &mut names);
+    names
+}
+
+fn collect_extern_names_inner<'db>(
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    names: &mut HashSet<Symbol>,
+) {
+    for decl in decls {
+        match decl {
+            Decl::ExternFunction(function) => {
+                names.insert(crate::qualified_symbol(prefix, function.name));
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let len = crate::push_prefix(prefix, module.name);
+                    collect_extern_names_inner(body, prefix, names);
+                    prefix.truncate(len);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Compute a NonZero<u64> variant hash from concrete type arguments.
 ///
 /// This is used to give specialized AST nodes unique NodeIds that
@@ -458,15 +653,36 @@ fn specialize_func_decl<'db>(
     mangled_name: Symbol,
 ) -> FuncDecl<TypedRef<'db>> {
     let variant = type_args_variant(type_args);
+    let param_names: Vec<Symbol> = func.type_params.iter().map(|param| param.name).collect();
     FuncDecl {
         id: func.id.with_variant(variant),
         is_pub: false,
         name: mangled_name,
         type_params: vec![],
-        params: func.params.clone(),
-        return_ty: func.return_ty.clone(),
-        effects: func.effects.clone(),
-        body: substitute_expr(db, func.body.clone(), type_args, variant),
+        params: func
+            .params
+            .iter()
+            .map(|param| ParamDecl {
+                id: param.id.with_variant(variant),
+                name: param.name,
+                ty: param
+                    .ty
+                    .as_ref()
+                    .map(|ty| substitute_annotation(db, ty, &param_names, type_args, variant)),
+                local_id: param.local_id,
+            })
+            .collect(),
+        return_ty: func
+            .return_ty
+            .as_ref()
+            .map(|ty| substitute_annotation(db, ty, &param_names, type_args, variant)),
+        effects: func.effects.as_ref().map(|effects| {
+            effects
+                .iter()
+                .map(|effect| substitute_annotation(db, effect, &param_names, type_args, variant))
+                .collect()
+        }),
+        body: substitute_expr(db, func.body.clone(), &param_names, type_args, variant),
     }
 }
 
@@ -500,52 +716,56 @@ fn subst_typed_ref<'db>(
 fn substitute_expr<'db>(
     db: &'db dyn salsa::Database,
     expr: Expr<TypedRef<'db>>,
+    param_names: &[Symbol],
     type_args: &[Type<'db>],
     variant: NonZero<u64>,
 ) -> Expr<TypedRef<'db>> {
     let kind = match *expr.kind {
         ExprKind::Var(tr) => ExprKind::Var(subst_typed_ref(db, tr, type_args)),
         ExprKind::Call { callee, args } => ExprKind::Call {
-            callee: substitute_expr(db, callee, type_args, variant),
+            callee: substitute_expr(db, callee, param_names, type_args, variant),
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args, variant))
+                .map(|a| substitute_expr(db, a, param_names, type_args, variant))
                 .collect(),
         },
         ExprKind::Block { stmts, value } => ExprKind::Block {
             stmts: stmts
                 .into_iter()
-                .map(|s| substitute_stmt(db, s, type_args, variant))
+                .map(|s| substitute_stmt(db, s, param_names, type_args, variant))
                 .collect(),
-            value: substitute_expr(db, value, type_args, variant),
+            value: substitute_expr(db, value, param_names, type_args, variant),
         },
         ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-            scrutinee: substitute_expr(db, scrutinee, type_args, variant),
+            scrutinee: substitute_expr(db, scrutinee, param_names, type_args, variant),
             arms: arms
                 .into_iter()
-                .map(|a| substitute_arm(db, a, type_args, variant))
+                .map(|a| substitute_arm(db, a, param_names, type_args, variant))
                 .collect(),
         },
         ExprKind::Lambda { params, body } => ExprKind::Lambda {
-            params,
-            body: substitute_expr(db, body, type_args, variant),
+            params: params
+                .into_iter()
+                .map(|param| substitute_lambda_param(db, param, param_names, type_args, variant))
+                .collect(),
+            body: substitute_expr(db, body, param_names, type_args, variant),
         },
         ExprKind::Handle { body, handlers } => ExprKind::Handle {
-            body: substitute_expr(db, body, type_args, variant),
+            body: substitute_expr(db, body, param_names, type_args, variant),
             handlers: handlers
                 .into_iter()
-                .map(|h| substitute_handler_arm(db, h, type_args, variant))
+                .map(|h| substitute_handler_arm(db, h, param_names, type_args, variant))
                 .collect(),
         },
         ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-            arg: substitute_expr(db, arg, type_args, variant),
+            arg: substitute_expr(db, arg, param_names, type_args, variant),
             local_id,
         },
         ExprKind::Cons { ctor, args } => ExprKind::Cons {
             ctor: subst_typed_ref(db, ctor, type_args),
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args, variant))
+                .map(|a| substitute_expr(db, a, param_names, type_args, variant))
                 .collect(),
         },
         ExprKind::Record {
@@ -556,35 +776,40 @@ fn substitute_expr<'db>(
             type_name: subst_typed_ref(db, type_name, type_args),
             fields: fields
                 .into_iter()
-                .map(|(name, e)| (name, substitute_expr(db, e, type_args, variant)))
+                .map(|(name, e)| {
+                    (
+                        name,
+                        substitute_expr(db, e, param_names, type_args, variant),
+                    )
+                })
                 .collect(),
-            spread: spread.map(|s| substitute_expr(db, s, type_args, variant)),
+            spread: spread.map(|s| substitute_expr(db, s, param_names, type_args, variant)),
         },
         ExprKind::MethodCall {
             receiver,
             method,
             args,
         } => ExprKind::MethodCall {
-            receiver: substitute_expr(db, receiver, type_args, variant),
+            receiver: substitute_expr(db, receiver, param_names, type_args, variant),
             method,
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args, variant))
+                .map(|a| substitute_expr(db, a, param_names, type_args, variant))
                 .collect(),
         },
         ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
             op,
-            lhs: substitute_expr(db, lhs, type_args, variant),
-            rhs: substitute_expr(db, rhs, type_args, variant),
+            lhs: substitute_expr(db, lhs, param_names, type_args, variant),
+            rhs: substitute_expr(db, rhs, param_names, type_args, variant),
         },
         ExprKind::Tuple(es) => ExprKind::Tuple(
             es.into_iter()
-                .map(|e| substitute_expr(db, e, type_args, variant))
+                .map(|e| substitute_expr(db, e, param_names, type_args, variant))
                 .collect(),
         ),
         ExprKind::List(es) => ExprKind::List(
             es.into_iter()
-                .map(|e| substitute_expr(db, e, type_args, variant))
+                .map(|e| substitute_expr(db, e, param_names, type_args, variant))
                 .collect(),
         ),
         // Leaf nodes — no types to substitute
@@ -604,6 +829,7 @@ fn substitute_expr<'db>(
 fn substitute_stmt<'db>(
     db: &'db dyn salsa::Database,
     stmt: Stmt<TypedRef<'db>>,
+    param_names: &[Symbol],
     type_args: &[Type<'db>],
     variant: NonZero<u64>,
 ) -> Stmt<TypedRef<'db>> {
@@ -616,12 +842,14 @@ fn substitute_stmt<'db>(
         } => Stmt::Let {
             id: id.with_variant(variant),
             pattern: substitute_pattern(db, pattern, type_args, variant),
-            ty,
-            value: substitute_expr(db, value, type_args, variant),
+            ty: ty.as_ref().map(|annotation| {
+                substitute_annotation(db, annotation, param_names, type_args, variant)
+            }),
+            value: substitute_expr(db, value, param_names, type_args, variant),
         },
         Stmt::Expr { id, expr } => Stmt::Expr {
             id: id.with_variant(variant),
-            expr: substitute_expr(db, expr, type_args, variant),
+            expr: substitute_expr(db, expr, param_names, type_args, variant),
         },
     }
 }
@@ -629,6 +857,7 @@ fn substitute_stmt<'db>(
 fn substitute_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: Arm<TypedRef<'db>>,
+    param_names: &[Symbol],
     type_args: &[Type<'db>],
     variant: NonZero<u64>,
 ) -> Arm<TypedRef<'db>> {
@@ -637,14 +866,15 @@ fn substitute_arm<'db>(
         pattern: substitute_pattern(db, arm.pattern, type_args, variant),
         guard: arm
             .guard
-            .map(|g| substitute_expr(db, g, type_args, variant)),
-        body: substitute_expr(db, arm.body, type_args, variant),
+            .map(|g| substitute_expr(db, g, param_names, type_args, variant)),
+        body: substitute_expr(db, arm.body, param_names, type_args, variant),
     }
 }
 
 fn substitute_handler_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: HandlerArm<TypedRef<'db>>,
+    param_names: &[Symbol],
     type_args: &[Type<'db>],
     variant: NonZero<u64>,
 ) -> HandlerArm<TypedRef<'db>> {
@@ -682,7 +912,24 @@ fn substitute_handler_arm<'db>(
     HandlerArm {
         id: arm.id.with_variant(variant),
         kind,
-        body: substitute_expr(db, arm.body, type_args, variant),
+        body: substitute_expr(db, arm.body, param_names, type_args, variant),
+    }
+}
+
+fn substitute_lambda_param<'db>(
+    db: &'db dyn salsa::Database,
+    param: Param,
+    param_names: &[Symbol],
+    type_args: &[Type<'db>],
+    variant: NonZero<u64>,
+) -> Param {
+    Param {
+        id: param.id.with_variant(variant),
+        name: param.name,
+        ty: param.ty.as_ref().map(|annotation| {
+            substitute_annotation(db, annotation, param_names, type_args, variant)
+        }),
+        local_id: param.local_id,
     }
 }
 
@@ -758,6 +1005,197 @@ fn substitute_pattern<'db>(
     Pattern::new(pattern.id.with_variant(variant), kind)
 }
 
+fn collect_semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
+    let mut ids = HashSet::new();
+    ids.insert(func.id);
+    for param in &func.params {
+        ids.insert(param.id);
+        if let Some(annotation) = &param.ty {
+            collect_annotation_ids(annotation, &mut ids);
+        }
+    }
+    if let Some(annotation) = &func.return_ty {
+        collect_annotation_ids(annotation, &mut ids);
+    }
+    if let Some(effects) = &func.effects {
+        for effect in effects {
+            collect_annotation_ids(effect, &mut ids);
+        }
+    }
+    collect_expr_ids(&func.body, &mut ids);
+    ids
+}
+
+fn collect_annotation_ids(annotation: &TypeAnnotation, ids: &mut HashSet<NodeId>) {
+    ids.insert(annotation.id);
+    match &annotation.kind {
+        TypeAnnotationKind::App { ctor, args } => {
+            collect_annotation_ids(ctor, ids);
+            for arg in args {
+                collect_annotation_ids(arg, ids);
+            }
+        }
+        TypeAnnotationKind::Func {
+            params,
+            result,
+            abilities,
+        } => {
+            for param in params {
+                collect_annotation_ids(param, ids);
+            }
+            collect_annotation_ids(result, ids);
+            for ability in abilities {
+                collect_annotation_ids(ability, ids);
+            }
+        }
+        TypeAnnotationKind::Tuple(elements) => {
+            for element in elements {
+                collect_annotation_ids(element, ids);
+            }
+        }
+        TypeAnnotationKind::Named(_)
+        | TypeAnnotationKind::Path(_)
+        | TypeAnnotationKind::Infer
+        | TypeAnnotationKind::Error => {}
+    }
+}
+
+fn collect_expr_ids<'db>(expr: &Expr<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+    ids.insert(expr.id);
+    match expr.kind.as_ref() {
+        ExprKind::Call { callee, args } => {
+            collect_expr_ids(callee, ids);
+            for arg in args {
+                collect_expr_ids(arg, ids);
+            }
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Let {
+                        id,
+                        pattern,
+                        ty,
+                        value,
+                    } => {
+                        ids.insert(*id);
+                        collect_pattern_ids(pattern, ids);
+                        if let Some(annotation) = ty {
+                            collect_annotation_ids(annotation, ids);
+                        }
+                        collect_expr_ids(value, ids);
+                    }
+                    Stmt::Expr { id, expr } => {
+                        ids.insert(*id);
+                        collect_expr_ids(expr, ids);
+                    }
+                }
+            }
+            collect_expr_ids(value, ids);
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            collect_expr_ids(scrutinee, ids);
+            for arm in arms {
+                ids.insert(arm.id);
+                collect_pattern_ids(&arm.pattern, ids);
+                if let Some(guard) = &arm.guard {
+                    collect_expr_ids(guard, ids);
+                }
+                collect_expr_ids(&arm.body, ids);
+            }
+        }
+        ExprKind::Lambda { params, body } => {
+            for param in params {
+                ids.insert(param.id);
+                if let Some(annotation) = &param.ty {
+                    collect_annotation_ids(annotation, ids);
+                }
+            }
+            collect_expr_ids(body, ids);
+        }
+        ExprKind::Handle { body, handlers } => {
+            collect_expr_ids(body, ids);
+            for handler in handlers {
+                ids.insert(handler.id);
+                match &handler.kind {
+                    HandlerKind::Do { binding } => collect_pattern_ids(binding, ids),
+                    HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => {
+                        for param in params {
+                            collect_pattern_ids(param, ids);
+                        }
+                    }
+                }
+                collect_expr_ids(&handler.body, ids);
+            }
+        }
+        ExprKind::Resume { arg, .. } => collect_expr_ids(arg, ids),
+        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+            for arg in args {
+                collect_expr_ids(arg, ids);
+            }
+        }
+        ExprKind::Record { fields, spread, .. } => {
+            for (_, value) in fields {
+                collect_expr_ids(value, ids);
+            }
+            if let Some(spread) = spread {
+                collect_expr_ids(spread, ids);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_expr_ids(receiver, ids);
+            for arg in args {
+                collect_expr_ids(arg, ids);
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_expr_ids(lhs, ids);
+            collect_expr_ids(rhs, ids);
+        }
+        ExprKind::Var(_)
+        | ExprKind::NatLit(_)
+        | ExprKind::IntLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::RuneLit(_)
+        | ExprKind::Nil
+        | ExprKind::Error => {}
+    }
+}
+
+fn collect_pattern_ids<'db>(pattern: &Pattern<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+    ids.insert(pattern.id);
+    match pattern.kind.as_ref() {
+        PatternKind::Variant { fields, .. }
+        | PatternKind::Tuple(fields)
+        | PatternKind::List(fields) => {
+            for field in fields {
+                collect_pattern_ids(field, ids);
+            }
+        }
+        PatternKind::Record { fields, .. } => {
+            for field in fields {
+                ids.insert(field.id);
+                if let Some(pattern) = &field.pattern {
+                    collect_pattern_ids(pattern, ids);
+                }
+            }
+        }
+        PatternKind::ListRest { head, .. } => {
+            for element in head {
+                collect_pattern_ids(element, ids);
+            }
+        }
+        PatternKind::As { pattern, .. } => collect_pattern_ids(pattern, ids),
+        PatternKind::Wildcard
+        | PatternKind::Bind { .. }
+        | PatternKind::Literal(_)
+        | PatternKind::Error => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ast::{EffectRow, NodeId, ResolvedRef, TypeKind, TypeParam};
@@ -810,7 +1248,7 @@ mod tests {
         );
         let expr = Expr::new(node_id(1), ExprKind::Var(tr));
         let variant = type_args_variant(&[int]);
-        let result = substitute_expr(&db, expr, &[int], variant);
+        let result = substitute_expr(&db, expr, &[], &[int], variant);
 
         // NodeId should have the variant applied
         assert!(result.id.variant().is_some());
@@ -868,6 +1306,129 @@ mod tests {
     }
 
     #[test]
+    fn specialized_annotation_ids_and_metadata_origins_agree() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let named_a = |id| TypeAnnotation {
+            id: node_id(id),
+            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+        };
+        let let_annotation = TypeAnnotation {
+            id: node_id(22),
+            kind: TypeAnnotationKind::Func {
+                params: vec![],
+                result: Box::new(TypeAnnotation {
+                    id: node_id(23),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Nil")),
+                }),
+                abilities: vec![TypeAnnotation {
+                    id: node_id(24),
+                    kind: TypeAnnotationKind::App {
+                        ctor: Box::new(TypeAnnotation {
+                            id: node_id(25),
+                            kind: TypeAnnotationKind::Named(Symbol::new("State")),
+                        }),
+                        args: vec![named_a(26)],
+                    },
+                }],
+            },
+        };
+        let lambda = Expr::new(
+            node_id(10),
+            ExprKind::Lambda {
+                params: vec![Param {
+                    id: node_id(11),
+                    name: Symbol::new("value"),
+                    ty: Some(named_a(12)),
+                    local_id: Some(crate::ast::LocalId::new(1)),
+                }],
+                body: Expr::new(node_id(13), ExprKind::Nil),
+            },
+        );
+        let func = FuncDecl {
+            id: node_id(1),
+            is_pub: false,
+            name: Symbol::new("annotated"),
+            type_params: vec![crate::ast::TypeParamDecl {
+                id: node_id(2),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            params: vec![ParamDecl {
+                id: node_id(3),
+                name: Symbol::new("input"),
+                ty: Some(named_a(4)),
+                local_id: Some(crate::ast::LocalId::new(0)),
+            }],
+            return_ty: Some(TypeAnnotation {
+                id: node_id(5),
+                kind: TypeAnnotationKind::Named(Symbol::new("Nil")),
+            }),
+            effects: None,
+            body: Expr::new(
+                node_id(30),
+                ExprKind::Block {
+                    stmts: vec![Stmt::Let {
+                        id: node_id(20),
+                        pattern: Pattern::new(
+                            node_id(21),
+                            PatternKind::Bind {
+                                name: Symbol::new("f"),
+                                local_id: Some(crate::ast::LocalId::new(2)),
+                            },
+                        ),
+                        ty: Some(let_annotation),
+                        value: lambda,
+                    }],
+                    value: Expr::new(node_id(31), ExprKind::Nil),
+                },
+            ),
+        };
+
+        let origins = collect_semantic_node_ids(&func);
+        for id in [4, 12, 22, 23, 24, 25, 26] {
+            assert!(
+                origins.contains(&node_id(id)),
+                "missing metadata origin {id}"
+            );
+        }
+
+        let variant = type_args_variant(&[int]);
+        let specialized = specialize_func_decl(&db, &func, &[int], Symbol::new("annotated$Int"));
+        assert_eq!(
+            specialized.params[0].ty.as_ref().unwrap().id,
+            node_id(4).with_variant(variant)
+        );
+        let ExprKind::Block { stmts, .. } = specialized.body.kind.as_ref() else {
+            panic!("expected block body");
+        };
+        let Stmt::Let { ty, value, .. } = &stmts[0] else {
+            panic!("expected let statement");
+        };
+        let annotation = ty.as_ref().expect("specialized let annotation");
+        assert_eq!(annotation.id, node_id(22).with_variant(variant));
+        let TypeAnnotationKind::Func { abilities, .. } = &annotation.kind else {
+            panic!("expected nested function annotation");
+        };
+        let TypeAnnotationKind::App { args, .. } = &abilities[0].kind else {
+            panic!("expected parameterized ability annotation");
+        };
+        assert!(
+            matches!(args[0].kind, TypeAnnotationKind::Named(name) if name == Symbol::new("Int"))
+        );
+        assert_eq!(args[0].id, node_id(26).with_variant(variant));
+
+        let ExprKind::Lambda { params, .. } = value.kind.as_ref() else {
+            panic!("expected lambda value");
+        };
+        assert_eq!(params[0].id, node_id(11).with_variant(variant));
+        assert_eq!(
+            params[0].ty.as_ref().unwrap().id,
+            node_id(12).with_variant(variant)
+        );
+    }
+
+    #[test]
     fn test_generate_specializations_produces_correct_count() {
         let db = TestDb::default();
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
@@ -921,11 +1482,12 @@ mod tests {
         let mut instantiations = HashMap::new();
         instantiations.insert(func_id, type_arg_sets);
 
-        let (new_decls, new_fn_types) =
+        let (new_decls, new_fn_types, specializations) =
             generate_specializations(&db, &module, &instantiations, &function_types);
 
         assert_eq!(new_decls.len(), 2);
         assert_eq!(new_fn_types.len(), 2);
+        assert_eq!(specializations.len(), 2);
 
         // Verify names are mangled
         let names: HashSet<String> = new_decls.iter().map(|d| d.name.to_string()).collect();
@@ -1260,7 +1822,13 @@ mod tests {
             id: node_id(1),
             kind: TypeAnnotationKind::Named(Symbol::new("a")),
         };
-        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
+        let result = substitute_annotation(
+            &db,
+            &ann,
+            &[Symbol::new("a")],
+            &[int],
+            type_args_variant(&[int]),
+        );
         match &result.kind {
             TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Int"),
             other => panic!("expected Named(Int), got {:?}", other),
@@ -1275,7 +1843,13 @@ mod tests {
             id: node_id(1),
             kind: TypeAnnotationKind::Named(Symbol::new("Text")),
         };
-        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
+        let result = substitute_annotation(
+            &db,
+            &ann,
+            &[Symbol::new("a")],
+            &[int],
+            type_args_variant(&[int]),
+        );
         match &result.kind {
             TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Text"),
             other => panic!("expected Named(Text), got {:?}", other),

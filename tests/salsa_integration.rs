@@ -8,10 +8,10 @@ use tribute_passes::diagnostic::Diagnostic;
 use trunk_ir::Symbol;
 use trunk_ir::{IrContext, Module};
 
-/// Helper to check whether a `func.func` with the given `sym_name` exists
-/// among the top-level operations of an arena module.
+/// Helper to check whether a source-logical `tribute_control.func` with the
+/// given `sym_name` exists among an arena module's top-level operations.
 fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
-    let func_dialect = Symbol::new("func");
+    let func_dialect = Symbol::new("tribute_control");
     let func_name = Symbol::new("func");
     let sym_name_key = Symbol::new("sym_name");
     module.ops(ctx).iter().any(|&op_ref| {
@@ -31,9 +31,11 @@ fn compile_frontend_with_diagnostics(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Result<(IrContext, Module), Vec<&Diagnostic>> {
-    compile_frontend(db, source).ok_or_else(|| {
-        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
-    })
+    compile_frontend(db, source)
+        .map(|frontend| (frontend.context, frontend.module))
+        .ok_or_else(|| {
+            tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        })
 }
 
 fn expect_compilation_success(db: &dyn salsa::Database, source: SourceCst) -> (IrContext, Module) {

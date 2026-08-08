@@ -12,9 +12,11 @@ mod logical;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::dialect::tribute_control;
 use trunk_ir::Symbol;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::{arith, core};
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
@@ -34,6 +36,24 @@ pub(super) struct FuncSignature {
 }
 
 impl FuncSignature {
+    pub fn from_logical_type<'db>(
+        ctx: &IrLoweringCtx<'db>,
+        ir: &mut IrContext,
+        ty: crate::ast::Type<'db>,
+    ) -> Option<Self> {
+        match ty.kind(ctx.db) {
+            TypeKind::Func { params, result, .. } => Some(Self {
+                param_types: params
+                    .iter()
+                    .map(|parameter| ctx.convert_logical_type(ir, *parameter))
+                    .collect(),
+                return_type: ctx.convert_logical_type(ir, *result),
+                convention: ctx.calling_convention_for_type(ty)?,
+            }),
+            _ => None,
+        }
+    }
+
     /// Look up a function's TypeScheme by name and extract its IR-level signature.
     ///
     /// Returns `None` if the function has no TypeScheme or non-Func body type.
@@ -64,17 +84,7 @@ impl FuncSignature {
         }
         let scheme = *ctx.lookup_function_type(name)?;
         let body = scheme.body(ctx.db);
-        match body.kind(ctx.db) {
-            TypeKind::Func { params, result, .. } => Some(Self {
-                param_types: params
-                    .iter()
-                    .map(|ty| ctx.convert_logical_type(ir, *ty))
-                    .collect(),
-                return_type: ctx.convert_logical_type(ir, *result),
-                convention: ctx.calling_convention_for_type(body)?,
-            }),
-            _ => None,
-        }
+        Self::from_logical_type(ctx, ir, body)
     }
 }
 
@@ -152,6 +162,10 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             return value;
         }
 
+        if let Some(adapter) = self.callable_strengthening_adapter(location, value, target_ty) {
+            return adapter;
+        }
+
         // Skip cast for closure → func conversions
         if self.ctx.is_closure_type(self.ir, value_ty) && self.ctx.is_func_type(self.ir, target_ty)
         {
@@ -171,6 +185,82 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let cast_op = core::unrealized_conversion_cast(self.ir, location, value, target_ty);
         self.ir.push_op(self.block, cast_op.op_ref());
         cast_op.result(self.ir)
+    }
+
+    /// Build the explicit source-logical Direct-to-Cps wrapper for an otherwise
+    /// identical callable signature. This is structural source IR, not an
+    /// unrealized control conversion: the wrapper calls the original closure
+    /// normally and returns through the Cps callable body.
+    fn callable_strengthening_adapter(
+        &mut self,
+        location: Location,
+        value: ValueRef,
+        target_ty: TypeRef,
+    ) -> Option<ValueRef> {
+        let source_ty = self.ir.value_ty(value);
+        let source = tribute_control::Callable::from_type_ref(self.ir, source_ty)?;
+        let target = tribute_control::Callable::from_type_ref(self.ir, target_ty)?;
+        let source_convention = tribute_control::callable_convention(self.ir, source_ty)?;
+        let target_convention = tribute_control::callable_convention(self.ir, target_ty)?;
+        if source_convention != tribute_control::CallingConvention::Direct
+            || target_convention != tribute_control::CallingConvention::Cps
+            || source.result(self.ir) != target.result(self.ir)
+            || source.params(self.ir) != target.params(self.ir)
+        {
+            return None;
+        }
+
+        let entry = self.ir.create_block(BlockData {
+            location,
+            args: target
+                .params(self.ir)
+                .iter()
+                .map(|ty| BlockArgData {
+                    ty: *ty,
+                    attrs: Default::default(),
+                })
+                .collect(),
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let args = self.ir.block_args(entry).to_vec();
+        let call = OperationDataBuilder::new(
+            location,
+            Symbol::new("tribute_control"),
+            Symbol::new("call_indirect"),
+        )
+        .operand(value)
+        .operands(args)
+        .result(target.result(self.ir))
+        .build(self.ir);
+        let call = self.ir.create_op(call);
+        self.ir.push_op(entry, call);
+        let return_op = OperationDataBuilder::new(
+            location,
+            Symbol::new("tribute_control"),
+            Symbol::new("return"),
+        )
+        .operand(self.ir.op_result(call, 0))
+        .build(self.ir);
+        let return_op = self.ir.create_op(return_op);
+        self.ir.push_op(entry, return_op);
+        let region = self.ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![entry],
+            parent_op: None,
+        });
+        let lambda = OperationDataBuilder::new(
+            location,
+            Symbol::new("tribute_control"),
+            Symbol::new("lambda"),
+        )
+        .operand(value)
+        .result(target_ty)
+        .region(region)
+        .build(self.ir);
+        let lambda = self.ir.create_op(lambda);
+        self.ir.push_op(self.block, lambda);
+        Some(self.ir.op_result(lambda, 0))
     }
 }
 

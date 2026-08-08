@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @yes() -> core.i1 convention(cps) {
+  tribute_control.func @yes() -> core.i1 convention(direct) {
       %0 = arith.const {value = true} : core.i1
       tribute_control.return %0
   }

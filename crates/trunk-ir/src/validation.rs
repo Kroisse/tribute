@@ -495,6 +495,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
                 data.name.with_str(|name| name.to_owned()).as_str(),
                 "perform" | "handle_dispatch"
             ))
+        || (data.dialect == Symbol::new("effect") && data.name == Symbol::new("dispatch_cps"))
         || (data.dialect == Symbol::new("scf")
             && matches!(
                 data.name.with_str(|name| name.to_owned()).as_str(),
@@ -553,6 +554,13 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 
         let yield_data = ctx.op(yield_op);
         if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
+            let unreachable = (yield_data.dialect == Symbol::new("tribute_control")
+                && yield_data.name == Symbol::new("unreachable"))
+                || (yield_data.dialect == Symbol::new("func")
+                    && yield_data.name == Symbol::new("unreachable"));
+            if unreachable {
+                continue;
+            }
             let never_result = match ctx.op_result_types(op) {
                 [ty] => {
                     let ty = ctx.types.get(*ty);
@@ -1913,6 +1921,7 @@ mod tests {
     } {
       scf.yield %x
     }
+
     func.return %r
   }
 }"#;
@@ -1924,6 +1933,25 @@ mod tests {
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
         assert!(operation_errors[0].contains("then_region must terminate with scf.yield"));
+    }
+
+    #[test]
+    fn scf_if_value_region_accepts_logical_unreachable_terminator() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %value: core.i32) -> core.i32 {
+    %result = scf.if %cond : core.i32 {
+      scf.yield %value
+    } {
+      tribute_control.unreachable
+    }
+    func.return %result
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
     }
 
     #[test]

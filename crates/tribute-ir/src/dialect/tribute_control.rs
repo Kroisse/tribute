@@ -112,6 +112,8 @@ mod tribute_control {
     fn resume(resume_token: (), value: ()) -> result {}
 
     fn r#yield(value: ()) {}
+
+    fn unreachable() {}
 }
 
 /// Typed wrapper for `tribute_control.callable(Result, Params...)`.
@@ -177,7 +179,10 @@ pub fn callable_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConven
         .and_then(|code| CallingConvention::try_from(code).ok())
 }
 
-fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
+/// Return the exact source input and handler-answer types carried by a resume
+/// token.  Source lowering uses this provenance to materialize erased source
+/// data at the token's declared type; control continuations are never erased.
+pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
     if !ResumeToken::matches(ctx, ty) {
         return None;
     }
@@ -1663,6 +1668,40 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
     }
 }
 
+fn validate_unreachable(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    validate_arity(ctx, op, Some(0), Some(0), Some(0), errors);
+    validate_attr_keys(ctx, op, &[], false, errors);
+    let Some(block) = ctx.op(op).parent_block else {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "must terminate an exhaustive scf.if region",
+        );
+        return;
+    };
+    if ctx.block(block).ops.last().copied() != Some(op) {
+        push_op_error(ctx, op, errors, "must be the final operation in its block");
+    }
+    let placed = parent_op(ctx, op).is_some_and(|owner| {
+        ctx.op(owner).dialect == Symbol::new("scf")
+            && ctx.op(owner).name == Symbol::new("if")
+            && ctx
+                .op(owner)
+                .regions
+                .iter()
+                .any(|&region| parent_region(ctx, op) == Some(region))
+    });
+    if !placed {
+        push_op_error(
+            ctx,
+            op,
+            errors,
+            "must terminate an exhaustive scf.if region",
+        );
+    }
+}
+
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
     if data.dialect != Symbol::new("tribute_control") {
@@ -1680,6 +1719,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         "handler" => validate_handler(ctx, op, errors),
         "resume" => validate_resume(ctx, op, errors),
         "yield" => validate_yield(ctx, op, errors),
+        "unreachable" => validate_unreachable(ctx, op, errors),
         name => push_op_error(
             ctx,
             op,
@@ -1751,6 +1791,25 @@ fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool
     left_result == right_result && left_params == right_params
 }
 
+/// Return the unmangled base of a specialized direct-call symbol.
+///
+/// A nonempty `$...` suffix is required. This helper identifies only the
+/// spelling relation; callers must still prove that the base is an eligible
+/// body-less intrinsic declaration and must give exact symbols priority.
+pub fn specialized_intrinsic_base(symbol: Symbol) -> Option<Symbol> {
+    symbol.with_str(|text| {
+        text.split_once('$')
+            .filter(|(base, suffix)| !base.is_empty() && !suffix.is_empty())
+            .map(|(base, _)| Symbol::from_dynamic(base))
+    })
+}
+
+fn is_intrinsic_declaration(ctx: &IrContext, op: OpRef) -> bool {
+    is_control_op(ctx, op, "func")
+        && ctx.op(op).regions.is_empty()
+        && ctx.op(op).attributes.get_str("abi") == Some("intrinsic")
+}
+
 fn validate_symbol_uses(
     ctx: &IrContext,
     body: RegionRef,
@@ -1800,10 +1859,25 @@ fn validate_symbol_uses(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
                 return;
             };
-            let Some(target) = funcs.get(&symbol).copied() else {
+            let exact_target = funcs.get(&symbol).copied();
+            let target = exact_target.or_else(|| {
+                let base = specialized_intrinsic_base(symbol)?;
+                funcs
+                    .get(&base)
+                    .copied()
+                    .filter(|target| is_intrinsic_declaration(ctx, *target))
+            });
+            let Some(target) = target else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
+            // A specialized intrinsic call deliberately has no declaration at
+            // its mangled symbol. Its exact types were selected by the
+            // frontend and are carried on the call itself; the unmangled
+            // declaration authorizes only its ABI/lowering family.
+            if exact_target.is_none() {
+                return;
+            }
             let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
                 return;
             };
@@ -2852,6 +2926,42 @@ mod tests {
             assert!(printed.contains(expected), "missing {expected}\n{printed}");
         }
         assert!(printed.contains("tribute.calling_convention = 0"));
+    }
+
+    #[test]
+    fn logical_unreachable_round_trips_and_is_limited_to_a_structured_arm() {
+        let input = r#"core.module @test {
+  tribute_control.func @select(%condition: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %selected = scf.if %condition : core.i32 {
+      scf.yield %value
+    } {
+      tribute_control.unreachable
+    }
+    tribute_control.return %selected
+  }
+}"#;
+        let (ctx, module) = parse_fixture(input);
+        let result = validate(&ctx, module, &[]);
+        assert!(result.is_ok(), "{result}");
+        let printed = assert_round_trip(&ctx, module);
+        assert!(printed.contains("tribute_control.unreachable"), "{printed}");
+    }
+
+    #[test]
+    fn logical_unreachable_outside_a_structured_arm_is_rejected_without_mutation() {
+        let input = r#"core.module @test {
+  tribute_control.func @bad() -> core.i32 convention(direct) {
+    tribute_control.unreachable
+  }
+}"#;
+        let (ctx, module) = parse_fixture(input);
+        let before = print_module(&ctx, module.op());
+        let result = validate(&ctx, module, &[]);
+        assert!(
+            messages(&result).contains("must terminate an exhaustive scf.if region"),
+            "{result}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

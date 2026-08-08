@@ -38,10 +38,12 @@ fn basic_database_usage() {
     let tree = parser.parse(source_code, None).expect("tree");
     let source = SourceCst::from_path(&db, "example.tr", source_code.into(), Some(tree));
 
-    let Some((ctx, module)) = compile_frontend(&db, source) else {
+    let Some(frontend) = compile_frontend(&db, source) else {
         println!("Compilation failed");
         return;
     };
+    let ctx = frontend.context;
+    let module = frontend.module;
 
     // Print module name if available
     if let Some(name) = module.name(&ctx) {
@@ -55,9 +57,10 @@ fn basic_database_usage() {
     // Display the lowered functions
     for (i, op_ref) in ops.iter().enumerate() {
         let op_data = ctx.op(*op_ref);
-        if op_data.dialect == Symbol::new("func") && op_data.name == Symbol::new("func") {
+        if op_data.dialect == Symbol::new("tribute_control") && op_data.name == Symbol::new("func")
+        {
             if let Some(name) = op_data.attributes.get_symbol("sym_name") {
-                println!("  Operation {}: func.func \"{}\"", i + 1, name);
+                println!("  Operation {}: tribute_control.func \"{}\"", i + 1, name);
             }
         } else {
             println!(
@@ -89,10 +92,12 @@ fn incremental_compilation_demo() {
 
     // Lower it
     println!("Initial lowering...");
-    let Some((ctx1, m1)) = compile_frontend(&db, source_file) else {
+    let Some(frontend1) = compile_frontend(&db, source_file) else {
         println!("Initial compilation failed");
         return;
     };
+    let ctx1 = frontend1.context;
+    let m1 = frontend1.module;
     let ops1 = m1.ops(&ctx1);
     println!("Lowered {} operations", ops1.len());
 
@@ -105,19 +110,23 @@ fn incremental_compilation_demo() {
 
     // Lower again - Salsa will automatically detect the change and recompute
     // the internal tracked queries, then produce fresh arena IR.
-    let Some((ctx2, m2)) = compile_frontend(&db, source_file) else {
+    let Some(frontend2) = compile_frontend(&db, source_file) else {
         println!("Recompilation failed");
         return;
     };
+    let ctx2 = frontend2.context;
+    let m2 = frontend2.module;
     let ops2 = m2.ops(&ctx2);
     println!("Lowered {} operations after modification", ops2.len());
 
     // Lower again without changes - internally Salsa caches the tracked
     // queries, so this recomputation is fast.
-    let Some((ctx3, m3)) = compile_frontend(&db, source_file) else {
+    let Some(frontend3) = compile_frontend(&db, source_file) else {
         println!("Cached compilation failed");
         return;
     };
+    let ctx3 = frontend3.context;
+    let m3 = frontend3.module;
     let ops3 = m3.ops(&ctx3);
     println!("Cached result identical: {}", ops2.len() == ops3.len());
 

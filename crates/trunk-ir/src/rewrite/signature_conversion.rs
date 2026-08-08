@@ -136,6 +136,44 @@ fn rewrite_function_signature(
     true
 }
 
+/// Convert a declaration signature without inventing a body region.
+fn rewrite_declaration_signature(
+    ctx: &mut IrContext,
+    op: OpRef,
+    rewriter: &mut PatternRewriter<'_>,
+    func_type: TypeRef,
+) -> bool {
+    let Some(sig) = convert_func_signature(ctx, func_type, rewriter.type_converter()) else {
+        return false;
+    };
+    let new_func_type = rebuild_func_type(ctx, &sig);
+    let data = ctx.op(op);
+    let location = data.location;
+    let dialect = data.dialect;
+    let name = data.name;
+    let successors = data.successors.to_vec();
+    let mut attributes = data.attributes.clone();
+    let operands = ctx.op_operands(op).to_vec();
+    let results = ctx.op_result_types(op).to_vec();
+    attributes.insert(
+        crate::Symbol::new("type"),
+        crate::types::Attribute::Type(new_func_type),
+    );
+    let mut builder = crate::OperationDataBuilder::new(location, dialect, name)
+        .operands(operands)
+        .results(results);
+    for (name, value) in attributes {
+        builder = builder.attr(name, value);
+    }
+    for successor in successors {
+        builder = builder.successor(successor);
+    }
+    let new_data = builder.build(ctx);
+    let new_op = ctx.create_op(new_data);
+    rewriter.replace_op(new_op);
+    true
+}
+
 /// Pattern that converts `func.func` operation signatures using a `TypeConverter`.
 ///
 /// This pattern:
@@ -157,7 +195,9 @@ impl RewritePattern for FuncSignatureConversionPattern {
         };
 
         let func_type = func_op.r#type(ctx);
-        let body = func_op.body(ctx);
+        let Some(&body) = ctx.op(op).regions.first() else {
+            return rewrite_declaration_signature(ctx, op, rewriter, func_type);
+        };
         let sym_name = func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 
@@ -188,7 +228,9 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
         };
 
         let func_type = wasm_func_op.r#type(ctx);
-        let body = wasm_func_op.body(ctx);
+        let Some(&body) = ctx.op(op).regions.first() else {
+            return rewrite_declaration_signature(ctx, op, rewriter, func_type);
+        };
         let sym_name = wasm_func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 
@@ -527,5 +569,54 @@ mod tests {
         let ops = module.ops(&ctx);
         let original_func = func::Func::from_op(&ctx, ops[0]).unwrap();
         assert_eq!(original_func.r#type(&ctx), func_ty);
+    }
+
+    #[test]
+    fn bodyless_func_declaration_converts_without_inventing_a_region() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @decl(%value: core.i32) -> core.i32
+}"#,
+        );
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+        let first = PatternApplicator::new(i32_to_i64_converter(i32_ty, i64_ty))
+            .add_pattern(FuncSignatureConversionPattern)
+            .apply_partial(&mut ctx, module);
+        assert_eq!(first.total_changes, 1);
+        assert!(first.reached_fixpoint);
+        let second = PatternApplicator::new(i32_to_i64_converter(i32_ty, i64_ty))
+            .add_pattern(FuncSignatureConversionPattern)
+            .apply_partial(&mut ctx, module);
+        assert_eq!(second.total_changes, 0);
+        assert!(second.reached_fixpoint);
+
+        let declaration = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
+        let signature = ctx.types.get(declaration.r#type(&ctx));
+        assert_eq!(signature.params.as_slice(), [i64_ty, i64_ty]);
+    }
+
+    #[test]
+    fn bodyless_wasm_declaration_converts_without_inventing_a_region() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @decl(%value: core.i32) -> core.i32
+}"#,
+        );
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+        PatternApplicator::new(i32_to_i64_converter(i32_ty, i64_ty))
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(&mut ctx, module);
+
+        let declaration = wasm::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
+        let signature = ctx.types.get(declaration.r#type(&ctx));
+        assert_eq!(signature.params.as_slice(), [i64_ty, i64_ty]);
     }
 }

@@ -115,6 +115,31 @@ fn main() ->{std::io::Io} Nil {
     expect_wasm_compilation_success(db, source, "Should compile function with params");
 }
 
+#[salsa_test]
+fn test_compile_user_list_member_shadowing_prelude(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "list_member_shadowing.trb",
+        r#"
+pub mod List {
+    pub fn prepend(value: Nat, tail: Nat) -> Nat { value + tail }
+}
+
+fn main() ->{std::io::Io} Nil {
+    case List::prepend(20, 22) {
+        42 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
+    }
+}
+"#,
+    );
+    expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile a user List member that shadows the prelude member",
+    );
+}
+
 /// The target-independent root delimiter keeps an open-callback `main` on the
 /// Direct/EvidenceDirect entry ABI, so Wasm never receives a CPS entrypoint.
 #[salsa_test]
@@ -413,5 +438,33 @@ fn main() ->{std::io::Io} Nil {
         db,
         source,
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
+    );
+}
+
+#[salsa_test]
+fn test_compile_transitive_generic_handler_specializations(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability A {
+    op do_a() -> Nat
+}
+
+fn run_b(value: a) -> a { value }
+
+fn run_a(comp: fn() ->{e, A} a) ->{e} a {
+    handle comp() {
+        do result { run_b(result) }
+        op A::do_a() { run_a(fn() { resume 10 }) }
+    }
+}
+
+fn main() {
+    let _ = run_a(fn() { A::do_a() })
+}
+"#;
+    let source = SourceCst::from_source_str(db, "transitive_generic_handler.trb", code);
+    expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile retained and specialized generic handler workers",
     );
 }

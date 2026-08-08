@@ -17,7 +17,10 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
+use trunk_ir::adt_layout::{
+    compute_enum_layout, compute_struct_layout, find_variant_layout, get_struct_fields,
+    type_size_align,
+};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;
@@ -174,7 +177,14 @@ impl RewritePattern for StructNewPattern {
             fields.len(),
             layout.field_offsets.len(),
         );
-        for (i, &field_val) in fields.iter().enumerate() {
+        let Some(field_types) = get_struct_fields(ctx, struct_ty) else {
+            panic!("adt_rc_header: struct_new type has no fields metadata");
+        };
+        for (i, (&field_val, (_, field_ty))) in fields.iter().zip(field_types.iter()).enumerate() {
+            let native_ty = tc.convert_type_or_identity(ctx, *field_ty);
+            if type_size_align(ctx, native_ty).0 == 0 {
+                continue;
+            }
             let offset = layout.field_offsets[i] as i32;
             let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
             ops.push(store_op.op_ref());
@@ -466,5 +476,22 @@ mod tests {
         let unit_ty = crate::native::rtti::make_struct_type(&mut ctx, &[]);
         let output = build_and_lower(&mut ctx, loc, unit_ty, &[]);
         insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn root_completion_cell_lowers_through_native_rc_header() {
+        let (mut ctx, loc) = test_ctx();
+        let nil_ty = core::nil(&mut ctx).as_type_ref();
+        let completion_cell = crate::target_abi::root_completion_cell_type(&mut ctx, nil_ty);
+
+        let output = build_and_lower(&mut ctx, loc, completion_cell, &[nil_ty]);
+
+        assert!(!output.contains("adt.struct_new"), "{output}");
+        assert!(output.contains("clif.call"), "{output}");
+        assert_eq!(
+            output.matches("clif.store").count(),
+            2,
+            "the Nil completion field has no native storage: {output}"
+        );
     }
 }

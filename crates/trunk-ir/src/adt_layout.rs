@@ -105,6 +105,10 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
         (8, 8)
     } else if name == Symbol::new("f32") {
         (4, 4)
+    } else if name == Symbol::new("nil") {
+        // Unit carries no native payload. Keep its declared field metadata so
+        // source layout identity is stable, but do not reserve a scalar slot.
+        (0, 1)
     } else {
         // f64, ptr, and any unknown types default to 8-byte size/align
         (8, 8)
@@ -296,4 +300,55 @@ pub fn compute_enum_layout(
 /// Find the variant layout for a given tag name.
 pub fn find_variant_layout(layout: &EnumLayout, tag: Symbol) -> Option<&VariantFieldLayout> {
     layout.variant_layouts.iter().find(|v| v.name == tag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rewrite::type_converter::TypeConverter;
+    use crate::smallvec::smallvec;
+    use crate::types::{AttributeMap, TypeData};
+
+    fn core_type(ctx: &mut IrContext, name: &str) -> TypeRef {
+        ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::from_dynamic(name),
+            params: smallvec![],
+            attrs: AttributeMap::new(),
+        })
+    }
+
+    #[test]
+    fn nil_struct_field_has_no_payload_between_represented_fields() {
+        let mut ctx = IrContext::new();
+        let i32_ty = core_type(&mut ctx, "i32");
+        let nil_ty = core_type(&mut ctx, "nil");
+        let i64_ty = core_type(&mut ctx, "i64");
+        let fields = Attribute::List(vec![
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("before")),
+                Attribute::Type(i32_ty),
+            ]),
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("unit")),
+                Attribute::Type(nil_ty),
+            ]),
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("after")),
+                Attribute::Type(i64_ty),
+            ]),
+        ]);
+        let struct_ty = ctx.types.intern(TypeData {
+            dialect: Symbol::new("adt"),
+            name: Symbol::new("struct"),
+            params: smallvec![i32_ty, nil_ty, i64_ty],
+            attrs: [(Symbol::new("fields"), fields)].into_iter().collect(),
+        });
+
+        let layout = compute_struct_layout(&ctx, struct_ty, &TypeConverter::new()).unwrap();
+
+        assert_eq!(layout.field_offsets, vec![0, 4, 8]);
+        assert_eq!(layout.total_size, 16);
+        assert_eq!(layout.alignment, 8);
+    }
 }

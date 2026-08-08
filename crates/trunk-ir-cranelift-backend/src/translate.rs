@@ -22,6 +22,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 
+use crate::calling_convention::calling_convention_for_op;
 use crate::function::{FunctionTranslator, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
 
@@ -384,9 +385,11 @@ fn emit_module_impl(
             Linkage::Local
         };
 
+        let function_call_conv = calling_convention_for_op(ctx, func_op, call_conv)?;
+
         // Skip imported functions whose types can't be translated to Cranelift
         // (e.g., prelude extern functions using core.bytes that are never called).
-        let sig = match translate_signature(ctx, func_type_ref, call_conv, ptr_ty) {
+        let sig = match translate_signature(ctx, func_type_ref, function_call_conv, ptr_ty) {
             Ok(sig) => sig,
             Err(_) if has_abi => continue,
             Err(e) => return Err(e),
@@ -447,7 +450,8 @@ fn emit_module_impl(
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
 
-        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
+        let function_call_conv = calling_convention_for_op(ctx, func_op, call_conv)?;
+        let sig = translate_signature(ctx, func_type_ref, function_call_conv, ptr_ty)?;
         let func_id = func_ids[&name_sym];
 
         let mut cl_func =

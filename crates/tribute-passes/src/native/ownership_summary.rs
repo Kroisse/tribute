@@ -42,7 +42,9 @@ pub fn compute_and_attach(
     let mut definitions: HashMap<Symbol, Vec<OpRef>> = HashMap::new();
     for &op in &module_ops {
         ctx.op_mut(op).attributes.remove(PARAMETER_OWNERSHIP_ATTR);
-        if let Ok(function) = func::Func::from_op(ctx, op) {
+        if let Ok(function) = func::Func::from_op(ctx, op)
+            && !ctx.op(op).regions.is_empty()
+        {
             definitions
                 .entry(function.sym_name(ctx))
                 .or_default()
@@ -144,7 +146,8 @@ impl TrustedOwnershipSummaries {
                     return None;
                 }
                 let function = clif::Func::from_op(ctx, ops[0]).ok()?;
-                let parameters = entry_parameters(ctx, function.body(ctx));
+                let body = *ctx.op(function.op_ref()).regions.first()?;
+                let parameters = entry_parameters(ctx, body);
                 if parameters.len() != expected.len() {
                     return None;
                 }
@@ -198,8 +201,11 @@ impl TrustedOwnershipSummaries {
             let Ok(function) = clif::Func::from_op(ctx, op) else {
                 continue;
             };
+            let Some(&body) = ctx.op(function.op_ref()).regions.first() else {
+                continue;
+            };
             let symbol = function.sym_name(ctx);
-            let summary: Vec<_> = entry_parameters(ctx, function.body(ctx))
+            let summary: Vec<_> = entry_parameters(ctx, body)
                 .into_iter()
                 .map(|parameter| {
                     if is_anyref_value(ctx, parameter) {
@@ -254,7 +260,10 @@ fn collect_escaping_function_symbols(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        collect_escaping_function_symbols_in_region(ctx, function.body(ctx), functions, ineligible);
+        let Some(&body) = ctx.op(function.op_ref()).regions.first() else {
+            continue;
+        };
+        collect_escaping_function_symbols_in_region(ctx, body, functions, ineligible);
     }
 }
 
@@ -280,12 +289,9 @@ fn collect_escaping_function_symbols_in_region(
             }
 
             if let Ok(nested_function) = func::Func::from_op(ctx, op) {
-                collect_escaping_function_symbols_in_region(
-                    ctx,
-                    nested_function.body(ctx),
-                    functions,
-                    ineligible,
-                );
+                if let Some(&body) = ctx.op(nested_function.op_ref()).regions.first() {
+                    collect_escaping_function_symbols_in_region(ctx, body, functions, ineligible);
+                }
             } else {
                 for &nested in &ctx.op(op).regions {
                     collect_escaping_function_symbols_in_region(ctx, nested, functions, ineligible);
@@ -482,6 +488,69 @@ mod tests {
         assert_eq!(
             summaries.summaries.get(&Symbol::new("tail_target")),
             Some(&vec![ParameterOwnership::Owned])
+        );
+    }
+
+    #[test]
+    fn bodyless_clif_declaration_survives_ownership_and_rc_insertion() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @imported(%value: tribute_rt.anyref) -> core.i32 attributes {abi = "C"}
+  func.func @defined(%value: tribute_rt.anyref) -> core.i32 {
+    %result = clif.load %value {offset = 0} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+
+        let trusted = compute_and_attach(&mut ctx, module, &TypeConverter::new());
+        let module_block = module.first_block(&ctx).expect("module body");
+        let body = module.body(&ctx).expect("module region");
+        lower_func_ops_to_clif(&mut ctx, body);
+        insert_rc_with_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            &trusted,
+        );
+
+        let declaration = clif::Func::from_op(&ctx, ctx.block(module_block).ops[0]).unwrap();
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
+        assert!(
+            ctx.op(declaration.op_ref())
+                .attributes
+                .get_text("abi")
+                .is_some_and(|abi| abi == "C")
+        );
+        let declaration_type = ctx.types.get(declaration.r#type(&ctx));
+        assert_eq!(declaration_type.params.len(), 2);
+        assert_eq!(
+            ctx.types.get(declaration_type.params[0]).name,
+            Symbol::new("i32")
+        );
+        assert_eq!(
+            ctx.types.get(declaration_type.params[1]).name,
+            Symbol::new("ptr")
+        );
+
+        let defined = clif::Func::from_op(&ctx, ctx.block(module_block).ops[1]).unwrap();
+        assert!(
+            ctx.op(defined.op_ref())
+                .attributes
+                .contains_key(PARAMETER_OWNERSHIP_ATTR)
+        );
+        let body = *ctx
+            .op(defined.op_ref())
+            .regions
+            .first()
+            .expect("defined body");
+        let entry = ctx.region(body).blocks[0];
+        let parameter = ctx.block_args(entry)[0];
+        assert_eq!(
+            ctx.types.get(ctx.value_ty(parameter)).name,
+            Symbol::new("ptr")
         );
     }
 

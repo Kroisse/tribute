@@ -14,7 +14,7 @@
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
 //! | `tribute_rt.anyref` | `wasm.anyref`   | Any reference type                  |
-//! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference            |
+//! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference, except exact CPS Parent |
 //!
 //! ## Materializations
 //!
@@ -30,6 +30,7 @@ use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir_wasm_backend::gc_types::EVIDENCE_ARRAY_TYPE_ATTR;
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)
@@ -110,7 +111,11 @@ pub use tribute_ir::dialect::ability::marker_adt_type_ref as marker_adt_type;
 /// This is distinct from `ability::evidence_adt_type_ref()` which returns
 /// `core.array(Marker)` for high-level IR representation.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
-    intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"))
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("arrayref"))
+            .attr(EVIDENCE_ARRAY_TYPE_ATTR, Attribute::Bool(true))
+            .build(),
+    )
 }
 
 /// Get the canonical Step ADT type (arena version).
@@ -186,6 +191,13 @@ fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Check if a type is an `adt.typeref` type.
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, Symbol::new("adt"), Symbol::new("typeref"))
+}
+
+/// A CPS Parent is an exact nominal control-flow value.  Unlike ordinary ADT
+/// references it must retain its identity through Wasm signature conversion so
+/// its canonical GC layout can type closure-environment fields and parameters.
+fn is_cps_parent_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    tribute_core::cps_parent_result_type(ctx, ty).is_some()
 }
 
 /// Check if a type has the `is_variant` attribute set to true.
@@ -447,9 +459,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert adt.typeref -> wasm.structref (generic struct reference)
+    // Convert ordinary adt.typeref -> wasm.structref (generic struct reference).
+    // CPS Parent references retain their exact nominal identity: their layout
+    // is indexed after cast materialization with the rest of WasmGC types.
     tc.add_conversion(move |ctx, ty| {
-        if is_adt_typeref(ctx, ty) {
+        if is_adt_typeref(ctx, ty) && !is_cps_parent_type(ctx, ty) {
             Some(structref_ty)
         } else {
             None
@@ -862,4 +876,83 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     });
 
     tc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::dialect::wasm;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::rewrite::{PatternApplicator, WasmFuncSignatureConversionPattern};
+
+    #[test]
+    fn cps_parent_typeref_retains_nominal_wasm_identity() {
+        let mut ctx = IrContext::new();
+        let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
+        let anyref_ty = intern_type(&mut ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"));
+        let evidence_ty = intern_type(&mut ctx, Symbol::new("ability"), Symbol::new("evidence"));
+        let parent = tribute_core::cps_parent_ref_type(&mut ctx, Symbol::new("ParentI32"), i32_ty);
+        let done = tribute_core::cps_done_type(&mut ctx, i32_ty);
+        let dispatch =
+            tribute_core::cps_dispatch_type(&mut ctx, evidence_ty, parent, anyref_ty, i32_ty);
+        let layout = tribute_core::cps_parent_layout_type(
+            &mut ctx,
+            Symbol::new("ParentI32"),
+            i32_ty,
+            done,
+            dispatch,
+        );
+        let ordinary = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+                .attr("name", Attribute::Symbol(Symbol::new("Ordinary")))
+                .build(),
+        );
+        let structref_ty = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
+
+        let converter = wasm_type_converter(&mut ctx);
+
+        assert_eq!(converter.convert_type_or_identity(&ctx, parent), parent);
+        assert_eq!(
+            converter.convert_type_or_identity(&ctx, ordinary),
+            structref_ty
+        );
+        let Attribute::List(fields) = ctx.types.get(layout).attrs.get("fields").unwrap() else {
+            panic!("Parent layout must carry fields");
+        };
+        let Attribute::List(done_field) = &fields[0] else {
+            panic!("Parent done field must be a pair");
+        };
+        let Attribute::List(dispatch_field) = &fields[1] else {
+            panic!("Parent dispatch field must be a pair");
+        };
+        assert_eq!(done_field[1], Attribute::Type(done));
+        assert_eq!(dispatch_field[1], Attribute::Type(dispatch));
+    }
+
+    #[test]
+    fn wasm_signature_conversion_keeps_cps_parent_parameter_canonical() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !parent = adt.typeref() {name = @ParentI32, tribute.cps_parent_result = core.i32}
+  wasm.func @capture(%parent: !parent) -> core.nil {
+    wasm.return
+  }
+}"#,
+        );
+        let parent = ctx.type_alias_by_name(Symbol::new("parent")).unwrap();
+
+        PatternApplicator::new(wasm_type_converter(&mut ctx))
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(&mut ctx, module);
+
+        let function = wasm::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let signature = ctx.types.get(function.r#type(&ctx));
+        let body = function.body(&ctx);
+        let entry = ctx.region(body).blocks[0];
+        assert_eq!(signature.params[1], parent);
+        assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), parent);
+    }
 }

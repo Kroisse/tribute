@@ -914,6 +914,18 @@ pub(super) fn evaluation_control_class<'db>(
     evaluation_control_class_with_handle_propagation(ctx, expr, false)
 }
 
+/// Classify a source-logical worker before shared CPS legalization.
+///
+/// Unlike the temporary legacy physical route, the logical boundary does not
+/// own a private handler carrier. A handled computation therefore remains a
+/// CPS evaluation until the shared legalizer constructs its continuations.
+pub(super) fn logical_evaluation_control_class<'db>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    expr: &Expr<TypedRef<'db>>,
+) -> EvaluationControlClass {
+    evaluation_control_class_with_handle_propagation(ctx, expr, true)
+}
+
 /// Classify evaluation with an explicit nested-handle propagation policy.
 ///
 /// Source convention selection treats handles as source delimiters. Ambient
