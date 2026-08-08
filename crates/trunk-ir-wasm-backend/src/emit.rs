@@ -25,7 +25,8 @@ use handlers::{
     handle_i64_store, handle_i64_store8, handle_i64_store16, handle_i64_store32, handle_if,
     handle_local_get, handle_local_set, handle_local_tee, handle_loop, handle_memory_grow,
     handle_memory_size, handle_ref_cast, handle_ref_func, handle_ref_null, handle_ref_test,
-    handle_return_call, handle_struct_get, handle_struct_new, handle_struct_set,
+    handle_return_call, handle_return_call_indirect, handle_struct_get, handle_struct_new,
+    handle_struct_set,
 };
 use helpers::*;
 use value_emission::*;
@@ -1003,6 +1004,8 @@ fn emit_op_nested(
         handle_call_indirect(ctx, op, emit_ctx, module_info, function)
     } else if let Ok(return_call_op) = wasm_dialect::ReturnCall::from_op(ctx, op) {
         handle_return_call(ctx, return_call_op, emit_ctx, module_info, function)
+    } else if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
+        handle_return_call_indirect(ctx, op, emit_ctx, module_info, function)
     } else if let Ok(local_op) = wasm_dialect::LocalGet::from_op(ctx, op) {
         handle_local_get(ctx, local_op, emit_ctx, function)
     } else if let Ok(local_op) = wasm_dialect::LocalSet::from_op(ctx, op) {
@@ -1166,7 +1169,9 @@ fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bo
 fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if wasm_dialect::CallIndirect::matches(ctx, op) {
+            if wasm_dialect::CallIndirect::matches(ctx, op)
+                || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
+            {
                 return true;
             }
             for &nested_region in &ctx.op(op).regions {
@@ -1207,4 +1212,116 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
         params: Default::default(),
         attrs: Default::default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::process::Command;
+
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use wasmparser::{Operator, Parser, Payload, Validator, WasmFeatures};
+
+    fn return_call_indirect_module(ctx: &mut IrContext) -> IrModule {
+        parse_test_module(
+            ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @target} : wasm.funcref
+  }
+  wasm.func @target(%value: core.i32) -> core.nil {
+    wasm.return
+  }
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+  wasm.export_func {name = "caller", func = @caller}
+}"#,
+        )
+    }
+
+    #[test]
+    fn encodes_and_validates_return_call_indirect_with_exact_signature() {
+        let mut ctx = IrContext::new();
+        let module = return_call_indirect_module(&mut ctx);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid tail-transfer module")
+            .bytes;
+
+        let mut validator =
+            Validator::new_with_features(WasmFeatures::default() | WasmFeatures::TAIL_CALL);
+        validator
+            .validate_all(&bytes)
+            .expect("encoded return_call_indirect must validate");
+
+        let instructions = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .filter_map(|payload| match payload {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .flat_map(|body| body.get_operators_reader().expect("operators").into_iter())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("decode encoded instructions");
+        assert!(
+            instructions.iter().any(|instruction| matches!(
+                instruction,
+                Operator::ReturnCallIndirect {
+                    type_index: _,
+                    table_index: 0,
+                }
+            )),
+            "missing return_call_indirect in {instructions:?}"
+        );
+    }
+
+    #[test]
+    fn region_contains_call_indirect_recognizes_return_call_indirect() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+  wasm.func @tail_direct(%value: core.i32) -> core.nil {
+    wasm.return_call %value {callee = @target}
+  }
+}"#,
+        );
+
+        let tail_indirect = module.ops(&ctx)[0];
+        let tail_direct = module.ops(&ctx)[1];
+        assert!(region_contains_call_indirect(
+            &ctx,
+            ctx.op(tail_indirect).regions[0]
+        ));
+        assert!(!region_contains_call_indirect(
+            &ctx,
+            ctx.op(tail_direct).regions[0]
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires the Wasmtime CLI runtime"]
+    fn return_call_indirect_executes_in_wasmtime() {
+        let mut ctx = IrContext::new();
+        let module = return_call_indirect_module(&mut ctx);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid tail-transfer module")
+            .bytes;
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        fs::write(file.path(), bytes).expect("write Wasm module");
+
+        let status = Command::new("wasmtime")
+            .args(["-W", "gc=y", "-W", "tail-call=y", "--invoke", "caller"])
+            .arg(file.path())
+            .args(["0", "42"])
+            .status()
+            .expect("run Wasmtime");
+        assert!(status.success(), "Wasmtime returned {status}");
+    }
 }

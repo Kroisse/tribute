@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::refs::{TypeRef, ValueRef};
+use trunk_ir::dialect::func;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
@@ -102,6 +103,54 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
     }
     let (ret, params) = data.params.split_first()?;
     Some((params, *ret))
+}
+
+/// Read and validate the exact physical function type required by an indirect
+/// proper tail transfer. This backend deliberately does not infer the type
+/// from the runtime table index and operands.
+pub(crate) fn exact_return_call_indirect_signature(
+    ctx: &IrContext,
+    op: OpRef,
+) -> CompilationResult<TypeRef> {
+    let signature = ctx
+        .op(op)
+        .attributes
+        .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
+        .ok_or_else(|| {
+            CompilationError::invalid_module(
+                "wasm.return_call_indirect lacks func.indirect_call_signature",
+            )
+        })?;
+    let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.return_call_indirect signature must be core.func")
+    })?;
+    if !is_nil_type(ctx, result) {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect signature must have an empty result",
+        ));
+    }
+    let operands = ctx.op_operands(op);
+    let Some((&table_index, args)) = operands.split_first() else {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect requires a table index operand",
+        ));
+    };
+    if !is_type(ctx, value_type(ctx, table_index), "core", "i32") {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect first operand must be an i32 table index",
+        ));
+    }
+    if params.len() != args.len()
+        || params
+            .iter()
+            .zip(args)
+            .any(|(param, arg)| *param != value_type(ctx, *arg))
+    {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect operands do not match its exact signature",
+        ));
+    }
+    Ok(signature)
 }
 
 /// Convert an IR type to a WebAssembly value type.

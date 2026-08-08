@@ -1619,9 +1619,11 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "insta",
+ "tempfile",
  "tracing",
  "trunk-ir",
  "wasm-encoder",
+ "wasmparser",
 ]
 
 [[package]]

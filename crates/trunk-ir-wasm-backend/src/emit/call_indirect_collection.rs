@@ -129,7 +129,24 @@ pub(crate) fn collect_call_indirect_types(
                     )?;
                 }
 
-                // Check if this is a call_indirect
+                // `return_call_indirect` carries the exact physical callable
+                // contract from the shared ABI pass. Validate and register it
+                // before handling ordinary calls, whose historical path still
+                // derives a signature from their result-producing operation.
+                if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
+                    let func_type = helpers::exact_return_call_indirect_signature(ctx, op)?;
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        type_idx_by_type.entry(func_type)
+                    {
+                        let index = *next_type_idx;
+                        *next_type_idx += 1;
+                        entry.insert(index);
+                        new_types.push((index, func_type));
+                    }
+                    continue;
+                }
+
+                // Check if this is a result-producing call_indirect.
                 if wasm_dialect::CallIndirect::matches(ctx, op) {
                     // Build function type from operands and results
                     let operands: Vec<_> = ctx.op_operands(op).to_vec();
@@ -316,7 +333,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
     ref_funcs
 }
 
-/// Check if the module contains any call_indirect operations.
+/// Check if the module contains any table-based indirect transfer.
 pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
     fn check_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
         for &block_ref in &ctx.region(region_ref).blocks {
@@ -328,8 +345,9 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
                     }
                 }
 
-                // Check if this is a call_indirect
-                if wasm_dialect::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op)
+                    || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
+                {
                     return true;
                 }
             }
