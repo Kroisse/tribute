@@ -161,8 +161,8 @@ pub(crate) struct FunctionTranslator<'a> {
     data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
     pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
-    /// The ISA calling convention (used for indirect calls).
-    call_conv: CallConv,
+    /// The platform's ordinary calling convention for non-CPS indirect calls.
+    default_call_conv: CallConv,
     /// The platform pointer type (e.g. I64 on 64-bit).
     ptr_ty: cl_types::Type,
 }
@@ -173,7 +173,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: FunctionBuilder<'a>,
         func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
         data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
-        call_conv: CallConv,
+        default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
@@ -183,7 +183,7 @@ impl<'a> FunctionTranslator<'a> {
             func_refs,
             data_refs,
             block_map: HashMap::new(),
-            call_conv,
+            default_call_conv,
             ptr_ty,
         }
     }
@@ -516,7 +516,7 @@ impl<'a> FunctionTranslator<'a> {
                 .collect::<CompilationResult<_>>()?;
 
             let sig_ty = rci.sig(ctx);
-            let sig = translate_signature(ctx, sig_ty, self.call_conv, self.ptr_ty)?;
+            let sig = translate_signature(ctx, sig_ty, CallConv::Tail, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
             self.builder
@@ -535,7 +535,13 @@ impl<'a> FunctionTranslator<'a> {
                 .collect::<CompilationResult<_>>()?;
 
             let sig_ty = call_ind.sig(ctx);
-            let sig = translate_signature(ctx, sig_ty, self.call_conv, self.ptr_ty)?;
+            let call_conv =
+                if ctx.op(op).attributes.get_u8("tribute.calling_convention") == Ok(Some(2)) {
+                    CallConv::Tail
+                } else {
+                    self.default_call_conv
+                };
+            let sig = translate_signature(ctx, sig_ty, call_conv, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
             let inst = self.builder.ins().call_indirect(sig_ref, callee, &args);

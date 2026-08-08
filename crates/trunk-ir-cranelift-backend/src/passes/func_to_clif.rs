@@ -4,6 +4,8 @@
 //! - `func.func` -> `clif.func`
 //! - `func.call` -> `clif.call`
 //! - `func.call_indirect` -> `clif.call_indirect`
+//! - `func.tail_call` -> `clif.return_call`
+//! - `func.tail_call_indirect` -> `clif.return_call_indirect`
 //! - `func.return` -> `clif.return`
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
@@ -13,7 +15,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
@@ -38,6 +40,7 @@ pub fn lower(
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
+        .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern)
         .with_target(func_to_clif_target());
@@ -297,6 +300,53 @@ impl RewritePattern for FuncTailCallPattern {
     }
 }
 
+/// Pattern: `func.tail_call_indirect` -> `clif.return_call_indirect`.
+///
+/// The physical closure lowering boundary records the exact callable ABI on
+/// the transfer.  Do not infer a signature from the function pointer: after
+/// closure lowering it is untyped at the TrunkIR level.
+struct FuncTailCallIndirectPattern;
+
+impl RewritePattern for FuncTailCallIndirectPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if func::TailCallIndirect::from_op(ctx, op).is_err() {
+            return false;
+        }
+
+        let signature = match ctx
+            .op(op)
+            .attributes
+            .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
+        {
+            Some(signature) => signature,
+            None => return false,
+        };
+        let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
+            return false;
+        };
+        if callable.r#return(ctx) != core::nil(ctx).as_type_ref() {
+            return false;
+        }
+
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
+            ctx,
+            op,
+            Symbol::new("clif"),
+            Symbol::new("return_call_indirect"),
+        );
+        let attributes = &mut ctx.op_mut(new_op).attributes;
+        attributes.remove(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR));
+        attributes.insert(Symbol::new("sig"), Attribute::Type(signature));
+        rewriter.replace_op(new_op);
+        true
+    }
+}
+
 /// Pattern: `func.unreachable` -> `clif.trap`
 struct FuncUnreachablePattern;
 
@@ -416,6 +466,18 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
 
+    const TAIL_TRANSFERS: &str = r#"core.module @test {
+  func.func @direct_target(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.return
+  }
+  func.func @direct_caller(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call %value {callee = @direct_target, tribute.calling_convention = 2}
+  }
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32), tribute.calling_convention = 2}
+  }
+}"#;
+
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
@@ -449,6 +511,60 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_tail_transfers_to_clif() {
+        let result = run_pass(TAIL_TRANSFERS);
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn tail_transfers_emit_native_object() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, TAIL_TRANSFERS);
+        super::lower(&mut ctx, module, TypeConverter::new()).unwrap();
+
+        let object = crate::emit_module_to_native(&ctx, module, &[]).unwrap();
+        assert!(!object.is_empty());
+    }
+
+    #[test]
+    fn tail_call_indirect_without_exact_signature_is_rejected() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(
+            error.to_string().contains("func.tail_call_indirect"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tail_call_indirect_with_nonempty_signature_is_rejected() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.i32, core.i32)}
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(
+            error.to_string().contains("func.tail_call_indirect"),
+            "{error}"
+        );
     }
 
     #[test]
