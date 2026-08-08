@@ -284,7 +284,10 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         tdnr_ast,
         result.function_types,
         result.constructor_types,
-        result.node_types,
+        ast_typeck::ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
         result.handler_operations,
@@ -355,7 +358,7 @@ fn merge_and_lower_to_ir<'db>(
 
     let user_module = typed.module(db);
     let user_fn_types = typed.function_types(db);
-    let user_node_types = typed.node_types(db);
+    let user_node_types = &typed.expression_types(db).node_types;
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
@@ -369,7 +372,7 @@ fn merge_and_lower_to_ir<'db>(
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
         let prelude_fn_types = prelude.function_types(db);
-        let prelude_node_types = prelude.node_types(db);
+        let prelude_node_types = &prelude.expression_types(db).node_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
         let prelude_span_map = prelude.span_map(db);
 
@@ -422,8 +425,25 @@ fn merge_and_lower_to_ir<'db>(
     };
 
     // Monomorphize generic functions
-    let mono_result =
-        tribute_front::monomorphize::monomorphize_functions(db, merged_module, merged_fn_types);
+    let mono_result = tribute_front::monomorphize::monomorphize_functions(
+        db,
+        merged_module,
+        merged_fn_types,
+        tribute_front::monomorphize::MonomorphizeMetadata {
+            constructor_types: typed.constructor_types(db).iter().cloned().collect(),
+            node_types: merged_node_types,
+            call_callee_types: typed
+                .expression_types(db)
+                .call_callee_types
+                .iter()
+                .cloned()
+                .collect(),
+            handler_operations: typed.handler_operations(db).iter().cloned().collect(),
+            perform_operations: typed.perform_operations(db).iter().cloned().collect(),
+            lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
+            exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+        },
+    );
     let merged_module = mono_result.module;
     let merged_fn_types: std::collections::HashMap<_, _> =
         mono_result.function_types.into_iter().collect();
@@ -435,16 +455,16 @@ fn merge_and_lower_to_ir<'db>(
         ast: merged_module,
         span_map: merged_span_map,
         function_types: merged_fn_types,
-        constructor_types: typed.constructor_types(db).iter().cloned().collect(),
-        node_types: merged_node_types,
+        constructor_types: mono_result.metadata.constructor_types,
+        node_types: mono_result.metadata.node_types,
         ability_conventions: merged_ability_conventions,
         ability_definitions: ast_typeck::ability_definitions_from_schemas(
             typed.ability_definitions(db),
         ),
-        handler_operations: typed.handler_operations(db).iter().cloned().collect(),
-        perform_operations: typed.perform_operations(db).iter().cloned().collect(),
-        lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
-        exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+        handler_operations: mono_result.metadata.handler_operations,
+        perform_operations: mono_result.metadata.perform_operations,
+        lambda_signatures: mono_result.metadata.lambda_signatures,
+        exhaustive_cases: mono_result.metadata.exhaustive_cases,
         well_known_types: typed.well_known_types(db),
     }
     .lower_to_legacy_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
@@ -1315,7 +1335,10 @@ pub fn parse_and_lower_ast<'db>(
         tdnr_ast,
         result.function_types,
         result.constructor_types,
-        result.node_types,
+        ast_typeck::ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
         result.handler_operations,
