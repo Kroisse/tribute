@@ -5,13 +5,12 @@
 //!
 //! ```text
 //! // Input:
-//! %yr = ability.perform %continuation, [%args...]
+//! ability.perform %evidence, %dispatch, %resume, [%args...]
 //!   { ability_ref: @State, op_name: @get }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
-//! %cont = cast %continuation to anyref
-//! effect.dispatch_cps %evidence, %cont, %payload
+//! effect.dispatch_cps %evidence, %dispatch, %resume, %payload
 //!   { ability_ref: @State, op_name: @get }
 //! ```
 //!
@@ -593,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lower_perform_no_evidence_skips_gracefully() {
+    fn test_lower_call_no_evidence_skips_gracefully() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
 
@@ -602,9 +601,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.never {
-    %dispatch = arith.const {value = 0} : tribute_rt.anyref
-    %resume = arith.const {value = 0} : tribute_rt.anyref
-    %never = ability.perform %dispatch, %resume {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.never
+    %value = arith.const {value = 0} : tribute_rt.anyref
+    %result = ability.call %value {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+    func.unreachable
   }
 }"#,
         );
@@ -614,8 +613,8 @@ mod tests {
 
         let ir = print_module(&ctx, module.op());
         assert!(
-            ir.contains("ability.perform"),
-            "perform op should remain unchanged when evidence is missing, got:\n{ir}"
+            ir.contains("ability.call"),
+            "call op should remain unchanged when evidence is missing, got:\n{ir}"
         );
     }
 }

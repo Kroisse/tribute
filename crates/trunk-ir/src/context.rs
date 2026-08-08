@@ -205,12 +205,23 @@ impl IrContext {
         self.type_alias_by_type.insert(ty, name);
     }
 
-    /// Remove one type alias and its reverse lookup entry.
+    /// Remove one type alias and preserve a deterministic surviving reverse lookup.
     pub fn remove_type_alias(&mut self, name: Symbol) -> Option<TypeRef> {
         let ty = self.type_alias_by_name.remove(&name)?;
-        self.type_alias_by_type.remove(&ty);
+        let removed_reverse_entry = self.type_alias_by_type.get(&ty) == Some(&name);
         self.type_aliases
             .retain(|(candidate, _)| *candidate != name);
+        if removed_reverse_entry {
+            if let Some((replacement, _)) = self
+                .type_aliases
+                .iter()
+                .find(|(_, candidate_ty)| *candidate_ty == ty)
+            {
+                self.type_alias_by_type.insert(ty, *replacement);
+            } else {
+                self.type_alias_by_type.remove(&ty);
+            }
+        }
         Some(ty)
     }
 
@@ -1078,6 +1089,20 @@ mod tests {
         assert_eq!(ctx.value_ty(r1), i32_ty);
         assert_eq!(ctx.value_def(r0), ValueDef::OpResult(op, 0));
         assert_eq!(ctx.value_def(r1), ValueDef::OpResult(op, 1));
+    }
+
+    #[test]
+    fn removing_reverse_alias_preserves_first_surviving_alias() {
+        let mut ctx = IrContext::new();
+        let ty = i32_type(&mut ctx);
+        let first = Symbol::new("First");
+        let second = Symbol::new("Second");
+        ctx.register_type_alias(first, ty);
+        ctx.register_type_alias(second, ty);
+
+        assert_eq!(ctx.type_alias_by_type(ty), Some(second));
+        assert_eq!(ctx.remove_type_alias(second), Some(ty));
+        assert_eq!(ctx.type_alias_by_type(ty), Some(first));
     }
 
     #[test]

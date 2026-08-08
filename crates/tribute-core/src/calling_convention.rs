@@ -182,13 +182,14 @@ pub fn cps_dispatch_type(
 /// closure. Callers must reject absent provenance rather than infer it from
 /// structural shape.
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
-    (get_physical_closure_convention(ctx, closure) == Some(CallingConvention::Cps))
-        .then(|| ctx.types.get(closure).params.first().copied())
-        .flatten()
-        .filter(|function| {
-            let data = ctx.types.get(*function);
-            data.dialect == Symbol::new("core") && data.name == Symbol::new("func")
-        })
+    if get_physical_closure_convention(ctx, closure) != Some(CallingConvention::Cps) {
+        return None;
+    }
+    let [function] = ctx.types.get(closure).params.as_slice() else {
+        return None;
+    };
+    let data = ctx.types.get(*function);
+    (data.dialect == Symbol::new("core") && data.name == Symbol::new("func")).then_some(*function)
 }
 
 /// Build a physical closure type that preserves its exact callable
@@ -319,5 +320,24 @@ mod tests {
             completion,
             cps_completion_type(&mut ctx, evidence, anyref, parent)
         );
+    }
+
+    #[test]
+    fn cps_closure_function_type_rejects_extra_outer_parameters() {
+        let mut ctx = IrContext::new();
+        let never = core::never(&mut ctx).as_type_ref();
+        let function = core::func(&mut ctx, never, []).as_type_ref();
+        let malformed = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+                .param(function)
+                .param(never)
+                .attr(
+                    CALLING_CONVENTION_ATTR,
+                    Attribute::Int(CallingConvention::Cps as i128),
+                )
+                .build(),
+        );
+
+        assert_eq!(cps_closure_function_type(&ctx, malformed), None);
     }
 }

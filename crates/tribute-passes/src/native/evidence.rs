@@ -491,6 +491,9 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         };
 
         let loc = ctx.op(op).location;
+        if !ctx.op_result_types(op).is_empty() {
+            return false;
+        }
         let i32_ty = core_i32_type(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -530,9 +533,6 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
-        if !ctx.op_result_types(op).is_empty() {
-            return false;
-        }
         let tail = func::tail_call_indirect(
             ctx,
             loc,
@@ -811,7 +811,7 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
     use trunk_ir::Span;
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::context::{BlockArgData, BlockData, OperationDataBuilder, RegionData};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::smallvec::smallvec;
@@ -1115,5 +1115,44 @@ mod tests {
             .map(|call| call.callee(&ctx))
             .collect();
         assert_eq!(direct_callees, [Symbol::new(evidence_abi::LOOKUP)]);
+    }
+
+    #[test]
+    fn result_bearing_dispatch_cps_fails_before_mutation() {
+        let input = r#"core.module @test {
+  func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let run = func_by_name_recursive(&ctx, module, "run");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+        let anyref = ctx.value_ty(args[1]);
+        let ability_ref = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .build(),
+        );
+        let malformed_data = OperationDataBuilder::new(
+            ctx.op(run.op_ref()).location,
+            Symbol::new("effect"),
+            Symbol::new("dispatch_cps"),
+        )
+        .operands(args)
+        .result(anyref)
+        .attr("ability_ref", Attribute::Type(ability_ref))
+        .attr("op_name", Attribute::Symbol(Symbol::new("get")))
+        .build(&mut ctx);
+        let malformed = ctx.create_op(malformed_data);
+        let terminator = ctx.block(entry).ops[0];
+        ctx.insert_op_before(entry, terminator, malformed);
+
+        let before = print_module(&ctx, module.op());
+        let error = try_lower_evidence_to_native_func(&mut ctx, run)
+            .expect_err("result-bearing dispatch_cps must remain illegal");
+        assert!(error.to_string().contains("effect.dispatch_cps"));
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

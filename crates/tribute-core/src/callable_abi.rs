@@ -89,7 +89,8 @@ impl<T: Copy> CallableAbi<T> {
     ///
     /// Direct: `env, source...`
     /// EvidenceDirect: `evidence, env, source...`
-    /// Cps: `evidence, env, done_k, source...`
+    /// Cps: `evidence, env, done_k, source...`, or for result-indexed
+    /// dispatch, `evidence, env, done_k, dispatch, source...`.
     pub fn interpose_environment(&self, logical_params: &[T], environment: T) -> Vec<T> {
         let legacy_len = self.lowered_params(environment, environment).len();
         let dispatch_len = legacy_len + usize::from(self.convention.needs_done_k());
@@ -153,6 +154,10 @@ mod tests {
         assert_eq!(
             cps.interpose_environment(&["ev", "control", "arg"], "env"),
             ["ev", "env", "control", "arg"]
+        );
+        assert_eq!(
+            cps.interpose_environment(&["ev", "done", "dispatch", "arg"], "env"),
+            ["ev", "env", "done", "dispatch", "arg"]
         );
     }
 
