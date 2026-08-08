@@ -188,6 +188,12 @@ impl WellKnownTypes<'_> {
 /// both can be derived from a single type checking invocation.
 /// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
 /// can look up source spans without a separate plumbing path.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ExpressionTypeMetadata<'db> {
+    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub call_callee_types: Vec<(NodeId, Type<'db>)>,
+}
+
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
@@ -201,12 +207,9 @@ pub struct TypeCheckOutput<'db> {
     /// reinterpreting source annotations.
     #[returns(ref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
-    /// Node types collected during type checking.
-    /// Maps NodeId to its inferred type (after substitution but before generalization).
-    /// Used by IR lowering to get lambda effect types.
-    /// Stored as Vec for Salsa compatibility (HashMap doesn't implement Hash).
+    /// Exact expression types and callee instantiations.
     #[returns(ref)]
-    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub expression_types: ExpressionTypeMetadata<'db>,
     /// Ability-level calling-convention requirements.
     #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
@@ -296,7 +299,10 @@ pub fn typecheck_module<'db>(
         result.module,
         result.function_types,
         result.constructor_types,
-        result.node_types,
+        ExpressionTypeMetadata {
+            node_types: result.node_types,
+            call_callee_types: result.call_callee_types,
+        },
         result.ability_conventions,
         ability_schemas(&result.ability_definitions),
         result.handler_operations,

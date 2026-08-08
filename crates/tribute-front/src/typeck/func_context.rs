@@ -71,6 +71,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
+    /// The solved function type selected for each direct call callee.
+    call_callee_types: HashMap<NodeId, Type<'db>>,
+
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
 
@@ -158,6 +161,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
+            call_callee_types: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
@@ -347,6 +351,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Used for collecting all node types after type checking a function.
     pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
         std::mem::take(&mut self.node_types)
+    }
+
+    pub fn record_call_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {
+        self.call_callee_types.entry(callee).or_insert(ty);
+    }
+
+    pub fn take_call_callee_types(&mut self) -> HashMap<NodeId, Type<'db>> {
+        std::mem::take(&mut self.call_callee_types)
+    }
+
+    pub fn get_call_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
+        self.call_callee_types.get(&callee).copied()
     }
 
     /// Record the exact semantic operation selected for a handler arm.

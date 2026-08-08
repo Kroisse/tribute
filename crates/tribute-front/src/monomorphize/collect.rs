@@ -14,8 +14,9 @@ pub fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+    call_callee_types: &HashMap<crate::ast::NodeId, Type<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut collector = InstantiationCollector::new(db, function_types);
+    let mut collector = InstantiationCollector::new(db, function_types, call_callee_types);
     collector.visit_module(module);
     collector.instantiations
 }
@@ -118,16 +119,18 @@ fn extract_recursive<'db>(
     }
 }
 
-struct InstantiationCollector<'db> {
+struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
 }
 
-impl<'db> InstantiationCollector<'db> {
+impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+        call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -137,18 +140,24 @@ impl<'db> InstantiationCollector<'db> {
         Self {
             db,
             schemes,
+            call_callee_types,
             instantiations: HashMap::new(),
         }
     }
 
-    fn try_record(&mut self, typed_ref: &TypedRef<'db>) {
+    fn try_record(&mut self, node_id: crate::ast::NodeId, typed_ref: &TypedRef<'db>) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
         let Some(scheme) = self.schemes.get(id) else {
             return;
         };
-        let Some(type_args) = extract_type_args(self.db, *scheme, typed_ref.ty) else {
+        let concrete = self
+            .call_callee_types
+            .get(&node_id)
+            .copied()
+            .unwrap_or(typed_ref.ty);
+        let Some(type_args) = extract_type_args(self.db, *scheme, concrete) else {
             return;
         };
         self.instantiations
@@ -180,7 +189,7 @@ impl<'db> InstantiationCollector<'db> {
     fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
         match expr.kind.as_ref() {
             ExprKind::Var(typed_ref) => {
-                self.try_record(typed_ref);
+                self.try_record(expr.id, typed_ref);
             }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee);

@@ -13,6 +13,20 @@ use crate::typeck::subst::substitute_bound_vars;
 
 use super::mangle::{mangle_name, mangle_type_name};
 
+type GeneratedSpecializations<'db> = (
+    Vec<FuncDecl<TypedRef<'db>>>,
+    Vec<(Symbol, TypeScheme<'db>)>,
+    Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
+);
+
+type SpecializationEntry<'db> = (
+    Symbol,
+    FuncDecl<TypedRef<'db>>,
+    TypeScheme<'db>,
+    Vec<Type<'db>>,
+    HashSet<NodeId>,
+);
+
 /// Generate specialized copies of generic functions for each instantiation.
 ///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
@@ -22,11 +36,11 @@ pub fn generate_specializations<'db>(
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-) -> (Vec<FuncDecl<TypedRef<'db>>>, Vec<(Symbol, TypeScheme<'db>)>) {
+) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
-    let mut entries: Vec<(Symbol, FuncDecl<TypedRef<'db>>, TypeScheme<'db>)> = Vec::new();
+    let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
@@ -53,7 +67,13 @@ pub fn generate_specializations<'db>(
                     },
                 ),
             );
-            entries.push((mangled, specialized, specialized_scheme));
+            entries.push((
+                mangled,
+                specialized,
+                specialized_scheme,
+                type_args.clone(),
+                semantic_node_ids(func),
+            ));
         }
     }
 
@@ -62,12 +82,95 @@ pub fn generate_specializations<'db>(
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len());
-    for (name, decl, scheme) in entries {
+    let mut metadata_origins = Vec::with_capacity(entries.len());
+    for (name, decl, scheme, type_args, origins) in entries {
         new_decls.push(decl);
         new_function_types.push((name, scheme));
+        metadata_origins.push((type_args, origins));
     }
 
-    (new_decls, new_function_types)
+    (new_decls, new_function_types, metadata_origins)
+}
+
+fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
+    fn expr<'db>(value: &Expr<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+        ids.insert(value.id);
+        match value.kind.as_ref() {
+            ExprKind::Call { callee, args } => {
+                expr(callee, ids);
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::Block { stmts, value } => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { id, value, .. } | Stmt::Expr { id, expr: value } => {
+                            ids.insert(*id);
+                            expr(value, ids);
+                        }
+                    }
+                }
+                expr(value, ids);
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                expr(scrutinee, ids);
+                for arm in arms {
+                    ids.insert(arm.id);
+                    if let Some(guard) = &arm.guard {
+                        expr(guard, ids);
+                    }
+                    expr(&arm.body, ids);
+                }
+            }
+            ExprKind::Lambda { body, .. } => expr(body, ids),
+            ExprKind::Handle { body, handlers } => {
+                expr(body, ids);
+                for handler in handlers {
+                    ids.insert(handler.id);
+                    expr(&handler.body, ids);
+                }
+            }
+            ExprKind::Resume { arg, .. } => expr(arg, ids),
+            ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::Record { fields, spread, .. } => {
+                for (_, value) in fields {
+                    expr(value, ids);
+                }
+                if let Some(value) = spread {
+                    expr(value, ids);
+                }
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                expr(receiver, ids);
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                expr(lhs, ids);
+                expr(rhs, ids);
+            }
+            ExprKind::Var(_)
+            | ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::RuneLit(_)
+            | ExprKind::Nil
+            | ExprKind::Error => {}
+        }
+    }
+    let mut ids = HashSet::new();
+    ids.insert(func.id);
+    expr(&func.body, &mut ids);
+    ids
 }
 
 // ============================================================================
@@ -443,7 +546,7 @@ fn collect_func_decls_inner<'a, 'db>(
 ///
 /// This is used to give specialized AST nodes unique NodeIds that
 /// don't collide with the original or other specializations.
-fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
+pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     type_args.hash(&mut hasher);
     let hash = hasher.finish();
@@ -921,7 +1024,7 @@ mod tests {
         let mut instantiations = HashMap::new();
         instantiations.insert(func_id, type_arg_sets);
 
-        let (new_decls, new_fn_types) =
+        let (new_decls, new_fn_types, _) =
             generate_specializations(&db, &module, &instantiations, &function_types);
 
         assert_eq!(new_decls.len(), 2);
