@@ -397,6 +397,7 @@ fn freshen_effect_vars_inner<'db>(
             },
         ),
         TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::Int
         | TypeKind::Nat

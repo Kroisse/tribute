@@ -71,6 +71,11 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
+    /// Function-local quantifiers introduced by pure `let` generalization.
+    /// These are distinct from the enclosing function scheme's binders when
+    /// the solved typed body and callable metadata are materialized.
+    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+
     /// The solved function type selected for each direct call callee.
     call_callee_types: HashMap<NodeId, Type<'db>>,
 
@@ -161,6 +166,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
+            local_generalizations: HashMap::new(),
             call_callee_types: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
@@ -351,6 +357,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Used for collecting all node types after type checking a function.
     pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
         std::mem::take(&mut self.node_types)
+    }
+
+    /// Record the quantifier provenance of one generalized local scheme.
+    pub fn record_local_generalization(
+        &mut self,
+        scope: NodeId,
+        mapping: HashMap<UniVarId<'db>, u32>,
+    ) {
+        self.local_generalizations.extend(
+            mapping
+                .into_iter()
+                .map(|(var, index)| (var, (scope, index))),
+        );
+    }
+
+    pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {
+        std::mem::take(&mut self.local_generalizations)
     }
 
     pub fn record_call_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {

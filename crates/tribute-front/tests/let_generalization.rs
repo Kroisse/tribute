@@ -1,6 +1,54 @@
 use salsa_test_macros::salsa_test;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::SourceCst;
+use tribute_front::{
+    SourceCst,
+    ast::{Type, TypeKind},
+};
+
+fn type_contains_univar(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    match ty.kind(db) {
+        TypeKind::UniVar { .. } => true,
+        TypeKind::Named { args, .. } => args.iter().any(|arg| type_contains_univar(db, *arg)),
+        TypeKind::Func { params, result, .. } => {
+            params.iter().any(|param| type_contains_univar(db, *param))
+                || type_contains_univar(db, *result)
+        }
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .any(|element| type_contains_univar(db, *element)),
+        TypeKind::App { ctor, args } => {
+            type_contains_univar(db, *ctor) || args.iter().any(|arg| type_contains_univar(db, *arg))
+        }
+        TypeKind::Continuation { arg, result, .. } => {
+            type_contains_univar(db, *arg) || type_contains_univar(db, *result)
+        }
+        _ => false,
+    }
+}
+
+fn type_contains_local_bound(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    match ty.kind(db) {
+        TypeKind::LocalBoundVar { .. } => true,
+        TypeKind::Named { args, .. } => args.iter().any(|arg| type_contains_local_bound(db, *arg)),
+        TypeKind::Func { params, result, .. } => {
+            params
+                .iter()
+                .any(|param| type_contains_local_bound(db, *param))
+                || type_contains_local_bound(db, *result)
+        }
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .any(|element| type_contains_local_bound(db, *element)),
+        TypeKind::App { ctor, args } => {
+            type_contains_local_bound(db, *ctor)
+                || args.iter().any(|arg| type_contains_local_bound(db, *arg))
+        }
+        TypeKind::Continuation { arg, result, .. } => {
+            type_contains_local_bound(db, *arg) || type_contains_local_bound(db, *result)
+        }
+        _ => false,
+    }
+}
 
 fn phase_errors(
     db: &dyn salsa::Database,
@@ -29,13 +77,44 @@ fn pure_local_identity_is_polymorphic(db: &salsa::DatabaseImpl) {
         r#"
 fn pair() -> #(Nat, Bool) {
     let identity = fn(value) value
-    #(identity(1), identity(true))
+    #(identity(1), identity(True))
 }
 "#,
     );
 
     let errors = type_errors(db, source);
     assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+}
+
+#[salsa_test]
+fn local_callable_metadata_has_no_raw_solver_variables(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pair() -> #(Nat, Bool) {
+    let identity = fn(value) value
+    #(identity(1), identity(True))
+}
+"#,
+    );
+
+    let output = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output");
+    assert!(
+        output
+            .lambda_signatures(db)
+            .iter()
+            .all(|(_, signature)| !type_contains_univar(db, signature.function_type)),
+        "locally generalized callable metadata leaked a raw solver variable"
+    );
+    assert!(
+        output
+            .lambda_signatures(db)
+            .iter()
+            .any(|(_, signature)| type_contains_local_bound(db, signature.function_type)),
+        "locally generalized callable metadata lost its lexical quantifier owner"
+    );
 }
 
 #[salsa_test]
@@ -50,7 +129,7 @@ enum Wrapped(a) {
 
 fn pair() -> #(Nat, Bool) {
     let Wrapped(identity) = Wrapped(fn(value) value)
-    #(identity(1), identity(true))
+    #(identity(1), identity(True))
 }
 "#,
     );
@@ -67,7 +146,7 @@ fn as_pattern_alias_preserves_polymorphism(db: &salsa::DatabaseImpl) {
         r#"
 fn pair() -> #(Nat, Bool) {
     let _ as identity = fn(value) value
-    #(identity(1), identity(true))
+    #(identity(1), identity(True))
 }
 "#,
     );
