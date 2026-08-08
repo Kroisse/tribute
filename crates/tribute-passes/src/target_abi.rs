@@ -290,6 +290,11 @@ fn validate_transfers(
         let callable = core::Func::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect callable signature is not core.func")
         })?;
+        if func::CallIndirect::matches(ctx, op) && convention == CallingConvention::Cps {
+            return Err(TargetAbiError::new(
+                "target ABI: Cps indirect transfer must use func.tail_call_indirect",
+            ));
+        }
         if convention == CallingConvention::Cps && callable.r#return(ctx) != never {
             return Err(TargetAbiError::new(
                 "target ABI: Cps indirect signature must have logical core.never result",
@@ -312,6 +317,15 @@ fn validate_transfers(
         {
             return Err(TargetAbiError::new(
                 "target ABI: indirect call result differs from exact callable signature",
+            ));
+        }
+        if func::TailCallIndirect::matches(ctx, op)
+            && (convention != CallingConvention::Cps
+                || callable.r#return(ctx) != never
+                || !is_cps_never_caller(ctx, op, never)?)
+        {
+            return Err(TargetAbiError::new(
+                "target ABI: indirect tail call must be a Cps core.never transfer",
             ));
         }
     }
@@ -731,6 +745,53 @@ mod tests {
   }
   func.func @caller() -> core.i32 attributes {tribute.calling_convention = 0} {
     func.tail_call {callee = @callee, tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error.to_string().contains("Cps core.never transfer"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn rejects_non_tail_cps_indirect_call_without_mutating() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.func(core.never)) -> core.never attributes {tribute.calling_convention = 2} {
+    %result = func.call_indirect %callee {tribute.calling_convention = 2, func.indirect_call_signature = core.func(core.never)} : core.never
+    func.unreachable
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use func.tail_call_indirect"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn rejects_indirect_tail_outside_a_cps_never_caller_without_mutating() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.func(core.never)) -> core.i32 attributes {tribute.calling_convention = 0} {
+    func.tail_call_indirect %callee {tribute.calling_convention = 2, func.indirect_call_signature = core.func(core.never)}
   }
 }"#,
         );

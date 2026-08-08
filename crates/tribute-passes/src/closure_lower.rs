@@ -231,7 +231,10 @@ impl RewritePattern for LowerClosureCallArena {
         let env = ctx.op_result(env_op.op_ref(), 0);
 
         let new_args = if let Some(convention) = get_calling_convention(ctx, op) {
-            interpose_environment_for_physical_args(convention, &args, env)
+            let Some(args) = interpose_environment_for_physical_args(convention, &args, env) else {
+                return false;
+            };
+            args
         } else {
             // Compatibility for hand-written legacy IR without metadata.
             let evidence = if let Some(evidence) = self.legacy_evidence {
@@ -305,7 +308,10 @@ impl RewritePattern for LowerClosureTailCallArena {
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let func_ref = closure::func(ctx, location, callee, i32_ty);
         let env = closure::env(ctx, location, callee, anyref_ty);
-        let args = interpose_environment_for_physical_args(convention, args, env.result(ctx));
+        let Some(args) = interpose_environment_for_physical_args(convention, args, env.result(ctx))
+        else {
+            return false;
+        };
         let attrs = ctx.op(op).attributes.clone();
         let tail = func::tail_call_indirect(ctx, location, func_ref.result(ctx), args);
         ctx.op_mut(tail.op_ref()).attributes.extend(attrs);
@@ -338,7 +344,7 @@ fn interpose_environment_for_physical_args(
     convention: tribute_core::CallingConvention,
     args: &[ValueRef],
     environment: ValueRef,
-) -> Vec<ValueRef> {
+) -> Option<Vec<ValueRef>> {
     let hidden = if convention.needs_done_k() {
         CallableAbi::new(convention, std::iter::empty::<ValueRef>(), environment)
             .source_param_offset_with_dispatch()
@@ -346,8 +352,9 @@ fn interpose_environment_for_physical_args(
         CallableAbi::new(convention, std::iter::empty::<ValueRef>(), environment)
             .source_param_offset()
     };
-    let abi = CallableAbi::new(convention, args[hidden..].iter().copied(), environment);
-    abi.interpose_environment(args, environment)
+    let source_params = args.get(hidden..)?;
+    let abi = CallableAbi::new(convention, source_params.iter().copied(), environment);
+    Some(abi.interpose_environment(args, environment))
 }
 
 fn physical_indirect_signature(ctx: &mut IrContext, callee: ValueRef) -> Option<TypeRef> {
@@ -832,5 +839,28 @@ mod tests {
         lower_closures_in_func(&mut ctx, caller);
 
         assert_eq!(call_indirect_operands_in_func(&ctx, caller), before);
+    }
+
+    #[test]
+    fn malformed_cps_closure_tail_call_is_left_unchanged_without_panicking() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !cps = closure.closure(core.func(core.never, core.i32, core.i32, core.i32, core.i32)) {tribute.calling_convention = 2}
+  func.func @caller(%callee: !cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %value {tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let caller = func_by_name(&ctx, module, "caller");
+        let before = print_module(&ctx, module.op());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lower_closures_in_func(&mut ctx, caller);
+        }));
+
+        assert!(result.is_ok());
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }
