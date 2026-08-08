@@ -290,14 +290,15 @@ struct Marker {
     ability_id: i32,      // ability 식별자 (컴파일 타임 결정)
     prompt_tag: i32,      // 런타임 prompt 식별자
     tr_dispatch_fn: ptr,  // fn operation용 tail-resumptive dispatch closure
-    handler_dispatch: ptr // op operation용 CPS handler dispatch closure
 }
 ```
 
 **설계 결정:**
 
 - `ability_id`와 `prompt_tag`는 `i32`로 통일한다.
-- dispatch field는 target별 closure/function reference 표현으로 lowering한다.
+- `tr_dispatch_fn`은 target별 closure/function reference 표현으로 lowering한다.
+  `op` operation의 CPS Dispatch는 marker에 저장하지 않고 호출 지점의 typed control
+  operand으로 전달한다.
   Native marker는 closure pointer를 저장하고, WasmGC marker는
   `(table_idx: i32, env: anyref)` closure struct reference를 `anyref`로 저장한다.
 - 별도의 opaque 타입(`ability.evidence_ptr`, `ability.marker`) 대신 struct/array 사용
@@ -307,10 +308,12 @@ struct Marker {
 
 ### Handler Dispatch Closures
 
-Operation table 대신 handler boundary에서 두 종류의 dispatch closure를 만든다:
+Handler boundary는 `fn` operation용 dispatch closure를 만든다:
 
 - `tr_dispatch_fn`: `fn` operation 전용. `(op_idx, value) -> anyref`
-- `handler_dispatch`: `op` operation 전용. `(k, op_idx, value) -> ()`
+
+`op` operation의 `Dispatch<R>`는 `Parent<R>`에 capture된 typed CPS closure이며,
+`(Resume<R>, prompt_tag, ability_id, op_idx, payload) -> Never`로 tail transfer한다.
 
 `op_idx`는 ability 이름과 operation 이름의 stable hash로 계산한다. 호출 지점과
 handler dispatch closure가 같은 hash 함수를 사용하므로, handler arm 등록 순서에
@@ -331,9 +334,9 @@ func.call_indirect(handler, ...)
 
 Shared lowering은 concrete marker 접근을 직접 만들지 않고 `effect.*` ABI
 operation을 생성한다. Native lowering에서는 이를 `__tribute_evidence_*` C ABI와
-native closure pointer 호출로 대체한다. Wasm lowering은 같은 ability id와 marker
-field 순서를 사용해 binary search helper를 생성하고, marker에 저장된 `anyref`
-closure를 `(table_idx, env)`로 풀어 `wasm.call_indirect`를 emit한다.
+native closure pointer 호출로 대체한다. Wasm lowering은 evidence lookup에는 marker를
+사용하고, CPS Dispatch operand는 `(table_idx, env)`로 풀어
+`wasm.return_call_indirect`를 emit한다.
 
 ### Handler 설치
 
@@ -346,7 +349,6 @@ fn run_state(comp: fn(Evidence) -> a, init: s, ev: Evidence) -> a {
         ability_id: STATE_ID,
         prompt_tag: tag,
         tr_dispatch_fn: state_tr_dispatch,
-        handler_dispatch: state_handler_dispatch,
     }
 
     // evidence_extend: 정렬 유지하며 marker 삽입, 새 배열 반환
@@ -488,6 +490,10 @@ fn-only or empty ability    → EvidenceDirect
 ability containing any op  → Cps
 open or otherwise unknown e → Cps
 ```
+
+람다 값의 `Direct` 판정은 람다 본문이 만든 evaluation row를 그 본문의
+제약만 푼 직후에 검사한다. 이 row가 닫힌 빈 row일 때만 `Direct`이며,
+알려진 effect 또는 열린 tail은 이후 문맥이 넓히기 전에도 `Cps`다.
 
 이 ability-level convention bound는 operation declaration의 source `fn`/`op`
 kind를 erase하지 않는다. Typechecking이 resolve된 operation에 kind를 저장하고
@@ -955,14 +961,14 @@ it is part of frontend IR construction rather than a standalone pass. The
 function-anchored lowering point after case construction is `scf_to_cf_pass()`,
 which runs under `PassManager::nest::<func.func>()`.
 
-`typecheck` solves function-local unification variables where constraints make
-them concrete and generalizes remaining polymorphic variables into stable
-`BoundVar` indices. Generalization covers the function signature, checked body,
-and post-solve deferred UFCS callee types so later TDNR and monomorphization do
-not see raw solver variables in typed references. Each type-scheme
-instantiation freshens both bound type variables and quantified effect-row variables,
-while preserving repeated references to the same row variable within that
-single instantiation.
+`typecheck`는 제약으로 결정된 함수-지역 unification variable을 구체 타입으로
+치환한다. 함수 `TypeScheme`은 callable interface에 나타나는 나머지 변수만 안정된
+`BoundVar`로 quantify한다. 본문, node/callee/handler/perform/lambda metadata와
+deferred UFCS callee는 같은 치환 뒤 지역 `let` scheme으로 일반화되거나 보통의
+모호성 진단과 오류 복구를 거쳐야 하며, typed reference에 raw solver variable이
+남아서는 안 된다. TypeScheme 인스턴스화는 bound type variable과 quantify된
+effect-row variable을 모두 freshen하되, 한 인스턴스 안의 같은 row variable 참조는
+보존한다.
 
 Local scopes store `TypeScheme` bindings. At each `let`, the checker solves the
 constraint prefix through that binding and separately tracks the effect of
@@ -1041,13 +1047,11 @@ struct Marker {
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
 }
 ```
 
-위 `ptr` 표기는 high-level/native 설명이다. WasmGC의 concrete `_Marker` GC type은
-같은 field order를 유지하되 dispatch closure field를 `anyref` closure reference로
-저장한다.
+위 `ptr` 표기는 high-level/native 설명이다. WasmGC의 concrete marker type은
+같은 의미의 tail-resumptive closure reference를 target representation으로 저장한다.
 
 타입 시스템 수준에서는 ability row에 대해 parameterized된다:
 

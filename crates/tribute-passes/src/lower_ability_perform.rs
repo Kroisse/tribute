@@ -11,27 +11,32 @@
 //! // Output:
 //! %payload = pack %args into the canonical operation product
 //! %cont = cast %continuation to anyref
-//! %result = effect.dispatch_cps %evidence, %cont, %payload
+//! effect.dispatch_cps %evidence, %cont, %payload
 //!   { ability_ref: @State, op_name: @get }
-//! func.return %result
 //! ```
 //!
 //! The explicitly named legacy operations retain the old null-or-single-value
 //! carrier payload ABI until the frontend/pipeline migration is complete. Uses
-//! `PatternApplicator` for declarative op-level rewriting. This is an
-//! intermediate best-effort pass: the final `ability-lowered` boundary is
-//! established by `LowerHandleDispatch` after evidence resolution.
+//! `PatternApplicator` for declarative op-level rewriting. The function pass
+//! validates every final `ability.perform` candidate before mutation; the
+//! final `ability-lowered` dialect boundary is established by
+//! `LowerHandleDispatch` after evidence resolution.
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::DialectOp;
-use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::pass::{Pass, PassRunResult, VerifyError};
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter, erase_op,
+    PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
+use trunk_ir::walk::{WalkAction, walk_op};
 
+use tribute_core::{
+    CLOSURE_CALLABLE_TYPE_ATTR, cps_closure_function_type, get_closure_callable_type,
+    has_canonical_cps_parent_layout,
+};
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -73,12 +78,179 @@ impl Pass for LowerAbilityPerform {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        if ctx.op(target.op_ref()).regions.is_empty() {
+            return Ok(());
+        }
+        prevalidate_final_performs(ctx, target)?;
         lower_ability_perform(ctx, target);
+        let mut residual = None;
+        let _ = walk_op::<()>(ctx, target.op_ref(), &mut |op| {
+            if ability::Perform::from_op(ctx, op).is_ok() {
+                let reason = explain_invalid_final_perform(ctx, op)
+                    .unwrap_or("lowering pattern rejected a prevalidated final perform");
+                residual = Some(format!("residual ability.perform: {reason}"));
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(WalkAction::Advance)
+        });
+        if let Some(message) = residual {
+            return Err(Box::new(VerifyError { message }));
+        }
+        consume_closure_callable_provenance(ctx, target);
         Ok(())
     }
 }
 
-/// Pattern: `ability.perform` → `effect.dispatch_cps` + return.
+fn prevalidate_final_performs(ctx: &IrContext, target: func::Func) -> PassRunResult {
+    let mut invalid = None;
+    let _ = walk_op::<()>(ctx, target.op_ref(), &mut |op| {
+        if let Some(callable) = get_closure_callable_type(ctx, op)
+            && !crate::closure_lower::is_lowered_closure_pack(ctx, op, callable)
+        {
+            invalid = Some(
+                "invalid temporary closure callable provenance on a non-canonical closure pack"
+                    .to_owned(),
+            );
+            return std::ops::ControlFlow::Break(());
+        }
+        if ability::Perform::from_op(ctx, op).is_ok()
+            && let Some(reason) = explain_invalid_final_perform(ctx, op)
+        {
+            invalid = Some(format!("invalid final ability.perform: {reason}"));
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(WalkAction::Advance)
+    });
+    match invalid {
+        Some(message) => Err(Box::new(VerifyError { message })),
+        None => Ok(()),
+    }
+}
+
+/// Remove the proof-only closure type after every final perform in this
+/// function has lowered successfully. The marker must not reach backend-ready
+/// IR, where it would retain an abstract closure type in an attribute.
+fn consume_closure_callable_provenance(ctx: &mut IrContext, target: func::Func) {
+    let mut packs = Vec::new();
+    let _ = walk_op::<()>(ctx, target.op_ref(), &mut |op| {
+        if get_closure_callable_type(ctx, op).is_some() {
+            packs.push(op);
+        }
+        std::ops::ControlFlow::Continue(WalkAction::Advance)
+    });
+    for pack in packs {
+        ctx.op_mut(pack)
+            .attributes
+            .remove(Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR));
+    }
+}
+
+#[derive(Clone)]
+struct FinalPerformShape {
+    evidence: ValueRef,
+    dispatch: ValueRef,
+    resume: ValueRef,
+    values: Vec<ValueRef>,
+}
+
+/// Validate the complete final `ability.perform` ABI before either the pass
+/// wrapper or the local rewrite pattern mutates IR. The exact callback types
+/// are proof-bearing control values; raw `anyref` never substitutes for them.
+fn validate_final_perform_shape(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<FinalPerformShape, &'static str> {
+    let operands = ctx.op_operands(op);
+    if operands.len() < 3 {
+        return Err("missing explicit dynamic evidence, dispatch, or resume operand");
+    }
+    let evidence = operands[0];
+    if !ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)) {
+        return Err("dynamic evidence operand has the wrong exact type");
+    }
+    let dispatch = operands[1];
+    let Some(dispatch_closure) = proven_callback_closure_type(ctx, dispatch) else {
+        return Err("dispatch operand is not a convention-proven CPS closure");
+    };
+    let Some(dispatch_function) = cps_closure_function_type(ctx, dispatch_closure) else {
+        return Err("dispatch operand is not a convention-proven CPS closure");
+    };
+    let dispatch_params = &ctx.types.get(dispatch_function).params;
+    if dispatch_params.len() != 7
+        || !is_type(ctx, dispatch_params[0], "core", "never")
+        || dispatch_params[1] != ctx.value_ty(evidence)
+        || !is_type(ctx, dispatch_params[3], "core", "i32")
+        || !is_type(ctx, dispatch_params[4], "core", "i32")
+        || !is_type(ctx, dispatch_params[5], "core", "i32")
+        || !is_type(ctx, dispatch_params[6], "tribute_rt", "anyref")
+    {
+        return Err("dispatch operand does not have the exact Dispatch<R> ABI");
+    }
+    let expected_resume = dispatch_params[2];
+    let resume = operands[2];
+    if proven_callback_closure_type(ctx, resume) != Some(expected_resume) {
+        return Err("resume operand does not match Dispatch<R>'s exact Resume<R> type");
+    }
+    let Some(resume_function) = cps_closure_function_type(ctx, expected_resume) else {
+        return Err("Dispatch<R> does not name a convention-proven Resume<R> closure");
+    };
+    let resume_params = &ctx.types.get(resume_function).params;
+    if resume_params.len() != 4
+        || !is_type(ctx, resume_params[0], "core", "never")
+        || resume_params[1] != ctx.value_ty(evidence)
+        || !has_canonical_cps_parent_layout(ctx, resume_params[2], dispatch_closure)
+        || !is_type(ctx, resume_params[3], "tribute_rt", "anyref")
+    {
+        return Err("Dispatch<R> names a malformed Resume<R> callback");
+    }
+    let [result] = ctx.op_results(op) else {
+        return Err("expected exactly one core.never marker result");
+    };
+    let result_type = ctx.types.get(ctx.value_ty(*result));
+    if result_type.dialect != Symbol::new("core") || result_type.name != Symbol::new("never") {
+        return Err("marker result is not core.never");
+    }
+    if ctx.has_uses(*result) {
+        return Err("core.never marker result is used");
+    }
+    let Some(block) = ctx.op(op).parent_block else {
+        return Err("operation has no parent block");
+    };
+    if ctx.block(block).ops.last().copied() != Some(op) {
+        return Err("operation is not in proper-tail position");
+    }
+    Ok(FinalPerformShape {
+        evidence,
+        dispatch,
+        resume,
+        values: operands[3..].to_vec(),
+    })
+}
+
+fn proven_callback_closure_type(ctx: &IrContext, value: ValueRef) -> Option<TypeRef> {
+    let value_type = ctx.value_ty(value);
+    if cps_closure_function_type(ctx, value_type).is_some() {
+        return Some(value_type);
+    }
+    let trunk_ir::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
+        return None;
+    };
+    let closure_type = get_closure_callable_type(ctx, def)?;
+    crate::closure_lower::is_lowered_closure_pack(ctx, def, closure_type)
+        .then_some(closure_type)
+        .filter(|closure| cps_closure_function_type(ctx, *closure).is_some())
+}
+
+fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+}
+
+fn explain_invalid_final_perform(ctx: &IrContext, op: OpRef) -> Option<&'static str> {
+    validate_final_perform_shape(ctx, op).err()
+}
+
+/// Pattern: `ability.perform` → resultless `effect.dispatch_cps`.
 struct LowerPerformPattern {
     types: CommonTypes,
 }
@@ -90,11 +262,14 @@ impl RewritePattern for LowerPerformPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let legacy = if ability::Perform::from_op(ctx, op).is_ok() {
-            false
-        } else if ability::LegacyPerform::from_op(ctx, op).is_ok() {
-            true
-        } else {
+        if ability::Perform::from_op(ctx, op).is_err() {
+            // The explicitly named carrier form remains on the legacy path
+            // until its dedicated cleanup; the final effect ABI has no
+            // result-producing overload.
+            return false;
+        }
+
+        let Ok(shape) = validate_final_perform_shape(ctx, op) else {
             return false;
         };
 
@@ -102,103 +277,31 @@ impl RewritePattern for LowerPerformPattern {
         let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
         let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
 
-        // Operands: [continuation, ...values]
-        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-        let continuation_val = operands[0];
-        let value_operands = &operands[1..];
-
         let t = &self.types;
 
-        // Find evidence parameter from enclosing func's entry block.
-        let evidence_val = find_evidence_from_op(ctx, op);
-
-        // === 1. Find evidence ===
-        let Some(evidence_val) = evidence_val else {
-            // Missing evidence means the frontend detected unhandled effects
-            // and emitted a diagnostic. Skip this op gracefully.
-            return false;
-        };
-
         // === 2. Build the canonical payload product. ===
-        let shift_value_val = if legacy {
-            pack_legacy_payload(ctx, rewriter, location, value_operands, t.anyref)
-        } else {
-            pack_payload(
-                ctx,
-                rewriter,
-                location,
-                ability_ref_type,
-                op_name_sym,
-                value_operands,
-                t.anyref,
-            )
-        };
+        let shift_value_val = pack_payload(
+            ctx,
+            rewriter,
+            location,
+            ability_ref_type,
+            op_name_sym,
+            &shape.values,
+            t.anyref,
+        );
 
-        // === 3. Cast continuation closure to anyref ===
-        let cont_anyref =
-            core::unrealized_conversion_cast(ctx, location, continuation_val, t.anyref);
-        rewriter.insert_op(cont_anyref.op_ref());
-
-        // === 4. Dispatch through target-independent effect ABI ===
-        let dispatch_op = effect::dispatch_cps(
+        let dispatch = effect::dispatch_cps(
             ctx,
             location,
-            evidence_val,
-            cont_anyref.result(ctx),
+            shape.evidence,
+            shape.dispatch,
+            shape.resume,
             shift_value_val,
-            t.anyref,
             ability_ref_type,
             op_name_sym,
         );
-        rewriter.insert_op(dispatch_op.op_ref());
-
-        // === 5. Return the dispatch result (cast to function return type) ===
-        let block = ctx.op(op).parent_block.unwrap();
-        if is_in_func_body(ctx, block) {
-            let result_val = dispatch_op.result(ctx);
-            let func_ret_ty = find_enclosing_func_return_type(ctx, block);
-            let ret_op = if let Some(ret_ty) = func_ret_ty {
-                if is_nil_type(ctx, ret_ty) {
-                    // Nil return type = void in Cranelift; return with no args.
-                    func::r#return(ctx, location, std::iter::empty::<ValueRef>())
-                } else if ret_ty != t.anyref {
-                    let cast = core::unrealized_conversion_cast(ctx, location, result_val, ret_ty);
-                    rewriter.insert_op(cast.op_ref());
-                    func::r#return(ctx, location, [cast.result(ctx)])
-                } else {
-                    func::r#return(ctx, location, [result_val])
-                }
-            } else {
-                func::r#return(ctx, location, [result_val])
-            };
-            rewriter.insert_op(ret_op.op_ref());
-        }
-
-        // Erase perform op, mapping its result to the dispatch result.
-        rewriter.erase_op(vec![dispatch_op.result(ctx)]);
-
-        // Remove dead code after the perform op in the same block.
-        // Only do this when we inserted a func.return terminator (i.e., in
-        // func body); in other regions (scf.if, etc.) the existing terminator
-        // (scf.yield) must be preserved.
-        if is_in_func_body(ctx, block) {
-            let dead_ops: Vec<OpRef> = {
-                let ops = &ctx.block(block).ops;
-                let Some(idx) = ops.iter().position(|&o| o == op) else {
-                    return true;
-                };
-                ops[idx + 1..].to_vec()
-            };
-            // Erase unreachable ops after the perform in reverse order
-            // (consumer before producer) so `erase_op`'s result-use check never
-            // trips on a later dead op still consuming an earlier one. Unlike
-            // the previous detach-only loop, this also clears the dead ops'
-            // operand use-chains (#710).
-            for dead_op in dead_ops.into_iter().rev() {
-                erase_op(ctx, dead_op);
-            }
-        }
-
+        rewriter.insert_op(dispatch.op_ref());
+        rewriter.erase_op_with_unused_results();
         true
     }
 }
@@ -226,6 +329,7 @@ impl RewritePattern for LowerCallPattern {
         let location = ctx.op(op).location;
         let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
         let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
+        let source_result_ty = ctx.op_result_types(op)[0];
 
         // Operands: [...values]
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
@@ -270,8 +374,26 @@ impl RewritePattern for LowerCallPattern {
         );
         rewriter.insert_op(dispatch_op.op_ref());
 
-        // === 4. Erase ability.call, mapping its result to the dispatch result ===
-        rewriter.erase_op(vec![dispatch_op.result(ctx)]);
+        // === 4. Restore the source result after the erased effect ABI. ===
+        // `effect.dispatch_tail` always returns the runtime-erased `anyref`
+        // produced by the handler dispatcher. The source `ability.call`
+        // result remains its exact declared type, so preserve the conversion
+        // boundary explicitly for target materialization.
+        let replacement = if source_result_ty == t.anyref {
+            dispatch_op.result(ctx)
+        } else {
+            let cast = core::unrealized_conversion_cast(
+                ctx,
+                location,
+                dispatch_op.result(ctx),
+                source_result_ty,
+            );
+            let result = cast.result(ctx);
+            rewriter.insert_op(cast.op_ref());
+            result
+        };
+
+        rewriter.erase_op(vec![replacement]);
 
         true
     }
@@ -334,37 +456,6 @@ fn pack_legacy_payload(
     }
 }
 
-/// Check if a TypeRef is `core.nil` (void return type in Cranelift).
-fn is_nil_type(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    let td = ctx.types.get(ty);
-    td.dialect == Symbol::new("core") && td.name == Symbol::new("nil")
-}
-
-/// Find the return type of the enclosing `func.func`.
-fn find_enclosing_func_return_type(ctx: &IrContext, block: BlockRef) -> Option<trunk_ir::TypeRef> {
-    let region = ctx.block(block).parent_region?;
-    let parent_op = ctx.region(region).parent_op?;
-    let func_op = func::Func::from_op(ctx, parent_op).ok()?;
-    let func_ty = func_op.r#type(ctx);
-    let td = ctx.types.get(func_ty);
-    if td.dialect == Symbol::new("core") && td.name == Symbol::new("func") {
-        td.params.first().copied()
-    } else {
-        None
-    }
-}
-
-/// Check if a block belongs directly to a `func.func` body region.
-fn is_in_func_body(ctx: &IrContext, block: BlockRef) -> bool {
-    let Some(region) = ctx.block(block).parent_region else {
-        return false;
-    };
-    let Some(parent_op) = ctx.region(region).parent_op else {
-        return false;
-    };
-    func::Func::matches(ctx, parent_op)
-}
-
 /// Find the evidence parameter by walking up from the op to its enclosing func.
 fn find_evidence_from_op(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
     let mut current_op = op;
@@ -372,17 +463,88 @@ fn find_evidence_from_op(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
         let block = ctx.op(current_op).parent_block?;
         let region = ctx.block(block).parent_region?;
         let parent = ctx.region(region).parent_op?;
+        if let Ok(handle) = ability::HandleDispatch::from_op(ctx, parent) {
+            // A final delimiter owns an exact dynamically extended evidence
+            // value in its body entry block. A perform lexically inside that
+            // body must look up its prompt through that value, rather than
+            // through the enclosing function's outer evidence parameter.
+            // Handler arms are lowered into separate closures, so they do not
+            // satisfy this exact body-region provenance check.
+            if region == handle.body(ctx) {
+                let [evidence] = ctx.block_args(block) else {
+                    return None;
+                };
+                return ability::is_evidence_type_ref(ctx, ctx.value_ty(*evidence))
+                    .then_some(*evidence);
+            }
+        }
         if func::Func::matches(ctx, parent) {
             // Found the enclosing func — check entry block args.
             let func_body = func::Func::from_op(ctx, parent).ok()?.body(ctx);
             let entry = ctx.region(func_body).blocks[0];
-            return ctx
+            if let Some(evidence) = ctx
                 .block_args(entry)
                 .iter()
                 .find(|&&arg| ability::is_evidence_type_ref(ctx, ctx.value_ty(arg)))
-                .copied();
+                .copied()
+            {
+                return Some(evidence);
+            }
+            return captured_evidence_from_closure_environment(ctx, entry);
         }
         current_op = parent;
+    }
+}
+
+/// Recover evidence only from the canonical leading closure-environment
+/// extraction sequence produced by `lower_closure_lambda`.
+///
+/// The environment is the exact entry argument named `__env`; its first
+/// operation is an `adt.ref_cast`, followed immediately by the capture
+/// `adt.struct_get`s. Restricting lookup to that prefix proves provenance and
+/// dominance and rejects unrelated evidence-producing operations later in the
+/// entry block.
+fn captured_evidence_from_closure_environment(
+    ctx: &IrContext,
+    entry: trunk_ir::refs::BlockRef,
+) -> Option<ValueRef> {
+    let env_indices = ctx
+        .block(entry)
+        .args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            (arg.attrs.get_symbol("bind_name") == Some(Symbol::new("__env"))).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let [env_index] = env_indices.as_slice() else {
+        return None;
+    };
+    let env_arg = ctx.block_arg(entry, *env_index as u32);
+
+    let mut ops = ctx.block(entry).ops.iter().copied();
+    let cast = adt::RefCast::from_op(ctx, ops.next()?).ok()?;
+    if cast.r#ref(ctx) != env_arg {
+        return None;
+    }
+    let cast_result = cast.result(ctx);
+
+    let mut candidates = Vec::new();
+    for op in ops {
+        let Ok(get) = adt::StructGet::from_op(ctx, op) else {
+            break;
+        };
+        if get.r#ref(ctx) != cast_result {
+            break;
+        }
+        let result = get.result(ctx);
+        if ability::is_evidence_type_ref(ctx, ctx.value_ty(result)) {
+            candidates.push(result);
+        }
+    }
+    match candidates.as_slice() {
+        [evidence] => Some(*evidence),
+        _ => None,
     }
 }
 
@@ -404,20 +566,31 @@ mod tests {
         "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})"
     }
 
+    fn control_type_decls(ev_ty: &str) -> String {
+        format!(
+            "  !parent = adt.typeref() {{name = @Parent, tribute.cps_parent_result = core.i32}}\n  \
+             !done = closure.closure(core.func(core.never, core.i32)) {{tribute.calling_convention = 2}}\n  \
+             !resume = closure.closure(core.func(core.never, {ev_ty}, !parent, tribute_rt.anyref)) \
+             {{tribute.calling_convention = 2}}\n  \
+             !dispatch = closure.closure(core.func(core.never, {ev_ty}, !resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) \
+             {{tribute.calling_convention = 2}}\n  \
+             !parent_layout = adt.struct() {{fields = [[@done, !done], [@dispatch, !dispatch]], name = @Parent, tribute.cps_parent_result = core.i32}}\n"
+        )
+    }
+
     #[test]
     fn test_lower_perform_basic() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
         let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
 
         let module = parse_test_module(
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %yr = ability.perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
-    func.return %yr
+{control}  func.func @test_fn(%ev: {ev_ty}, %dispatch: !dispatch, %resume: !resume) -> core.never {{
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
   }}
 }}"#
             ),
@@ -426,7 +599,11 @@ mod tests {
         lower_ability_perform(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());
-        assert_snapshot!(ir_text);
+        assert!(!ir_text.contains("ability.perform"), "{ir_text}");
+        assert!(ir_text.contains("effect.dispatch_cps"), "{ir_text}");
+        assert!(!ir_text.contains("func.return"), "{ir_text}");
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &ir_text);
     }
 
     #[test]
@@ -434,16 +611,15 @@ mod tests {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
         let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
 
         let module = parse_test_module(
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+{control}  func.func @test_fn(%ev: {ev_ty}, %dispatch: !dispatch, %resume: !resume) -> core.never {{
     %val = arith.const {{value = 42}} : core.i32
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %yr = ability.perform %k, %val {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
-    func.return %yr
+    %never = ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : core.never
   }}
 }}"#
             ),
@@ -452,7 +628,45 @@ mod tests {
         lower_ability_perform(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());
-        assert_snapshot!(ir_text);
+        assert!(!ir_text.contains("ability.perform"), "{ir_text}");
+        assert!(ir_text.contains("effect.dispatch_cps"), "{ir_text}");
+        assert!(ir_text.contains("@arg0"), "{ir_text}");
+    }
+
+    #[test]
+    fn perform_in_final_handle_body_uses_dynamic_body_evidence() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @run(%outer: {ev_ty}) -> core.never {{
+    %prompt = arith.const {{value = 7}} : core.i32
+    ability.handle_dispatch %outer, %prompt {{ability_refs = []}} {{
+      ^body(%dynamic: {ev_ty}):
+        %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
+        %resume = arith.const {{value = 0}} : tribute_rt.anyref
+        %never = ability.perform %dynamic, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+    }}
+  }}
+}}"#
+            ),
+        );
+        let run = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|op| func::Func::from_op(&ctx, *op).ok())
+            .expect("run function");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let handle = ctx.block(entry).ops[1];
+        let handle = ability::HandleDispatch::from_op(&ctx, handle).expect("delimiter");
+        let body = ctx.region(handle.body(&ctx)).blocks[0];
+        let dynamic = ctx.block_arg(body, 0);
+        let perform = ctx.block(body).ops[2];
+
+        assert_eq!(find_evidence_from_op(&ctx, perform), Some(dynamic));
     }
 
     #[test]
@@ -481,6 +695,36 @@ mod tests {
     }
 
     #[test]
+    fn tail_dispatch_restores_the_exact_source_result_after_erasure() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @call_nat(%ev: {ev_ty}) -> core.i32 {{
+    %result = ability.call {{ability_ref = core.ability_ref() {{name = @Ask}}, op_name = @ask}} : core.i32
+    func.return %result
+  }}
+}}"#
+            ),
+        );
+
+        lower_ability_perform(&mut ctx, module);
+
+        let ir = print_module(&ctx, module.op());
+        assert!(!ir.contains("ability.call"), "{ir}");
+        assert!(ir.contains("effect.dispatch_tail"), "{ir}");
+        assert!(
+            ir.contains("core.unrealized_conversion_cast") && ir.contains(": core.i32"),
+            "the erased handler result must be restored to the source Nat type:\n{ir}"
+        );
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &ir);
+    }
+
+    #[test]
     fn legacy_operations_keep_the_carrier_payload_abi() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
@@ -505,12 +749,254 @@ mod tests {
         lower_ability_perform(&mut ctx, module);
 
         let ir = print_module(&ctx, module.op());
-        assert!(!ir.contains("ability.legacy_"));
+        assert!(ir.contains("ability.legacy_perform"));
+        assert!(!ir.contains("ability.legacy_call"));
         assert!(!ir.contains("__tribute_ability_payload_"));
-        assert!(ir.contains("adt.ref_null"));
-        assert_eq!(ir.matches("effect.dispatch_").count(), 2);
+        assert_eq!(ir.matches("effect.dispatch_").count(), 1);
+        assert_eq!(ir.matches("effect.dispatch_tail").count(), 1);
+        assert!(ir.contains("core.unrealized_conversion_cast %"));
+        assert!(!ir.contains("effect.legacy"));
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &ir);
+    }
+
+    #[test]
+    fn explicit_dynamic_evidence_is_used_without_environment_provenance_scan() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  !env = adt.struct() {{fields = [[@value, core.i32]], name = @env}}
+{control}  func.func @run(%__env: tribute_rt.anyref, %dispatch: !dispatch, %resume: !resume) -> core.never {{
+    %env_cast = adt.ref_cast %__env {{type = !env}} : !env
+    %captured_value = adt.struct_get %env_cast {{field = 0, type = !env}} : core.i32
+    %unrelated = adt.ref_null {{type = {ev_ty}}} : {ev_ty}
+    %never = ability.perform %unrelated, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+            ),
+        );
+        let run = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|op| func::Func::from_op(&ctx, *op).ok())
+            .expect("run function");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let env_arg = ctx.block_arg(entry, 0);
+        assert_eq!(
+            ctx.block(entry).args[0].attrs.get_symbol("bind_name"),
+            Some(Symbol::new("__env"))
+        );
+        let entry_ops = ctx.block(entry).ops.clone();
+        let env_cast = adt::RefCast::from_op(&ctx, entry_ops[0]).expect("leading environment cast");
+        assert_eq!(env_cast.r#ref(&ctx), env_arg);
+        let captured_value =
+            adt::StructGet::from_op(&ctx, entry_ops[1]).expect("leading environment field");
+        assert_eq!(captured_value.r#ref(&ctx), env_cast.result(&ctx));
+        assert!(!ability::is_evidence_type_ref(
+            &ctx,
+            ctx.value_ty(captured_value.result(&ctx))
+        ));
+        let unrelated =
+            adt::RefNull::from_op(&ctx, entry_ops[2]).expect("later unrelated evidence producer");
+        assert!(ability::is_evidence_type_ref(
+            &ctx,
+            ctx.value_ty(unrelated.result(&ctx))
+        ));
+        lower_ability_perform(&mut ctx, module);
+
+        let after = print_module(&ctx, module.op());
+        assert!(!after.contains("ability.perform"), "{after}");
+        assert!(after.contains("effect.dispatch_cps"), "{after}");
+    }
+
+    #[test]
+    fn prevalidation_preserves_mixed_valid_and_invalid_function() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+{control}  func.func @run(%ev: {ev_ty}, %dispatch: !dispatch, %resume: !resume, %condition: core.i1) -> core.never {{
+    %never = scf.if %condition : core.never {{
+      %valid = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+    }} {{
+      %invalid = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+      func.unreachable
+    }}
+  }}
+}}"#
+            ),
+        );
+        let run = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|op| func::Func::from_op(&ctx, *op).ok())
+            .expect("run function");
+        let before = print_module(&ctx, module.op());
+
+        let error = LowerAbilityPerform.run(&mut ctx, run).unwrap_err();
+
+        assert!(error.to_string().contains("not in proper-tail position"));
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn final_perform_prevalidation_rejects_unproven_control_values_without_mutation() {
+        let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
+        let cases = [
+            (
+                format!(
+                    r#"core.module @test {{
+{control}  func.func @run(%wrong: core.i32, %dispatch: !dispatch, %resume: !resume) -> core.never {{
+    %never = ability.perform %wrong, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+                ),
+                "dynamic evidence operand has the wrong exact type",
+            ),
+            (
+                format!(
+                    r#"core.module @test {{
+{control}  func.func @run(%ev: {ev_ty}, %dispatch: tribute_rt.anyref, %resume: !resume) -> core.never {{
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+                ),
+                "dispatch operand is not a convention-proven CPS closure",
+            ),
+            (
+                format!(
+                    r#"core.module @test {{
+{control}  func.func @run(%ev: {ev_ty}, %dispatch: !dispatch, %resume: tribute_rt.anyref) -> core.never {{
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+                ),
+                "resume operand does not match Dispatch<R>'s exact Resume<R> type",
+            ),
+            (
+                format!(
+                    r#"core.module @test {{
+{control}  !other_parent = adt.typeref() {{name = @Other, tribute.cps_parent_result = core.i64}}
+  !other_resume = closure.closure(core.func(core.never, {ev_ty}, !other_parent, tribute_rt.anyref)) {{tribute.calling_convention = 2}}
+  func.func @run(%ev: {ev_ty}, %dispatch: !dispatch, %resume: !other_resume) -> core.never {{
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+                ),
+                "resume operand does not match Dispatch<R>'s exact Resume<R> type",
+            ),
+            (
+                format!(
+                    r#"core.module @test {{
+{control}  !missing_layout_parent = adt.typeref() {{name = @MissingLayout, tribute.cps_parent_result = core.i32}}
+  !missing_layout_resume = closure.closure(core.func(core.never, {ev_ty}, !missing_layout_parent, tribute_rt.anyref)) {{tribute.calling_convention = 2}}
+  !missing_layout_dispatch = closure.closure(core.func(core.never, {ev_ty}, !missing_layout_resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) {{tribute.calling_convention = 2}}
+  func.func @run(%ev: {ev_ty}, %dispatch: !missing_layout_dispatch, %resume: !missing_layout_resume) -> core.never {{
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+                ),
+                "Dispatch<R> names a malformed Resume<R> callback",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let mut ctx = IrContext::new();
+            init_common_types(&mut ctx);
+            let module = parse_test_module(&mut ctx, &input);
+            let run = module
+                .ops(&ctx)
+                .iter()
+                .find_map(|op| func::Func::from_op(&ctx, *op).ok())
+                .expect("run function");
+            let before = print_module(&ctx, module.op());
+            let error = LowerAbilityPerform.run(&mut ctx, run).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn final_perform_consumes_canonical_closure_pack_provenance() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+{control}  !closure = adt.struct(core.i32, tribute_rt.anyref) {{name = @_closure}}
+  func.func @resume_impl(%ev: {ev_ty}, %parent: !parent, %input: tribute_rt.anyref) -> core.never {{
+    func.unreachable
+  }}
+  func.func @run(%ev: {ev_ty}, %dispatch: !dispatch, %env: tribute_rt.anyref) -> core.never {{
+    %resume_fn = func.constant @resume_impl : core.func(core.never, {ev_ty}, !parent, tribute_rt.anyref)
+    %resume = adt.struct_new %resume_fn, %env {{type = !closure, tribute.closure_callable_type = !resume}} : !closure
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+            ),
+        );
+        let run = module
+            .ops(&ctx)
+            .iter()
+            .filter_map(|op| func::Func::from_op(&ctx, *op).ok())
+            .find(|func_op| func_op.sym_name(&ctx) == Symbol::new("run"))
+            .expect("run function");
+
+        LowerAbilityPerform.run(&mut ctx, run).unwrap();
+
+        let ir = print_module(&ctx, module.op());
+        assert!(!ir.contains("ability.perform"), "{ir}");
+        assert!(!ir.contains(CLOSURE_CALLABLE_TYPE_ATTR), "{ir}");
+    }
+
+    #[test]
+    fn final_perform_rejects_spoofed_closure_pack_provenance_without_mutation() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let control = control_type_decls(ev_ty);
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+{control}  !closure = adt.struct(core.i32, tribute_rt.anyref) {{name = @_closure}}
+  func.func @run(%ev: {ev_ty}, %dispatch: !dispatch, %env: tribute_rt.anyref) -> core.never {{
+    %not_a_function = arith.const {{value = 0}} : core.i32
+    %resume = adt.struct_new %not_a_function, %env {{type = !closure, tribute.closure_callable_type = !resume}} : !closure
+    %never = ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : core.never
+  }}
+}}"#
+            ),
+        );
+        let run = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|op| func::Func::from_op(&ctx, *op).ok())
+            .expect("run function");
+        let before = print_module(&ctx, module.op());
+
+        let error = LowerAbilityPerform.run(&mut ctx, run).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid temporary closure callable provenance"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -522,10 +1008,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @test_fn() -> tribute_rt.anyref {
-    %k = arith.const {value = 0} : tribute_rt.anyref
-    %yr = ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-    func.return %yr
+  func.func @test_fn() -> core.never {
+    %dispatch = arith.const {value = 0} : tribute_rt.anyref
+    %resume = arith.const {value = 0} : tribute_rt.anyref
+    %never = ability.perform %dispatch, %resume {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.never
   }
 }"#,
         );

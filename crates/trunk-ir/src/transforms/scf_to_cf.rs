@@ -53,7 +53,10 @@ pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
 
 /// Lower all `scf` operations in one function to `cf` operations.
 pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
-    transform_region(ctx, func.body(ctx));
+    let Some(&body) = ctx.op(func.op_ref()).regions.first() else {
+        return;
+    };
+    transform_region(ctx, body);
 }
 
 /// Build a function-anchored SCF-to-CF lowering pass.
@@ -796,6 +799,48 @@ mod tests {
             untouched_names.iter().any(|n| n.starts_with("scf.")),
             "untouched function should retain scf ops: {untouched_names:?}"
         );
+    }
+
+    #[test]
+    fn function_scoped_scf_lowering_preserves_bodyless_declarations() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @decl(%value: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @defined() -> core.nil {
+    %condition = arith.const {value = true} : core.i1
+    scf.if %condition : core.nil {
+      scf.yield
+    } {
+      scf.yield
+    }
+    func.return
+  }
+}"#,
+        );
+
+        let mut pm = crate::pass::PassManager::new();
+        pm.nest::<func::Func>().add_pass(scf_to_cf_pass());
+        let core_module = core::Module::from_op(&ctx, module.op()).unwrap();
+        pm.run(&mut ctx, core_module).unwrap();
+
+        let declaration = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
+        assert!(
+            ctx.op(declaration.op_ref())
+                .attributes
+                .get_text("abi")
+                .is_some_and(|abi| abi == "C")
+        );
+
+        let defined = func::Func::from_op(&ctx, module.ops(&ctx)[1]).unwrap();
+        let names = collect_op_names(&ctx, defined.body(&ctx));
+        assert!(
+            !names.iter().any(|name| name.starts_with("scf.")),
+            "{names:?}"
+        );
+        assert!(names.iter().any(|name| name == "cf.cond_br"), "{names:?}");
     }
 
     #[test]

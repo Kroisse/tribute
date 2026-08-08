@@ -1,5 +1,12 @@
 //! Arena-based func dialect.
 
+/// Exact physical callable signature preserved when closure lowering projects
+/// a typed closure value to an untyped function/table reference.
+///
+/// Backends must consume this metadata rather than reconstructing an indirect
+/// signature from representation operands.
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "func.indirect_call_signature";
+
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
 crate::register_isolated_op!(func.func);

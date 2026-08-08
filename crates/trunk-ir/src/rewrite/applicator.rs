@@ -42,10 +42,10 @@ impl RewriteScope for Module {
 }
 
 impl RewriteScope for func::Func {
-    type Regions = std::iter::Once<RegionRef>;
+    type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        std::iter::once(self.body(ctx))
+        ctx.op(self.op_ref()).regions.first().copied().into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -54,10 +54,10 @@ impl RewriteScope for func::Func {
 }
 
 impl RewriteScope for wasm::Func {
-    type Regions = std::iter::Once<RegionRef>;
+    type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        std::iter::once(self.body(ctx))
+        ctx.op(self.op_ref()).regions.first().copied().into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -490,6 +490,21 @@ mod tests {
         func::Func::from_op(ctx, func_op).expect("test func should be valid")
     }
 
+    fn make_bodyless_declaration(
+        ctx: &mut IrContext,
+        loc: Location,
+        dialect: &'static str,
+        name: &'static str,
+    ) -> OpRef {
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let func_ty = crate::dialect::core::func(ctx, nil_ty, []).as_type_ref();
+        let declaration = OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
+            .attr("type", Attribute::Type(func_ty))
+            .build(ctx);
+        ctx.create_op(declaration)
+    }
+
     fn first_nested_op(ctx: &IrContext, op: OpRef) -> OpRef {
         let region = ctx.op(op).regions[0];
         let block = ctx.region(region).blocks[0];
@@ -730,6 +745,36 @@ mod tests {
             ctx.op(first_nested_op(&ctx, sibling_func.op_ref())).name,
             Symbol::new("source")
         );
+    }
+
+    #[test]
+    fn bodyless_func_declaration_has_empty_rewrite_scope() {
+        let (mut ctx, loc) = test_ctx();
+        let declaration = make_bodyless_declaration(&mut ctx, loc, "func", "external");
+        let declaration =
+            func::Func::from_op(&ctx, declaration).expect("bodyless func declaration");
+
+        let result =
+            PatternApplicator::new(TypeConverter::new()).apply_partial(&mut ctx, declaration);
+
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.total_changes, 0);
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
+    }
+
+    #[test]
+    fn bodyless_wasm_declaration_has_empty_rewrite_scope() {
+        let (mut ctx, loc) = test_ctx();
+        let declaration = make_bodyless_declaration(&mut ctx, loc, "wasm", "external");
+        let declaration =
+            wasm::Func::from_op(&ctx, declaration).expect("bodyless wasm declaration");
+
+        let result =
+            PatternApplicator::new(TypeConverter::new()).apply_partial(&mut ctx, declaration);
+
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.total_changes, 0);
+        assert!(ctx.op(declaration.op_ref()).regions.is_empty());
     }
 
     #[test]

@@ -9,9 +9,12 @@ use std::error::Error;
 use std::fmt;
 
 use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, set_calling_convention,
+    CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, cps_closure_function_type,
+    cps_completion_type, cps_dispatch_type, cps_done_type, cps_parent_layout_type,
+    cps_parent_ref_type, cps_resume_exact_type, cps_resume_type, get_calling_convention,
+    physical_closure_type, set_calling_convention,
 };
-use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -219,6 +222,49 @@ fn verify_type_boundary(
     failures
 }
 
+/// Source-logical Cps callable identity is never representational data. A
+/// Direct-to-Cps adaptation must be an explicit `tribute_control.lambda`, not
+/// an unrealized conversion cast deferred to legalization.
+fn verify_pre_cps_control_casts(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
+    fn is_cps_callable(ctx: &IrContext, ty: TypeRef) -> bool {
+        tribute_control::Callable::from_type_ref(ctx, ty).is_some()
+            && tribute_control::callable_convention(ctx, ty)
+                == Some(tribute_control::CallingConvention::Cps)
+    }
+
+    fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
+        let data = ctx.op(op);
+        if data.dialect == Symbol::new("core")
+            && data.name == Symbol::new("unrealized_conversion_cast")
+            && (ctx
+                .op_operands(op)
+                .iter()
+                .any(|value| is_cps_callable(ctx, ctx.value_ty(*value)))
+                || ctx
+                    .op_result_types(op)
+                    .iter()
+                    .any(|ty| is_cps_callable(ctx, *ty)))
+        {
+            failures.push(BoundaryFailure {
+                op: Some(op),
+                location: Some(data.location),
+                message: "CPS control callables may not cross unrealized conversion casts".into(),
+            });
+        }
+        for region in data.regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for child in ctx.block(block).ops.iter().copied() {
+                    visit(ctx, child, failures);
+                }
+            }
+        }
+    }
+
+    let mut failures = Vec::new();
+    visit(ctx, module.op(), &mut failures);
+    failures
+}
+
 fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
     fn check_dispatcher(
         ctx: &IrContext,
@@ -241,7 +287,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
                     && params.len() == 5
                     && type_is(ctx, params[0], "core", "never")
                     && params[1] == evidence
-                    && type_is(ctx, params[2], "tribute_rt", "anyref")
+                    && tribute_core::cps_parent_result_type(ctx, params[2]).is_some()
                     && type_is(ctx, params[3], "core", "i32")
                     && type_is(ctx, params[4], "tribute_rt", "anyref")
             } else {
@@ -296,7 +342,9 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
         if ability::HandleDispatch::matches(ctx, op) {
             let operands = ctx.op_operands(op);
-            if let Some((evidence, dispatchers)) = operands.split_first() {
+            if let Some((evidence, operands)) = operands.split_first()
+                && let Some((_, dispatchers)) = operands.split_first()
+            {
                 let evidence_ty = ctx.value_ty(*evidence);
                 for pair in dispatchers.chunks_exact(2) {
                     check_dispatcher(ctx, op, pair[0], evidence_ty, false, failures);
@@ -318,11 +366,337 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     failures
 }
 
+/// Verify the immutable, result-indexed `Parent<R>` control frame before
+/// closure lowering erases closure values into their target representation.
+///
+/// This is deliberately structural: a generated helper name is never used as
+/// provenance.  The tagged nominal reference, its ordered layout fields, and
+/// exact CPS closure signatures establish the only accepted control boundary.
+fn verify_parent_control_abi(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
+    fn cps_function(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
+        cps_closure_function_type(ctx, closure)
+    }
+
+    fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
+        type_is(ctx, ty, "core", "never")
+    }
+
+    fn is_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
+        type_is(ctx, ty, "tribute_rt", "anyref")
+    }
+
+    fn is_i32(ctx: &IrContext, ty: TypeRef) -> bool {
+        type_is(ctx, ty, "core", "i32")
+    }
+
+    fn is_evidence(ctx: &IrContext, ty: TypeRef) -> bool {
+        ability::is_evidence_type_ref(ctx, ty)
+    }
+
+    fn is_done(ctx: &IrContext, ty: TypeRef, result: TypeRef) -> bool {
+        let Some(function) = cps_function(ctx, ty) else {
+            return false;
+        };
+        let data = ctx.types.get(function);
+        data.params.len() == 2 && is_never(ctx, data.params[0]) && data.params[1] == result
+    }
+
+    fn is_resume(ctx: &IrContext, ty: TypeRef, parent: TypeRef) -> bool {
+        let Some(function) = cps_function(ctx, ty) else {
+            return false;
+        };
+        let data = ctx.types.get(function);
+        data.params.len() == 4
+            && is_never(ctx, data.params[0])
+            && is_evidence(ctx, data.params[1])
+            && data.params[2] == parent
+            && is_anyref(ctx, data.params[3])
+    }
+
+    fn is_dispatch(ctx: &IrContext, ty: TypeRef, parent: TypeRef) -> bool {
+        let Some(function) = cps_function(ctx, ty) else {
+            return false;
+        };
+        let data = ctx.types.get(function);
+        data.params.len() == 7
+            && is_never(ctx, data.params[0])
+            && is_evidence(ctx, data.params[1])
+            && is_resume(ctx, data.params[2], parent)
+            && is_i32(ctx, data.params[3])
+            && is_i32(ctx, data.params[4])
+            && is_i32(ctx, data.params[5])
+            && is_anyref(ctx, data.params[6])
+    }
+
+    fn is_parent_layout(ctx: &IrContext, parent: TypeRef, layout: TypeRef) -> bool {
+        let Some(result) = tribute_core::cps_parent_result_type(ctx, parent) else {
+            return false;
+        };
+        let Some(name) = ctx.types.get(parent).attrs.get_symbol("name") else {
+            return false;
+        };
+        let data = ctx.types.get(layout);
+        if data.dialect != Symbol::new("adt")
+            || data.name != Symbol::new("struct")
+            || data.attrs.get_symbol("name") != Some(name)
+            || data.attrs.get_type(tribute_core::CPS_PARENT_RESULT_ATTR) != Some(result)
+        {
+            return false;
+        }
+        let Some(Attribute::List(fields)) = data.attrs.get("fields") else {
+            return false;
+        };
+        let [Attribute::List(done), Attribute::List(dispatch)] = fields.as_slice() else {
+            return false;
+        };
+        let [Attribute::Symbol(done_name), Attribute::Type(done_type)] = done.as_slice() else {
+            return false;
+        };
+        let [
+            Attribute::Symbol(dispatch_name),
+            Attribute::Type(dispatch_type),
+        ] = dispatch.as_slice()
+        else {
+            return false;
+        };
+        *done_name == Symbol::new("done")
+            && is_done(ctx, *done_type, result)
+            && *dispatch_name == Symbol::new("dispatch")
+            && is_dispatch(ctx, *dispatch_type, parent)
+    }
+
+    fn done_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+        let function = cps_function(ctx, ty)?;
+        let data = ctx.types.get(function);
+        (data.params.len() == 2 && is_never(ctx, data.params[0])).then_some(data.params[1])
+    }
+
+    fn preflight_parent_types(
+        ctx: &IrContext,
+        module: Module,
+    ) -> (HashMap<TypeRef, TypeRef>, Vec<BoundaryFailure>) {
+        let parents: Vec<_> = ctx
+            .types
+            .iter()
+            .filter_map(|(ty, _)| tribute_core::cps_parent_result_type(ctx, ty).map(|_| ty))
+            .collect();
+        let mut layouts = HashMap::new();
+        let mut failures = Vec::new();
+        for parent in parents {
+            let result = tribute_core::cps_parent_result_type(ctx, parent)
+                .expect("parent list is filtered by result provenance");
+            let Some(name) = ctx.types.get(parent).attrs.get_symbol("name") else {
+                failures.push(BoundaryFailure {
+                    op: Some(module.op()),
+                    location: Some(ctx.op(module.op()).location),
+                    message: format!("Parent<{result}> is missing its nominal name provenance"),
+                });
+                continue;
+            };
+            let named_layouts: Vec<_> = ctx
+                .types
+                .iter()
+                .filter_map(|(candidate, data)| {
+                    (data.dialect == Symbol::new("adt")
+                        && data.name == Symbol::new("struct")
+                        && data.attrs.get_symbol("name") == Some(name))
+                    .then_some(candidate)
+                })
+                .collect();
+            let canonical: Vec<_> = named_layouts
+                .iter()
+                .copied()
+                .filter(|layout| is_parent_layout(ctx, parent, *layout))
+                .collect();
+            if named_layouts.len() != 1 || canonical.len() != 1 {
+                failures.push(BoundaryFailure {
+                    op: Some(module.op()),
+                    location: Some(ctx.op(module.op()).location),
+                    message: format!(
+                        "Parent<{result}> requires exactly one canonical immutable layout; found {} matching-name layout(s) and {} exact layout(s)",
+                        named_layouts.len(),
+                        canonical.len()
+                    ),
+                });
+                continue;
+            }
+            layouts.insert(parent, canonical[0]);
+        }
+
+        for (closure, _) in ctx.types.iter() {
+            let Some(function) = cps_function(ctx, closure) else {
+                continue;
+            };
+            let params = &ctx.types.get(function).params;
+            if params.len() == 3
+                && is_never(ctx, params[0])
+                && (done_result(ctx, params[1]).is_some()
+                    || tribute_core::cps_parent_result_type(ctx, params[1]).is_some())
+            {
+                failures.push(BoundaryFailure {
+                    op: Some(module.op()),
+                    location: Some(ctx.op(module.op()).location),
+                    message: "Completion and Resume closures must take explicit Evidence, Parent<R>, not an obsolete two-operand callback form".into(),
+                });
+            }
+        }
+        (layouts, failures)
+    }
+
+    fn parent_layout_field(ctx: &IrContext, layout: TypeRef, index: usize) -> Option<TypeRef> {
+        let Attribute::List(fields) = ctx.types.get(layout).attrs.get("fields")? else {
+            return None;
+        };
+        let Attribute::List(field) = fields.get(index)? else {
+            return None;
+        };
+        let Attribute::Type(ty) = field.get(1)? else {
+            return None;
+        };
+        Some(*ty)
+    }
+
+    fn is_control_value(ctx: &IrContext, ty: TypeRef) -> bool {
+        tribute_core::cps_parent_result_type(ctx, ty).is_some()
+            || cps_closure_function_type(ctx, ty).is_some()
+    }
+
+    fn failure(ctx: &IrContext, op: OpRef, message: impl Into<String>) -> BoundaryFailure {
+        BoundaryFailure {
+            op: Some(op),
+            location: Some(ctx.op(op).location),
+            message: message.into(),
+        }
+    }
+
+    fn visit(
+        ctx: &IrContext,
+        op: OpRef,
+        layouts: &HashMap<TypeRef, TypeRef>,
+        failures: &mut Vec<BoundaryFailure>,
+    ) {
+        let data = ctx.op(op);
+        let operands = ctx.op_operands(op);
+        let results = ctx.op_results(op);
+        if data.dialect == Symbol::new("adt") && data.name == Symbol::new("struct_new") {
+            if let [result_value] = results {
+                let parent = ctx.value_ty(*result_value);
+                if let Some(result) = tribute_core::cps_parent_result_type(ctx, parent) {
+                    let layout = layouts.get(&parent).copied();
+                    let expected_done =
+                        layout.and_then(|layout| parent_layout_field(ctx, layout, 0));
+                    let expected_dispatch =
+                        layout.and_then(|layout| parent_layout_field(ctx, layout, 1));
+                    if layout.is_none()
+                        || data.attributes.get_type("type") != layout
+                        || operands.len() != 2
+                        || operands.first().map(|value| ctx.value_ty(*value)) != expected_done
+                        || operands.get(1).map(|value| ctx.value_ty(*value)) != expected_dispatch
+                    {
+                        failures.push(failure(
+                            ctx,
+                            op,
+                            format!("Parent<{result}> must be packed with exact immutable done/dispatch fields"),
+                        ));
+                    }
+                }
+            }
+        } else if data.dialect == Symbol::new("adt") && data.name == Symbol::new("struct_get") {
+            if let Some(parent_value) = operands.first() {
+                let parent = ctx.value_ty(*parent_value);
+                if let Some(result) = tribute_core::cps_parent_result_type(ctx, parent) {
+                    let layout = layouts.get(&parent).copied();
+                    let field = data.attributes.get_u32("field").ok().flatten();
+                    let expected = layout.and_then(|layout| {
+                        field.and_then(|field| parent_layout_field(ctx, layout, field as usize))
+                    });
+                    if !matches!(field, Some(0 | 1))
+                        || data.attributes.get_type("type") != layout
+                        || results.first().map(|value| ctx.value_ty(*value)) != expected
+                    {
+                        failures.push(failure(
+                            ctx,
+                            op,
+                            format!("Parent<{result}> field access must use its exact done/dispatch layout"),
+                        ));
+                    }
+                }
+            }
+        } else if data.dialect == Symbol::new("adt") && data.name == Symbol::new("struct_set") {
+            if operands.first().is_some_and(|value| {
+                tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+            }) {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "Parent is immutable and may not be mutated",
+                ));
+            }
+        } else if data.dialect == Symbol::new("core")
+            && data.name == Symbol::new("unrealized_conversion_cast")
+        {
+            if operands
+                .first()
+                .is_some_and(|value| is_control_value(ctx, ctx.value_ty(*value)))
+                || results
+                    .first()
+                    .is_some_and(|value| is_control_value(ctx, ctx.value_ty(*value)))
+            {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "Parent and CPS control closures may not cross unrealized conversion casts",
+                ));
+            }
+        } else if data.dialect == Symbol::new("func")
+            && data.name == Symbol::new("tail_call_indirect")
+            && get_calling_convention(ctx, op) == Some(CallingConvention::Cps)
+        {
+            let Some(callee) = operands.first() else {
+                return;
+            };
+            let Some(function) = cps_closure_function_type(ctx, ctx.value_ty(*callee)) else {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "CPS indirect transfer requires an exact convention-proven closure callee",
+                ));
+                return;
+            };
+            let params = &ctx.types.get(function).params;
+            let operand_types: Vec<_> = operands[1..]
+                .iter()
+                .map(|value| ctx.value_ty(*value))
+                .collect();
+            if params.first().is_none_or(|result| !is_never(ctx, *result))
+                || params.get(1..) != Some(operand_types.as_slice())
+            {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "CPS indirect transfer operands do not match its exact control closure signature",
+                ));
+            }
+        }
+        for region in data.regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for child in ctx.block(block).ops.iter().copied() {
+                    visit(ctx, child, layouts, failures);
+                }
+            }
+        }
+    }
+
+    let (layouts, mut failures) = preflight_parent_types(ctx, module);
+    visit(ctx, module.op(), &layouts, &mut failures);
+    failures
+}
+
 fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
     fn collect(
         ctx: &IrContext,
         op: OpRef,
-        signatures: &mut HashMap<Symbol, (TypeRef, Option<i64>)>,
+        signatures: &mut HashMap<Symbol, (TypeRef, Option<i64>, bool)>,
     ) {
         let data = ctx.op(op);
         if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
@@ -339,7 +713,9 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                 .get_i64(CALLING_CONVENTION_ATTR)
                 .ok()
                 .flatten();
-            signatures.insert(symbol, (ty, convention));
+            let intrinsic_declaration =
+                data.regions.is_empty() && data.attributes.get_str("abi") == Some("intrinsic");
+            signatures.insert(symbol, (ty, convention, intrinsic_declaration));
         }
         for region in ctx.op(op).regions.iter().copied() {
             for block in ctx.region(region).blocks.iter().copied() {
@@ -353,7 +729,7 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
     fn visit(
         ctx: &IrContext,
         op: OpRef,
-        signatures: &HashMap<Symbol, (TypeRef, Option<i64>)>,
+        signatures: &HashMap<Symbol, (TypeRef, Option<i64>, bool)>,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
@@ -395,7 +771,7 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                 });
                 return;
             };
-            let Some((func_ty, convention)) = signatures.get(&callee) else {
+            let Some((func_ty, convention, _)) = signatures.get(&callee) else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -452,8 +828,13 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
         } else if data.dialect == Symbol::new("func") && data.name == Symbol::new("call") {
             let callee = data.attributes.get_symbol("callee");
             if let Some(callee) = callee {
-                match signatures.get(&callee) {
-                    Some((_, target_convention)) if *target_convention == op_convention => {}
+                let exact = signatures.get(&callee);
+                let target = exact.or_else(|| {
+                    let base = tribute_control::specialized_intrinsic_base(callee)?;
+                    signatures.get(&base).filter(|(_, _, intrinsic)| *intrinsic)
+                });
+                match target {
+                    Some((_, target_convention, _)) if *target_convention == op_convention => {}
                     Some(_) => failures.push(BoundaryFailure {
                         op: Some(op),
                         location: Some(data.location),
@@ -631,6 +1012,7 @@ pub fn verify_tribute_control_pre_cps(
                 }),
         );
     }
+    failures.extend(verify_pre_cps_control_casts(ctx, module));
     failures.extend(verify_type_boundary(ctx, module, TypeBoundary::Pre));
     failures.extend(verify_source_conversion_shapes(ctx, module));
     failures.extend(
@@ -686,6 +1068,7 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
+    failures.extend(verify_parent_control_abi(ctx, module));
     failures.extend(verify_physical_callable_graph(ctx, module));
     failures.extend(
         trunk_ir::validation::validate_all(ctx, module)
@@ -721,6 +1104,15 @@ struct CallableInfo {
     convention: CallingConvention,
     source_result: TypeRef,
     source_params: Vec<TypeRef>,
+    intrinsic_declaration: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ParentTypes {
+    reference: TypeRef,
+    layout: TypeRef,
+    done: TypeRef,
+    dispatch: TypeRef,
 }
 
 #[derive(Clone)]
@@ -733,6 +1125,35 @@ struct HandlerArmInfo {
     operation_result: TypeRef,
     params: Vec<TypeRef>,
     has_resume_token: bool,
+    parent_type: Option<TypeRef>,
+}
+
+/// Immutable recipe for rebuilding one exact handler token. Grouping these
+/// values makes it explicit that a token receives the dynamic Parent only at
+/// invocation; the factory metadata itself is never overwritten by re-entry.
+#[derive(Clone)]
+struct HandlerTokenFactory {
+    resume_body: ValueRef,
+    completion: ValueRef,
+    input_type: TypeRef,
+    body_type: TypeRef,
+    answer_type: TypeRef,
+    dispatch_factory: Symbol,
+    dispatch_factory_args: Vec<ValueRef>,
+}
+
+/// The exact dispatcher to install in a resumed `Parent<X>`.
+enum ResumeDispatchRebuild {
+    Adapter { factory: Symbol },
+    LocalFactory(LocalDispatchFactory),
+}
+
+/// Immutable inputs for rebuilding the lexical dispatcher after a foreign
+/// resumption. The dynamic Parent is supplied by `build_rebound_resume`; this
+/// recipe contains only the lexical factory and captures it needs to rebuild.
+struct LocalDispatchFactory {
+    factory: Symbol,
+    args: Vec<ValueRef>,
 }
 
 struct Converter<'a> {
@@ -741,16 +1162,32 @@ struct Converter<'a> {
     funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
     current_module: OpRef,
     converted_types: HashMap<TypeRef, TypeRef>,
+    parents: HashMap<TypeRef, ParentTypes>,
+    parent_layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
 }
 
 #[derive(Clone)]
 struct Flow {
     convention: CallingConvention,
+    /// Evidence used to evaluate the current lexical computation.
     evidence: Option<ValueRef>,
-    exit_k: Option<ValueRef>,
-    root_exit_k: Option<ValueRef>,
-    answer_type: TypeRef,
+    /// Evidence carried by an explicit callback context. A resumed suffix uses
+    /// this dynamic value when it performs again, while a handler arm may keep
+    /// evaluating under its outer lexical evidence.
+    resume_evidence: Option<ValueRef>,
+    done: Option<ValueRef>,
+    dispatch: Option<ValueRef>,
+    boundary_result: TypeRef,
+    /// A handler arm routes resumed suffixes through this completion using the
+    /// dynamic outer `Done` supplied to the suffix frame.
+    resume_after: Option<ValueRef>,
+    /// The enclosing `Done<O>` used to invoke a resumed arm suffix. This is
+    /// distinct from the arm's normal `Done<A>` exit.
+    resume_done: Option<ValueRef>,
+    /// Resultless structured control uses this exact zero-argument suffix.
+    void_done: Option<ValueRef>,
+    preserve_scf_yield: bool,
 }
 
 impl<'a> Converter<'a> {
@@ -766,6 +1203,8 @@ impl<'a> Converter<'a> {
             funcs_by_module,
             current_module,
             converted_types: HashMap::new(),
+            parents: HashMap::new(),
+            parent_layout_aliases: Vec::new(),
             helper_index: 0,
         }
     }
@@ -775,6 +1214,26 @@ impl<'a> Converter<'a> {
             .get(&self.current_module)
             .and_then(|funcs| funcs.get(&symbol))
             .cloned()
+    }
+
+    fn current_direct_call_target(&self, source: OpRef, symbol: Symbol) -> Option<CallableInfo> {
+        if let Some(exact) = self.current_func(symbol) {
+            return Some(exact);
+        }
+        let base = tribute_control::specialized_intrinsic_base(symbol)?;
+        let mut target = self.current_func(base)?;
+        if !target.intrinsic_declaration {
+            return None;
+        }
+        target.symbol = symbol;
+        target.source_result = *self.ctx.op_result_types(source).first()?;
+        target.source_params = self
+            .ctx
+            .op_operands(source)
+            .iter()
+            .map(|value| self.ctx.value_ty(*value))
+            .collect();
+        Some(target)
     }
 
     fn malformed_source(
@@ -802,17 +1261,124 @@ impl<'a> Converter<'a> {
         tribute_rt::anyref(self.ctx).as_type_ref()
     }
 
-    fn done_k_type(&mut self, answer: TypeRef) -> TypeRef {
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [answer]).as_type_ref();
-        closure::closure(self.ctx, function).as_type_ref()
+    fn i32_type(&mut self) -> TypeRef {
+        self.ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
-        let never = self.never_type();
-        let done_k = self.done_k_type(answer);
-        let function = core::func(self.ctx, never, [done_k, input]).as_type_ref();
-        closure::closure(self.ctx, function).as_type_ref()
+    fn done_k_type(&mut self, result: TypeRef) -> TypeRef {
+        cps_done_type(self.ctx, result)
+    }
+
+    fn completion_type(&mut self, value: TypeRef, boundary: TypeRef) -> TypeRef {
+        let evidence = self.evidence_type();
+        let parent = self.parent_types(boundary).reference;
+        cps_completion_type(self.ctx, evidence, value, parent)
+    }
+
+    fn resumption_type(&mut self, input: TypeRef, boundary: TypeRef) -> TypeRef {
+        let evidence = self.evidence_type();
+        let parent = self.parent_types(boundary).reference;
+        cps_resume_exact_type(self.ctx, evidence, input, parent)
+    }
+
+    fn erased_resumption_type(&mut self, boundary: TypeRef) -> TypeRef {
+        let evidence = self.evidence_type();
+        let anyref = self.anyref_type();
+        let parent = self.parent_types(boundary).reference;
+        cps_resume_type(self.ctx, evidence, parent, anyref)
+    }
+
+    fn dispatch_type(&mut self, boundary: TypeRef) -> TypeRef {
+        self.parent_types(boundary).dispatch
+    }
+
+    fn parent_types(&mut self, result: TypeRef) -> ParentTypes {
+        if let Some(parent) = self.parents.get(&result).copied() {
+            return parent;
+        }
+        let name = Symbol::from_dynamic(&format!("__tribute_parent_{result:?}"));
+        let reference = cps_parent_ref_type(self.ctx, name, result);
+        let done = self.done_k_type(result);
+        let evidence = self.evidence_type();
+        let anyref = self.anyref_type();
+        let i32 = self.i32_type();
+        let dispatch = cps_dispatch_type(self.ctx, evidence, reference, anyref, i32);
+        let layout = cps_parent_layout_type(self.ctx, name, result, done, dispatch);
+        self.parent_layout_aliases.push((name, layout));
+        let parent = ParentTypes {
+            reference,
+            layout,
+            done,
+            dispatch,
+        };
+        self.parents.insert(result, parent);
+        parent
+    }
+
+    fn pack_parent(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        result: TypeRef,
+        done: ValueRef,
+        dispatch: ValueRef,
+    ) -> ValueRef {
+        let parent = self.parent_types(result);
+        assert_eq!(
+            self.ctx.value_ty(done),
+            parent.done,
+            "Parent done type mismatch"
+        );
+        assert_eq!(
+            self.ctx.value_ty(dispatch),
+            parent.dispatch,
+            "Parent dispatch type mismatch"
+        );
+        let pack = adt::struct_new(
+            self.ctx,
+            location,
+            [done, dispatch],
+            parent.reference,
+            parent.layout,
+        );
+        self.ctx.push_op(block, pack.op_ref());
+        pack.result(self.ctx)
+    }
+
+    fn unpack_parent(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        result: TypeRef,
+        parent_value: ValueRef,
+    ) -> (ValueRef, ValueRef) {
+        let parent = self.parent_types(result);
+        assert_eq!(
+            self.ctx.value_ty(parent_value),
+            parent.reference,
+            "Parent provenance mismatch"
+        );
+        let done = adt::struct_get(
+            self.ctx,
+            location,
+            parent_value,
+            parent.done,
+            parent.layout,
+            0,
+        );
+        self.ctx.push_op(block, done.op_ref());
+        let dispatch = adt::struct_get(
+            self.ctx,
+            location,
+            parent_value,
+            parent.dispatch,
+            parent.layout,
+            1,
+        );
+        self.ctx.push_op(block, dispatch.op_ref());
+        (done.result(self.ctx), dispatch.result(self.ctx))
     }
 
     fn convert_attribute(&mut self, attribute: &Attribute) -> Attribute {
@@ -853,14 +1419,15 @@ impl<'a> Converter<'a> {
             let abi = CallableAbi::new(convention, params, result);
             let evidence = self.evidence_type();
             let done_k = self.done_k_type(result);
-            let lowered_params = abi.lowered_params(evidence, done_k);
+            let dispatch = self.dispatch_type(result);
+            let lowered_params = abi.lowered_params_with_dispatch(evidence, done_k, dispatch);
             let lowered_result = if convention == CallingConvention::Cps {
                 self.never_type()
             } else {
                 result
             };
             let function = core::func(self.ctx, lowered_result, lowered_params).as_type_ref();
-            let converted = closure::closure(self.ctx, function).as_type_ref();
+            let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
         }
@@ -919,8 +1486,9 @@ impl<'a> Converter<'a> {
             .collect();
         let evidence = self.evidence_type();
         let done_k = self.done_k_type(result);
+        let dispatch = self.dispatch_type(result);
         let abi = CallableAbi::new(convention, params, result);
-        let params = abi.lowered_params(evidence, done_k);
+        let params = abi.lowered_params_with_dispatch(evidence, done_k, dispatch);
         let result = if convention == CallingConvention::Cps {
             self.never_type()
         } else {
@@ -1168,35 +1736,64 @@ impl<'a> Converter<'a> {
         source_ops: &[OpRef],
         index: usize,
         block: BlockRef,
-        mapping: &HashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
-        if flow.convention != CallingConvention::Cps || self.ctx.op_result_types(source).len() != 1
-        {
+        let result_types = self.ctx.op_result_types(source).to_vec();
+        if result_types.len() > 1 {
             return Err(TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
                 Some(source),
                 Some(self.ctx.op(source).location),
-                "effectful scf.if requires one result inside a CPS callable",
+                "effectful scf.if requires zero or one result",
             ));
         }
+        if flow.convention != CallingConvention::Cps {
+            return self
+                .lower_direct_structured_if(source, source_ops, index, block, mapping, flow);
+        }
         let location = self.ctx.op(source).location;
-        let source_result = self.ctx.op_result(source, 0);
-        let source_result_type = self.ctx.op_result_types(source)[0];
-        let continuation = self.build_suffix_continuation(
-            source_ops,
-            index + 1,
-            source_result,
-            source_result_type,
-            mapping,
-            flow,
-            location,
-        )?;
-        let continuation_op = match self.ctx.value_def(continuation) {
-            trunk_ir::ValueDef::OpResult(op, _) => op,
-            _ => unreachable!("structured continuation is a closure.lambda"),
+        // `core.never` is the structured proper-tail marker, not an SSA value
+        // boundary. In particular, an `op -> Never` branch keeps the active
+        // `Flow<R>` so its rejecting `Resume<R>` matches `Dispatch<R>`.
+        let value_result_type = result_types
+            .first()
+            .copied()
+            .filter(|ty| !type_is(self.ctx, *ty, "core", "never"));
+        let is_tail_never_marker = value_result_type.is_none() && result_types.len() == 1;
+        let (branch_done, branch_dispatch) = if is_tail_never_marker {
+            (flow.done, flow.dispatch)
+        } else {
+            let continuation = if let Some(source_result_type) = value_result_type {
+                self.build_suffix_continuation(
+                    source_ops,
+                    index + 1,
+                    self.ctx.op_result(source, 0),
+                    source_result_type,
+                    mapping,
+                    flow,
+                    location,
+                )?
+            } else {
+                self.build_void_suffix_continuation(source_ops, index + 1, mapping, flow, location)?
+            };
+            let continuation_op = match self.ctx.value_def(continuation) {
+                trunk_ir::ValueDef::OpResult(op, _) => op,
+                _ => unreachable!("structured continuation is a closure.lambda"),
+            };
+            self.ctx.push_op(block, continuation_op);
+            if let Some(source_result_type) = value_result_type {
+                let value_type = self.convert_type(source_result_type);
+                let (ops, done, dispatch) =
+                    self.build_cps_call_adapters(value_type, continuation, flow, location)?;
+                for op in ops {
+                    self.ctx.push_op(block, op);
+                }
+                (Some(done), Some(dispatch))
+            } else {
+                (flow.done, flow.dispatch)
+            }
         };
-        self.ctx.push_op(block, continuation_op);
 
         let mut converted_regions = Vec::new();
         let source_regions = self.ctx.op(source).regions.to_vec();
@@ -1233,7 +1830,8 @@ impl<'a> Converter<'a> {
                 branch_mapping.insert(old, new);
             }
             let branch_flow = Flow {
-                exit_k: Some(continuation),
+                done: branch_done,
+                dispatch: branch_dispatch,
                 ..flow.clone()
             };
             self.convert_sequence(
@@ -1267,6 +1865,88 @@ impl<'a> Converter<'a> {
         self.copy_extra_attrs(source, lowered.op_ref(), &[]);
         self.ctx.push_op(block, lowered.op_ref());
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_direct_structured_if(
+        &mut self,
+        source: OpRef,
+        source_ops: &[OpRef],
+        index: usize,
+        block: BlockRef,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<(), TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        let mut converted_regions = Vec::new();
+        let source_regions = self.ctx.op(source).regions.clone();
+        for source_region in source_regions {
+            let source_blocks = self.ctx.region(source_region).blocks.to_vec();
+            let [source_block] = source_blocks.as_slice() else {
+                return Err(self
+                    .malformed_source(source, "effectful scf.if regions must contain one block"));
+            };
+            let source_arg_types = self
+                .ctx
+                .block_args(*source_block)
+                .iter()
+                .map(|arg| self.ctx.value_ty(*arg))
+                .collect::<Vec<_>>();
+            let arg_types = source_arg_types
+                .into_iter()
+                .map(|ty| self.convert_type(ty))
+                .collect::<Vec<_>>();
+            let converted_block =
+                self.make_block(self.ctx.block(*source_block).location, &arg_types);
+            let mut branch_mapping = mapping.clone();
+            for (old, new) in self
+                .ctx
+                .block_args(*source_block)
+                .iter()
+                .copied()
+                .zip(self.ctx.block_args(converted_block).iter().copied())
+            {
+                branch_mapping.insert(old, new);
+            }
+            let branch_flow = Flow {
+                preserve_scf_yield: true,
+                ..flow.clone()
+            };
+            self.convert_sequence(
+                self.ctx.block(*source_block).ops.to_vec(),
+                0,
+                converted_block,
+                &mut branch_mapping,
+                &branch_flow,
+            )?;
+            converted_regions.push(self.single_block_region(location, converted_block));
+        }
+        let [then_region, else_region] = converted_regions.as_slice() else {
+            return Err(self.malformed_source(source, "scf.if requires exactly two regions"));
+        };
+        let condition = self.ctx.op_operands(source)[0];
+        let condition = mapping.get(&condition).copied().unwrap_or(condition);
+        let mut builder =
+            OperationDataBuilder::new(location, Symbol::new("scf"), Symbol::new("if"))
+                .operand(condition);
+        for result_type in self.ctx.op_result_types(source).to_vec() {
+            builder = builder.result(self.convert_type(result_type));
+        }
+        builder = builder.region(*then_region).region(*else_region);
+        let data = builder.build(self.ctx);
+        let lowered = self.ctx.create_op(data);
+        self.copy_extra_attrs(source, lowered, &[]);
+        self.ctx.push_op(block, lowered);
+        for (old, new) in self
+            .ctx
+            .op_results(source)
+            .to_vec()
+            .into_iter()
+            .zip(self.ctx.op_results(lowered).to_vec())
+        {
+            mapping.insert(old, new);
+        }
+        self.convert_sequence(source_ops.to_vec(), index + 1, block, mapping, flow)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1354,7 +2034,8 @@ impl<'a> Converter<'a> {
             let converted_block = self.make_block(case_location, &[]);
             let mut case_mapping = mapping.clone();
             let case_flow = Flow {
-                exit_k: Some(continuation),
+                done: Some(continuation),
+                void_done: Some(continuation),
                 ..flow.clone()
             };
             self.convert_sequence(
@@ -1392,15 +2073,15 @@ impl<'a> Converter<'a> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention == CallingConvention::Cps {
-            let exit_k = flow.exit_k.ok_or_else(|| {
+            let done = flow.done.ok_or_else(|| {
                 TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
                     None,
                     Some(location),
-                    "CPS region has no verified exit continuation",
+                    "CPS region has no verified Done boundary",
                 )
             })?;
-            let tail = func::tail_call_indirect(self.ctx, location, exit_k, [value]);
+            let tail = func::tail_call_indirect(self.ctx, location, done, [value]);
             set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
             self.ctx.push_op(block, tail.op_ref());
         } else {
@@ -1416,7 +2097,7 @@ impl<'a> Converter<'a> {
         location: Location,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
-        let exit_k = flow.exit_k.ok_or_else(|| {
+        let done = flow.done.ok_or_else(|| {
             TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
                 None,
@@ -1425,7 +2106,7 @@ impl<'a> Converter<'a> {
             )
         })?;
         let tail =
-            func::tail_call_indirect(self.ctx, location, exit_k, std::iter::empty::<ValueRef>());
+            func::tail_call_indirect(self.ctx, location, done, std::iter::empty::<ValueRef>());
         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
         self.ctx.push_op(block, tail.op_ref());
         Ok(())
@@ -1443,10 +2124,10 @@ impl<'a> Converter<'a> {
         let mut suffix_mapping = mapping.clone();
         self.convert_sequence(source_ops.to_vec(), start, block, &mut suffix_mapping, flow)?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
+        let captures = self.continuation_captures(region, flow);
         let never = self.never_type();
         let function = core::func(self.ctx, never, std::iter::empty::<TypeRef>()).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = physical_closure_type(self.ctx, function, CallingConvention::Cps);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
@@ -1472,13 +2153,14 @@ impl<'a> Converter<'a> {
             .collect();
         let evidence = self.evidence_type();
         let done_k = self.done_k_type(result);
+        let dispatch = self.dispatch_type(result);
         let abi = CallableAbi::new(convention, source_param_types.clone(), result);
-        let params = abi.lowered_params(evidence, done_k);
+        let params = abi.lowered_params_with_dispatch(evidence, done_k, dispatch);
         let body_source = self.ctx.op(source).regions[0];
         let entry_source = self.ctx.region(body_source).blocks[0];
         let block = self.make_block(location, &params);
         let mut body_mapping = mapping.clone();
-        let offset = abi.source_param_offset();
+        let offset = abi.source_param_offset_with_dispatch();
         for (old, new) in self
             .ctx
             .block_args(entry_source)
@@ -1491,15 +2173,24 @@ impl<'a> Converter<'a> {
         let evidence_value = convention
             .needs_evidence()
             .then(|| self.ctx.block_args(block)[0]);
-        let exit_k = convention
+        let done_index = usize::from(convention.needs_evidence());
+        let done = convention
             .needs_done_k()
-            .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
+            .then(|| self.ctx.block_args(block)[done_index]);
+        let dispatch = convention
+            .needs_done_k()
+            .then(|| self.ctx.block_args(block)[done_index + 1]);
         let flow = Flow {
             convention,
             evidence: evidence_value,
-            exit_k,
-            root_exit_k: exit_k,
-            answer_type: result,
+            resume_evidence: evidence_value,
+            done,
+            dispatch,
+            boundary_result: result,
+            resume_after: None,
+            resume_done: None,
+            void_done: None,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(entry_source).ops.to_vec(),
@@ -1533,6 +2224,21 @@ impl<'a> Converter<'a> {
                 Some(source),
                 Some(self.ctx.op(source).location),
                 "operation requires evidence but the enclosing callable convention is Direct",
+            )
+        })
+    }
+
+    fn current_resume_evidence(
+        &self,
+        source: OpRef,
+        flow: &Flow,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        flow.resume_evidence.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                Some(source),
+                Some(self.ctx.op(source).location),
+                "CPS call has no verified dynamic evidence context",
             )
         })
     }
@@ -1573,18 +2279,315 @@ impl<'a> Converter<'a> {
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let result_type = self.convert_type(result_type);
-        let block = self.make_block(location, &[result_type]);
+        let evidence_type = self.evidence_type();
+        let parent_type = self.parent_types(flow.boundary_result).reference;
+        let block = self.make_block(location, &[evidence_type, parent_type, result_type]);
+        let context_evidence = self.ctx.block_args(block)[0];
+        let parent_value = self.ctx.block_args(block)[1];
+        let (parent_done, parent_dispatch) =
+            self.unpack_parent(block, location, flow.boundary_result, parent_value);
         let mut body_mapping = mapping.clone();
-        body_mapping.insert(source_result, self.ctx.block_args(block)[0]);
-        self.convert_sequence(source_ops.to_vec(), start, block, &mut body_mapping, flow)?;
+        body_mapping.insert(source_result, self.ctx.block_args(block)[2]);
+        let dynamic_done = if let Some(after) = flow.resume_after {
+            let (op, done) = self.build_done_adapter(
+                result_type,
+                after,
+                context_evidence,
+                parent_value,
+                location,
+            );
+            self.ctx.push_op(block, op);
+            done
+        } else {
+            parent_done
+        };
+        let suffix_flow = Flow {
+            evidence: Some(context_evidence),
+            resume_evidence: Some(context_evidence),
+            done: Some(dynamic_done),
+            dispatch: Some(parent_dispatch),
+            ..flow.clone()
+        };
+        self.convert_sequence(
+            source_ops.to_vec(),
+            start,
+            block,
+            &mut body_mapping,
+            &suffix_flow,
+        )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [result_type]).as_type_ref();
-        let closure_ty = closure::closure(self.ctx, function).as_type_ref();
+        let captures = self.continuation_captures(region, flow);
+        let closure_ty = self.completion_type(result_type, flow.boundary_result);
         let lambda = closure::lambda(self.ctx, location, captures, closure_ty, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
+    }
+
+    /// Adapt a call returning `value_type` to the caller's result-indexed
+    /// `Done`/`Dispatch` boundary. Both adapters are immutable closure frames;
+    /// the callee never needs to inspect or clone an opaque caller continuation.
+    fn build_cps_call_adapters(
+        &mut self,
+        value_type: TypeRef,
+        completion: ValueRef,
+        flow: &Flow,
+        location: Location,
+    ) -> Result<(Vec<OpRef>, ValueRef, ValueRef), TributeControlToCpsError> {
+        let boundary = flow.boundary_result;
+        let current_done = flow.done.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS call has no verified Done boundary",
+            )
+        })?;
+        let current_dispatch = flow.dispatch.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS call has no verified Dispatch boundary",
+            )
+        })?;
+        let context_evidence = flow.resume_evidence.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS call has no verified dynamic evidence context",
+            )
+        })?;
+
+        let done_block = self.make_block(location, &[value_type]);
+        let done_value = self.ctx.block_args(done_block)[0];
+        let current_parent = self.pack_parent(
+            done_block,
+            location,
+            boundary,
+            current_done,
+            current_dispatch,
+        );
+        let done_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            completion,
+            [context_evidence, current_parent, done_value],
+        );
+        set_calling_convention(self.ctx, done_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(done_block, done_tail.op_ref());
+        let done_region = self.single_block_region(location, done_block);
+        let done_captures = ordered_external_values(self.ctx, done_region);
+        let done_ty = self.done_k_type(value_type);
+        let done_lambda = closure::lambda(self.ctx, location, done_captures, done_ty, done_region);
+        set_calling_convention(self.ctx, done_lambda.op_ref(), CallingConvention::Cps);
+
+        let factory = self.build_dispatch_adapter_factory(location, value_type, boundary);
+        let dispatch_ty = self.dispatch_type(value_type);
+        let dispatch_call = func::call(
+            self.ctx,
+            location,
+            [completion, current_dispatch],
+            dispatch_ty,
+            factory,
+        );
+        set_calling_convention(self.ctx, dispatch_call.op_ref(), CallingConvention::Direct);
+
+        Ok((
+            vec![done_lambda.op_ref(), dispatch_call.op_ref()],
+            done_lambda.result(self.ctx),
+            dispatch_call.result(self.ctx),
+        ))
+    }
+
+    /// Rebuild an exact `Resume<R>` from the dynamic `Parent<R>` supplied by
+    /// a later handler arm. Both ordinary call adapters and lexical handler
+    /// dispatchers use this same immutable continuation frame.
+    fn build_rebound_resume(
+        &mut self,
+        location: Location,
+        value_type: TypeRef,
+        boundary: TypeRef,
+        resume_body: ValueRef,
+        completion: ValueRef,
+        dispatch_rebuild: ResumeDispatchRebuild,
+    ) -> (OpRef, ValueRef) {
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let parent_type = self.parent_types(boundary).reference;
+        let block = self.make_block(location, &[evidence_type, parent_type, anyref]);
+        let args = self.ctx.block_args(block).to_vec();
+        let (next_done_op, next_done) =
+            self.build_done_adapter(value_type, completion, args[0], args[1], location);
+        self.ctx.push_op(block, next_done_op);
+        let dispatch_type = self.dispatch_type(value_type);
+        let rebuilt_dispatch = match dispatch_rebuild {
+            ResumeDispatchRebuild::Adapter { factory } => {
+                let (_, outer_dispatch) = self.unpack_parent(block, location, boundary, args[1]);
+                func::call(
+                    self.ctx,
+                    location,
+                    [completion, outer_dispatch],
+                    dispatch_type,
+                    factory,
+                )
+            }
+            ResumeDispatchRebuild::LocalFactory(LocalDispatchFactory {
+                factory,
+                args: mut factory_args,
+            }) => {
+                factory_args.insert(0, args[1]);
+                func::call(self.ctx, location, factory_args, dispatch_type, factory)
+            }
+        };
+        set_calling_convention(
+            self.ctx,
+            rebuilt_dispatch.op_ref(),
+            CallingConvention::Direct,
+        );
+        self.ctx.push_op(block, rebuilt_dispatch.op_ref());
+        let parent = self.pack_parent(
+            block,
+            location,
+            value_type,
+            next_done,
+            rebuilt_dispatch.result(self.ctx),
+        );
+        let tail =
+            func::tail_call_indirect(self.ctx, location, resume_body, [args[0], parent, args[2]]);
+        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(block, tail.op_ref());
+        let region = self.single_block_region(location, block);
+        let closure_type = self.erased_resumption_type(boundary);
+        let resume = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            closure_type,
+            region,
+        );
+        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Cps);
+        (resume.op_ref(), resume.result(self.ctx))
+    }
+
+    /// Emit a direct factory for the `Dispatch<X>` adapter used at a CPS call
+    /// inside a `Flow<R>`.  The factory is recursive only in the construction
+    /// sense: every resumed invocation allocates a fresh dispatcher which
+    /// captures the dynamically supplied `Parent<R>`.  The direct factory
+    /// call builds a closure; it is never a control-flow fallback.
+    fn build_dispatch_adapter_factory(
+        &mut self,
+        location: Location,
+        value_type: TypeRef,
+        boundary: TypeRef,
+    ) -> Symbol {
+        let symbol = self.fresh_helper("make_dispatch_adapter");
+        let completion_ty = self.completion_type(value_type, boundary);
+        let outer_dispatch_ty = self.dispatch_type(boundary);
+        let dispatch_ty = self.dispatch_type(value_type);
+        let factory_ty =
+            core::func(self.ctx, dispatch_ty, [completion_ty, outer_dispatch_ty]).as_type_ref();
+        let factory_block = self.make_block(location, &[completion_ty, outer_dispatch_ty]);
+        let factory_args = self.ctx.block_args(factory_block).to_vec();
+        let completion = factory_args[0];
+        let outer_dispatch = factory_args[1];
+
+        let anyref = self.anyref_type();
+        let evidence_type = self.evidence_type();
+        let i32_type = self.i32_type();
+        let erased_resume_value_ty = self.erased_resumption_type(value_type);
+        let dispatch_block = self.make_block(
+            location,
+            &[
+                evidence_type,
+                erased_resume_value_ty,
+                i32_type,
+                i32_type,
+                i32_type,
+                anyref,
+            ],
+        );
+        let dispatch_args = self.ctx.block_args(dispatch_block).to_vec();
+        let context_evidence = dispatch_args[0];
+        let resume_value = dispatch_args[1];
+        let prompt = dispatch_args[2];
+        let ability_id = dispatch_args[3];
+        let op_id = dispatch_args[4];
+        let payload = dispatch_args[5];
+
+        let (resume_op, resume_lambda) = self.build_rebound_resume(
+            location,
+            value_type,
+            boundary,
+            resume_value,
+            completion,
+            ResumeDispatchRebuild::Adapter { factory: symbol },
+        );
+        self.ctx.push_op(dispatch_block, resume_op);
+        let dispatch_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            outer_dispatch,
+            [
+                context_evidence,
+                resume_lambda,
+                prompt,
+                ability_id,
+                op_id,
+                payload,
+            ],
+        );
+        set_calling_convention(self.ctx, dispatch_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(dispatch_block, dispatch_tail.op_ref());
+        let dispatch_region = self.single_block_region(location, dispatch_block);
+        let dispatch_lambda = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, dispatch_region),
+            dispatch_ty,
+            dispatch_region,
+        );
+        set_calling_convention(self.ctx, dispatch_lambda.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(factory_block, dispatch_lambda.op_ref());
+        let ret = func::r#return(self.ctx, location, [dispatch_lambda.result(self.ctx)]);
+        self.ctx.push_op(factory_block, ret.op_ref());
+        let region = self.single_block_region(location, factory_block);
+        let factory = func::func(self.ctx, location, symbol, factory_ty, region);
+        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(self.module_block, factory.op_ref());
+        symbol
+    }
+
+    /// Build only the `Done<X>` half of a result-indexed CPS boundary.
+    ///
+    /// This is used by a handler's normal completion: the handler answer
+    /// crosses `after_handle`, while the handler's own dispatch remains the
+    /// enclosing dispatch. Keeping the frame immutable is what makes nested
+    /// resumes compose rather than overwrite an ambient root continuation.
+    fn build_done_adapter(
+        &mut self,
+        value_type: TypeRef,
+        completion: ValueRef,
+        context_evidence: ValueRef,
+        current_parent: ValueRef,
+        location: Location,
+    ) -> (OpRef, ValueRef) {
+        let block = self.make_block(location, &[value_type]);
+        let value = self.ctx.block_args(block)[0];
+        let tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            completion,
+            [context_evidence, current_parent, value],
+        );
+        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(block, tail.op_ref());
+        let region = self.single_block_region(location, block);
+        let captures = ordered_external_values(self.ctx, region);
+        let done_type = self.done_k_type(value_type);
+        let lambda = closure::lambda(self.ctx, location, captures, done_type, region);
+        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        (lambda.op_ref(), lambda.result(self.ctx))
     }
 
     fn lower_func_ref(
@@ -1620,8 +2623,9 @@ impl<'a> Converter<'a> {
             .collect();
         let evidence_ty = self.evidence_type();
         let done_k_ty = self.done_k_type(result);
+        let dispatch_ty = self.dispatch_type(result);
         let abi = CallableAbi::new(result_convention, source_params.clone(), result);
-        let logical_params = abi.lowered_params(evidence_ty, done_k_ty);
+        let logical_params = abi.lowered_params_with_dispatch(evidence_ty, done_k_ty, dispatch_ty);
         let env_ty = self.anyref_type();
         let physical_params = abi.interpose_environment(&logical_params, env_ty);
         let physical_result = if result_convention == CallingConvention::Cps {
@@ -1631,21 +2635,29 @@ impl<'a> Converter<'a> {
         };
         let adapter_ty =
             core::func(self.ctx, physical_result, physical_params.clone()).as_type_ref();
-        let block = self.make_block(location, &physical_params);
-        let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
+        let block = self.make_block(location, &physical_params);
+        self.ctx.block_mut(block).args[evidence_offset]
+            .attrs
+            .insert(
+                Symbol::new("bind_name"),
+                Attribute::Symbol(Symbol::new("__env")),
+            );
+        let args = self.ctx.block_args(block).to_vec();
         // The environment is interposed immediately after optional evidence,
         // so a present done continuation is the following slot.
         let done_offset = evidence_offset + 1;
+        let dispatch_offset = done_offset + 1;
         let source_offset = usize::from(result_convention.needs_evidence())
             + 1
-            + usize::from(result_convention.needs_done_k());
+            + usize::from(result_convention.needs_done_k()) * 2;
         let mut target_args = Vec::new();
         if target.convention.needs_evidence() {
             target_args.push(args[0]);
         }
         if target.convention.needs_done_k() {
             target_args.push(args[done_offset]);
+            target_args.push(args[dispatch_offset]);
         }
         target_args.extend_from_slice(&args[source_offset..]);
         if target.convention == CallingConvention::Cps {
@@ -1714,7 +2726,6 @@ impl<'a> Converter<'a> {
     fn build_completion_continuation(
         &mut self,
         source_region: RegionRef,
-        final_k: ValueRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
@@ -1722,15 +2733,26 @@ impl<'a> Converter<'a> {
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
-        let block = self.make_block(location, &[arg_type]);
+        let evidence_type = self.evidence_type();
+        let parent_type = self.parent_types(flow.boundary_result).reference;
+        let block = self.make_block(location, &[evidence_type, parent_type, arg_type]);
+        let context_evidence = self.ctx.block_args(block)[0];
+        let parent_value = self.ctx.block_args(block)[1];
+        let (parent_done, parent_dispatch) =
+            self.unpack_parent(block, location, flow.boundary_result, parent_value);
         let mut body_mapping = mapping.clone();
-        body_mapping.insert(source_arg, self.ctx.block_args(block)[0]);
+        body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
         let completion_flow = Flow {
             convention: CallingConvention::Cps,
-            evidence: flow.evidence,
-            exit_k: Some(final_k),
-            root_exit_k: Some(final_k),
-            answer_type: flow.answer_type,
+            evidence: Some(context_evidence),
+            resume_evidence: Some(context_evidence),
+            done: Some(parent_done),
+            dispatch: Some(parent_dispatch),
+            boundary_result: flow.boundary_result,
+            resume_after: None,
+            resume_done: None,
+            void_done: None,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -1740,51 +2762,11 @@ impl<'a> Converter<'a> {
             &completion_flow,
         )?;
         let body = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, body);
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [arg_type]).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let captures = self.continuation_captures(body, flow);
+        let closure_type = self.completion_type(arg_type, flow.boundary_result);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, body);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    fn rebind_generated_continuation(
-        &mut self,
-        value: ValueRef,
-        old_root: ValueRef,
-        new_root: ValueRef,
-        destination: BlockRef,
-        cache: &mut HashMap<ValueRef, ValueRef>,
-    ) -> Result<ValueRef, TributeControlToCpsError> {
-        if value == old_root {
-            return Ok(new_root);
-        }
-        if let Some(rebound) = cache.get(&value) {
-            return Ok(*rebound);
-        }
-        let trunk_ir::ValueDef::OpResult(def, _) = self.ctx.value_def(value) else {
-            return Ok(value);
-        };
-        if !closure::Lambda::matches(self.ctx, def) {
-            return Ok(value);
-        }
-        let mut mapping = HashMap::from([(old_root, new_root)]);
-        for capture in self.ctx.op_operands(def).to_vec() {
-            let rebound = self.rebind_generated_continuation(
-                capture,
-                old_root,
-                new_root,
-                destination,
-                cache,
-            )?;
-            mapping.insert(capture, rebound);
-        }
-        let rebound_op = self.clone_plain_op(def, &mut mapping)?;
-        self.ctx.push_op(destination, rebound_op);
-        let rebound = self.ctx.op_result(rebound_op, 0);
-        cache.insert(value, rebound);
-        Ok(rebound)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1799,38 +2781,23 @@ impl<'a> Converter<'a> {
         location: Location,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
-        let done_k_type = self.done_k_type(flow.answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
-        let resume_done = self.ctx.block_args(block)[0];
-        let resume_input = self.ctx.block_args(block)[1];
+        let evidence_type = self.evidence_type();
+        let parent_type = self.parent_types(flow.boundary_result).reference;
+        let block = self.make_block(location, &[evidence_type, parent_type, input_type]);
+        let resume_evidence = self.ctx.block_args(block)[0];
+        let parent_value = self.ctx.block_args(block)[1];
+        let (resume_done, resume_dispatch) =
+            self.unpack_parent(block, location, flow.boundary_result, parent_value);
+        let resume_input = self.ctx.block_args(block)[2];
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_result, resume_input);
-        let mut suffix_flow = flow.clone();
-        let old_root = flow.root_exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
-                "resumptive computation has no root continuation",
-            )
-        })?;
-        let current_exit = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
-                "resumptive computation has no current continuation",
-            )
-        })?;
-        let rebound_exit = self.rebind_generated_continuation(
-            current_exit,
-            old_root,
-            resume_done,
-            block,
-            &mut HashMap::new(),
-        )?;
-        suffix_flow.exit_k = Some(rebound_exit);
-        suffix_flow.root_exit_k = Some(resume_done);
+        let suffix_flow = Flow {
+            evidence: Some(resume_evidence),
+            resume_evidence: Some(resume_evidence),
+            done: Some(resume_done),
+            dispatch: Some(resume_dispatch),
+            ..flow.clone()
+        };
         self.convert_sequence(
             source_ops.to_vec(),
             start,
@@ -1839,8 +2806,8 @@ impl<'a> Converter<'a> {
             &suffix_flow,
         )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
-        let closure_type = self.resumption_type(input_type, flow.answer_type);
+        let captures = self.continuation_captures(region, &suffix_flow);
+        let closure_type = self.resumption_type(input_type, flow.boundary_result);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
@@ -1879,9 +2846,13 @@ impl<'a> Converter<'a> {
             state_type,
         );
 
-        let done_k_type = self.done_k_type(answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
+        let evidence_type = self.evidence_type();
+        let parent_type = self.parent_types(answer_type).reference;
+        let anyref = self.anyref_type();
+        let block = self.make_block(location, &[evidence_type, parent_type, anyref]);
         let args = self.ctx.block_args(block).to_vec();
+        let input = core::unrealized_conversion_cast(self.ctx, location, args[2], input_type);
+        self.ctx.push_op(block, input.op_ref());
         let consumed = adt::struct_get(
             self.ctx,
             location,
@@ -1909,8 +2880,12 @@ impl<'a> Converter<'a> {
             0,
         );
         self.ctx.push_op(enter_block, mark.op_ref());
-        let tail =
-            func::tail_call_indirect(self.ctx, location, raw_continuation, args.iter().copied());
+        let tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            raw_continuation,
+            [args[0], args[1], input.result(self.ctx)],
+        );
         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
         self.ctx.push_op(enter_block, tail.op_ref());
         let enter_region = self.single_block_region(location, enter_block);
@@ -1927,7 +2902,7 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, guard.op_ref());
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
-        let closure_type = self.resumption_type(input_type, answer_type);
+        let closure_type = self.erased_resumption_type(answer_type);
         let wrapper = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, wrapper.op_ref(), CallingConvention::Cps);
         (
@@ -1936,19 +2911,27 @@ impl<'a> Converter<'a> {
         )
     }
 
+    /// Callback ABIs carry dynamic evidence explicitly. Ordinary closure
+    /// captures are therefore determined solely by lexical value use.
+    fn continuation_captures(&self, region: RegionRef, flow: &Flow) -> Vec<ValueRef> {
+        let _ = flow;
+        ordered_external_values(self.ctx, region)
+    }
+
     fn build_reject_continuation(
         &mut self,
-        input_type: TypeRef,
+        _input_type: TypeRef,
         answer_type: TypeRef,
         location: Location,
     ) -> (OpRef, ValueRef) {
-        let input_type = self.convert_type(input_type);
-        let done_k_type = self.done_k_type(answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
+        let evidence_type = self.evidence_type();
+        let parent_type = self.parent_types(answer_type).reference;
+        let anyref = self.anyref_type();
+        let block = self.make_block(location, &[evidence_type, parent_type, anyref]);
         let unreachable = func::unreachable(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
-        let closure_type = self.resumption_type(input_type, answer_type);
+        let closure_type = self.erased_resumption_type(answer_type);
         let lambda = closure::lambda(
             self.ctx,
             location,
@@ -1978,11 +2961,12 @@ impl<'a> Converter<'a> {
             ));
         }
         let location = self.ctx.op(source).location;
+        let resume_flow = flow.clone();
         let old_result = self.ctx.op_result(source, 0);
         let input_type = self.ctx.op_result_types(source)[0];
         let continuation = if type_is(self.ctx, input_type, "core", "never") {
             let (op, value) =
-                self.build_reject_continuation(input_type, flow.answer_type, location);
+                self.build_reject_continuation(input_type, flow.boundary_result, location);
             self.ctx.push_op(block, op);
             value
         } else {
@@ -1992,13 +2976,17 @@ impl<'a> Converter<'a> {
                 old_result,
                 input_type,
                 mapping,
-                flow,
+                &resume_flow,
                 location,
             )?;
             self.ctx.push_op(block, raw_op);
             let converted_input = self.convert_type(input_type);
-            let (ops, one_shot) =
-                self.build_one_shot_wrapper(raw, converted_input, flow.answer_type, location);
+            let (ops, one_shot) = self.build_one_shot_wrapper(
+                raw,
+                converted_input,
+                resume_flow.boundary_result,
+                location,
+            );
             for op in ops {
                 self.ctx.push_op(block, op);
             }
@@ -2026,6 +3014,22 @@ impl<'a> Converter<'a> {
         let perform = ability::perform(
             self.ctx,
             location,
+            resume_flow.resume_evidence.ok_or_else(|| {
+                TributeControlToCpsError::one(
+                    POST_CPS_BOUNDARY,
+                    Some(source),
+                    Some(location),
+                    "general operation has no verified dynamic evidence context",
+                )
+            })?,
+            resume_flow.dispatch.ok_or_else(|| {
+                TributeControlToCpsError::one(
+                    POST_CPS_BOUNDARY,
+                    Some(source),
+                    Some(location),
+                    "general operation has no verified Dispatch boundary",
+                )
+            })?,
             continuation,
             args,
             never,
@@ -2054,6 +3058,7 @@ impl<'a> Converter<'a> {
             ));
         }
         let location = self.ctx.op(source).location;
+        let resume_flow = flow.clone();
         let token_source = self.ctx.op_operands(source)[0];
         let value_source = self.ctx.op_operands(source)[1];
         let token = mapping.get(&token_source).copied().unwrap_or(token_source);
@@ -2066,7 +3071,7 @@ impl<'a> Converter<'a> {
             old_result,
             result_type,
             mapping,
-            flow,
+            &resume_flow,
             location,
         )?;
         let suffix_op = match self.ctx.value_def(suffix) {
@@ -2074,7 +3079,33 @@ impl<'a> Converter<'a> {
             _ => unreachable!("suffix is produced by closure.lambda"),
         };
         self.ctx.push_op(block, suffix_op);
-        let tail = func::tail_call_indirect(self.ctx, location, token, [suffix, value]);
+        let answer_type = self.convert_type(result_type);
+        let (adapter_ops, arm_done, arm_dispatch) =
+            self.build_cps_call_adapters(answer_type, suffix, &resume_flow, location)?;
+        for op in adapter_ops {
+            self.ctx.push_op(block, op);
+        }
+        let arm_parent = self.pack_parent(
+            block,
+            location,
+            resume_flow.boundary_result,
+            arm_done,
+            arm_dispatch,
+        );
+        let context_evidence = resume_flow.resume_evidence.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                Some(source),
+                Some(location),
+                "resume has no verified dynamic evidence context",
+            )
+        })?;
+        let tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            token,
+            [context_evidence, arm_parent, value],
+        );
         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
         self.ctx.push_op(block, tail.op_ref());
         Ok(())
@@ -2084,8 +3115,7 @@ impl<'a> Converter<'a> {
         &mut self,
         source: OpRef,
         outer_mapping: &HashMap<ValueRef, ValueRef>,
-        handle_exit: ValueRef,
-        handle_answer: TypeRef,
+        outer_flow: &Flow,
     ) -> Result<HandlerArmInfo, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let ability_ref = self
@@ -2124,27 +3154,54 @@ impl<'a> Converter<'a> {
             .map(|arg| self.convert_type(self.ctx.value_ty(*arg)))
             .collect();
         let mut params = vec![evidence_type];
+        let parent_type = (kind == Symbol::new("op"))
+            .then(|| self.parent_types(outer_flow.boundary_result).reference);
+        if let Some(parent_type) = parent_type {
+            params.push(parent_type);
+        }
+        // A general handler arm evaluates under its outer lexical evidence,
+        // but receives the effect-point evidence separately for any resume
+        // context it constructs.
+        if kind == Symbol::new("op") {
+            params.push(evidence_type);
+        }
         params.extend_from_slice(&converted_args);
         let block = self.make_block(location, &params);
         let mut mapping = outer_mapping.clone();
+        let source_offset =
+            1 + usize::from(parent_type.is_some()) + usize::from(kind == Symbol::new("op"));
         for (old, new) in source_args
             .into_iter()
-            .zip(self.ctx.block_args(block)[1..].iter().copied())
+            .zip(self.ctx.block_args(block)[source_offset..].iter().copied())
         {
             mapping.insert(old, new);
         }
         let evidence = self.ctx.block_args(block)[0];
+        let resume_evidence = (kind == Symbol::new("op")).then(|| self.ctx.block_args(block)[2]);
         let convention = if kind == Symbol::new("fn") {
             CallingConvention::EvidenceDirect
         } else {
             CallingConvention::Cps
         };
+        let parent_values = parent_type.map(|_| {
+            self.unpack_parent(
+                block,
+                location,
+                outer_flow.boundary_result,
+                self.ctx.block_args(block)[1],
+            )
+        });
         let flow = Flow {
             convention,
             evidence: Some(evidence),
-            exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
-            root_exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
-            answer_type: handle_answer,
+            resume_evidence: resume_evidence.or(Some(evidence)),
+            done: parent_values.map(|(done, _)| done),
+            dispatch: parent_values.map(|(_, dispatch)| dispatch),
+            boundary_result: outer_flow.boundary_result,
+            resume_after: outer_flow.resume_after,
+            resume_done: outer_flow.resume_done,
+            void_done: outer_flow.void_done,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -2161,7 +3218,7 @@ impl<'a> Converter<'a> {
             self.convert_type(operation_result)
         };
         let function = core::func(self.ctx, result, params).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok(HandlerArmInfo {
@@ -2173,6 +3230,7 @@ impl<'a> Converter<'a> {
             operation_result: self.convert_type(operation_result),
             params: converted_args,
             has_resume_token,
+            parent_type,
         })
     }
 
@@ -2221,6 +3279,38 @@ impl<'a> Converter<'a> {
         arms: &[HandlerArmInfo],
         general: bool,
     ) -> (OpRef, ValueRef) {
+        // The marker's compatibility handler slot is deliberately not a final
+        // control path.  Final `effect.dispatch_cps` reaches the exact local
+        // dispatcher factory above, where a `Parent<A>` is available.  Keep a
+        // typed rejecting placeholder here instead of casting the old marker
+        // continuation into the new `ResumeExact<I, A>` ABI.
+        if general {
+            let evidence_type = self.evidence_type();
+            let parent_type = arms
+                .iter()
+                .find(|arm| arm.kind == Symbol::new("op"))
+                .and_then(|arm| arm.parent_type)
+                .unwrap_or_else(|| self.parent_types(arms[0].operation_result).reference);
+            let i32_type = self.i32_type();
+            let anyref = self.anyref_type();
+            let params = [evidence_type, parent_type, i32_type, anyref];
+            let block = self.make_block(location, &params);
+            let unreachable = func::unreachable(self.ctx, location);
+            self.ctx.push_op(block, unreachable.op_ref());
+            let region = self.single_block_region(location, block);
+            let never = self.never_type();
+            let function = core::func(self.ctx, never, params).as_type_ref();
+            let closure_type = physical_closure_type(self.ctx, function, CallingConvention::Cps);
+            let lambda = closure::lambda(
+                self.ctx,
+                location,
+                std::iter::empty::<ValueRef>(),
+                closure_type,
+                region,
+            );
+            set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+            return (lambda.op_ref(), lambda.result(self.ctx));
+        }
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let i32_type = self
@@ -2311,19 +3401,415 @@ impl<'a> Converter<'a> {
 
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
+        let convention = if general {
+            CallingConvention::Cps
+        } else {
+            CallingConvention::EvidenceDirect
+        };
         let function = core::func(self.ctx, result, params).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
-        set_calling_convention(
-            self.ctx,
-            lambda.op_ref(),
-            if general {
-                CallingConvention::Cps
-            } else {
-                CallingConvention::EvidenceDirect
-            },
-        );
+        set_calling_convention(self.ctx, lambda.op_ref(), convention);
         (lambda.op_ref(), lambda.result(self.ctx))
+    }
+
+    /// Emit an immutable recursive factory for a lexical handle dispatcher.
+    /// A factory invocation captures one exact `Parent<A>` in the returned
+    /// dispatcher.  Resuming a body invokes the same factory with a new
+    /// parent, so a nested resume cannot overwrite an outer arm suffix.
+    fn build_local_cps_dispatch_factory(
+        &mut self,
+        location: Location,
+        arms: &[HandlerArmInfo],
+        body_type: TypeRef,
+        answer_type: TypeRef,
+    ) -> Symbol {
+        let symbol = self.fresh_helper("make_local_dispatch");
+        let parent_type = self.parent_types(answer_type).reference;
+        let evidence_type = self.evidence_type();
+        let i32_type = self.i32_type();
+        let completion_type = self.completion_type(body_type, answer_type);
+        let mut params = vec![parent_type, evidence_type, i32_type, completion_type];
+        params.extend(arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
+        let dispatch_type = self.dispatch_type(body_type);
+        let factory_type = core::func(self.ctx, dispatch_type, params.clone()).as_type_ref();
+        let factory_block = self.make_block(location, &params);
+        let args = self.ctx.block_args(factory_block).to_vec();
+        let mut factory_arms = arms.to_vec();
+        for (arm, value) in factory_arms.iter_mut().zip(args[4..].iter().copied()) {
+            arm.value = value;
+        }
+        let (_, parent_dispatch) =
+            self.unpack_parent(factory_block, location, answer_type, args[0]);
+        let foreign_factory = LocalDispatchFactory {
+            factory: symbol,
+            args: args[1..].to_vec(),
+        };
+        let (foreign_op, foreign_dispatch) = self.build_local_foreign_dispatch(
+            location,
+            body_type,
+            answer_type,
+            parent_dispatch,
+            args[3],
+            foreign_factory,
+        );
+        self.ctx.push_op(factory_block, foreign_op);
+        let dispatcher = self.build_local_cps_dispatcher_instance(
+            location,
+            &factory_arms,
+            body_type,
+            answer_type,
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            foreign_dispatch,
+            symbol,
+            args[1..].to_vec(),
+        );
+        self.ctx.push_op(factory_block, dispatcher.0);
+        let ret = func::r#return(self.ctx, location, [dispatcher.1]);
+        self.ctx.push_op(factory_block, ret.op_ref());
+        let region = self.single_block_region(location, factory_block);
+        let factory = func::func(self.ctx, location, symbol, factory_type, region);
+        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(self.module_block, factory.op_ref());
+        symbol
+    }
+
+    /// Forward a foreign operation through the enclosing dispatcher while
+    /// retaining this lexical handle's factory for a later resumption.
+    fn build_local_foreign_dispatch(
+        &mut self,
+        location: Location,
+        body_type: TypeRef,
+        answer_type: TypeRef,
+        parent_dispatch: ValueRef,
+        completion: ValueRef,
+        local_factory: LocalDispatchFactory,
+    ) -> (OpRef, ValueRef) {
+        let evidence_type = self.evidence_type();
+        let i32_type = self.i32_type();
+        let anyref = self.anyref_type();
+        let body_resume_type = self.erased_resumption_type(body_type);
+        let block = self.make_block(
+            location,
+            &[
+                evidence_type,
+                body_resume_type,
+                i32_type,
+                i32_type,
+                i32_type,
+                anyref,
+            ],
+        );
+        let args = self.ctx.block_args(block).to_vec();
+        let (resume_op, resume) = self.build_rebound_resume(
+            location,
+            body_type,
+            answer_type,
+            args[1],
+            completion,
+            ResumeDispatchRebuild::LocalFactory(local_factory),
+        );
+        self.ctx.push_op(block, resume_op);
+        let foreign_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            parent_dispatch,
+            [args[0], resume, args[2], args[3], args[4], args[5]],
+        );
+        set_calling_convention(self.ctx, foreign_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(block, foreign_tail.op_ref());
+        let region = self.single_block_region(location, block);
+        let dispatch_type = self.dispatch_type(body_type);
+        let dispatch = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            dispatch_type,
+            region,
+        );
+        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Cps);
+        (dispatch.op_ref(), dispatch.result(self.ctx))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_local_cps_dispatcher_instance(
+        &mut self,
+        location: Location,
+        arms: &[HandlerArmInfo],
+        body_type: TypeRef,
+        answer_type: TypeRef,
+        parent: ValueRef,
+        outer_evidence: ValueRef,
+        prompt_tag: ValueRef,
+        completion: ValueRef,
+        foreign_dispatch: ValueRef,
+        factory: Symbol,
+        factory_static_args: Vec<ValueRef>,
+    ) -> (OpRef, ValueRef) {
+        let anyref = self.anyref_type();
+        let i32_type = self.i32_type();
+        let i1_type = self
+            .ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let evidence_type = self.evidence_type();
+        let params = [
+            evidence_type,
+            self.erased_resumption_type(body_type),
+            i32_type,
+            i32_type,
+            i32_type,
+            anyref,
+        ];
+        let block = self.make_block(location, &params);
+        let args = self.ctx.block_args(block).to_vec();
+        let effect_evidence = args[0];
+        let resume = args[1];
+        let prompt = args[2];
+        let ability_id = args[3];
+        let op_id = args[4];
+        let payload = args[5];
+
+        let foreign_block = self.make_block(location, &[]);
+        let foreign_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            foreign_dispatch,
+            [effect_evidence, resume, prompt, ability_id, op_id, payload],
+        );
+        set_calling_convention(self.ctx, foreign_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(foreign_block, foreign_tail.op_ref());
+        let foreign_region = self.single_block_region(location, foreign_block);
+
+        let selected_block = self.make_block(location, &[]);
+        for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
+            let case_block = self.make_block(location, &[]);
+            let arm_ability =
+                ability::ability_id_const(self.ctx, location, i32_type, arm.ability_ref);
+            self.ctx.push_op(case_block, arm_ability.op_ref());
+            let same_ability = arith::cmpi(
+                self.ctx,
+                location,
+                ability_id,
+                arm_ability.result(self.ctx),
+                i1_type,
+                Symbol::new("eq"),
+            );
+            self.ctx.push_op(case_block, same_ability.op_ref());
+
+            let local_block = self.make_block(location, &[]);
+            let mut call_args = vec![outer_evidence, parent, effect_evidence];
+            call_args.extend(self.unpack_handler_payload(local_block, location, payload, arm));
+            if arm.has_resume_token {
+                let token_type = *arm.params.last().expect("resume arm has token type");
+                let token_function = cps_closure_function_type(self.ctx, token_type)
+                    .expect("pre-CPS validation proved a CPS resume token closure");
+                let input_type =
+                    *self.ctx.types.get(token_function).params.get(3).expect(
+                        "resume token has Evidence, Parent and exact source-input parameters",
+                    );
+                let (token_op, token) = self.build_exact_handler_token(
+                    location,
+                    HandlerTokenFactory {
+                        resume_body: resume,
+                        completion,
+                        input_type,
+                        body_type,
+                        answer_type,
+                        dispatch_factory: factory,
+                        dispatch_factory_args: factory_static_args.clone(),
+                    },
+                );
+                self.ctx.push_op(local_block, token_op);
+                call_args.push(token);
+            }
+            let local_tail = func::tail_call_indirect(self.ctx, location, arm.value, call_args);
+            set_calling_convention(self.ctx, local_tail.op_ref(), CallingConvention::Cps);
+            self.ctx.push_op(local_block, local_tail.op_ref());
+            let local_region = self.single_block_region(location, local_block);
+
+            let fallback_block = self.make_block(location, &[]);
+            let fallback_tail = func::tail_call_indirect(
+                self.ctx,
+                location,
+                foreign_dispatch,
+                [effect_evidence, resume, prompt, ability_id, op_id, payload],
+            );
+            set_calling_convention(self.ctx, fallback_tail.op_ref(), CallingConvention::Cps);
+            self.ctx.push_op(fallback_block, fallback_tail.op_ref());
+            let fallback_region = self.single_block_region(location, fallback_block);
+            let never = self.never_type();
+            let choice = scf::r#if(
+                self.ctx,
+                location,
+                same_ability.result(self.ctx),
+                never,
+                local_region,
+                fallback_region,
+            );
+            self.ctx.push_op(case_block, choice.op_ref());
+            let case_region = self.single_block_region(location, case_block);
+            let op_index = ability::compute_op_idx(
+                self.ctx.types.get(arm.ability_ref).attrs.get_symbol("name"),
+                Some(arm.op_name),
+            );
+            let case = scf::case(
+                self.ctx,
+                location,
+                Attribute::Int(op_index as i128),
+                case_region,
+            );
+            self.ctx.push_op(selected_block, case.op_ref());
+        }
+        let default_block = self.make_block(location, &[]);
+        let default_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            foreign_dispatch,
+            [effect_evidence, resume, prompt, ability_id, op_id, payload],
+        );
+        set_calling_convention(self.ctx, default_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(default_block, default_tail.op_ref());
+        let default_region = self.single_block_region(location, default_block);
+        let default = scf::default(self.ctx, location, default_region);
+        self.ctx.push_op(selected_block, default.op_ref());
+        let selected_region = self.single_block_region(location, selected_block);
+        let selected = scf::switch(self.ctx, location, op_id, selected_region);
+
+        let same_prompt = arith::cmpi(
+            self.ctx,
+            location,
+            prompt,
+            prompt_tag,
+            i1_type,
+            Symbol::new("eq"),
+        );
+        self.ctx.push_op(block, same_prompt.op_ref());
+        let local_switch_block = self.make_block(location, &[]);
+        self.ctx.push_op(local_switch_block, selected.op_ref());
+        let local_switch_region = self.single_block_region(location, local_switch_block);
+        let never = self.never_type();
+        let choose = scf::r#if(
+            self.ctx,
+            location,
+            same_prompt.result(self.ctx),
+            never,
+            local_switch_region,
+            foreign_region,
+        );
+        self.ctx.push_op(block, choose.op_ref());
+        let region = self.single_block_region(location, block);
+        let captures = ordered_external_values(self.ctx, region);
+        let dispatch_type = self.dispatch_type(body_type);
+        let lambda = closure::lambda(self.ctx, location, captures, dispatch_type, region);
+        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        (lambda.op_ref(), lambda.result(self.ctx))
+    }
+
+    /// Adapt a typed handler token without erasing a continuation. Only the
+    /// source operation input crosses the exact `I -> anyref` boundary.
+    fn build_exact_handler_token(
+        &mut self,
+        location: Location,
+        factory: HandlerTokenFactory,
+    ) -> (OpRef, ValueRef) {
+        let HandlerTokenFactory {
+            resume_body,
+            completion,
+            input_type,
+            body_type,
+            answer_type,
+            dispatch_factory,
+            dispatch_factory_args,
+        } = factory;
+        let anyref = self.anyref_type();
+        let evidence_type = self.evidence_type();
+        let answer_parent_type = self.parent_types(answer_type).reference;
+        let exact_block =
+            self.make_block(location, &[evidence_type, answer_parent_type, input_type]);
+        let exact_args = self.ctx.block_args(exact_block).to_vec();
+        let resume_block = self.make_block(location, &[evidence_type, answer_parent_type, anyref]);
+        let resume_args = self.ctx.block_args(resume_block).to_vec();
+        let next_block = self.make_block(location, &[body_type]);
+        let next_value = self.ctx.block_args(next_block)[0];
+        let next_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            completion,
+            [resume_args[0], resume_args[1], next_value],
+        );
+        set_calling_convention(self.ctx, next_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(next_block, next_tail.op_ref());
+        let next_region = self.single_block_region(location, next_block);
+        let next_captures = ordered_external_values(self.ctx, next_region);
+        let body_done_type = self.done_k_type(body_type);
+        let next_done = closure::lambda(
+            self.ctx,
+            location,
+            next_captures,
+            body_done_type,
+            next_region,
+        );
+        set_calling_convention(self.ctx, next_done.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(resume_block, next_done.op_ref());
+        let mut factory_args = vec![resume_args[1]];
+        factory_args.extend(dispatch_factory_args);
+        let body_dispatch_type = self.dispatch_type(body_type);
+        let dispatch = func::call(
+            self.ctx,
+            location,
+            factory_args,
+            body_dispatch_type,
+            dispatch_factory,
+        );
+        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(resume_block, dispatch.op_ref());
+        let parent = self.pack_parent(
+            resume_block,
+            location,
+            body_type,
+            next_done.result(self.ctx),
+            dispatch.result(self.ctx),
+        );
+        let resume_tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            resume_body,
+            [resume_args[0], parent, resume_args[2]],
+        );
+        set_calling_convention(self.ctx, resume_tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(resume_block, resume_tail.op_ref());
+        let resume_region = self.single_block_region(location, resume_block);
+        let resume_captures = ordered_external_values(self.ctx, resume_region);
+        let erased_resume_type = self.erased_resumption_type(answer_type);
+        let resume = closure::lambda(
+            self.ctx,
+            location,
+            resume_captures,
+            erased_resume_type,
+            resume_region,
+        );
+        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(exact_block, resume.op_ref());
+        let erased = core::unrealized_conversion_cast(self.ctx, location, exact_args[2], anyref);
+        self.ctx.push_op(exact_block, erased.op_ref());
+        let tail = func::tail_call_indirect(
+            self.ctx,
+            location,
+            resume.result(self.ctx),
+            [exact_args[0], exact_args[1], erased.result(self.ctx)],
+        );
+        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(exact_block, tail.op_ref());
+        let exact_region = self.single_block_region(location, exact_block);
+        let exact_captures = ordered_external_values(self.ctx, exact_region);
+        let token_type = self.resumption_type(input_type, answer_type);
+        let token = closure::lambda(self.ctx, location, exact_captures, token_type, exact_region);
+        set_calling_convention(self.ctx, token.op_ref(), CallingConvention::Cps);
+        (token.op_ref(), token.result(self.ctx))
     }
 
     fn lower_handle(
@@ -2361,6 +3847,19 @@ impl<'a> Converter<'a> {
             _ => unreachable!("handle continuation is produced by closure.lambda"),
         };
         self.ctx.push_op(block, after_handle_op);
+        let i32_type = self.i32_type();
+        let prompt_tag = effect::fresh_prompt_tag(self.ctx, location, i32_type);
+        let prompt_tag_value = prompt_tag.result(self.ctx);
+        self.ctx.push_op(block, prompt_tag.op_ref());
+
+        // A normal handler-arm yield has answer type `A`, but general
+        // operations inside the arm still cross the enclosing `O` dispatch
+        // boundary. `after_done` is the sole immutable bridge between them.
+        let (after_adapter_ops, after_done, after_dispatch) =
+            self.build_cps_call_adapters(handle_answer, after_handle, flow, location)?;
+        for op in after_adapter_ops {
+            self.ctx.push_op(block, op);
+        }
 
         let regions = self.ctx.op(source).regions.to_vec();
         let [body_source, completion_source, handlers_region] = regions.as_slice() else {
@@ -2371,8 +3870,20 @@ impl<'a> Converter<'a> {
         let handlers_block = self.ctx.region(handlers_region).blocks[0];
         let mut handler_arms = Vec::new();
         let source_handlers = self.ctx.block(handlers_block).ops.to_vec();
+        let handler_flow = Flow {
+            convention: CallingConvention::Cps,
+            evidence: flow.evidence,
+            resume_evidence: flow.resume_evidence,
+            done: None,
+            dispatch: None,
+            boundary_result: handle_answer,
+            resume_after: None,
+            resume_done: None,
+            void_done: None,
+            preserve_scf_yield: false,
+        };
         for handler in source_handlers {
-            let arm = self.lower_handler_arm(handler, mapping, after_handle, handle_answer)?;
+            let arm = self.lower_handler_arm(handler, mapping, &handler_flow)?;
             self.ctx.push_op(block, arm.op);
             handler_arms.push(arm);
         }
@@ -2406,20 +3917,71 @@ impl<'a> Converter<'a> {
         let body_flow_base = Flow {
             convention: CallingConvention::Cps,
             evidence: Some(extended_evidence),
-            exit_k: Some(after_handle),
-            root_exit_k: Some(after_handle),
-            answer_type: handle_answer,
+            resume_evidence: Some(extended_evidence),
+            done: None,
+            dispatch: Some(after_dispatch),
+            boundary_result: handle_answer,
+            resume_after: None,
+            resume_done: None,
+            void_done: None,
+            preserve_scf_yield: false,
         };
         let (completion_op, completion_k) = self.build_completion_continuation(
             completion_source,
-            after_handle,
             &body_mapping,
             &body_flow_base,
             location,
         )?;
         self.ctx.push_op(body_block, completion_op);
+        let body_type = self.convert_type(
+            self.ctx.value_ty(
+                self.ctx
+                    .block_args(self.ctx.region(completion_source).blocks[0])[0],
+            ),
+        );
+        let after_parent = self.pack_parent(
+            body_block,
+            location,
+            handle_answer,
+            after_done,
+            after_dispatch,
+        );
+        let (body_done_op, body_done) = self.build_done_adapter(
+            body_type,
+            completion_k,
+            extended_evidence,
+            after_parent,
+            location,
+        );
+        self.ctx.push_op(body_block, body_done_op);
+        let outer_evidence = self.current_evidence(source, flow)?;
+        let local_dispatch_factory = self.build_local_cps_dispatch_factory(
+            location,
+            &handler_arms,
+            body_type,
+            handle_answer,
+        );
+        let mut local_factory_args =
+            vec![after_parent, outer_evidence, prompt_tag_value, completion_k];
+        local_factory_args.extend(handler_arms.iter().map(|arm| arm.value));
+        let body_dispatch_type = self.dispatch_type(body_type);
+        let local_dispatch_call = func::call(
+            self.ctx,
+            location,
+            local_factory_args,
+            body_dispatch_type,
+            local_dispatch_factory,
+        );
+        set_calling_convention(
+            self.ctx,
+            local_dispatch_call.op_ref(),
+            CallingConvention::Direct,
+        );
+        self.ctx.push_op(body_block, local_dispatch_call.op_ref());
         let body_flow = Flow {
-            exit_k: Some(completion_k),
+            done: Some(body_done),
+            dispatch: Some(local_dispatch_call.result(self.ctx)),
+            boundary_result: body_type,
             ..body_flow_base
         };
         let source_body_block = self.ctx.region(body_source).blocks[0];
@@ -2436,6 +3998,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             current_evidence,
+            prompt_tag_value,
             dispatchers,
             Attribute::List(ability_refs.into_iter().map(Attribute::Type).collect()),
             body_region,
@@ -2458,8 +4021,24 @@ impl<'a> Converter<'a> {
             let dialect = self.ctx.op(source).dialect;
             let name = self.ctx.op(source).name;
             if dialect == Symbol::new("scf") && name == Symbol::new("yield") {
+                if flow.preserve_scf_yield {
+                    let cloned = self.clone_plain_op(source, mapping)?;
+                    self.ctx.push_op(block, cloned);
+                    return Ok(());
+                }
                 let values = self.ctx.op_operands(source);
                 if values.is_empty() {
+                    if let Some(void_done) = flow.void_done {
+                        let tail = func::tail_call_indirect(
+                            self.ctx,
+                            location,
+                            void_done,
+                            std::iter::empty::<ValueRef>(),
+                        );
+                        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+                        self.ctx.push_op(block, tail.op_ref());
+                        return Ok(());
+                    }
                     self.emit_void_exit(block, location, flow)?;
                     return Ok(());
                 }
@@ -2489,6 +4068,34 @@ impl<'a> Converter<'a> {
                 self.lower_structured_if(source, &source_ops, index, block, mapping, flow)?;
                 return Ok(());
             }
+            // Source case lowering can use an unrealized cast into the
+            // logical bottom solely to join an `op -> Never` arm with a
+            // normal arm. At a proven CPS structured exit, that cast carries
+            // no runtime value: route the represented input directly to the
+            // active `Flow<R>` instead. Any other Never cast remains for the
+            // named boundary verifier to reject.
+            if flow.convention == CallingConvention::Cps
+                && dialect == Symbol::new("core")
+                && name == Symbol::new("unrealized_conversion_cast")
+            {
+                let results = self.ctx.op_results(source);
+                let operands = self.ctx.op_operands(source);
+                if let ([result], [input]) = (results, operands)
+                    && type_is(self.ctx, self.ctx.value_ty(*result), "core", "never")
+                    && !self.ctx.uses(*result).is_empty()
+                    && self.ctx.uses(*result).iter().all(|use_| {
+                        self.ctx.op(use_.user).dialect == Symbol::new("scf")
+                            && self.ctx.op(use_.user).name == Symbol::new("yield")
+                    })
+                {
+                    let input = mapping.get(input).copied().unwrap_or(*input);
+                    if self.ctx.value_ty(input) == flow.boundary_result {
+                        mapping.insert(*result, input);
+                        index += 1;
+                        continue;
+                    }
+                }
+            }
             if dialect != Symbol::new("tribute_control") {
                 let cloned = self.clone_plain_op(source, mapping)?;
                 self.ctx.push_op(block, cloned);
@@ -2497,6 +4104,11 @@ impl<'a> Converter<'a> {
             }
 
             match name.with_str(|value| value.to_owned()).as_str() {
+                "unreachable" => {
+                    let unreachable = func::unreachable(self.ctx, location);
+                    self.ctx.push_op(block, unreachable.op_ref());
+                    return Ok(());
+                }
                 "return" | "yield" => {
                     let value = self.ctx.op_operands(source)[0];
                     let value = mapping.get(&value).copied().unwrap_or(value);
@@ -2525,7 +4137,7 @@ impl<'a> Converter<'a> {
                         .get_symbol("callee")
                         .expect("pre-CPS validation checked direct callee");
                     let target = self
-                        .current_func(target_symbol)
+                        .current_direct_call_target(source, target_symbol)
                         .expect("pre-CPS validation resolved direct callee in this module");
                     if target.convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
@@ -2533,12 +4145,15 @@ impl<'a> Converter<'a> {
                                 POST_CPS_BOUNDARY,
                                 Some(source),
                                 Some(location),
-                                "a non-CPS callable cannot call a CPS target",
+                                format!(
+                                    "a {:?} callable cannot call CPS target @{}",
+                                    flow.convention, target_symbol
+                                ),
                             ));
                         }
                         let old_result = self.ctx.op_result(source, 0);
                         let result_type = self.ctx.op_result_types(source)[0];
-                        let continuation = self.build_suffix_continuation(
+                        let completion = self.build_suffix_continuation(
                             &source_ops,
                             index + 1,
                             old_result,
@@ -2547,12 +4162,19 @@ impl<'a> Converter<'a> {
                             flow,
                             location,
                         )?;
-                        let continuation_op = match self.ctx.value_def(continuation) {
+                        let completion_op = match self.ctx.value_def(completion) {
                             trunk_ir::ValueDef::OpResult(op, _) => op,
                             _ => unreachable!("continuation is produced by closure.lambda"),
                         };
-                        self.ctx.push_op(block, continuation_op);
-                        let mut args = vec![self.current_evidence(source, flow)?, continuation];
+                        self.ctx.push_op(block, completion_op);
+                        let value_type = self.convert_type(result_type);
+                        let (adapter_ops, done, dispatch) =
+                            self.build_cps_call_adapters(value_type, completion, flow, location)?;
+                        for op in adapter_ops {
+                            self.ctx.push_op(block, op);
+                        }
+                        let mut args =
+                            vec![self.current_resume_evidence(source, flow)?, done, dispatch];
                         args.extend(
                             self.ctx
                                 .op_operands(source)
@@ -2591,7 +4213,7 @@ impl<'a> Converter<'a> {
                         }
                         let old_result = self.ctx.op_result(source, 0);
                         let result_type = self.ctx.op_result_types(source)[0];
-                        let continuation = self.build_suffix_continuation(
+                        let completion = self.build_suffix_continuation(
                             &source_ops,
                             index + 1,
                             old_result,
@@ -2600,12 +4222,19 @@ impl<'a> Converter<'a> {
                             flow,
                             location,
                         )?;
-                        let continuation_op = match self.ctx.value_def(continuation) {
+                        let completion_op = match self.ctx.value_def(completion) {
                             trunk_ir::ValueDef::OpResult(op, _) => op,
                             _ => unreachable!("continuation is produced by closure.lambda"),
                         };
-                        self.ctx.push_op(block, continuation_op);
-                        let mut args = vec![self.current_evidence(source, flow)?, continuation];
+                        self.ctx.push_op(block, completion_op);
+                        let value_type = self.convert_type(result_type);
+                        let (adapter_ops, done, dispatch) =
+                            self.build_cps_call_adapters(value_type, completion, flow, location)?;
+                        for op in adapter_ops {
+                            self.ctx.push_op(block, op);
+                        }
+                        let mut args =
+                            vec![self.current_resume_evidence(source, flow)?, done, dispatch];
                         args.extend(
                             source_args
                                 .iter()
@@ -2751,11 +4380,12 @@ impl<'a> Converter<'a> {
         let abi = CallableAbi::new(info.convention, source_params, source_result);
         let evidence_ty = self.evidence_type();
         let done_k_ty = self.done_k_type(source_result);
-        let params = abi.lowered_params(evidence_ty, done_k_ty);
+        let dispatch_ty = self.dispatch_type(source_result);
+        let params = abi.lowered_params_with_dispatch(evidence_ty, done_k_ty, dispatch_ty);
         let block = self.make_block(location, &params);
         let mut mapping = HashMap::new();
         for (old, new) in self.ctx.block_args(source_block).to_vec().into_iter().zip(
-            self.ctx.block_args(block)[abi.source_param_offset()..]
+            self.ctx.block_args(block)[abi.source_param_offset_with_dispatch()..]
                 .iter()
                 .copied(),
         ) {
@@ -2765,16 +4395,26 @@ impl<'a> Converter<'a> {
             .convention
             .needs_evidence()
             .then(|| self.ctx.block_args(block)[0]);
-        let exit_k = info
+        let done_index = usize::from(info.convention.needs_evidence());
+        let done = info
             .convention
             .needs_done_k()
-            .then(|| self.ctx.block_args(block)[usize::from(info.convention.needs_evidence())]);
+            .then(|| self.ctx.block_args(block)[done_index]);
+        let dispatch = info
+            .convention
+            .needs_done_k()
+            .then(|| self.ctx.block_args(block)[done_index + 1]);
         let flow = Flow {
             convention: info.convention,
             evidence,
-            exit_k,
-            root_exit_k: exit_k,
-            answer_type: source_result,
+            resume_evidence: evidence,
+            done,
+            dispatch,
+            boundary_result: source_result,
+            resume_after: None,
+            resume_done: None,
+            void_done: None,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -2874,6 +4514,8 @@ fn collect_callable_graph(
                             convention: convert_convention(convention),
                             source_result: callable.result(ctx),
                             source_params: callable.params(ctx).to_vec(),
+                            intrinsic_declaration: data.regions.is_empty()
+                                && data.attributes.get_str("abi") == Some("intrinsic"),
                         },
                     );
                 }
@@ -2909,8 +4551,12 @@ fn verify_candidate_or_restore_aliases(
     ctx: &mut IrContext,
     candidate: Module,
     source_aliases: &[(Symbol, TypeRef)],
+    generated_aliases: &[(Symbol, TypeRef)],
 ) -> Result<(), TributeControlToCpsError> {
     if let Err(error) = verify_tribute_control_post_cps(ctx, candidate) {
+        for (name, _) in generated_aliases {
+            ctx.remove_type_alias(*name);
+        }
         for (name, ty) in source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
@@ -2951,6 +4597,7 @@ pub fn tribute_control_to_cps(
     let module_location = ctx.op(module.op()).location;
     let source_aliases = ctx.type_aliases().to_vec();
     let mut converted_aliases = Vec::with_capacity(source_aliases.len());
+    let generated_parent_aliases;
     let new_block = ctx.create_block(BlockData {
         location: ctx.block(source_blocks[0]).location,
         args: vec![],
@@ -2982,7 +4629,9 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (*name, converter.convert_type(*ty))),
         );
+        generated_parent_aliases = converter.parent_layout_aliases.clone();
     }
+    converted_aliases.extend(generated_parent_aliases.iter().copied());
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,
         blocks: trunk_ir::smallvec::smallvec![new_block],
@@ -2994,7 +4643,12 @@ pub fn tribute_control_to_cps(
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(*name, *ty);
     }
-    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases)?;
+    verify_candidate_or_restore_aliases(
+        ctx,
+        candidate,
+        &source_aliases,
+        &generated_parent_aliases,
+    )?;
 
     ctx.detach_region(new_region);
     ctx.remove_op(candidate.op());
@@ -3005,6 +4659,9 @@ pub fn tribute_control_to_cps(
         ctx.detach_region(new_region);
         ctx.op_mut(module.op()).regions.push(source_region);
         ctx.region_mut(source_region).parent_op = Some(module.op());
+        for (name, _) in &generated_parent_aliases {
+            ctx.remove_type_alias(*name);
+        }
         for (name, ty) in &source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
@@ -3103,6 +4760,34 @@ mod tests {
     }
 
     #[test]
+    fn logical_unreachable_legalizes_only_after_the_pre_cps_boundary() {
+        let input = r#"core.module @test {
+  tribute_control.func @select(%condition: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %selected = scf.if %condition : core.i32 {
+      scf.yield %value
+    } {
+      tribute_control.unreachable
+    }
+    tribute_control.return %selected
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        verify_tribute_control_pre_cps(&ctx, module, &[]).unwrap();
+        let source = print_module(&ctx, module.op());
+        assert!(source.contains("tribute_control.unreachable"), "{source}");
+        assert!(!source.contains("func.unreachable"), "{source}");
+
+        tribute_control_to_cps(&mut ctx, module, &[]).unwrap();
+        let lowered = print_module(&ctx, module.op());
+        assert!(lowered.contains("func.unreachable"), "{lowered}");
+        assert!(
+            !lowered.contains("tribute_control.unreachable"),
+            "{lowered}"
+        );
+        verify_tribute_control_post_cps(&ctx, module).unwrap();
+    }
+
+    #[test]
     fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
         let input = r#"core.module @test {
   !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
@@ -3144,6 +4829,21 @@ mod tests {
         assert!(printed.contains("tribute.calling_convention = 1"));
         assert!(printed.contains("tribute.calling_convention = 2"));
         assert!(!printed.contains("tribute_control."), "{printed}");
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let has_explicit_dispatch_context = ctx.types.iter().any(|(closure, _)| {
+            let Some(function) = cps_closure_function_type(&ctx, closure) else {
+                return false;
+            };
+            let params = &ctx.types.get(function).params;
+            params.len() == 4
+                && type_is(&ctx, params[0], "core", "never")
+                && params[1] == evidence
+                && tribute_core::cps_parent_result_type(&ctx, params[2]).is_some()
+        });
+        assert!(
+            has_explicit_dispatch_context,
+            "CPS callback ABI must retain explicit evidence before Parent<R>: {printed}"
+        );
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
@@ -3447,8 +5147,8 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         ctx.register_type_alias(alias_name, converted_type);
 
-        let error =
-            verify_candidate_or_restore_aliases(&mut ctx, candidate, &source_aliases).unwrap_err();
+        let error = verify_candidate_or_restore_aliases(&mut ctx, candidate, &source_aliases, &[])
+            .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
         assert_eq!(ctx.type_alias_by_name(alias_name), Some(source_type));
         assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
@@ -3498,6 +5198,30 @@ mod tests {
         let (ctx, module) = parse(malformed_delimiter);
         let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
         assert!(error.to_string().contains("requires an evidence operand"));
+    }
+
+    #[test]
+    fn pre_boundary_rejects_control_callable_cast_without_mutating_input() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  tribute_control.func @broken(%callback: !direct) -> core.i32 convention(direct) {
+    %forged = core.unrealized_conversion_cast %callback : !cps
+    %zero = arith.const {value = 0} : core.i32
+    tribute_control.return %zero
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("CPS control callables may not cross unrealized conversion casts"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -3623,13 +5347,114 @@ mod tests {
     }
 
     #[test]
+    fn post_boundary_rejects_parent_mutation_control_cast_and_mismatched_resume() {
+        let input = r#"core.module @test {
+  !parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i32}
+  !done = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
+  !resume = closure.closure(core.func(core.never, !parent, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !dispatch = closure.closure(core.func(core.never, !resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !parent_layout = adt.struct() {fields = [[@done, !done], [@dispatch, !dispatch]], name = @Parent, tribute.cps_parent_result = core.i32}
+  func.func @broken(%parent: !parent, %done: !done, %resume: !resume, %wrong: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    %erased = core.unrealized_conversion_cast %parent : tribute_rt.anyref
+    adt.struct_set %parent, %done {field = 0, type = !parent_layout}
+    func.tail_call_indirect %resume, %wrong {tribute.calling_convention = 2}
+  }
+}"#;
+        let (ctx, module) = parse(input);
+        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let text = error.to_string();
+        assert!(
+            text.contains("may not cross unrealized conversion casts"),
+            "{text}"
+        );
+        assert!(text.contains("Parent is immutable"), "{text}");
+        assert!(
+            text.contains("operands do not match its exact control closure signature"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn post_boundary_preflights_parent_layouts_and_rejects_obsolete_done_first_forms() {
+        let malformed = [
+            (
+                r#"core.module @test {
+  !parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i32}
+  func.func @dead(%parent: !parent) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+                "requires exactly one canonical immutable layout",
+            ),
+            (
+                r#"core.module @test {
+  !parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i32}
+  !done = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
+  !resume = closure.closure(core.func(core.never, !parent, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !dispatch = closure.closure(core.func(core.never, !resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !layout = adt.struct() {fields = [[@dispatch, !dispatch], [@done, !done]], name = @Parent, tribute.cps_parent_result = core.i32}
+  func.func @dead(%parent: !parent) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+                "requires exactly one canonical immutable layout",
+            ),
+            (
+                r#"core.module @test {
+  !parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i32}
+  !other_parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i64}
+  !done = closure.closure(core.func(core.never, core.i64)) {tribute.calling_convention = 2}
+  !resume = closure.closure(core.func(core.never, !other_parent, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !dispatch = closure.closure(core.func(core.never, !resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !layout = adt.struct() {fields = [[@done, !done], [@dispatch, !dispatch]], name = @Parent, tribute.cps_parent_result = core.i64}
+  func.func @dead(%parent: !parent) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+                "requires exactly one canonical immutable layout",
+            ),
+            (
+                r#"core.module @test {
+  !parent = adt.typeref() {name = @Parent, tribute.cps_parent_result = core.i32}
+  !done = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
+  !resume = closure.closure(core.func(core.never, !parent, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !dispatch = closure.closure(core.func(core.never, !resume, core.i32, core.i32, core.i32, tribute_rt.anyref)) {tribute.calling_convention = 2}
+  !canonical = adt.struct() {fields = [[@done, !done], [@dispatch, !dispatch]], name = @Parent, tribute.cps_parent_result = core.i32}
+  !conflicting = adt.struct() {fields = [[@dispatch, !dispatch], [@done, !done]], name = @Parent, tribute.cps_parent_result = core.i32}
+  func.func @dead(%parent: !parent) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+                "requires exactly one canonical immutable layout",
+            ),
+            (
+                r#"core.module @test {
+  !done = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2}
+  !obsolete_completion = closure.closure(core.func(core.never, !done, core.i32)) {tribute.calling_convention = 2}
+  func.func @dead(%completion: !obsolete_completion) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+                "must take explicit Evidence, Parent<R>",
+            ),
+        ];
+        for (input, expected) in malformed {
+            let (ctx, module) = parse(input);
+            let before = print_module(&ctx, module.op());
+            let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
     fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
         let dispatcher_input = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
   !tr = closure.closure(core.func(tribute_rt.anyref, !evidence, core.i32, tribute_rt.anyref))
   !general = closure.closure(core.func(core.never, !evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref))
-  func.func @caller(%ev: !evidence, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3646,14 +5471,14 @@ mod tests {
 
         let wrong_abi_input = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
-  func.func @caller(%ev: !evidence) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
     }
     %general = closure.lambda(%inner: !evidence) -> core.never {tribute.calling_convention = 2} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3670,14 +5495,14 @@ mod tests {
 
         let wrong_metadata_input = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
-  func.func @caller(%ev: !evidence) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
     }
     %general = closure.lambda(%inner: !evidence, %continuation: tribute_rt.anyref, %op_idx: core.i32, %payload: tribute_rt.anyref) -> core.never {tribute.calling_convention = 1} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3798,9 +5623,86 @@ mod tests {
         find_one_shot_state_ops(&ctx, module.op(), &mut consumed_get, &mut consumed_set);
         assert_eq!(consumed_get, consumed_set);
         assert!(consumed_get.is_some(), "one-shot state was not emitted");
+
+        let mut parent_packs = 0;
+        let mut parent_dispatch_unpacks = 0;
+        let mut parent_mutations = 0;
+        let mut control_casts = 0;
+        fn inspect_parent_flow(
+            ctx: &IrContext,
+            op: OpRef,
+            parent_packs: &mut usize,
+            parent_dispatch_unpacks: &mut usize,
+            parent_mutations: &mut usize,
+            control_casts: &mut usize,
+        ) {
+            let operands = ctx.op_operands(op);
+            if adt::StructNew::matches(ctx, op)
+                && ctx.op_results(op).first().is_some_and(|value| {
+                    tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+                })
+            {
+                *parent_packs += 1;
+            }
+            if adt::StructGet::matches(ctx, op)
+                && operands.first().is_some_and(|value| {
+                    tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+                })
+                && ctx.op(op).attributes.get_u32("field") == Ok(Some(1))
+            {
+                *parent_dispatch_unpacks += 1;
+            }
+            if adt::StructSet::matches(ctx, op)
+                && operands.first().is_some_and(|value| {
+                    tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+                })
+            {
+                *parent_mutations += 1;
+            }
+            if core::UnrealizedConversionCast::matches(ctx, op)
+                && (operands.first().is_some_and(|value| {
+                    tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+                        || cps_closure_function_type(ctx, ctx.value_ty(*value)).is_some()
+                }) || ctx.op_results(op).first().is_some_and(|value| {
+                    tribute_core::cps_parent_result_type(ctx, ctx.value_ty(*value)).is_some()
+                        || cps_closure_function_type(ctx, ctx.value_ty(*value)).is_some()
+                }))
+            {
+                *control_casts += 1;
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        inspect_parent_flow(
+                            ctx,
+                            child,
+                            parent_packs,
+                            parent_dispatch_unpacks,
+                            parent_mutations,
+                            control_casts,
+                        );
+                    }
+                }
+            }
+        }
+        inspect_parent_flow(
+            &ctx,
+            module.op(),
+            &mut parent_packs,
+            &mut parent_dispatch_unpacks,
+            &mut parent_mutations,
+            &mut control_casts,
+        );
+        assert!(parent_packs >= 2, "expected immutable Parent flow packs");
+        assert!(
+            parent_dispatch_unpacks >= 1,
+            "raw resumptions must unpack the dynamic dispatch from Parent"
+        );
+        assert_eq!(parent_mutations, 0, "Parent must stay immutable");
+        assert_eq!(control_casts, 0, "control values must not be erased");
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 1);
-        assert!(!printed.contains("effect."));
+        assert!(printed.contains("effect.fresh_prompt_tag"));
         assert!(printed.contains("ability_refs = [core.ability_ref"));
         assert!(printed.contains("func.tail_call_indirect"));
         assert!(printed.contains("adt.struct_set"));
@@ -3887,7 +5789,7 @@ mod tests {
         let [delimiter] = delimiters.as_slice() else {
             panic!("expected one final delimiter");
         };
-        assert_eq!(ctx.op_operands(*delimiter).len(), 3);
+        assert_eq!(ctx.op_operands(*delimiter).len(), 4);
         let Some(Attribute::List(ability_refs)) = ctx.op(*delimiter).attributes.get("ability_refs")
         else {
             panic!("final delimiter must have ability_refs");
@@ -3896,7 +5798,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("value = 9"));
         assert!(printed.contains("func.tail_call_indirect"));
-        assert!(!printed.contains("effect."));
+        assert!(printed.contains("effect.fresh_prompt_tag"));
     }
 
     #[test]
@@ -4067,9 +5969,95 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[]).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
-        assert!(!printed.contains("effect."));
+        assert!(printed.contains("effect.fresh_prompt_tag"));
         assert!(printed.matches("func.tail_call_indirect").count() >= 3);
         assert!(!printed.contains("__tribute_cps_control"));
+    }
+
+    #[test]
+    fn foreign_resume_rebuilds_the_inner_local_dispatcher() {
+        let input = r#"core.module @test {
+  tribute_control.func @nested(%input: core.i32) -> core.i32 convention(cps) {
+    %outer = tribute_control.handle : core.i32 {
+      %inner = tribute_control.handle : core.i32 {
+        %first = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @A}, op_name = @ask, operation_kind = @op} : core.i32
+        %second = tribute_control.perform %first {ability_ref = core.ability_ref() {name = @B}, op_name = @ask, operation_kind = @op} : core.i32
+        tribute_control.yield %second
+      } {
+        ^inner_completion(%value: core.i32):
+          tribute_control.yield %value
+      } {
+        tribute_control.handler {ability_ref = core.ability_ref() {name = @B}, kind = @op, op_name = @ask, operation_result_type = core.i32} {
+          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+            %resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.yield %resumed
+        }
+      }
+      tribute_control.yield %inner
+    } {
+      ^outer_completion(%value: core.i32):
+        tribute_control.yield %value
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref() {name = @A}, kind = @op, op_name = @ask, operation_result_type = core.i32} {
+        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.yield %resumed
+      }
+    }
+    tribute_control.return %outer
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let mut abilities = HashMap::new();
+        for (ty, data) in ctx.types.iter() {
+            if data.dialect == Symbol::new("core")
+                && data.name == Symbol::new("ability_ref")
+                && let Some(name) = data.attrs.get_symbol("name")
+            {
+                abilities.insert(name, ty);
+            }
+        }
+        let declarations = [
+            tribute_control::OperationDeclaration::new(
+                abilities[&Symbol::new("A")],
+                Symbol::new("ask"),
+                Symbol::new("op"),
+                vec![i32_type],
+                i32_type,
+            ),
+            tribute_control::OperationDeclaration::new(
+                abilities[&Symbol::new("B")],
+                Symbol::new("ask"),
+                Symbol::new("op"),
+                vec![i32_type],
+                i32_type,
+            ),
+        ];
+        tribute_control_to_cps(&mut ctx, module, &declarations).unwrap();
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
+        assert_eq!(
+            printed
+                .matches("func.func @__tribute_make_local_dispatch")
+                .count(),
+            2,
+        );
+        assert!(
+            printed
+                .matches("callee = @__tribute_make_local_dispatch")
+                .count()
+                >= 6,
+            "the resumed foreign flow must rebuild the inner local dispatcher: {printed}"
+        );
+        assert!(!printed.contains("tribute_control."));
     }
 
     #[test]
@@ -4133,6 +6121,99 @@ mod tests {
         assert!(!printed.contains("@consumed"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(!printed.contains("adt.ref_null"));
+    }
+
+    #[test]
+    fn textual_structured_never_keeps_the_outer_dispatch_resume_boundary() {
+        let input = r#"core.module @test {
+  tribute_control.func @abort_conditional(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
+    %never = scf.if %condition : core.never {
+      %abort = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @Abort}, op_name = @abort, operation_kind = @op} : core.never
+      scf.yield %abort
+    } {
+      %value = arith.const {value = 42} : core.i32
+      %coerced = core.unrealized_conversion_cast %value : core.never
+      scf.yield %coerced
+    }
+    tribute_control.return %input
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let ability_ref = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let never_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let declarations = [tribute_control::OperationDeclaration::new(
+            ability_ref,
+            Symbol::new("abort"),
+            Symbol::new("op"),
+            vec![i32_type],
+            never_type,
+        )];
+
+        tribute_control_to_cps(&mut ctx, module, &declarations).unwrap();
+
+        fn collect_performs(ctx: &IrContext, op: OpRef, performs: &mut Vec<OpRef>) {
+            if ability::Perform::matches(ctx, op) {
+                performs.push(op);
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        collect_performs(ctx, child, performs);
+                    }
+                }
+            }
+        }
+
+        let mut performs = Vec::new();
+        collect_performs(&ctx, module.op(), &mut performs);
+        assert_eq!(performs.len(), 1);
+        for perform in performs {
+            let operands = ctx.op_operands(perform);
+            let dispatch = cps_closure_function_type(&ctx, ctx.value_ty(operands[1]))
+                .expect("structured Never perform must retain a typed Dispatch<R>");
+            assert_eq!(
+                ctx.value_ty(operands[2]),
+                ctx.types.get(dispatch).params[2],
+                "reject Resume<R> must match the active outer Dispatch<R>"
+            );
+        }
+
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("scf.if"));
+        assert!(printed.contains(" : core.never"));
+        assert_eq!(printed.matches("ability.perform").count(), 1);
+        assert!(
+            !printed.lines().any(|line| {
+                line.contains("core.unrealized_conversion_cast") && line.contains(": core.never")
+            }),
+            "bottom join coercion must not survive as a runtime Never value: {printed}"
+        );
+        assert!(!printed.contains("tribute_control."));
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
     }
 
     #[test]
