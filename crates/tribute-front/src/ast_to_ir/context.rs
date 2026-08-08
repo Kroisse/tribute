@@ -624,7 +624,7 @@ impl<'db> IrLoweringCtx<'db> {
                 // Legacy frontend CPS has no logical bottom representation.
                 self.anyref_type(ir)
             }
-            TypeKind::BoundVar { .. } => {
+            TypeKind::BoundVar { .. } | TypeKind::LocalBoundVar { .. } => {
                 // Quantified type variable in TypeScheme body → type-erased any
                 self.anyref_type(ir)
             }
@@ -660,7 +660,9 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::Never => core::never(ir).as_type_ref(),
-            TypeKind::BoundVar { .. } | TypeKind::UniVar { .. } => self.anyref_type(ir),
+            TypeKind::BoundVar { .. }
+            | TypeKind::LocalBoundVar { .. }
+            | TypeKind::UniVar { .. } => self.anyref_type(ir),
             TypeKind::Named { name, .. }
                 if self.get_type(*name).is_some()
                     || self.logical_nominal_declarations.contains(name) =>
@@ -746,6 +748,9 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Never => "never".into(),
             TypeKind::Error => "error".into(),
             TypeKind::BoundVar { index } => logical_key("bound", [index.to_string()]),
+            TypeKind::LocalBoundVar { scope, index } => {
+                logical_key("local_bound", [scope.raw().to_string(), index.to_string()])
+            }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
             TypeKind::Named { id, name, args } => {
                 let mut parts = vec![self.logical_nominal_key(*id, *name)];
