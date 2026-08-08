@@ -1169,7 +1169,9 @@ fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bo
 fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if wasm_dialect::CallIndirect::matches(ctx, op) {
+            if wasm_dialect::CallIndirect::matches(ctx, op)
+                || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
+            {
                 return true;
             }
             for &nested_region in &ctx.op(op).regions {
@@ -1274,6 +1276,33 @@ mod tests {
             )),
             "missing return_call_indirect in {instructions:?}"
         );
+    }
+
+    #[test]
+    fn region_contains_call_indirect_recognizes_return_call_indirect() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+  wasm.func @tail_direct(%value: core.i32) -> core.nil {
+    wasm.return_call %value {callee = @target}
+  }
+}"#,
+        );
+
+        let tail_indirect = module.ops(&ctx)[0];
+        let tail_direct = module.ops(&ctx)[1];
+        assert!(region_contains_call_indirect(
+            &ctx,
+            ctx.op(tail_indirect).regions[0]
+        ));
+        assert!(!region_contains_call_indirect(
+            &ctx,
+            ctx.op(tail_direct).regions[0]
+        ));
     }
 
     #[test]
