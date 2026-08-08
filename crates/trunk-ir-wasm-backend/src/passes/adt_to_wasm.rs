@@ -63,6 +63,19 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
     get_enum_variants(ctx, attr_ty).map(|_| attr_ty)
 }
 
+/// Resolve a logical ADT reference through its exact type alias to an enum
+/// layout. A typeref's `name` attribute is its nominal declaration link; do
+/// not fall back to structural or same-name equivalence here.
+fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
+        return None;
+    }
+    let name = data.attrs.get_symbol("name")?;
+    let enum_ty = ctx.type_alias_by_name(name)?;
+    canonical_enum_type(ctx, enum_ty)
+}
+
 /// Convert logical enum field types that remain in enum attributes to their
 /// existing Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
@@ -403,6 +416,13 @@ impl RewritePattern for VariantGetPattern {
             }
             operand_ty
         } else {
+            let operand_data = ctx.types.get(operand_ty);
+            if operand_data.dialect == Symbol::new("adt")
+                && operand_data.name == Symbol::new("typeref")
+                && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
+            {
+                return false;
+            }
             make_variant_type(ctx, enum_type, tag)
         };
 
@@ -836,8 +856,10 @@ mod tests {
   !A = adt.enum() {name = @A, variants = [[@Some, [core.i32]], [@Other, [core.i32]]]}
   !B = adt.enum() {name = @B, variants = [[@Some, [core.i32]]]}
 
-  wasm.func @main() -> core.nil {
+  wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
+    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = @Some, field = 0} : core.i32
+    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = @Some, field = 0} : core.i32
     %from_b = adt.variant_new %zero {type = !B, tag = @Some} : !BRef
     %wrong_enum = adt.variant_get %from_b {type = !A, tag = @Some, field = 0} : core.i32
     %from_a_other = adt.variant_new %zero {type = !A, tag = @Other} : !ARef
@@ -852,18 +874,26 @@ mod tests {
         let func = module.ops(&ctx)[0];
         let body = ctx.op(func).regions[0];
         let block = ctx.region(body).blocks[0];
+        let function_args = ctx.block_args(block).to_vec();
         let remaining_variant_gets = ctx
             .block(block)
             .ops
             .iter()
             .filter(|&&op| adt::VariantGet::from_op(&ctx, op).is_ok())
             .count();
-        assert_eq!(remaining_variant_gets, 2);
-        assert!(
-            ctx.block(block)
-                .ops
-                .iter()
-                .all(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).is_err())
+        assert_eq!(remaining_variant_gets, 3);
+        let lowered_variant_gets: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .copied()
+            .filter(|&op| wasm_gc_dialect::StructGet::from_op(&ctx, op).is_ok())
+            .collect();
+        assert_eq!(lowered_variant_gets.len(), 1);
+        assert_eq!(
+            ctx.op_operands(lowered_variant_gets[0])[0],
+            function_args[0],
+            "only the matching !ARef operand lowers",
         );
     }
 
