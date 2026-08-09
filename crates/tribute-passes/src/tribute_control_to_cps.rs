@@ -751,6 +751,7 @@ struct Flow {
     exit_k: Option<ValueRef>,
     root_exit_k: Option<ValueRef>,
     answer_type: TypeRef,
+    preserve_scf_yield: bool,
 }
 
 impl<'a> Converter<'a> {
@@ -1168,35 +1169,44 @@ impl<'a> Converter<'a> {
         source_ops: &[OpRef],
         index: usize,
         block: BlockRef,
-        mapping: &HashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
-        if flow.convention != CallingConvention::Cps || self.ctx.op_result_types(source).len() != 1
-        {
+        let result_types = self.ctx.op_result_types(source).to_vec();
+        let is_cps = flow.convention == CallingConvention::Cps;
+        if is_cps && result_types.len() > 1 {
             return Err(TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
                 Some(source),
                 Some(self.ctx.op(source).location),
-                "effectful scf.if requires one result inside a CPS callable",
+                "effectful scf.if requires zero or one result inside a CPS callable",
             ));
         }
         let location = self.ctx.op(source).location;
-        let source_result = self.ctx.op_result(source, 0);
-        let source_result_type = self.ctx.op_result_types(source)[0];
-        let continuation = self.build_suffix_continuation(
-            source_ops,
-            index + 1,
-            source_result,
-            source_result_type,
-            mapping,
-            flow,
-            location,
-        )?;
-        let continuation_op = match self.ctx.value_def(continuation) {
-            trunk_ir::ValueDef::OpResult(op, _) => op,
-            _ => unreachable!("structured continuation is a closure.lambda"),
+        let continuation = if is_cps {
+            Some(if let [source_result_type] = result_types.as_slice() {
+                self.build_suffix_continuation(
+                    source_ops,
+                    index + 1,
+                    self.ctx.op_result(source, 0),
+                    *source_result_type,
+                    mapping,
+                    flow,
+                    location,
+                )?
+            } else {
+                self.build_void_suffix_continuation(source_ops, index + 1, mapping, flow, location)?
+            })
+        } else {
+            None
         };
-        self.ctx.push_op(block, continuation_op);
+        if let Some(continuation) = continuation {
+            let continuation_op = match self.ctx.value_def(continuation) {
+                trunk_ir::ValueDef::OpResult(op, _) => op,
+                _ => unreachable!("structured continuation is a closure.lambda"),
+            };
+            self.ctx.push_op(block, continuation_op);
+        }
 
         let mut converted_regions = Vec::new();
         let source_regions = self.ctx.op(source).regions.to_vec();
@@ -1232,9 +1242,15 @@ impl<'a> Converter<'a> {
             {
                 branch_mapping.insert(old, new);
             }
-            let branch_flow = Flow {
-                exit_k: Some(continuation),
-                ..flow.clone()
+            let branch_flow = match continuation {
+                Some(continuation) => Flow {
+                    exit_k: Some(continuation),
+                    ..flow.clone()
+                },
+                None => Flow {
+                    preserve_scf_yield: true,
+                    ..flow.clone()
+                },
             };
             self.convert_sequence(
                 self.ctx.block(*source_block).ops.to_vec(),
@@ -1255,18 +1271,44 @@ impl<'a> Converter<'a> {
         };
         let condition = self.ctx.op_operands(source)[0];
         let condition = mapping.get(&condition).copied().unwrap_or(condition);
-        let never = self.never_type();
-        let lowered = scf::r#if(
-            self.ctx,
-            location,
-            condition,
-            never,
-            *then_region,
-            *else_region,
-        );
-        self.copy_extra_attrs(source, lowered.op_ref(), &[]);
-        self.ctx.push_op(block, lowered.op_ref());
-        Ok(())
+        if continuation.is_some() {
+            let never = self.never_type();
+            let lowered = scf::r#if(
+                self.ctx,
+                location,
+                condition,
+                never,
+                *then_region,
+                *else_region,
+            );
+            self.copy_extra_attrs(source, lowered.op_ref(), &[]);
+            self.ctx.push_op(block, lowered.op_ref());
+            return Ok(());
+        }
+
+        let mut builder =
+            OperationDataBuilder::new(location, Symbol::new("scf"), Symbol::new("if"))
+                .operand(condition);
+        for result_type in result_types {
+            builder = builder.result(self.convert_type(result_type));
+        }
+        let data = builder
+            .region(*then_region)
+            .region(*else_region)
+            .build(self.ctx);
+        let lowered = self.ctx.create_op(data);
+        self.copy_extra_attrs(source, lowered, &[]);
+        self.ctx.push_op(block, lowered);
+        for (old, new) in self
+            .ctx
+            .op_results(source)
+            .to_vec()
+            .into_iter()
+            .zip(self.ctx.op_results(lowered).to_vec())
+        {
+            mapping.insert(old, new);
+        }
+        self.convert_sequence(source_ops.to_vec(), index + 1, block, mapping, flow)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1500,6 +1542,7 @@ impl<'a> Converter<'a> {
             exit_k,
             root_exit_k: exit_k,
             answer_type: result,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(entry_source).ops.to_vec(),
@@ -1731,6 +1774,7 @@ impl<'a> Converter<'a> {
             exit_k: Some(final_k),
             root_exit_k: Some(final_k),
             answer_type: flow.answer_type,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -2145,6 +2189,7 @@ impl<'a> Converter<'a> {
             exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
             root_exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
             answer_type: handle_answer,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -2409,6 +2454,7 @@ impl<'a> Converter<'a> {
             exit_k: Some(after_handle),
             root_exit_k: Some(after_handle),
             answer_type: handle_answer,
+            preserve_scf_yield: false,
         };
         let (completion_op, completion_k) = self.build_completion_continuation(
             completion_source,
@@ -2458,6 +2504,11 @@ impl<'a> Converter<'a> {
             let dialect = self.ctx.op(source).dialect;
             let name = self.ctx.op(source).name;
             if dialect == Symbol::new("scf") && name == Symbol::new("yield") {
+                if flow.preserve_scf_yield {
+                    let cloned = self.clone_plain_op(source, mapping)?;
+                    self.ctx.push_op(block, cloned);
+                    return Ok(());
+                }
                 let values = self.ctx.op_operands(source);
                 if values.is_empty() {
                     self.emit_void_exit(block, location, flow)?;
@@ -2775,6 +2826,7 @@ impl<'a> Converter<'a> {
             exit_k,
             root_exit_k: exit_k,
             answer_type: source_result,
+            preserve_scf_yield: false,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.to_vec(),
@@ -3948,6 +4000,136 @@ mod tests {
         assert!(printed.contains("func.tail_call_indirect"));
         assert!(printed.contains("arith.addi"));
         assert!(!printed.contains("tribute_control."));
+    }
+
+    #[test]
+    fn textual_zero_result_cps_and_direct_scf_branches_lower() {
+        let input = r#"core.module @test {
+  tribute_control.func @identity(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @branch(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
+    %direct = tribute_control.lambda(%value: core.i32) -> core.i32 convention(direct) captures [%condition] {
+      %selected = scf.if %condition : core.i32 {
+        %called = tribute_control.call %value {callee = @identity} : core.i32
+        scf.yield %called
+      } {
+        scf.yield %value
+      }
+      tribute_control.return %selected
+    }
+    scf.if %condition {
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      scf.yield
+    } {
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @set, operation_kind = @op} : core.i32
+      scf.yield
+    }
+    tribute_control.return %input
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let ability_ref = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let declarations = [
+            tribute_control::OperationDeclaration::new(
+                ability_ref,
+                Symbol::new("get"),
+                Symbol::new("op"),
+                [i32_type],
+                i32_type,
+            ),
+            tribute_control::OperationDeclaration::new(
+                ability_ref,
+                Symbol::new("set"),
+                Symbol::new("op"),
+                [i32_type],
+                i32_type,
+            ),
+        ];
+        tribute_control_to_cps(&mut ctx, module, &declarations).unwrap();
+        let printed = print_module(&ctx, module.op());
+        let scf_ifs: Vec<_> = printed
+            .lines()
+            .filter(|line| line.contains("scf.if"))
+            .collect();
+        let value_if_count = scf_ifs
+            .iter()
+            .filter(|line| line.contains(": core.i32"))
+            .count();
+        assert_eq!(value_if_count, 1, "{printed}");
+        assert!(
+            scf_ifs.iter().any(|line| line.contains(": core.never")),
+            "{printed}"
+        );
+        assert_eq!(printed.matches("ability.perform").count(), 2, "{printed}");
+        assert!(printed.contains("func.call") && printed.contains("func.tail_call_indirect"));
+        assert!(!printed.contains("tribute_control."));
+
+        let mut reparsed = IrContext::new();
+        let reparsed_module = parse_test_module(&mut reparsed, &printed);
+        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+    }
+
+    #[test]
+    fn malformed_multi_result_effectful_scf_if_remains_unchanged() {
+        let input = r#"core.module @test {
+  tribute_control.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
+    %left, %right = scf.if %condition : core.i32, core.i32 {
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      scf.yield %performed, %input
+    } {
+      scf.yield %input, %input
+    }
+    tribute_control.return %left
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let ability_ref = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let declarations = [tribute_control::OperationDeclaration::new(
+            ability_ref,
+            Symbol::new("get"),
+            Symbol::new("op"),
+            [i32_type],
+            i32_type,
+        )];
+        let error = tribute_control_to_cps(&mut ctx, module, &declarations).unwrap_err();
+        assert_eq!(error.boundary, POST_CPS_BOUNDARY);
+        assert!(
+            error.to_string().contains("requires zero or one result"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
