@@ -2123,6 +2123,12 @@ fn main() {
             let concrete = "List::__tribute_list_prepend_intrinsic$Int";
 
             assert!(
+                monomorphized
+                    .function_types
+                    .contains_key(&trunk_ir::Symbol::new(concrete)),
+                "monomorphization must retain the concrete prelude intrinsic scheme"
+            );
+            assert!(
                 ast.contains(concrete),
                 "specialized List body must call the concrete intrinsic:\n{ast}"
             );

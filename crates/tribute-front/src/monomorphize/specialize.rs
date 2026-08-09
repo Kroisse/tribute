@@ -38,22 +38,24 @@ pub fn generate_specializations<'db>(
     function_types: &[(Symbol, TypeScheme<'db>)],
 ) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
+    let extern_functions = collect_extern_function_names(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
     let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
+    let mut extern_function_types = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(func) = func_decls.get(&qualified) else {
+        let func = func_decls.get(&qualified).copied();
+        if func.is_none() && !extern_functions.contains(&qualified) {
             continue;
-        };
+        }
         let Some(scheme) = scheme_map.get(&qualified) else {
             continue;
         };
 
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
-            let specialized = specialize_func_decl(db, func, type_args, mangled);
             let specialized_scheme = TypeScheme::new(
                 db,
                 vec![],
@@ -67,13 +69,21 @@ pub fn generate_specializations<'db>(
                     },
                 ),
             );
-            entries.push((
-                mangled,
-                specialized,
-                specialized_scheme,
-                type_args.clone(),
-                semantic_node_ids(func),
-            ));
+            if let Some(func) = func {
+                let specialized = specialize_func_decl(db, func, type_args, mangled);
+                entries.push((
+                    mangled,
+                    specialized,
+                    specialized_scheme,
+                    type_args.clone(),
+                    semantic_node_ids(func),
+                ));
+            } else {
+                // Extern functions have no AST body to clone, but rewritten
+                // call sites still need their concrete scheme during logical
+                // lowering under the mangled identity.
+                extern_function_types.push((mangled, specialized_scheme));
+            }
         }
     }
 
@@ -81,13 +91,15 @@ pub fn generate_specializations<'db>(
     entries.sort_by_key(|e| e.0);
 
     let mut new_decls = Vec::with_capacity(entries.len());
-    let mut new_function_types = Vec::with_capacity(entries.len());
+    let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
     let mut metadata_origins = Vec::with_capacity(entries.len());
     for (name, decl, scheme, type_args, origins) in entries {
         new_decls.push(decl);
         new_function_types.push((name, scheme));
         metadata_origins.push((type_args, origins));
     }
+    new_function_types.extend(extern_function_types);
+    new_function_types.sort_by_key(|(name, _)| *name);
 
     (new_decls, new_function_types, metadata_origins)
 }
@@ -534,6 +546,35 @@ fn collect_func_decls_inner<'a, 'db>(
                 if let Some(body) = &m.body {
                     let len = crate::push_prefix(prefix, m.name);
                     collect_func_decls_inner(body, prefix, map);
+                    prefix.truncate(len);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_extern_function_names<'db>(module: &Module<TypedRef<'db>>) -> HashSet<Symbol> {
+    let mut names = HashSet::new();
+    let mut prefix = String::new();
+    collect_extern_function_names_inner(&module.decls, &mut prefix, &mut names);
+    names
+}
+
+fn collect_extern_function_names_inner<'db>(
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    names: &mut HashSet<Symbol>,
+) {
+    for decl in decls {
+        match decl {
+            Decl::ExternFunction(func) => {
+                names.insert(crate::qualified_symbol(prefix, func.name));
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let len = crate::push_prefix(prefix, module.name);
+                    collect_extern_function_names_inner(body, prefix, names);
                     prefix.truncate(len);
                 }
             }
