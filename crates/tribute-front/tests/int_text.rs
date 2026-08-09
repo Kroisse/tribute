@@ -89,6 +89,96 @@ fn use_apply() -> Int { apply(+41) }
     generic_specialization_transports_lambda_metadata_inner(db, source);
 }
 
+/// A generic extern discovered through a concrete clone has no AST body to
+/// specialize, but source-logical lowering still needs its exact callable
+/// scheme under the mangled identity.
+#[salsa_test]
+fn generic_extern_specialization_has_a_logical_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_extern_metadata.trb",
+        r#"
+extern "intrinsic" fn generic_intrinsic(value: a) -> a
+
+fn through(value: a) -> a {
+    generic_intrinsic(value)
+}
+
+fn use_through() -> Nat { through(0) }
+"#,
+    );
+
+    generic_extern_specialization_has_a_logical_signature_inner(db, source);
+}
+
+#[salsa::tracked]
+fn generic_extern_specialization_has_a_logical_signature_inner(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) {
+    let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
+    let ast = parsed.module(db).clone();
+    let checked = tribute_front::typeck::typecheck_module(
+        db,
+        tribute_front::resolve::resolve_with_env(
+            db,
+            ast.clone(),
+            tribute_front::resolve::build_env(db, &ast),
+            parsed.span_map(db).clone(),
+        ),
+        parsed.span_map(db).clone(),
+    );
+    let typed =
+        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mono = tribute_front::monomorphize::monomorphize_functions(
+        db,
+        typed,
+        checked.function_types(db).iter().cloned().collect(),
+        tribute_front::monomorphize::MonomorphizeMetadata {
+            constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+            node_types: checked
+                .expression_types(db)
+                .node_types
+                .iter()
+                .cloned()
+                .collect(),
+            call_callee_types: checked
+                .expression_types(db)
+                .call_callee_types
+                .iter()
+                .cloned()
+                .collect(),
+            handler_operations: checked.handler_operations(db).iter().cloned().collect(),
+            perform_operations: checked.perform_operations(db).iter().cloned().collect(),
+            lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
+            exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+        },
+    );
+    let mut ir = IrContext::new();
+    let output = tribute_front::ast_to_ir::TypedModule {
+        ast: mono.module,
+        span_map: checked.span_map(db).clone(),
+        function_types: mono.function_types.into_iter().collect(),
+        constructor_types: mono.metadata.constructor_types,
+        node_types: mono.metadata.node_types,
+        ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
+        ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
+            checked.ability_definitions(db),
+        ),
+        handler_operations: mono.metadata.handler_operations,
+        perform_operations: mono.metadata.perform_operations,
+        lambda_signatures: mono.metadata.lambda_signatures,
+        exhaustive_cases: mono.metadata.exhaustive_cases,
+        well_known_types: checked.well_known_types(db),
+    }
+    .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    let ir_text = print_module(&ir, output.module.op());
+    assert!(
+        ir_text.contains("generic_intrinsic$Nat"),
+        "logical lowering must resolve the concrete generic extern signature:\n{ir_text}"
+    );
+}
+
 #[salsa::tracked]
 fn generic_specialization_transports_lambda_metadata_inner(
     db: &dyn salsa::Database,
