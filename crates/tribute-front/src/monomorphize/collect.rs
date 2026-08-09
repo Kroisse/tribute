@@ -160,6 +160,9 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         let Some(type_args) = extract_type_args(self.db, *scheme, concrete) else {
             return;
         };
+        if !type_args.iter().all(|ty| is_concrete_type(self.db, *ty)) {
+            return;
+        }
         self.instantiations
             .entry(*id)
             .or_default()
@@ -266,6 +269,31 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             Stmt::Let { value, .. } => self.visit_expr(value),
             Stmt::Expr { expr, .. } => self.visit_expr(expr),
         }
+    }
+}
+
+fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    match ty.kind(db) {
+        TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
+        TypeKind::Func { params, result, .. } => {
+            params.iter().all(|param| is_concrete_type(db, *param)) && is_concrete_type(db, *result)
+        }
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .all(|element| is_concrete_type(db, *element)),
+        TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::Never
+        | TypeKind::Error => true,
+        TypeKind::BoundVar { .. }
+        | TypeKind::UniVar { .. }
+        | TypeKind::App { .. }
+        | TypeKind::Continuation { .. } => false,
     }
 }
 

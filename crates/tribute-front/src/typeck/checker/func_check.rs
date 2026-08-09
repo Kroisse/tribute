@@ -366,7 +366,7 @@ impl<'db> TypeChecker<'db> {
             self.node_types.insert(node_id, substituted);
         }
         for (callee_id, ty) in func_call_callee_types {
-            let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
             self.call_callee_types.insert(callee_id, substituted);
         }
         for (arm_id, operation) in func_handler_operations {
