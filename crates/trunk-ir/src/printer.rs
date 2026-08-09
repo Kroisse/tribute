@@ -537,7 +537,7 @@ fn generate_auto_aliases(
     existing: &HashMap<TypeRef, String>,
 ) -> Vec<(String, TypeRef)> {
     let counts = collect_module_types(ctx, region);
-    let mut candidates: Vec<(TypeRef, usize, usize)> = Vec::new();
+    let mut candidates: Vec<(TypeRef, usize, usize, String)> = Vec::new();
 
     for (&ty, &count) in &counts {
         if existing.contains_key(&ty) {
@@ -554,22 +554,26 @@ fn generate_auto_aliases(
             count >= MIN_ALIAS_USES && complexity >= MIN_ALIAS_COMPLEXITY
         };
         if eligible {
-            candidates.push((ty, count, complexity));
+            // `TypeRef` is an allocation detail. The alias-free type printer
+            // gives equivalent types the same stable structural ordering.
+            candidates.push((ty, count, complexity, print_type(ctx, ty)));
         }
     }
 
-    // Sort by (count desc, complexity desc, TypeRef asc) for deterministic output
-    candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+    // Sort by (count desc, complexity desc, structural type key asc).
+    // This order also makes name-conflict assignment and the stable
+    // topological extraction deterministic for independent candidates.
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.3.cmp(&b.3)));
 
     // Name assignment
     let mut used_names: HashSet<String> = existing.values().cloned().collect();
     let mut next_num = 0usize;
     let mut result = Vec::new();
 
-    for &(ty, _, _) in &candidates {
-        let name = choose_alias_name(ctx, ty, &used_names, &mut next_num);
+    for (ty, _, _, _) in &candidates {
+        let name = choose_alias_name(ctx, *ty, &used_names, &mut next_num);
         used_names.insert(name.clone());
-        result.push((name, ty));
+        result.push((name, *ty));
     }
 
     // Topological sort: if type A references type B, B must come first
@@ -1587,6 +1591,49 @@ core.module @test {
             output.contains("!Point_1 ="),
             "Expected !Point_1 alias for conflict:\n{output}"
         );
+    }
+
+    #[test]
+    fn test_auto_alias_order_is_independent_of_type_interning_order() {
+        fn print_module_with_point_types(reverse_interning: bool) -> String {
+            let mut ctx = IrContext::new();
+            let loc = test_location(&mut ctx);
+            let i32_ty = make_i32_type(&mut ctx);
+            let make_point =
+                |ctx: &mut IrContext, field| make_adt_struct(ctx, "Point", &[(field, i32_ty)]);
+            let (alpha_point, zebra_point) = if reverse_interning {
+                let zebra = make_point(&mut ctx, "zebra");
+                let alpha = make_point(&mut ctx, "alpha");
+                (alpha, zebra)
+            } else {
+                let alpha = make_point(&mut ctx, "alpha");
+                let zebra = make_point(&mut ctx, "zebra");
+                (alpha, zebra)
+            };
+            let funcs = vec![
+                make_identity_func(&mut ctx, loc, "alpha_1", alpha_point, alpha_point),
+                make_identity_func(&mut ctx, loc, "alpha_2", alpha_point, alpha_point),
+                make_identity_func(&mut ctx, loc, "zebra_1", zebra_point, zebra_point),
+                make_identity_func(&mut ctx, loc, "zebra_2", zebra_point, zebra_point),
+            ];
+            let module = make_module_with_funcs(&mut ctx, loc, funcs);
+            print_module(&ctx, module)
+        }
+
+        let output = print_module_with_point_types(false);
+        assert_eq!(output, print_module_with_point_types(true));
+        assert!(
+            output.contains("!Point = adt.struct() {fields = [[@alpha, core.i32]], name = @Point}")
+        );
+        assert!(
+            output
+                .contains("!Point_1 = adt.struct() {fields = [[@zebra, core.i32]], name = @Point}")
+        );
+
+        let mut reparsed_ctx = IrContext::new();
+        let reparsed =
+            crate::parser::parse_module(&mut reparsed_ctx, &output).expect("parse failed");
+        assert_eq!(output, print_module(&reparsed_ctx, reparsed));
     }
 
     #[test]
