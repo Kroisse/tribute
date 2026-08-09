@@ -371,7 +371,10 @@ fn collect_handler_root_functions(
             if fns_with_evidence.contains(&func_name) {
                 continue;
             }
-            if region_contains_handle_dispatch(ctx, func_op.body(ctx)) {
+            let Some(&body) = ctx.op(op).regions.first() else {
+                continue;
+            };
+            if region_contains_handle_dispatch(ctx, body) {
                 handler_roots.insert(func_name);
             }
         }
@@ -492,7 +495,9 @@ fn transform_handler_roots(
             continue;
         }
 
-        let body = func_op.body(ctx);
+        let Some(&body) = ctx.op(func_op_ref).regions.first() else {
+            continue;
+        };
         let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
         let Some(&entry_block) = blocks.first() else {
             continue;
@@ -580,7 +585,9 @@ fn update_calls_to_newly_evidenced(
             continue;
         }
 
-        let body = func_op.body(ctx);
+        let Some(&body) = ctx.op(func_op_ref).regions.first() else {
+            continue;
+        };
         update_calls_in_region(ctx, body, newly_evidenced, evidence_ty, i32_ty);
     }
 }
@@ -676,7 +683,9 @@ fn transform_shifts_in_module(
             continue;
         }
 
-        let body = func_op.body(ctx);
+        let Some(&body) = ctx.op(func_op_ref).regions.first() else {
+            continue;
+        };
         let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
         let Some(&entry_block) = blocks.first() else {
             continue;
@@ -1342,6 +1351,42 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &input);
         validate_final_handle_dispatches(&ctx, module).unwrap();
+    }
+
+    #[test]
+    fn bodyless_declarations_are_preserved_during_evidence_resolution() {
+        let input = r#"core.module @test {
+  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
+  !evidence = core.array(!marker)
+  func.func @plain_external() -> core.i32
+  func.func @evidence_external(%ev: !evidence) -> !marker
+  func.func @body(%ev: !evidence) -> !marker {
+    %marker = ability.evidence_lookup %ev {ability_ref = core.ability_ref() {name = @State}} : !marker
+    func.return %marker
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let resolved = print_module(&ctx, module.op());
+        assert!(
+            resolved.contains("func.func @plain_external() -> core.i32\n"),
+            "plain external declaration changed or disappeared:\n{resolved}"
+        );
+        assert!(
+            resolved.contains("func.func @evidence_external(%arg0: !evidence) -> !marker\n"),
+            "evidence-bearing external declaration changed or disappeared:\n{resolved}"
+        );
+        assert!(
+            !resolved.contains("ability.evidence_lookup"),
+            "body-bearing function was not processed:\n{resolved}"
+        );
+        assert!(
+            resolved.contains("func.call") && resolved.contains("__tribute_evidence_lookup"),
+            "body-bearing evidence lookup was not resolved:\n{resolved}"
+        );
     }
 
     // Note: CPS-specific evidence resolution (ability.evidence_lookup,
