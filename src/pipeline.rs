@@ -354,11 +354,23 @@ fn merge_and_lower_to_ir<'db>(
     source: SourceCst,
     options: OptimizationOptions,
 ) -> (IrContext, Module) {
+    merge_and_lower_to_ir_with(db, typed, source, |typed, db, ir, source_uri| {
+        typed.lower_to_legacy_ir_with_options(db, ir, source_uri, options.ast_to_ir)
+    })
+}
+
+fn merge_and_lower_to_ir_with<'db, M>(
+    db: &'db dyn salsa::Database,
+    typed: &ast_typeck::TypeCheckOutput<'db>,
+    source: SourceCst,
+    lower: impl FnOnce(ast_to_ir::TypedModule<'db>, &'db dyn salsa::Database, &mut IrContext, &str) -> M,
+) -> (IrContext, M) {
     use tribute_front::ast::TypedRef;
 
     let user_module = typed.module(db);
     let user_fn_types = typed.function_types(db);
     let user_node_types = &typed.expression_types(db).node_types;
+    let user_call_callee_types = &typed.expression_types(db).call_callee_types;
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
@@ -367,12 +379,14 @@ fn merge_and_lower_to_ir<'db>(
         merged_module,
         merged_fn_types,
         merged_node_types,
+        merged_call_callee_types,
         merged_ability_conventions,
         merged_span_map,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
         let prelude_fn_types = prelude.function_types(db);
         let prelude_node_types = &prelude.expression_types(db).node_types;
+        let prelude_call_callee_types = &prelude.expression_types(db).call_callee_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
         let prelude_span_map = prelude.span_map(db);
 
@@ -396,6 +410,10 @@ fn merge_and_lower_to_ir<'db>(
             prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
+        let mut call_callee_types: std::collections::HashMap<_, _> =
+            prelude_call_callee_types.iter().cloned().collect();
+        call_callee_types.extend(user_call_callee_types.iter().cloned());
+
         let mut ability_conventions: std::collections::HashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
@@ -407,18 +425,22 @@ fn merge_and_lower_to_ir<'db>(
             merged_ast,
             fn_types,
             node_types,
+            call_callee_types,
             ability_conventions,
             merged_span_map,
         )
     } else {
         let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
         let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
+        let call_callee_types: std::collections::HashMap<_, _> =
+            user_call_callee_types.iter().cloned().collect();
         let ability_conventions: std::collections::HashMap<_, _> =
             user_ability_conventions.iter().cloned().collect();
         (
             user_module.clone(),
             fn_types,
             node_types,
+            call_callee_types,
             ability_conventions,
             user_span_map.clone(),
         )
@@ -432,12 +454,7 @@ fn merge_and_lower_to_ir<'db>(
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: typed.constructor_types(db).iter().cloned().collect(),
             node_types: merged_node_types,
-            call_callee_types: typed
-                .expression_types(db)
-                .call_callee_types
-                .iter()
-                .cloned()
-                .collect(),
+            call_callee_types: merged_call_callee_types,
             handler_operations: typed.handler_operations(db).iter().cloned().collect(),
             perform_operations: typed.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
@@ -451,23 +468,27 @@ fn merge_and_lower_to_ir<'db>(
     // AST → TrunkIR (arena)
     let source_uri = source.uri(db).as_str();
     let mut ir = IrContext::new();
-    let module = ast_to_ir::TypedModule {
-        ast: merged_module,
-        span_map: merged_span_map,
-        function_types: merged_fn_types,
-        constructor_types: mono_result.metadata.constructor_types,
-        node_types: mono_result.metadata.node_types,
-        ability_conventions: merged_ability_conventions,
-        ability_definitions: ast_typeck::ability_definitions_from_schemas(
-            typed.ability_definitions(db),
-        ),
-        handler_operations: mono_result.metadata.handler_operations,
-        perform_operations: mono_result.metadata.perform_operations,
-        lambda_signatures: mono_result.metadata.lambda_signatures,
-        exhaustive_cases: mono_result.metadata.exhaustive_cases,
-        well_known_types: typed.well_known_types(db),
-    }
-    .lower_to_legacy_ir_with_options(db, &mut ir, source_uri, options.ast_to_ir);
+    let module = lower(
+        ast_to_ir::TypedModule {
+            ast: merged_module,
+            span_map: merged_span_map,
+            function_types: merged_fn_types,
+            constructor_types: mono_result.metadata.constructor_types,
+            node_types: mono_result.metadata.node_types,
+            ability_conventions: merged_ability_conventions,
+            ability_definitions: ast_typeck::ability_definitions_from_schemas(
+                typed.ability_definitions(db),
+            ),
+            handler_operations: mono_result.metadata.handler_operations,
+            perform_operations: mono_result.metadata.perform_operations,
+            lambda_signatures: mono_result.metadata.lambda_signatures,
+            exhaustive_cases: mono_result.metadata.exhaustive_cases,
+            well_known_types: typed.well_known_types(db),
+        },
+        db,
+        &mut ir,
+        source_uri,
+    );
 
     (ir, module)
 }
@@ -2082,6 +2103,35 @@ fn main() ->{std::io::Io} Nil {
         assert!(result.is_some());
         let (ctx, m) = result.unwrap();
         assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
+    }
+
+    #[test]
+    fn root_prelude_generic_callee_metadata_reaches_concrete_specialization() {
+        salsa::Database::attach(&salsa::DatabaseImpl::default(), |db| {
+            let source = source_from_str(
+                "prelude_list_prepend.trb",
+                r#"
+fn main() {
+    let _ = List::prepend(+1, [])
+}
+"#,
+            );
+            let typed = parse_and_lower_ast(db, source).expect("frontend output");
+            let (_, monomorphized) =
+                merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
+            let ast = format!("{:#?}", monomorphized.ast);
+            let concrete = "List::__tribute_list_prepend_intrinsic$Int";
+
+            assert!(
+                ast.contains(concrete),
+                "specialized List body must call the concrete intrinsic:\n{ast}"
+            );
+            assert!(
+                !ast.contains("List::__tribute_list_prepend_intrinsic$T0")
+                    && !ast.contains("List::__tribute_list_prepend_intrinsic$T1"),
+                "specialized List body must not retain generic intrinsic binders:\n{ast}"
+            );
+        });
     }
 
     #[salsa_test]

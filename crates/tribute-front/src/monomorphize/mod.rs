@@ -11,6 +11,8 @@ use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeScheme, Type
 use crate::typeck::subst::substitute_bound_vars;
 use crate::typeck::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 
+const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
+
 /// Exact typechecking metadata keyed by source NodeId.
 pub struct MonomorphizeMetadata<'db> {
     pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
@@ -47,46 +49,67 @@ pub fn monomorphize_functions<'db>(
 
     // === Function monomorphization ===
 
-    // Step 1: Collect function instantiations
-    let func_instantiations =
-        collect::collect_instantiations(db, &module, &fn_types_vec, &metadata.call_callee_types);
+    let source_function_types = fn_types_vec.clone();
+    let mut module = module;
+    let mut all_function_types = fn_types_vec;
+    let mut instantiations = HashMap::new();
+    let mut reached_fixpoint = false;
 
-    let module = if !func_instantiations.is_empty() {
-        // Step 2: Generate specialized functions
+    // A concrete clone can reveal direct calls that were abstract in its
+    // source body. Clone the metadata first, then collect only unseen keys.
+    for _ in 0..MAX_TRANSITIVE_SPECIALIZATION_ROUNDS {
+        let discovered = collect::collect_instantiations(
+            db,
+            &module,
+            &source_function_types,
+            &metadata.call_callee_types,
+        );
+        let mut new_instantiations = HashMap::new();
+        for (func_id, type_arg_sets) in discovered {
+            let known = instantiations.entry(func_id).or_insert_with(HashSet::new);
+            for type_args in type_arg_sets {
+                if known.insert(type_args.clone()) {
+                    new_instantiations
+                        .entry(func_id)
+                        .or_insert_with(HashSet::new)
+                        .insert(type_args);
+                }
+            }
+        }
+        if new_instantiations.is_empty() {
+            reached_fixpoint = true;
+            break;
+        }
+
         let (specialized_decls, specialized_fn_types, metadata_origins) =
-            specialize::generate_specializations(db, &module, &func_instantiations, &fn_types_vec);
+            specialize::generate_specializations(
+                db,
+                &module,
+                &new_instantiations,
+                &source_function_types,
+            );
         for (type_args, origins) in metadata_origins {
             specialize_metadata(db, &mut metadata, &type_args, &origins);
         }
 
-        // Build rewrite map
-        let rewrite_map = build_rewrite_map(db, &func_instantiations, &fn_types_vec);
-
-        // Step 3: Rewrite call sites in the module
-        let rewritten_module = rewrite::rewrite_module(db, module, &fn_types_vec, &rewrite_map);
-
-        // Step 4: Rewrite call sites inside specialized function bodies
+        let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
+        let rewritten_module =
+            rewrite::rewrite_module(db, module, &source_function_types, &rewrite_map);
         let specialized_decls: Vec<Decl<TypedRef<'db>>> =
             specialized_decls.into_iter().map(Decl::Function).collect();
         let rewritten_specialized =
-            rewrite::rewrite_decls(db, specialized_decls, &fn_types_vec, &rewrite_map);
+            rewrite::rewrite_decls(db, specialized_decls, &source_function_types, &rewrite_map);
 
-        // Step 5: Append specialized functions to module
         let mut decls = rewritten_module.decls;
         decls.extend(rewritten_specialized);
-
-        // Update function types for downstream
-        let mut all_fn_types = fn_types_vec;
-        all_fn_types.extend(specialized_fn_types);
-
-        // Return intermediate result with updated fn_types
-        let module = Module::new(rewritten_module.id, rewritten_module.name, decls);
-        (module, all_fn_types)
-    } else {
-        (module, fn_types_vec)
-    };
-
-    let (module, fn_types_vec) = module;
+        module = Module::new(rewritten_module.id, rewritten_module.name, decls);
+        all_function_types.extend(specialized_fn_types);
+    }
+    assert!(
+        reached_fixpoint,
+        "generic specialization exceeded the deterministic expansion limit"
+    );
+    let fn_types_vec = all_function_types;
 
     // === Type monomorphization (struct/enum) ===
 
