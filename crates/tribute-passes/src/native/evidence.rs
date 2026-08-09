@@ -66,7 +66,10 @@ fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
-    rewrite_evidence_ops_in_region(ctx, func_op.body(ctx))?;
+    let Some(body) = ctx.op(func_op.op_ref()).regions.first().copied() else {
+        return Ok(());
+    };
+    rewrite_evidence_ops_in_region(ctx, body)?;
     Ok(())
 }
 
@@ -885,6 +888,40 @@ mod tests {
         assert!(ir_text.contains("func.func @untouched"));
         assert!(ir_text.contains("op_name = @print"));
         assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
+    }
+
+    #[test]
+    fn function_scope_preserves_bodyless_declaration_and_rewrites_body() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
+  !evidence = core.array(!marker)
+  func.func @external(%ev: !evidence) -> !marker
+  func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    func.return %result
+  }
+}"#,
+        );
+        let external = func_by_name_recursive(&ctx, module, "external");
+        let before = print_module(&ctx, module.op());
+
+        lower_evidence_to_native_func(&mut ctx, external);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
+
+        let selected = func_by_name_recursive(&ctx, module, "selected");
+        lower_evidence_to_native_func(&mut ctx, selected);
+
+        let after = print_module(&ctx, module.op());
+        assert!(after.contains("func.func @external(%arg0: !evidence) -> !marker\n"));
+        assert!(
+            !after.contains("effect.dispatch_tail"),
+            "body-bearing function was not transformed:\n{after}"
+        );
+        assert!(after.contains("__tribute_evidence_lookup_tr"));
     }
 
     #[test]
