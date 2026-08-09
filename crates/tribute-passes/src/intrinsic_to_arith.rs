@@ -248,6 +248,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
             return false;
         };
 
+        // External declarations have no body region and must remain
+        // untouched. `Func::body` asserts that the region exists.
+        let Some(old_body) = ctx.op(op).regions.first().copied() else {
+            return false;
+        };
+
         let loc = ctx.op(op).location;
         let func_ty = func_op.r#type(ctx);
 
@@ -296,7 +302,6 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         });
 
         // Detach old body region before replacing
-        let old_body = func_op.body(ctx);
         ctx.detach_region(old_body);
 
         let new_func = func::func(ctx, loc, sym_name, func_ty, body).op_ref();
@@ -379,6 +384,26 @@ mod tests {
             !output.contains("func.unreachable"),
             "func.unreachable should be gone:\n{output}"
         );
+    }
+
+    #[test]
+    fn bodyless_intrinsic_decl_is_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic"}
+            }
+        "#,
+        );
+
+        let before = print_module(&ctx, module.op());
+        lower_intrinsic_to_arith(&mut ctx, module);
+        let after = print_module(&ctx, module.op());
+
+        assert_eq!(after, before, "bodyless declaration must remain unchanged");
     }
 
     #[test]
