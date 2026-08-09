@@ -24,9 +24,7 @@
 
 use std::collections::HashMap;
 
-use tribute_core::{
-    CallableAbi, CallingConvention, get_calling_convention, set_calling_convention,
-};
+use tribute_core::{CallingConvention, get_calling_convention, set_calling_convention};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
@@ -37,6 +35,7 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 
+use crate::target_abi::get_physical_closure_abi;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
@@ -60,8 +59,12 @@ pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
             break;
         }
 
+        let mut made_progress = false;
         for lambda_ref in lambdas {
-            lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
+            made_progress |= lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
+        }
+        if !made_progress {
+            break;
         }
     }
 }
@@ -120,9 +123,9 @@ fn lower_single_lambda(
     module_block: BlockRef,
     lambda_ref: OpRef,
     namer: &mut LambdaNamer,
-) {
+) -> bool {
     let Ok(lambda_op) = closure::Lambda::from_op(ctx, lambda_ref) else {
-        return;
+        return false;
     };
 
     let location = ctx.op(lambda_ref).location;
@@ -148,6 +151,18 @@ fn lower_single_lambda(
     // Determine function return type and effect from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let convention = get_calling_convention(ctx, lambda_ref);
+    let environment_index = match convention {
+        Some(convention) => match get_physical_closure_abi(ctx, result_ty) {
+            Some(abi)
+                if abi.convention == convention && abi.environment_index <= orig_param_count =>
+            {
+                abi.environment_index
+            }
+            Some(_) => return false,
+            None => usize::from(convention.needs_evidence()),
+        },
+        None => 1,
+    };
     let func_result_ty = extract_return_type_from_closure(ctx, result_ty)
         .expect("closure.lambda result type must be closure.closure<core.func<...>>");
 
@@ -181,6 +196,7 @@ fn lower_single_lambda(
             env_struct_ty,
             orig_param_types: &orig_param_types,
             convention,
+            environment_index,
             evidence_ty,
             implicit_evidence,
             anyref_ty,
@@ -189,15 +205,10 @@ fn lower_single_lambda(
 
     // Source lambdas carry explicit convention metadata. Synthetic legacy
     // continuations still use the compatibility ABI `(evidence, env, args...)`.
-    let all_param_tys = if let Some(convention) = convention {
-        let source_offset =
-            usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
-        let abi = CallableAbi::new(
-            convention,
-            orig_param_types[source_offset..].iter().copied(),
-            func_result_ty,
-        );
-        abi.interpose_environment(&orig_param_types, anyref_ty)
+    let all_param_tys = if convention.is_some() {
+        let mut params = orig_param_types.clone();
+        params.insert(environment_index, anyref_ty);
+        params
     } else {
         let mut params = Vec::with_capacity(orig_param_types.len() + 2);
         params.push(ability::evidence_adt_type_ref(ctx));
@@ -232,10 +243,7 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty =
-        core::func(ctx, func_result_ty, orig_param_types.iter().copied()).as_type_ref();
-    let closure_ty = closure::closure(ctx, closure_func_ty).as_type_ref();
-    let closure_new_op = closure::new(ctx, location, closure_env, closure_ty, lifted_name);
+    let closure_new_op = closure::new(ctx, location, closure_env, result_ty, lifted_name);
     if let Some(convention) = convention {
         set_calling_convention(ctx, closure_new_op.op_ref(), convention);
     }
@@ -250,6 +258,7 @@ fn lower_single_lambda(
     // use-chains of the lambda and its (now-cloned) body subtree, not just
     // detaches it — see #710.
     erase_op(ctx, lambda_ref);
+    true
 }
 
 // ============================================================================
@@ -263,6 +272,7 @@ struct LiftBodyParams<'a> {
     env_struct_ty: Option<TypeRef>,
     orig_param_types: &'a [TypeRef],
     convention: Option<CallingConvention>,
+    environment_index: usize,
     evidence_ty: TypeRef,
     implicit_evidence: Option<ValueRef>,
     anyref_ty: TypeRef,
@@ -281,6 +291,7 @@ fn build_lifted_body(
     let env_struct_ty = params.env_struct_ty;
     let orig_param_types = params.orig_param_types;
     let convention = params.convention;
+    let environment_index = params.environment_index;
     let evidence_ty = params.evidence_ty;
     let implicit_evidence = params.implicit_evidence;
     let anyref_ty = params.anyref_ty;
@@ -291,32 +302,37 @@ fn build_lifted_body(
     let mut mapping = IrMapping::new();
 
     // --- Pass 1: Create new entry block with the physical closure ABI. ---
-    let mut new_entry_args = Vec::new();
-    match convention {
-        Some(convention) if convention.needs_evidence() => {
-            new_entry_args.push(BlockArgData {
-                ty: orig_param_types[0],
-                attrs: ctx.block(orig_entry).args[0].attrs.clone(),
-            });
-        }
-        None => {
-            new_entry_args.push(BlockArgData {
+    let mut new_entry_args: Vec<BlockArgData> = orig_param_types
+        .iter()
+        .enumerate()
+        .map(|(index, &ty)| BlockArgData {
+            ty,
+            attrs: ctx.block(orig_entry).args[index].attrs.clone(),
+        })
+        .collect();
+    if convention.is_some() {
+        new_entry_args.insert(
+            environment_index,
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: make_bind_name_attrs("__env"),
+            },
+        );
+    } else {
+        new_entry_args.insert(
+            0,
+            BlockArgData {
                 ty: evidence_ty,
                 attrs: make_bind_name_attrs("__evidence"),
-            });
-        }
-        Some(_) => {}
-    }
-    new_entry_args.push(BlockArgData {
-        ty: anyref_ty,
-        attrs: make_bind_name_attrs("__env"),
-    });
-    let source_start = usize::from(convention.is_some_and(CallingConvention::needs_evidence));
-    for (i, &param_ty) in orig_param_types.iter().enumerate().skip(source_start) {
-        new_entry_args.push(BlockArgData {
-            ty: param_ty,
-            attrs: ctx.block(orig_entry).args[i].attrs.clone(),
-        });
+            },
+        );
+        new_entry_args.insert(
+            1,
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: make_bind_name_attrs("__env"),
+            },
+        );
     }
 
     let new_entry = ctx.create_block(BlockData {
@@ -331,10 +347,10 @@ fn build_lifted_body(
     // Map logical closure args around the inserted environment parameter.
     for i in 0..orig_param_count {
         let old_arg = ctx.block_arg(orig_entry, i as u32);
-        let new_index = match convention {
-            Some(convention) if convention.needs_evidence() && i == 0 => 0,
-            Some(_) => i + 1,
-            None => i + 2,
+        let new_index = if convention.is_some() {
+            i + usize::from(i >= environment_index)
+        } else {
+            i + 2
         };
         let new_arg = ctx.block_arg(new_entry, new_index as u32);
         mapping.map_value(old_arg, new_arg);
@@ -350,8 +366,7 @@ fn build_lifted_body(
     }
 
     // Insert env extraction ops at the start of the new entry block.
-    let env_index = u32::from(convention.is_none_or(CallingConvention::needs_evidence));
-    let raw_env_val = ctx.block_arg(new_entry, env_index);
+    let raw_env_val = ctx.block_arg(new_entry, environment_index as u32);
     if let Some(env_ty) = env_struct_ty {
         let cast_op = adt::ref_cast(ctx, location, raw_env_val, env_ty, env_ty);
         ctx.push_op(new_entry, cast_op.op_ref());

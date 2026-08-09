@@ -19,7 +19,11 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use tribute_core::{CallableAbi, get_calling_convention};
+use crate::target_abi::{
+    get_closure_callable_type, get_physical_closure_abi, physical_closure_type,
+    set_closure_callable_type, set_indirect_call_signature,
+};
+use tribute_core::get_calling_convention;
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
@@ -166,6 +170,21 @@ impl RewritePattern for LowerClosureNewArena {
         // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
         let struct_ty = closure_struct_type_ref(ctx);
         let struct_new_op = adt::struct_new(ctx, loc, vec![funcref, env], struct_ty, struct_ty);
+        let exact_closure_ty = get_physical_closure_abi(ctx, result_ty)
+            .map(|_| result_ty)
+            .or_else(|| {
+                let convention = get_calling_convention(ctx, op)?;
+                let environment_index = infer_environment_index(ctx, func_ty, convention)?;
+                Some(physical_closure_type(
+                    ctx,
+                    func_ty,
+                    convention,
+                    environment_index,
+                ))
+            });
+        if let Some(exact_closure_ty) = exact_closure_ty {
+            set_closure_callable_type(ctx, struct_new_op.op_ref(), exact_closure_ty);
+        }
 
         rewriter.insert_op(constant_op.op_ref());
         rewriter.replace_op(struct_new_op.op_ref());
@@ -199,28 +218,7 @@ impl RewritePattern for LowerClosureCallArena {
         }
         let callee = operands[0];
         let callee_ty = ctx.value_ty(callee);
-
-        // Determine if callee is a closure
-        let callee_is_closure = if closure::Closure::matches(ctx, callee_ty) {
-            true
-        } else if is_closure_struct_type_ref(ctx, callee_ty) {
-            // Already lowered closure struct
-            true
-        } else if core::Func::matches(ctx, callee_ty) {
-            // core.func in func.call_indirect is always a closure value.
-            // Direct function calls use func.call; call_indirect operates on
-            // closure values (block args, env captures, etc.).
-            true
-        } else {
-            // Fallback: check if result of closure.new
-            if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
-                closure::New::from_op(ctx, def_op).is_ok()
-            } else {
-                false
-            }
-        };
-
-        if !callee_is_closure {
+        if !is_closure_callee(ctx, callee) {
             return false;
         }
 
@@ -232,6 +230,16 @@ impl RewritePattern for LowerClosureCallArena {
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let convention = get_calling_convention(ctx, op);
+        let exact_contract = if let Some(convention) = convention {
+            let Some(contract) = physical_call_contract(ctx, callee, convention, &args, anyref_ty)
+            else {
+                return false;
+            };
+            Some(contract)
+        } else {
+            None
+        };
 
         // Determine actual return type from the closure's func type.
         // Effectful lambdas may return anyref even if the caller's
@@ -247,11 +255,15 @@ impl RewritePattern for LowerClosureCallArena {
         let env_op = closure::env(ctx, loc, callee, anyref_ty);
         let env = ctx.op_result(env_op.op_ref(), 0);
 
-        let new_args = if let Some(convention) = get_calling_convention(ctx, op) {
-            let hidden =
-                usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
-            let abi = CallableAbi::new(convention, args[hidden..].iter().copied(), env);
-            abi.interpose_environment(&args, env)
+        let new_args = if let Some(contract) = exact_contract {
+            let mut args = args;
+            for (index, expected) in contract.argument_casts {
+                let cast = core::unrealized_conversion_cast(ctx, loc, args[index], expected);
+                rewriter.insert_op(cast.op_ref());
+                args[index] = cast.result(ctx);
+            }
+            args.insert(contract.environment_index, env);
+            args
         } else {
             // Compatibility for hand-written legacy IR without metadata.
             let evidence = if let Some(evidence) = self.legacy_evidence {
@@ -266,7 +278,9 @@ impl RewritePattern for LowerClosureCallArena {
             legacy.extend_from_slice(&args);
             legacy
         };
+        let attrs = ctx.op(op).attributes.clone();
         let new_call = func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
+        ctx.op_mut(new_call.op_ref()).attributes.extend(attrs);
 
         rewriter.insert_op(table_idx_op.op_ref());
         rewriter.insert_op(env_op.op_ref());
@@ -287,6 +301,257 @@ impl RewritePattern for LowerClosureCallArena {
     fn name(&self) -> &'static str {
         "LowerClosureCallArena"
     }
+}
+
+/// Lower a closure-valued proper-tail transfer and retain its exact callable
+/// signature for the shared target ABI boundary.
+struct LowerClosureTailCallArena;
+
+impl RewritePattern for LowerClosureTailCallArena {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if func::TailCallIndirect::from_op(ctx, op).is_err() {
+            return false;
+        }
+        let Some(convention) = get_calling_convention(ctx, op) else {
+            return false;
+        };
+        let operands = ctx.op_operands(op).to_vec();
+        let Some((&callee, args)) = operands.split_first() else {
+            return false;
+        };
+        if !is_closure_callee(ctx, callee) {
+            return false;
+        }
+
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let Some(contract) = physical_call_contract(ctx, callee, convention, args, anyref_ty)
+        else {
+            return false;
+        };
+        let func_ref = closure::func(ctx, location, callee, i32_ty);
+        let env = closure::env(ctx, location, callee, anyref_ty);
+        let mut args = args.to_vec();
+        for (index, expected) in contract.argument_casts {
+            let cast = core::unrealized_conversion_cast(ctx, location, args[index], expected);
+            rewriter.insert_op(cast.op_ref());
+            args[index] = cast.result(ctx);
+        }
+        args.insert(contract.environment_index, env.result(ctx));
+        let attrs = ctx.op(op).attributes.clone();
+        let tail = func::tail_call_indirect(ctx, location, func_ref.result(ctx), args);
+        ctx.op_mut(tail.op_ref()).attributes.extend(attrs);
+        set_indirect_call_signature(ctx, tail.op_ref(), contract.signature);
+
+        rewriter.insert_op(func_ref.op_ref());
+        rewriter.insert_op(env.op_ref());
+        rewriter.replace_op(tail.op_ref());
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "LowerClosureTailCallArena"
+    }
+}
+
+fn closure_type_for_callee(ctx: &IrContext, callee: ValueRef) -> Option<TypeRef> {
+    let ty = ctx.value_ty(callee);
+    if closure::Closure::matches(ctx, ty) {
+        return Some(ty);
+    }
+    let trunk_ir::refs::ValueDef::OpResult(pack, _) = ctx.value_def(callee) else {
+        return None;
+    };
+    let closure_ty = get_closure_callable_type(ctx, pack)?;
+    is_lowered_closure_pack(ctx, pack, closure_ty).then_some(closure_ty)
+}
+
+fn is_closure_callee(ctx: &IrContext, callee: ValueRef) -> bool {
+    if closure_type_for_callee(ctx, callee).is_some()
+        || is_closure_struct_type_ref(ctx, ctx.value_ty(callee))
+    {
+        return true;
+    }
+    if !core::Func::matches(ctx, ctx.value_ty(callee)) {
+        return false;
+    }
+    !matches!(
+        ctx.value_def(callee),
+        trunk_ir::refs::ValueDef::OpResult(defining_op, _)
+            if func::Constant::from_op(ctx, defining_op).is_ok()
+    )
+}
+
+fn physical_call_contract(
+    ctx: &mut IrContext,
+    callee: ValueRef,
+    convention: tribute_core::CallingConvention,
+    args: &[ValueRef],
+    environment_type: TypeRef,
+) -> Option<PhysicalCallContract> {
+    let closure_ty = closure_type_for_callee(ctx, callee)?;
+    let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
+    let callable = core::Func::from_type_ref(ctx, function)?;
+    let environment_index = match get_physical_closure_abi(ctx, closure_ty) {
+        Some(abi) if abi.convention == convention => abi.environment_index,
+        Some(_) => return None,
+        None => hidden_done_k_environment_index(ctx, callee, function, convention)
+            .or_else(|| infer_environment_index(ctx, function, convention))?,
+    };
+    if args.len() != callable.params(ctx).len() || environment_index > args.len() {
+        return None;
+    }
+    let mut argument_casts = Vec::new();
+    for (index, (value, expected)) in args.iter().zip(callable.params(ctx)).enumerate() {
+        let actual = ctx.value_ty(*value);
+        if actual == *expected {
+            continue;
+        }
+        if is_closure_struct_type_ref(ctx, actual)
+            && (*expected == environment_type || closure::Closure::matches(ctx, *expected))
+        {
+            argument_casts.push((index, *expected));
+            continue;
+        }
+        return None;
+    }
+
+    let mut physical_params = callable.params(ctx).to_vec();
+    physical_params.insert(environment_index, environment_type);
+    let signature = core::func(ctx, callable.r#return(ctx), physical_params).as_type_ref();
+    Some(PhysicalCallContract {
+        environment_index,
+        signature,
+        argument_casts,
+    })
+}
+
+struct PhysicalCallContract {
+    environment_index: usize,
+    signature: TypeRef,
+    argument_casts: Vec<(usize, TypeRef)>,
+}
+
+/// Recognize the CPS function's `done_k` operand from its checked block-argument
+/// position. A done continuation is itself a closure over only its answer, so
+/// its environment precedes that source parameter at index zero.
+fn hidden_done_k_environment_index(
+    ctx: &mut IrContext,
+    callee: ValueRef,
+    function: TypeRef,
+    convention: tribute_core::CallingConvention,
+) -> Option<usize> {
+    if convention != tribute_core::CallingConvention::Cps {
+        return None;
+    }
+    let trunk_ir::refs::ValueDef::BlockArg(block, index) = ctx.value_def(callee) else {
+        return None;
+    };
+    let region = ctx.block(block).parent_region?;
+    let parent = ctx.region(region).parent_op?;
+    let enclosing = func::Func::from_op(ctx, parent).ok()?;
+    if get_calling_convention(ctx, parent) != Some(tribute_core::CallingConvention::Cps)
+        || ctx.region(enclosing.body(ctx)).blocks.first() != Some(&block)
+    {
+        return None;
+    }
+
+    let enclosing_callable = core::Func::from_type_ref(ctx, enclosing.r#type(ctx))?;
+    let enclosing_params = enclosing_callable.params(ctx).to_vec();
+    let entry_arg_count = ctx.block(block).args.len();
+    if enclosing_params.len() != entry_arg_count || enclosing_params.len() < 2 {
+        return None;
+    }
+    let environment_indices: Vec<_> = ctx
+        .block(block)
+        .args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, argument)| {
+            (argument.attrs.get_symbol("bind_name") == Some(Symbol::new("__env"))).then_some(index)
+        })
+        .collect();
+    let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
+    if enclosing_params.first() != Some(&evidence) {
+        return None;
+    }
+    let physical_done_index = match environment_indices.as_slice() {
+        [] => 1,
+        [1] if enclosing_params[1] == tribute_rt::anyref(ctx).as_type_ref() => 2,
+        _ => return None,
+    };
+    if index as usize != physical_done_index {
+        return None;
+    }
+
+    let never = core::never(ctx).as_type_ref();
+    let done_callable = core::Func::from_type_ref(ctx, function)?;
+    (done_callable.r#return(ctx) == never && done_callable.params(ctx).len() == 1).then_some(0)
+}
+
+fn infer_environment_index(
+    ctx: &mut IrContext,
+    function: TypeRef,
+    convention: tribute_core::CallingConvention,
+) -> Option<usize> {
+    let callable = core::Func::from_type_ref(ctx, function)?;
+    let params = callable.params(ctx).to_vec();
+    let hidden_count =
+        usize::from(convention.needs_evidence()) + usize::from(convention.needs_done_k());
+    if params.len() < hidden_count {
+        return None;
+    }
+    if convention.needs_evidence() {
+        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
+        if params.first() != Some(&evidence) {
+            return None;
+        }
+    }
+    if convention.needs_done_k() {
+        let never = core::never(ctx).as_type_ref();
+        let done_k = closure::Closure::from_type_ref(ctx, params[1])?;
+        let done_callable = core::Func::from_type_ref(ctx, done_k.func_type(ctx))?;
+        (callable.r#return(ctx) == never
+            && done_callable.r#return(ctx) == never
+            && done_callable.params(ctx).len() == 1)
+            .then_some(())?;
+    }
+    Some(usize::from(convention.needs_evidence()))
+}
+
+/// Accept closure provenance only from the canonical shared closure pack, not
+/// an arbitrary runtime-shaped value with a lookalike attribute.
+fn is_lowered_closure_pack(ctx: &IrContext, op: OpRef, closure_ty: TypeRef) -> bool {
+    if adt::StructNew::from_op(ctx, op).is_err() {
+        return false;
+    }
+    let [result] = ctx.op_results(op) else {
+        return false;
+    };
+    if !is_closure_struct_type_ref(ctx, ctx.value_ty(*result)) {
+        return false;
+    }
+    let [function, _environment] = ctx.op_operands(op) else {
+        return false;
+    };
+    let trunk_ir::refs::ValueDef::OpResult(constant, _) = ctx.value_def(*function) else {
+        return false;
+    };
+    if func::Constant::from_op(ctx, constant).is_err() {
+        return false;
+    }
+    let Some(closure) = closure::Closure::from_type_ref(ctx, closure_ty) else {
+        return false;
+    };
+    ctx.value_ty(*function) == closure.func_type(ctx)
 }
 
 /// Lower `closure.func` to `adt.struct_get` field 0.
@@ -408,6 +673,9 @@ pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
 /// Closure calls already carry convention-specific hidden operands. This pass
 /// only interposes the physical closure environment.
 pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
+    if ctx.op(func_op.op_ref()).regions.is_empty() {
+        return;
+    }
     let legacy_evidence = evidence_param_for_func(ctx, func_op);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .with_target(
@@ -416,6 +684,7 @@ pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
                 .recursive_legal_op("func", "func"),
         )
         .add_pattern(LowerClosureCallArena { legacy_evidence })
+        .add_pattern(LowerClosureTailCallArena)
         .add_pattern(LowerClosureNewArena)
         .add_pattern(LowerClosureFuncArena)
         .add_pattern(LowerClosureEnvArena);
@@ -691,5 +960,81 @@ mod tests {
             entry_evidence_arg(&ctx, inner),
             "nested function pass should use the nested function's own evidence argument"
         );
+    }
+
+    #[test]
+    fn direct_evidence_typed_source_argument_follows_environment() {
+        let mut ctx = IrContext::new();
+        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let callable = core::func(&mut ctx, anyref, [evidence]).as_type_ref();
+        assert_eq!(
+            infer_environment_index(&mut ctx, callable, tribute_core::CallingConvention::Direct),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn bodyless_declaration_has_no_closure_rewrite_regions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @external(%arg: core.i32) -> core.i32 attributes {abi = "C"}
+}"#,
+        );
+        let declaration = func_by_name(&ctx, module, "external");
+        let before = print_module(&ctx, module.op());
+
+        lower_closures_in_func(&mut ctx, declaration);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn raw_function_pointer_indirect_call_is_not_lowered_as_a_closure() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @callee(%value: core.i32) -> core.i32 {
+    func.return %value
+  }
+  func.func @caller(%value: core.i32) -> core.i32 {
+    %function = func.constant {func_ref = @callee} : core.func(core.i32, core.i32)
+    %result = func.call_indirect %function, %value : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        let caller = func_by_name(&ctx, module, "caller");
+        let before = call_indirect_operands_in_func(&ctx, caller);
+
+        lower_closures_in_func(&mut ctx, caller);
+
+        assert_eq!(call_indirect_operands_in_func(&ctx, caller), before);
+    }
+
+    #[test]
+    fn malformed_cps_closure_tail_call_is_left_unchanged_without_panicking() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !cps = closure.closure(core.func(core.never, core.i32)) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+  func.func @caller(%callee: !cps) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee {tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let caller = func_by_name(&ctx, module, "caller");
+        let before = print_module(&ctx, module.op());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lower_closures_in_func(&mut ctx, caller);
+        }));
+
+        assert!(result.is_ok());
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

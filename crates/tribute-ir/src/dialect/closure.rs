@@ -94,13 +94,20 @@ fn print_closure_lambda(
     }
 
     // " {key = val, ...}" — attributes (if any)
-    let attrs: Vec<(trunk_ir::Symbol, trunk_ir::Attribute)> = h
+    let mut attrs: Vec<(trunk_ir::Symbol, trunk_ir::Attribute)> = h
         .ctx()
         .op(op)
         .attributes
         .iter()
         .map(|(k, v)| (*k, v.clone()))
         .collect();
+    let environment_index = trunk_ir::Symbol::new("tribute.closure_environment_index");
+    if !attrs.iter().any(|(name, _)| *name == environment_index) {
+        let result_ty = h.ctx().op_result_types(op)[0];
+        if let Some(value) = h.ctx().types.get(result_ty).attrs.get(environment_index) {
+            attrs.push((environment_index, value.clone()));
+        }
+    }
     if !attrs.is_empty() {
         write!(h, " {{")?;
         for (i, (key, val)) in attrs.iter().enumerate() {
@@ -234,11 +241,28 @@ fn parse_closure_lambda<'a>(
     };
 
     // closure.closure<core.func<...>>
+    let has_physical_environment = attributes
+        .iter()
+        .any(|(name, _)| *name == "tribute.closure_environment_index");
+    let closure_attrs = if has_physical_environment {
+        attributes
+            .iter()
+            .filter(|(name, _)| {
+                matches!(
+                    *name,
+                    "tribute.calling_convention" | "tribute.closure_environment_index"
+                )
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let closure_raw_ty = RawType::Concrete {
         dialect: "closure",
         name: "closure",
         params: vec![func_raw_ty],
-        attrs: vec![],
+        attrs: closure_attrs,
     };
 
     Ok(RawOperation {
