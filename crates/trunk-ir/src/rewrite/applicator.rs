@@ -42,10 +42,10 @@ impl RewriteScope for Module {
 }
 
 impl RewriteScope for func::Func {
-    type Regions = std::iter::Once<RegionRef>;
+    type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        std::iter::once(self.body(ctx))
+        ctx.op(self.op_ref()).regions.first().copied().into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -54,10 +54,10 @@ impl RewriteScope for func::Func {
 }
 
 impl RewriteScope for wasm::Func {
-    type Regions = std::iter::Once<RegionRef>;
+    type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        std::iter::once(self.body(ctx))
+        ctx.op(self.op_ref()).regions.first().copied().into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -393,9 +393,10 @@ impl PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::func;
+    use crate::dialect::{func, wasm};
     use crate::location::Span;
     use crate::ops::DialectOp;
+    use crate::printer::print_module;
     use crate::rewrite::conversion_target::ConversionTarget;
     use crate::symbol::Symbol;
     use crate::*;
@@ -488,6 +489,46 @@ mod tests {
             .build(ctx);
         let func_op = ctx.create_op(func_data);
         func::Func::from_op(ctx, func_op).expect("test func should be valid")
+    }
+
+    fn make_wasm_func_container(
+        ctx: &mut IrContext,
+        loc: Location,
+        name: &'static str,
+        nested_ops: Vec<OpRef>,
+    ) -> wasm::Func {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in nested_ops {
+            ctx.push_op(block, op);
+        }
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let func_ty = crate::dialect::core::func(ctx, nil_ty, []).as_type_ref();
+        wasm::func(ctx, loc, Symbol::new(name), func_ty, region)
+    }
+
+    fn make_bodyless_func(
+        ctx: &mut IrContext,
+        loc: Location,
+        dialect: &'static str,
+        name: &'static str,
+    ) -> OpRef {
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        let func_ty = crate::dialect::core::func(ctx, nil_ty, []).as_type_ref();
+        let op_data = OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
+            .attr("type", Attribute::Type(func_ty))
+            .build(ctx);
+        ctx.create_op(op_data)
     }
 
     fn first_nested_op(ctx: &IrContext, op: OpRef) -> OpRef {
@@ -729,6 +770,66 @@ mod tests {
         assert_eq!(
             ctx.op(first_nested_op(&ctx, sibling_func.op_ref())).name,
             Symbol::new("source")
+        );
+    }
+
+    #[test]
+    fn func_scope_skips_bodyless_and_visits_body() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let bodyless = make_bodyless_func(&mut ctx, loc, "func", "extern");
+        let nested_data =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let nested = ctx.create_op(nested_data);
+        let bodyful = make_func_container(&mut ctx, loc, "defined", vec![nested]);
+        let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
+
+        let before = print_module(&ctx, module.op());
+        let bodyless = func::Func::from_op(&ctx, bodyless).unwrap();
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .apply_partial(&mut ctx, bodyless);
+        assert_eq!(print_module(&ctx, module.op()), before);
+
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .apply_partial(&mut ctx, bodyful);
+        assert_eq!(result.total_changes, 1);
+        assert_eq!(
+            ctx.op(first_nested_op(&ctx, bodyful.op_ref())).name,
+            Symbol::new("target")
+        );
+    }
+
+    #[test]
+    fn wasm_scope_skips_bodyless_and_visits_body() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let bodyless = make_bodyless_func(&mut ctx, loc, "wasm", "extern");
+        let nested_data =
+            OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let nested = ctx.create_op(nested_data);
+        let bodyful = make_wasm_func_container(&mut ctx, loc, "defined", vec![nested]);
+        let module = make_module(&mut ctx, loc, vec![bodyless, bodyful.op_ref()]);
+
+        let before = print_module(&ctx, module.op());
+        let bodyless = wasm::Func::from_op(&ctx, bodyless).unwrap();
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .apply_partial(&mut ctx, bodyless);
+        assert_eq!(print_module(&ctx, module.op()), before);
+
+        let result = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(RenamePattern)
+            .apply_partial(&mut ctx, bodyful);
+        assert_eq!(result.total_changes, 1);
+        assert_eq!(
+            ctx.op(first_nested_op(&ctx, bodyful.op_ref())).name,
+            Symbol::new("target")
         );
     }
 
