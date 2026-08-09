@@ -275,8 +275,15 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
 fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     match ty.kind(db) {
         TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
-        TypeKind::Func { params, result, .. } => {
-            params.iter().all(|param| is_concrete_type(db, *param)) && is_concrete_type(db, *result)
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } => {
+            params.iter().all(|param| is_concrete_type(db, *param))
+                && is_concrete_type(db, *result)
+                && is_concrete_effect_row(db, *effect)
         }
         TypeKind::Tuple(elements) => elements
             .iter()
@@ -288,13 +295,29 @@ fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         | TypeKind::Bytes
         | TypeKind::Rune
         | TypeKind::Nil
-        | TypeKind::Never
-        | TypeKind::Error => true,
+        | TypeKind::Never => true,
         TypeKind::BoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::App { .. }
-        | TypeKind::Continuation { .. } => false,
+        | TypeKind::Error => false,
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            is_concrete_type(db, *arg)
+                && is_concrete_type(db, *result)
+                && is_concrete_effect_row(db, *effect)
+        }
     }
+}
+
+fn is_concrete_effect_row(db: &dyn salsa::Database, row: crate::ast::EffectRow<'_>) -> bool {
+    row.rest(db).is_none()
+        && row
+            .effects(db)
+            .iter()
+            .all(|effect| effect.args.iter().all(|arg| is_concrete_type(db, *arg)))
 }
 
 // ============================================================================
@@ -535,7 +558,8 @@ impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{EffectRow, TypeParam, TypeScheme};
+    use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, TypeParam, TypeScheme};
+    use trunk_ir::Symbol;
 
     use super::*;
 
@@ -559,6 +583,73 @@ mod tests {
 
     fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
         EffectRow::new(db, vec![], None)
+    }
+
+    fn direct_function_type<'db>(
+        db: &'db dyn salsa::Database,
+        effect: EffectRow<'db>,
+    ) -> Type<'db> {
+        let int = Type::new(db, TypeKind::Int);
+        Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        )
+    }
+
+    #[test]
+    fn concrete_type_accepts_closed_effect_rows_with_concrete_ability_arguments() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let row = EffectRow::new(
+            &db,
+            vec![Effect {
+                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                args: vec![int],
+            }],
+            None,
+        );
+
+        assert!(is_concrete_type(&db, direct_function_type(&db, row)));
+    }
+
+    #[test]
+    fn concrete_type_rejects_open_effect_rows() {
+        let db = TestDb::default();
+        let open = EffectRow::open(&db, EffectVar { id: 0 });
+        let int = Type::new(&db, TypeKind::Int);
+        let continuation = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect: open,
+            },
+        );
+
+        assert!(!is_concrete_type(&db, direct_function_type(&db, open)));
+        assert!(!is_concrete_type(&db, continuation));
+    }
+
+    #[test]
+    fn concrete_type_rejects_error_types_in_effect_arguments() {
+        let db = TestDb::default();
+        let error = Type::new(&db, TypeKind::Error);
+        let row = EffectRow::new(
+            &db,
+            vec![Effect {
+                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                args: vec![error],
+            }],
+            None,
+        );
+
+        assert!(!is_concrete_type(&db, error));
+        assert!(!is_concrete_type(&db, direct_function_type(&db, row)));
     }
 
     // ========================================================================
