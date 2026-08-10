@@ -73,7 +73,7 @@ fn format_box(value: Int) -> String {
 /// Direct-call metadata preserves the exact concrete instantiation used when
 /// cloning a generic source function for source-logical lowering.
 #[salsa_test]
-fn generic_specialization_transports_lambda_metadata(db: &salsa::DatabaseImpl) {
+fn generic_specialization_transports_direct_callee_metadata(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "generic_lambda_metadata.trb",
@@ -86,7 +86,7 @@ fn use_apply() -> Int { apply(+41) }
 "#,
     );
 
-    generic_specialization_transports_lambda_metadata_inner(db, source);
+    generic_specialization_transports_direct_callee_metadata_inner(db, source);
 }
 
 /// A generic extern discovered through a concrete clone has no AST body to
@@ -179,8 +179,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     );
 }
 
+// This query provides the Salsa accumulator context used by the type checker.
 #[salsa::tracked]
-fn generic_specialization_transports_lambda_metadata_inner(
+fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) {

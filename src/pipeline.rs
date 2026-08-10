@@ -2133,8 +2133,7 @@ fn main() {
                 "specialized List body must call the concrete intrinsic:\n{ast}"
             );
             assert!(
-                !ast.contains("List::__tribute_list_prepend_intrinsic$T0")
-                    && !ast.contains("List::__tribute_list_prepend_intrinsic$T1"),
+                !ast.contains("List::__tribute_list_prepend_intrinsic$T"),
                 "specialized List body must not retain generic intrinsic binders:\n{ast}"
             );
         });

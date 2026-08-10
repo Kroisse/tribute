@@ -158,8 +158,16 @@ fn specialize_metadata<'db>(
         type_args,
         origins,
     );
-    let handlers = metadata.handler_operations.clone();
-    for (id, operation) in handlers.into_iter().filter(|(id, _)| origins.contains(id)) {
+    let handlers: Vec<_> = origins
+        .iter()
+        .filter_map(|id| {
+            metadata
+                .handler_operations
+                .get(id)
+                .map(|operation| (*id, operation.clone()))
+        })
+        .collect();
+    for (id, operation) in handlers {
         metadata.handler_operations.insert(
             id.with_variant(variant),
             InstantiatedHandlerOperation {
@@ -179,8 +187,16 @@ fn specialize_metadata<'db>(
             },
         );
     }
-    let performs = metadata.perform_operations.clone();
-    for (id, operation) in performs.into_iter().filter(|(id, _)| origins.contains(id)) {
+    let performs: Vec<_> = origins
+        .iter()
+        .filter_map(|id| {
+            metadata
+                .perform_operations
+                .get(id)
+                .map(|operation| (*id, operation.clone()))
+        })
+        .collect();
+    for (id, operation) in performs {
         metadata.perform_operations.insert(
             id.with_variant(variant),
             InstantiatedPerformOperation {
@@ -200,8 +216,16 @@ fn specialize_metadata<'db>(
             },
         );
     }
-    let lambdas = metadata.lambda_signatures.clone();
-    for (id, signature) in lambdas.into_iter().filter(|(id, _)| origins.contains(id)) {
+    let lambdas: Vec<_> = origins
+        .iter()
+        .filter_map(|id| {
+            metadata
+                .lambda_signatures
+                .get(id)
+                .map(|signature| (*id, signature.clone()))
+        })
+        .collect();
+    for (id, signature) in lambdas {
         metadata.lambda_signatures.insert(
             id.with_variant(variant),
             LambdaSignature {
@@ -210,11 +234,10 @@ fn specialize_metadata<'db>(
             },
         );
     }
-    let exhaustive: Vec<_> = metadata
-        .exhaustive_cases
+    let exhaustive: Vec<_> = origins
         .iter()
         .copied()
-        .filter(|id| origins.contains(id))
+        .filter(|id| metadata.exhaustive_cases.contains(id))
         .collect();
     metadata
         .exhaustive_cases
@@ -228,8 +251,11 @@ fn clone_type_table<'db>(
     type_args: &[Type<'db>],
     origins: &HashSet<NodeId>,
 ) {
-    let source = table.clone();
-    for (id, ty) in source.into_iter().filter(|(id, _)| origins.contains(id)) {
+    let source: Vec<_> = origins
+        .iter()
+        .filter_map(|id| table.get(id).map(|ty| (*id, *ty)))
+        .collect();
+    for (id, ty) in source {
         table.insert(id.with_variant(variant), substitute_type(db, ty, type_args));
     }
 }

@@ -19,13 +19,13 @@ type GeneratedSpecializations<'db> = (
     Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
 );
 
-type SpecializationEntry<'db> = (
-    Symbol,
-    FuncDecl<TypedRef<'db>>,
-    TypeScheme<'db>,
-    Vec<Type<'db>>,
-    HashSet<NodeId>,
-);
+struct SpecializationEntry<'db> {
+    name: Symbol,
+    declaration: FuncDecl<TypedRef<'db>>,
+    scheme: TypeScheme<'db>,
+    type_args: Vec<Type<'db>>,
+    origins: HashSet<NodeId>,
+}
 
 /// Generate specialized copies of generic functions for each instantiation.
 ///
@@ -53,6 +53,7 @@ pub fn generate_specializations<'db>(
         let Some(scheme) = scheme_map.get(&qualified) else {
             continue;
         };
+        let origins = func.map(semantic_node_ids);
 
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
@@ -71,13 +72,13 @@ pub fn generate_specializations<'db>(
             );
             if let Some(func) = func {
                 let specialized = specialize_func_decl(db, func, type_args, mangled);
-                entries.push((
-                    mangled,
-                    specialized,
-                    specialized_scheme,
-                    type_args.clone(),
-                    semantic_node_ids(func),
-                ));
+                entries.push(SpecializationEntry {
+                    name: mangled,
+                    declaration: specialized,
+                    scheme: specialized_scheme,
+                    type_args: type_args.clone(),
+                    origins: origins.clone().expect("function specialization origins"),
+                });
             } else {
                 // Extern functions have no AST body to clone, but rewritten
                 // call sites still need their concrete scheme during logical
@@ -88,15 +89,15 @@ pub fn generate_specializations<'db>(
     }
 
     // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
-    entries.sort_by_key(|e| e.0);
+    entries.sort_by_key(|entry| entry.name);
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
     let mut metadata_origins = Vec::with_capacity(entries.len());
-    for (name, decl, scheme, type_args, origins) in entries {
-        new_decls.push(decl);
-        new_function_types.push((name, scheme));
-        metadata_origins.push((type_args, origins));
+    for entry in entries {
+        new_decls.push(entry.declaration);
+        new_function_types.push((entry.name, entry.scheme));
+        metadata_origins.push((entry.type_args, entry.origins));
     }
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| *name);
@@ -105,6 +106,37 @@ pub fn generate_specializations<'db>(
 }
 
 fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
+    fn pattern<'db>(value: &Pattern<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+        ids.insert(value.id);
+        match value.kind.as_ref() {
+            PatternKind::Variant { fields, .. }
+            | PatternKind::Tuple(fields)
+            | PatternKind::List(fields) => {
+                for field in fields {
+                    pattern(field, ids);
+                }
+            }
+            PatternKind::Record { fields, .. } => {
+                for field in fields {
+                    ids.insert(field.id);
+                    if let Some(field_pattern) = &field.pattern {
+                        pattern(field_pattern, ids);
+                    }
+                }
+            }
+            PatternKind::ListRest { head, .. } => {
+                for head_pattern in head {
+                    pattern(head_pattern, ids);
+                }
+            }
+            PatternKind::As { pattern: inner, .. } => pattern(inner, ids),
+            PatternKind::Wildcard
+            | PatternKind::Bind { .. }
+            | PatternKind::Literal(_)
+            | PatternKind::Error => {}
+        }
+    }
+
     fn expr<'db>(value: &Expr<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
         ids.insert(value.id);
         match value.kind.as_ref() {
@@ -117,7 +149,17 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
             ExprKind::Block { stmts, value } => {
                 for stmt in stmts {
                     match stmt {
-                        Stmt::Let { id, value, .. } | Stmt::Expr { id, expr: value } => {
+                        Stmt::Let {
+                            id,
+                            pattern: binding,
+                            value,
+                            ..
+                        } => {
+                            ids.insert(*id);
+                            pattern(binding, ids);
+                            expr(value, ids);
+                        }
+                        Stmt::Expr { id, expr: value } => {
                             ids.insert(*id);
                             expr(value, ids);
                         }
@@ -129,6 +171,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
                 expr(scrutinee, ids);
                 for arm in arms {
                     ids.insert(arm.id);
+                    pattern(&arm.pattern, ids);
                     if let Some(guard) = &arm.guard {
                         expr(guard, ids);
                     }
@@ -140,6 +183,14 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
                 expr(body, ids);
                 for handler in handlers {
                     ids.insert(handler.id);
+                    match &handler.kind {
+                        HandlerKind::Do { binding } => pattern(binding, ids),
+                        HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => {
+                            for param in params {
+                                pattern(param, ids);
+                            }
+                        }
+                    }
                     expr(&handler.body, ids);
                 }
             }
@@ -923,6 +974,140 @@ mod tests {
 
     fn node_id(n: usize) -> NodeId {
         NodeId::from_raw(n)
+    }
+
+    #[test]
+    fn semantic_node_ids_include_nested_pattern_nodes() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let typed_ref = |index| {
+            TypedRef::new(
+                ResolvedRef::Local {
+                    id: crate::ast::LocalId::new(index),
+                    name: Symbol::new("value"),
+                },
+                int,
+            )
+        };
+        let bind = |id, name| {
+            Pattern::new(
+                node_id(id),
+                PatternKind::Bind {
+                    name: Symbol::new(name),
+                    local_id: None,
+                },
+            )
+        };
+        let nil = |id| Expr::new(node_id(id), ExprKind::Nil);
+
+        let let_pattern = Pattern::new(
+            node_id(10),
+            PatternKind::Record {
+                type_name: None,
+                fields: vec![FieldPattern {
+                    id: node_id(11),
+                    name: Symbol::new("field"),
+                    pattern: Some(Pattern::new(
+                        node_id(12),
+                        PatternKind::As {
+                            pattern: Pattern::new(
+                                node_id(13),
+                                PatternKind::Tuple(vec![bind(14, "tuple")]),
+                            ),
+                            name: Symbol::new("record"),
+                            local_id: None,
+                        },
+                    )),
+                }],
+                rest: false,
+            },
+        );
+        let case = Expr::new(
+            node_id(20),
+            ExprKind::Case {
+                scrutinee: nil(21),
+                arms: vec![Arm {
+                    id: node_id(22),
+                    pattern: Pattern::new(
+                        node_id(23),
+                        PatternKind::Variant {
+                            ctor: typed_ref(0),
+                            fields: vec![Pattern::new(
+                                node_id(24),
+                                PatternKind::ListRest {
+                                    head: vec![bind(25, "head")],
+                                    rest: Some(Symbol::new("tail")),
+                                    rest_local_id: None,
+                                },
+                            )],
+                        },
+                    ),
+                    guard: None,
+                    body: nil(26),
+                }],
+            },
+        );
+        let handled = Expr::new(
+            node_id(30),
+            ExprKind::Handle {
+                body: case,
+                handlers: vec![
+                    HandlerArm {
+                        id: node_id(31),
+                        kind: HandlerKind::Do {
+                            binding: Pattern::new(
+                                node_id(32),
+                                PatternKind::List(vec![bind(33, "result")]),
+                            ),
+                        },
+                        body: nil(34),
+                    },
+                    HandlerArm {
+                        id: node_id(35),
+                        kind: HandlerKind::Fn {
+                            ability: typed_ref(1),
+                            op: Symbol::new("fn_op"),
+                            params: vec![Pattern::new(
+                                node_id(36),
+                                PatternKind::Tuple(vec![bind(37, "fn_param")]),
+                            )],
+                        },
+                        body: nil(38),
+                    },
+                ],
+            },
+        );
+        let function = FuncDecl {
+            id: node_id(1),
+            is_pub: false,
+            name: Symbol::new("patterns"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(
+                node_id(2),
+                ExprKind::Block {
+                    stmts: vec![Stmt::Let {
+                        id: node_id(3),
+                        pattern: let_pattern,
+                        ty: None,
+                        value: nil(4),
+                    }],
+                    value: handled,
+                },
+            ),
+        };
+
+        let ids = semantic_node_ids(&function);
+        for id in [
+            1, 3, 10, 11, 12, 13, 14, 22, 23, 24, 25, 31, 32, 33, 35, 36, 37,
+        ] {
+            assert!(
+                ids.contains(&node_id(id)),
+                "semantic metadata must follow nested pattern node {id}"
+            );
+        }
     }
 
     #[test]

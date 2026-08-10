@@ -114,7 +114,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
-                ctx.record_call_callee_type(callee.id, callee_ty);
+                if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::Function { .. })) {
+                    ctx.record_call_callee_type(callee.id, callee_ty);
+                }
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
                 // semantic state, never through the concrete node-type table.
@@ -639,7 +641,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
-                ctx.record_call_callee_type(callee.id, callee_ty);
+                if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::Function { .. })) {
+                    ctx.record_call_callee_type(callee.id, callee_ty);
+                }
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
