@@ -6,7 +6,7 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
-use crate::context::IrContext;
+use crate::context::{IrContext, OperationDataBuilder};
 use crate::dialect::{core, func, wasm};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef, TypeRef};
@@ -14,6 +14,7 @@ use crate::rewrite::clone_attrs_except;
 use crate::rewrite::pattern::RewritePattern;
 use crate::rewrite::rewriter::PatternRewriter;
 use crate::rewrite::type_converter::TypeConverter;
+use crate::types::Attribute;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
@@ -77,7 +78,8 @@ fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
 fn update_entry_block_args(ctx: &mut IrContext, op: OpRef, new_params: &[TypeRef]) -> bool {
     let regions = &ctx.op(op).regions;
     if regions.is_empty() {
-        return new_params.is_empty();
+        // Declarations have no entry block whose arguments need updating.
+        return true;
     }
     let body = regions[0];
     let blocks = &ctx.region(body).blocks;
@@ -96,6 +98,22 @@ fn update_entry_block_args(ctx: &mut IrContext, op: OpRef, new_params: &[TypeRef
     true
 }
 
+/// Create a bodyless function declaration for a dialect whose generated
+/// constructor requires a body region.
+fn make_bodyless_function_op(
+    ctx: &mut IrContext,
+    loc: crate::types::Location,
+    dialect: crate::Symbol,
+    sym_name: crate::Symbol,
+    func_type: TypeRef,
+) -> OpRef {
+    let data = OperationDataBuilder::new(loc, dialect, crate::Symbol::new("func"))
+        .attr("sym_name", Attribute::Symbol(sym_name))
+        .attr("type", Attribute::Type(func_type))
+        .build(ctx);
+    ctx.create_op(data)
+}
+
 /// Shared implementation for function signature conversion.
 ///
 /// Converts parameter and result types using the type converter, updates
@@ -107,8 +125,8 @@ fn rewrite_function_signature(
     op: OpRef,
     rewriter: &mut PatternRewriter<'_>,
     func_type: TypeRef,
-    body: RegionRef,
-    make_op: impl FnOnce(&mut IrContext, TypeRef) -> OpRef,
+    body: Option<RegionRef>,
+    make_op: impl FnOnce(&mut IrContext, TypeRef, Option<RegionRef>) -> OpRef,
 ) -> bool {
     let converter = rewriter.type_converter();
     let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
@@ -126,10 +144,12 @@ fn rewrite_function_signature(
     let new_func_type = rebuild_func_type(ctx, &sig);
 
     // Detach body region so it can be reused in the new op
-    ctx.detach_region(body);
+    if let Some(body) = body {
+        ctx.detach_region(body);
+    }
 
     // Create replacement op with new type
-    let new_op = make_op(ctx, new_func_type);
+    let new_op = make_op(ctx, new_func_type, body);
     ctx.op_mut(new_op).attributes.extend(attrs_to_preserve);
 
     rewriter.replace_op(new_op);
@@ -157,13 +177,23 @@ impl RewritePattern for FuncSignatureConversionPattern {
         };
 
         let func_type = func_op.r#type(ctx);
-        let body = func_op.body(ctx);
+        let body = ctx.op(op).regions.first().copied();
         let sym_name = func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 
-        rewrite_function_signature(ctx, op, rewriter, func_type, body, |ctx, ty| {
-            func::func(ctx, loc, sym_name, ty, body).op_ref()
-        })
+        rewrite_function_signature(
+            ctx,
+            op,
+            rewriter,
+            func_type,
+            body,
+            |ctx, ty, body| match body {
+                Some(body) => func::func(ctx, loc, sym_name, ty, body).op_ref(),
+                None => {
+                    make_bodyless_function_op(ctx, loc, crate::Symbol::new("func"), sym_name, ty)
+                }
+            },
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -188,13 +218,23 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
         };
 
         let func_type = wasm_func_op.r#type(ctx);
-        let body = wasm_func_op.body(ctx);
+        let body = ctx.op(op).regions.first().copied();
         let sym_name = wasm_func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 
-        rewrite_function_signature(ctx, op, rewriter, func_type, body, |ctx, ty| {
-            wasm::func(ctx, loc, sym_name, ty, body).op_ref()
-        })
+        rewrite_function_signature(
+            ctx,
+            op,
+            rewriter,
+            func_type,
+            body,
+            |ctx, ty, body| match body {
+                Some(body) => wasm::func(ctx, loc, sym_name, ty, body).op_ref(),
+                None => {
+                    make_bodyless_function_op(ctx, loc, crate::Symbol::new("wasm"), sym_name, ty)
+                }
+            },
+        )
     }
 
     fn name(&self) -> &'static str {
@@ -208,6 +248,7 @@ mod tests {
     use crate::Symbol;
     use crate::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use crate::location::Span;
+    use crate::printer::print_module;
     use crate::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use crate::types::{Attribute, TypeDataBuilder};
     use smallvec::smallvec;
@@ -440,6 +481,65 @@ mod tests {
         assert_eq!(ctx.block(entry).args.len(), 2);
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i64_ty);
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 1)), i64_ty);
+    }
+
+    #[test]
+    fn bodyless_signatures_convert_without_inventing_bodies() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+        let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+
+        let func_decl = make_bodyless_function_op(
+            &mut ctx,
+            loc,
+            Symbol::new("func"),
+            Symbol::new("external"),
+            func_ty,
+        );
+        let wasm_decl = make_bodyless_function_op(
+            &mut ctx,
+            loc,
+            Symbol::new("wasm"),
+            Symbol::new("wasm_external"),
+            func_ty,
+        );
+        let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
+        let wasm_def = make_wasm_func_op(&mut ctx, loc, "wasm_defined", func_ty, &[i32_ty]);
+        let module = make_module(
+            &mut ctx,
+            loc,
+            vec![func_decl, wasm_decl, func_def, wasm_def],
+        );
+
+        let tc = i32_to_i64_converter(i32_ty, i64_ty);
+        let applicator = PatternApplicator::new(tc)
+            .add_pattern(FuncSignatureConversionPattern)
+            .add_pattern(WasmFuncSignatureConversionPattern);
+        let result = applicator
+            .with_target(ConversionTarget::new())
+            .apply_partial_conversion(&mut ctx, module, "test-boundary")
+            .unwrap();
+
+        assert!(result.reached_fixpoint);
+        assert!(result.total_changes >= 4);
+
+        let ops = module.ops(&ctx);
+        for (index, expected_regions) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
+            let data = ctx.op(ops[index]);
+            assert_eq!(data.regions.len(), expected_regions);
+            let func_ty = data.attributes.get_type("type").unwrap();
+            let params = &ctx.types.get(func_ty).params;
+            assert_eq!(params[0], i64_ty);
+            assert_eq!(params[1], i64_ty);
+        }
+
+        let text = print_module(&ctx, module.op());
+        assert!(text.contains("func.func @external(%arg0: core.i64) -> core.i64\n"));
+        assert!(text.contains(
+            "wasm.func {sym_name = @wasm_external, type = core.func(core.i64, core.i64)}\n"
+        ));
+        assert!(text.contains("func.func @defined(%0: core.i64) -> core.i64 {"));
     }
 
     #[test]
