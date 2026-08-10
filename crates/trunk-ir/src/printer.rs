@@ -912,17 +912,24 @@ fn print_module_op(
         let saved_aliases = state.type_alias_names.clone();
 
         // 1. Emit manual type alias definitions
-        let manual_aliases: Vec<_> = state.ctx.type_aliases().to_vec();
+        let mut manual_aliases: Vec<_> = state
+            .ctx
+            .type_aliases()
+            .iter()
+            .map(|(name, ty)| (name.to_string(), *ty))
+            .collect();
+        manual_aliases.sort_by(|a, b| a.0.cmp(&b.0));
+        topological_sort_aliases(state.ctx, &mut manual_aliases);
         for (name, ty) in &manual_aliases {
             write!(f, "{inner_indent}")?;
-            write_type_alias_name(f, &name.to_string())?;
+            write_type_alias_name(f, name)?;
             f.write_str(" = ")?;
             // Temporarily remove this alias from the map so we print the
             // full type definition, while earlier aliases can still be used.
             state.type_alias_names.remove(ty);
             state.write_type(f, *ty)?;
             // Re-insert so subsequent aliases and ops can reference it
-            state.type_alias_names.insert(*ty, name.to_string());
+            state.type_alias_names.insert(*ty, name.clone());
             f.write_char('\n')?;
         }
 
@@ -1478,6 +1485,57 @@ mod tests {
             !output.contains("!Point"),
             "Should not auto-alias when manual exists:\n{output}"
         );
+    }
+
+    #[test]
+    fn test_manual_alias_order_is_independent_of_registration_order() {
+        fn print_with_aliases(reverse_registration: bool) -> String {
+            let mut ctx = IrContext::new();
+            let loc = test_location(&mut ctx);
+            let i32_ty = make_i32_type(&mut ctx);
+            let alpha_ty = make_adt_struct(&mut ctx, "Alpha", &[("value", i32_ty)]);
+            let inner_ty = make_adt_struct(&mut ctx, "Inner", &[("value", i32_ty)]);
+            let outer_ty = make_adt_struct(&mut ctx, "Outer", &[("inner", inner_ty)]);
+            let zebra_ty = make_adt_struct(&mut ctx, "Zebra", &[("value", i32_ty)]);
+            let aliases = [
+                (Symbol::new("alpha"), alpha_ty),
+                (Symbol::new("a_outer"), outer_ty),
+                (Symbol::new("z_inner"), inner_ty),
+                (Symbol::new("zebra"), zebra_ty),
+            ];
+
+            if reverse_registration {
+                for &(name, ty) in aliases.iter().rev() {
+                    ctx.register_type_alias(name, ty);
+                }
+            } else {
+                for (name, ty) in aliases {
+                    ctx.register_type_alias(name, ty);
+                }
+            }
+
+            let module = make_module_with_funcs(&mut ctx, loc, vec![]);
+            print_module(&ctx, module)
+        }
+
+        let output = print_with_aliases(false);
+        assert_eq!(output, print_with_aliases(true));
+
+        let alpha_pos = output.find("!alpha =").expect("missing !alpha alias");
+        let inner_pos = output.find("!z_inner =").expect("missing !z_inner alias");
+        let outer_pos = output.find("!a_outer =").expect("missing !a_outer alias");
+        let zebra_pos = output.find("!zebra =").expect("missing !zebra alias");
+        assert!(alpha_pos < inner_pos && inner_pos < outer_pos && outer_pos < zebra_pos);
+        let outer_line = output
+            .lines()
+            .find(|line| line.contains("!a_outer ="))
+            .unwrap();
+        assert!(outer_line.contains("!z_inner"));
+
+        let mut reparsed_ctx = IrContext::new();
+        let reparsed =
+            crate::parser::parse_module(&mut reparsed_ctx, &output).expect("parse failed");
+        assert_eq!(output, print_module(&reparsed_ctx, reparsed));
     }
 
     #[test]
