@@ -906,10 +906,13 @@ mod tests {
 }"#,
         );
         let external = func_by_name_recursive(&ctx, module, "external");
+        assert!(ctx.op(external.op_ref()).regions.is_empty());
         let before = print_module(&ctx, module.op());
 
         lower_evidence_to_native_func(&mut ctx, external);
 
+        let external_after = func_by_name_recursive(&ctx, module, "external");
+        assert!(ctx.op(external_after.op_ref()).regions.is_empty());
         assert_eq!(print_module(&ctx, module.op()), before);
 
         let selected = func_by_name_recursive(&ctx, module, "selected");

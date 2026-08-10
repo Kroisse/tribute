@@ -536,7 +536,9 @@ mod tests {
 
         let text = print_module(&ctx, module.op());
         assert!(text.contains("func.func @external(%arg0: core.i64) -> core.i64\n"));
-        assert!(text.contains("wasm.func"));
+        assert!(text.contains(
+            "wasm.func {sym_name = @wasm_external, type = core.func(core.i64, core.i64)}\n"
+        ));
         assert!(text.contains("func.func @defined(%0: core.i64) -> core.i64 {"));
     }
 
