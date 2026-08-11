@@ -114,6 +114,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::Function { .. })) {
+                    ctx.record_call_callee_type(callee.id, callee_ty);
+                }
                 // Conversion re-visits the callee. Keep this one ability-op
                 // inference instance connected to that visit through dedicated
                 // semantic state, never through the concrete node-type table.
@@ -638,6 +641,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::Function { .. })) {
+                    ctx.record_call_callee_type(callee.id, callee_ty);
+                }
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
@@ -1162,7 +1168,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
-            ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved)),
+            ExprKind::Var(resolved) => {
+                ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(expr_id), resolved))
+            }
             ExprKind::Call { callee, args } => {
                 let inferred_ability_op_callee = ctx.get_ability_op_callee_type(callee.id);
                 // First, process callee so its type gets recorded
@@ -1212,7 +1220,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor: self.convert_ref_with_ctx(ctx, ctor),
+                ctor: self.convert_ref_with_ctx(ctx, None, ctor),
                 args: args
                     .into_iter()
                     .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
@@ -1223,7 +1231,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => ExprKind::Record {
-                type_name: self.convert_ref_with_ctx(ctx, type_name),
+                type_name: self.convert_ref_with_ctx(ctx, None, type_name),
                 fields: fields
                     .into_iter()
                     .map(|(name, expr)| (name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))
@@ -1406,9 +1414,12 @@ impl<'db> TypeChecker<'db> {
     fn convert_ref_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node_id: Option<crate::ast::NodeId>,
         resolved: ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = self.infer_var_with_ctx(ctx, &resolved);
+        let ty = node_id
+            .and_then(|node| ctx.get_call_callee_type(node))
+            .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved));
         TypedRef { resolved, ty }
     }
 
@@ -1845,7 +1856,7 @@ impl<'db> TypeChecker<'db> {
             PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
             PatternKind::Literal(lit) => PatternKind::Literal(lit),
             PatternKind::Variant { ctor, fields } => PatternKind::Variant {
-                ctor: self.convert_ref_with_ctx(ctx, ctor),
+                ctor: self.convert_ref_with_ctx(ctx, None, ctor),
                 fields: fields
                     .into_iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
@@ -1856,7 +1867,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => PatternKind::Record {
-                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
+                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, None, t)),
                 fields: fields
                     .into_iter()
                     .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
@@ -2015,7 +2026,7 @@ impl<'db> TypeChecker<'db> {
                     .collect();
 
                 PatternKind::Record {
-                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
+                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, None, t)),
                     fields: converted_fields,
                     rest,
                 }
@@ -2121,7 +2132,7 @@ impl<'db> TypeChecker<'db> {
                 );
                 ctx.record_handler_operation(arm.id, operation);
                 HandlerKind::Fn {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
+                    ability: self.convert_ref_with_ctx(ctx, None, ability),
                     op,
                     params: params
                         .into_iter()
@@ -2173,7 +2184,7 @@ impl<'db> TypeChecker<'db> {
                 }
 
                 HandlerKind::Op {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
+                    ability: self.convert_ref_with_ctx(ctx, None, ability),
                     op,
                     params: params
                         .into_iter()

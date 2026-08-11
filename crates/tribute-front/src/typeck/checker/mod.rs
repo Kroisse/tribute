@@ -49,6 +49,8 @@ pub struct ModuleCheckResult<'db> {
     pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
     pub node_types: Vec<(NodeId, Type<'db>)>,
+    /// Exact instantiated types selected for direct call callees.
+    pub call_callee_types: Vec<(NodeId, Type<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
@@ -93,6 +95,7 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
+    call_callee_types: HashMap<NodeId, Type<'db>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -131,6 +134,7 @@ impl<'db> TypeChecker<'db> {
             prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
+            call_callee_types: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
@@ -236,6 +240,8 @@ impl<'db> TypeChecker<'db> {
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
+        let mut call_callee_types: Vec<_> = self.call_callee_types.into_iter().collect();
+        call_callee_types.sort_by_key(|(id, _)| *id);
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
@@ -253,6 +259,7 @@ impl<'db> TypeChecker<'db> {
             function_types,
             constructor_types,
             node_types,
+            call_callee_types,
             ability_conventions,
             handler_operations,
             perform_operations,

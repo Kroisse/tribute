@@ -13,33 +13,50 @@ use crate::typeck::subst::substitute_bound_vars;
 
 use super::mangle::{mangle_name, mangle_type_name};
 
+pub(super) struct GeneratedSpecializations<'db> {
+    pub(super) specialized_declarations: Vec<FuncDecl<TypedRef<'db>>>,
+    pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    pub(super) metadata_origins: Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
+}
+
+struct SpecializationEntry<'db> {
+    name: Symbol,
+    declaration: FuncDecl<TypedRef<'db>>,
+    scheme: TypeScheme<'db>,
+    type_args: Vec<Type<'db>>,
+    origins: HashSet<NodeId>,
+}
+
 /// Generate specialized copies of generic functions for each instantiation.
 ///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
 /// `(Symbol, TypeScheme)` entries for `function_types`.
-pub fn generate_specializations<'db>(
+pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-) -> (Vec<FuncDecl<TypedRef<'db>>>, Vec<(Symbol, TypeScheme<'db>)>) {
+) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
+    let extern_functions = collect_extern_function_names(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
-    let mut entries: Vec<(Symbol, FuncDecl<TypedRef<'db>>, TypeScheme<'db>)> = Vec::new();
+    let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
+    let mut extern_function_types = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(func) = func_decls.get(&qualified) else {
+        let func = func_decls.get(&qualified).copied();
+        if func.is_none() && !extern_functions.contains(&qualified) {
             continue;
-        };
+        }
         let Some(scheme) = scheme_map.get(&qualified) else {
             continue;
         };
+        let origins = func.map(semantic_node_ids);
 
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
-            let specialized = specialize_func_decl(db, func, type_args, mangled);
             let specialized_scheme = TypeScheme::new(
                 db,
                 vec![],
@@ -53,21 +70,174 @@ pub fn generate_specializations<'db>(
                     },
                 ),
             );
-            entries.push((mangled, specialized, specialized_scheme));
+            if let Some(func) = func {
+                let specialized = specialize_func_decl(db, func, type_args, mangled);
+                entries.push(SpecializationEntry {
+                    name: mangled,
+                    declaration: specialized,
+                    scheme: specialized_scheme,
+                    type_args: type_args.clone(),
+                    origins: origins.clone().expect("function specialization origins"),
+                });
+            } else {
+                // Extern functions have no AST body to clone, but rewritten
+                // call sites still need their concrete scheme during logical
+                // lowering under the mangled identity.
+                extern_function_types.push((mangled, specialized_scheme));
+            }
         }
     }
 
     // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
-    entries.sort_by_key(|e| e.0);
+    entries.sort_by_key(|entry| entry.name);
 
     let mut new_decls = Vec::with_capacity(entries.len());
-    let mut new_function_types = Vec::with_capacity(entries.len());
-    for (name, decl, scheme) in entries {
-        new_decls.push(decl);
-        new_function_types.push((name, scheme));
+    let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
+    let mut metadata_origins = Vec::with_capacity(entries.len());
+    for entry in entries {
+        new_decls.push(entry.declaration);
+        new_function_types.push((entry.name, entry.scheme));
+        metadata_origins.push((entry.type_args, entry.origins));
+    }
+    new_function_types.extend(extern_function_types);
+    new_function_types.sort_by_key(|(name, _)| *name);
+
+    GeneratedSpecializations {
+        specialized_declarations: new_decls,
+        specialized_function_types: new_function_types,
+        metadata_origins,
+    }
+}
+
+fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
+    fn pattern<'db>(value: &Pattern<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+        ids.insert(value.id);
+        match value.kind.as_ref() {
+            PatternKind::Variant { fields, .. }
+            | PatternKind::Tuple(fields)
+            | PatternKind::List(fields) => {
+                for field in fields {
+                    pattern(field, ids);
+                }
+            }
+            PatternKind::Record { fields, .. } => {
+                for field in fields {
+                    ids.insert(field.id);
+                    if let Some(field_pattern) = &field.pattern {
+                        pattern(field_pattern, ids);
+                    }
+                }
+            }
+            PatternKind::ListRest { head, .. } => {
+                for head_pattern in head {
+                    pattern(head_pattern, ids);
+                }
+            }
+            PatternKind::As { pattern: inner, .. } => pattern(inner, ids),
+            PatternKind::Wildcard
+            | PatternKind::Bind { .. }
+            | PatternKind::Literal(_)
+            | PatternKind::Error => {}
+        }
     }
 
-    (new_decls, new_function_types)
+    fn expr<'db>(value: &Expr<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
+        ids.insert(value.id);
+        match value.kind.as_ref() {
+            ExprKind::Call { callee, args } => {
+                expr(callee, ids);
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::Block { stmts, value } => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let {
+                            id,
+                            pattern: binding,
+                            value,
+                            ..
+                        } => {
+                            ids.insert(*id);
+                            pattern(binding, ids);
+                            expr(value, ids);
+                        }
+                        Stmt::Expr { id, expr: value } => {
+                            ids.insert(*id);
+                            expr(value, ids);
+                        }
+                    }
+                }
+                expr(value, ids);
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                expr(scrutinee, ids);
+                for arm in arms {
+                    ids.insert(arm.id);
+                    pattern(&arm.pattern, ids);
+                    if let Some(guard) = &arm.guard {
+                        expr(guard, ids);
+                    }
+                    expr(&arm.body, ids);
+                }
+            }
+            ExprKind::Lambda { body, .. } => expr(body, ids),
+            ExprKind::Handle { body, handlers } => {
+                expr(body, ids);
+                for handler in handlers {
+                    ids.insert(handler.id);
+                    match &handler.kind {
+                        HandlerKind::Do { binding } => pattern(binding, ids),
+                        HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => {
+                            for param in params {
+                                pattern(param, ids);
+                            }
+                        }
+                    }
+                    expr(&handler.body, ids);
+                }
+            }
+            ExprKind::Resume { arg, .. } => expr(arg, ids),
+            ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::Record { fields, spread, .. } => {
+                for (_, value) in fields {
+                    expr(value, ids);
+                }
+                if let Some(value) = spread {
+                    expr(value, ids);
+                }
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                expr(receiver, ids);
+                for arg in args {
+                    expr(arg, ids);
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                expr(lhs, ids);
+                expr(rhs, ids);
+            }
+            ExprKind::Var(_)
+            | ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::RuneLit(_)
+            | ExprKind::Nil
+            | ExprKind::Error => {}
+        }
+    }
+    let mut ids = HashSet::new();
+    ids.insert(func.id);
+    expr(&func.body, &mut ids);
+    ids
 }
 
 // ============================================================================
@@ -335,7 +505,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
     TypeAnnotation { id, kind }
 }
 
-fn collect_struct_decls<'a, 'db>(
+pub(super) fn collect_struct_decls<'a, 'db>(
     db: &'db dyn salsa::Database,
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<TypeDefId<'db>, &'a StructDecl> {
@@ -439,11 +609,40 @@ fn collect_func_decls_inner<'a, 'db>(
     }
 }
 
+fn collect_extern_function_names<'db>(module: &Module<TypedRef<'db>>) -> HashSet<Symbol> {
+    let mut names = HashSet::new();
+    let mut prefix = String::new();
+    collect_extern_function_names_inner(&module.decls, &mut prefix, &mut names);
+    names
+}
+
+fn collect_extern_function_names_inner<'db>(
+    decls: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    names: &mut HashSet<Symbol>,
+) {
+    for decl in decls {
+        match decl {
+            Decl::ExternFunction(func) => {
+                names.insert(crate::qualified_symbol(prefix, func.name));
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let len = crate::push_prefix(prefix, module.name);
+                    collect_extern_function_names_inner(body, prefix, names);
+                    prefix.truncate(len);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Compute a NonZero<u64> variant hash from concrete type arguments.
 ///
 /// This is used to give specialized AST nodes unique NodeIds that
 /// don't collide with the original or other specializations.
-fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
+pub(crate) fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     type_args.hash(&mut hasher);
     let hash = hasher.finish();
@@ -782,6 +981,140 @@ mod tests {
     }
 
     #[test]
+    fn semantic_node_ids_include_nested_pattern_nodes() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let typed_ref = |index| {
+            TypedRef::new(
+                ResolvedRef::Local {
+                    id: crate::ast::LocalId::new(index),
+                    name: Symbol::new("value"),
+                },
+                int,
+            )
+        };
+        let bind = |id, name| {
+            Pattern::new(
+                node_id(id),
+                PatternKind::Bind {
+                    name: Symbol::new(name),
+                    local_id: None,
+                },
+            )
+        };
+        let nil = |id| Expr::new(node_id(id), ExprKind::Nil);
+
+        let let_pattern = Pattern::new(
+            node_id(10),
+            PatternKind::Record {
+                type_name: None,
+                fields: vec![FieldPattern {
+                    id: node_id(11),
+                    name: Symbol::new("field"),
+                    pattern: Some(Pattern::new(
+                        node_id(12),
+                        PatternKind::As {
+                            pattern: Pattern::new(
+                                node_id(13),
+                                PatternKind::Tuple(vec![bind(14, "tuple")]),
+                            ),
+                            name: Symbol::new("record"),
+                            local_id: None,
+                        },
+                    )),
+                }],
+                rest: false,
+            },
+        );
+        let case = Expr::new(
+            node_id(20),
+            ExprKind::Case {
+                scrutinee: nil(21),
+                arms: vec![Arm {
+                    id: node_id(22),
+                    pattern: Pattern::new(
+                        node_id(23),
+                        PatternKind::Variant {
+                            ctor: typed_ref(0),
+                            fields: vec![Pattern::new(
+                                node_id(24),
+                                PatternKind::ListRest {
+                                    head: vec![bind(25, "head")],
+                                    rest: Some(Symbol::new("tail")),
+                                    rest_local_id: None,
+                                },
+                            )],
+                        },
+                    ),
+                    guard: None,
+                    body: nil(26),
+                }],
+            },
+        );
+        let handled = Expr::new(
+            node_id(30),
+            ExprKind::Handle {
+                body: case,
+                handlers: vec![
+                    HandlerArm {
+                        id: node_id(31),
+                        kind: HandlerKind::Do {
+                            binding: Pattern::new(
+                                node_id(32),
+                                PatternKind::List(vec![bind(33, "result")]),
+                            ),
+                        },
+                        body: nil(34),
+                    },
+                    HandlerArm {
+                        id: node_id(35),
+                        kind: HandlerKind::Fn {
+                            ability: typed_ref(1),
+                            op: Symbol::new("fn_op"),
+                            params: vec![Pattern::new(
+                                node_id(36),
+                                PatternKind::Tuple(vec![bind(37, "fn_param")]),
+                            )],
+                        },
+                        body: nil(38),
+                    },
+                ],
+            },
+        );
+        let function = FuncDecl {
+            id: node_id(1),
+            is_pub: false,
+            name: Symbol::new("patterns"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(
+                node_id(2),
+                ExprKind::Block {
+                    stmts: vec![Stmt::Let {
+                        id: node_id(3),
+                        pattern: let_pattern,
+                        ty: None,
+                        value: nil(4),
+                    }],
+                    value: handled,
+                },
+            ),
+        };
+
+        let ids = semantic_node_ids(&function);
+        for id in [
+            1, 3, 10, 11, 12, 13, 14, 22, 23, 24, 25, 31, 32, 33, 35, 36, 37,
+        ] {
+            assert!(
+                ids.contains(&node_id(id)),
+                "semantic metadata must follow nested pattern node {id}"
+            );
+        }
+    }
+
+    #[test]
     fn test_subst_type_replaces_bound_var() {
         let db = TestDb::default();
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
@@ -921,19 +1254,23 @@ mod tests {
         let mut instantiations = HashMap::new();
         instantiations.insert(func_id, type_arg_sets);
 
-        let (new_decls, new_fn_types) =
+        let specializations =
             generate_specializations(&db, &module, &instantiations, &function_types);
 
-        assert_eq!(new_decls.len(), 2);
-        assert_eq!(new_fn_types.len(), 2);
+        assert_eq!(specializations.specialized_declarations.len(), 2);
+        assert_eq!(specializations.specialized_function_types.len(), 2);
 
         // Verify names are mangled
-        let names: HashSet<String> = new_decls.iter().map(|d| d.name.to_string()).collect();
+        let names: HashSet<String> = specializations
+            .specialized_declarations
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
         assert!(names.contains("identity$Int"));
         assert!(names.contains("identity$Float"));
 
         // All specialized TypeSchemes must be monomorphic
-        for (_, scheme) in &new_fn_types {
+        for (_, scheme) in &specializations.specialized_function_types {
             assert!(
                 scheme.is_mono(&db),
                 "specialized scheme should have no type params"

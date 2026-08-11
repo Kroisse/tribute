@@ -14,8 +14,9 @@ pub fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+    call_callee_types: &HashMap<crate::ast::NodeId, Type<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut collector = InstantiationCollector::new(db, function_types);
+    let mut collector = InstantiationCollector::new(db, function_types, call_callee_types);
     collector.visit_module(module);
     collector.instantiations
 }
@@ -118,16 +119,18 @@ fn extract_recursive<'db>(
     }
 }
 
-struct InstantiationCollector<'db> {
+struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
 }
 
-impl<'db> InstantiationCollector<'db> {
+impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
+        call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -137,20 +140,29 @@ impl<'db> InstantiationCollector<'db> {
         Self {
             db,
             schemes,
+            call_callee_types,
             instantiations: HashMap::new(),
         }
     }
 
-    fn try_record(&mut self, typed_ref: &TypedRef<'db>) {
+    fn try_record(&mut self, node_id: crate::ast::NodeId, typed_ref: &TypedRef<'db>) {
         let ResolvedRef::Function { id } = &typed_ref.resolved else {
             return;
         };
         let Some(scheme) = self.schemes.get(id) else {
             return;
         };
-        let Some(type_args) = extract_type_args(self.db, *scheme, typed_ref.ty) else {
+        let concrete = self
+            .call_callee_types
+            .get(&node_id)
+            .copied()
+            .unwrap_or(typed_ref.ty);
+        let Some(type_args) = extract_type_args(self.db, *scheme, concrete) else {
             return;
         };
+        if !type_args.iter().all(|ty| is_concrete_type(self.db, *ty)) {
+            return;
+        }
         self.instantiations
             .entry(*id)
             .or_default()
@@ -180,7 +192,7 @@ impl<'db> InstantiationCollector<'db> {
     fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
         match expr.kind.as_ref() {
             ExprKind::Var(typed_ref) => {
-                self.try_record(typed_ref);
+                self.try_record(expr.id, typed_ref);
             }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee);
@@ -258,6 +270,54 @@ impl<'db> InstantiationCollector<'db> {
             Stmt::Expr { expr, .. } => self.visit_expr(expr),
         }
     }
+}
+
+fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    match ty.kind(db) {
+        TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } => {
+            params.iter().all(|param| is_concrete_type(db, *param))
+                && is_concrete_type(db, *result)
+                && is_concrete_effect_row(db, *effect)
+        }
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .all(|element| is_concrete_type(db, *element)),
+        TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::Never => true,
+        TypeKind::BoundVar { .. }
+        | TypeKind::UniVar { .. }
+        | TypeKind::App { .. }
+        | TypeKind::Error => false,
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            is_concrete_type(db, *arg)
+                && is_concrete_type(db, *result)
+                && is_concrete_effect_row(db, *effect)
+        }
+    }
+}
+
+fn is_concrete_effect_row(db: &dyn salsa::Database, row: crate::ast::EffectRow<'_>) -> bool {
+    row.rest(db).is_none()
+        && row
+            .effects(db)
+            .iter()
+            .all(|effect| effect.args.iter().all(|arg| is_concrete_type(db, *arg)))
 }
 
 // ============================================================================
@@ -498,7 +558,8 @@ impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{EffectRow, TypeParam, TypeScheme};
+    use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, TypeParam, TypeScheme};
+    use trunk_ir::Symbol;
 
     use super::*;
 
@@ -522,6 +583,73 @@ mod tests {
 
     fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
         EffectRow::new(db, vec![], None)
+    }
+
+    fn direct_function_type<'db>(
+        db: &'db dyn salsa::Database,
+        effect: EffectRow<'db>,
+    ) -> Type<'db> {
+        let int = Type::new(db, TypeKind::Int);
+        Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+                minimum_convention: crate::ast::CallingConvention::Direct,
+            },
+        )
+    }
+
+    #[test]
+    fn concrete_type_accepts_closed_effect_rows_with_concrete_ability_arguments() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let row = EffectRow::new(
+            &db,
+            vec![Effect {
+                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                args: vec![int],
+            }],
+            None,
+        );
+
+        assert!(is_concrete_type(&db, direct_function_type(&db, row)));
+    }
+
+    #[test]
+    fn concrete_type_rejects_open_effect_rows() {
+        let db = TestDb::default();
+        let open = EffectRow::open(&db, EffectVar { id: 0 });
+        let int = Type::new(&db, TypeKind::Int);
+        let continuation = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int,
+                result: int,
+                effect: open,
+            },
+        );
+
+        assert!(!is_concrete_type(&db, direct_function_type(&db, open)));
+        assert!(!is_concrete_type(&db, continuation));
+    }
+
+    #[test]
+    fn concrete_type_rejects_error_types_in_effect_arguments() {
+        let db = TestDb::default();
+        let error = Type::new(&db, TypeKind::Error);
+        let row = EffectRow::new(
+            &db,
+            vec![Effect {
+                ability_id: AbilityId::source(&db, Symbol::new("State")),
+                args: vec![error],
+            }],
+            None,
+        );
+
+        assert!(!is_concrete_type(&db, error));
+        assert!(!is_concrete_type(&db, direct_function_type(&db, row)));
     }
 
     // ========================================================================

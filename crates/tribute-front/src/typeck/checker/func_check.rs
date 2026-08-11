@@ -128,6 +128,7 @@ impl<'db> TypeChecker<'db> {
         let constraints = ctx.take_constraints();
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
+        let func_call_callee_types = ctx.take_call_callee_types();
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
@@ -363,6 +364,10 @@ impl<'db> TypeChecker<'db> {
         for (node_id, ty) in func_node_types {
             let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
             self.node_types.insert(node_id, substituted);
+        }
+        for (callee_id, ty) in func_call_callee_types {
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
+            self.call_callee_types.insert(callee_id, substituted);
         }
         for (arm_id, operation) in func_handler_operations {
             self.handler_operations.insert(
