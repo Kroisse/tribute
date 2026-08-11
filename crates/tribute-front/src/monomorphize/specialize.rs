@@ -13,11 +13,11 @@ use crate::typeck::subst::substitute_bound_vars;
 
 use super::mangle::{mangle_name, mangle_type_name};
 
-type GeneratedSpecializations<'db> = (
-    Vec<FuncDecl<TypedRef<'db>>>,
-    Vec<(Symbol, TypeScheme<'db>)>,
-    Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
-);
+pub(super) struct GeneratedSpecializations<'db> {
+    pub(super) specialized_declarations: Vec<FuncDecl<TypedRef<'db>>>,
+    pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    pub(super) metadata_origins: Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
+}
 
 struct SpecializationEntry<'db> {
     name: Symbol,
@@ -31,7 +31,7 @@ struct SpecializationEntry<'db> {
 ///
 /// Returns a list of new specialized `FuncDecl`s and their corresponding
 /// `(Symbol, TypeScheme)` entries for `function_types`.
-pub fn generate_specializations<'db>(
+pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
@@ -102,7 +102,11 @@ pub fn generate_specializations<'db>(
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| *name);
 
-    (new_decls, new_function_types, metadata_origins)
+    GeneratedSpecializations {
+        specialized_declarations: new_decls,
+        specialized_function_types: new_function_types,
+        metadata_origins,
+    }
 }
 
 fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
@@ -1250,19 +1254,23 @@ mod tests {
         let mut instantiations = HashMap::new();
         instantiations.insert(func_id, type_arg_sets);
 
-        let (new_decls, new_fn_types, _) =
+        let specializations =
             generate_specializations(&db, &module, &instantiations, &function_types);
 
-        assert_eq!(new_decls.len(), 2);
-        assert_eq!(new_fn_types.len(), 2);
+        assert_eq!(specializations.specialized_declarations.len(), 2);
+        assert_eq!(specializations.specialized_function_types.len(), 2);
 
         // Verify names are mangled
-        let names: HashSet<String> = new_decls.iter().map(|d| d.name.to_string()).collect();
+        let names: HashSet<String> = specializations
+            .specialized_declarations
+            .iter()
+            .map(|d| d.name.to_string())
+            .collect();
         assert!(names.contains("identity$Int"));
         assert!(names.contains("identity$Float"));
 
         // All specialized TypeSchemes must be monomorphic
-        for (_, scheme) in &new_fn_types {
+        for (_, scheme) in &specializations.specialized_function_types {
             assert!(
                 scheme.is_mono(&db),
                 "specialized scheme should have no type params"

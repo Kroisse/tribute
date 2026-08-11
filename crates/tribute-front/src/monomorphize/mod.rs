@@ -81,29 +81,31 @@ pub fn monomorphize_functions<'db>(
             break;
         }
 
-        let (specialized_decls, specialized_fn_types, metadata_origins) =
-            specialize::generate_specializations(
-                db,
-                &module,
-                &new_instantiations,
-                &source_function_types,
-            );
-        for (type_args, origins) in metadata_origins {
+        let specializations = specialize::generate_specializations(
+            db,
+            &module,
+            &new_instantiations,
+            &source_function_types,
+        );
+        for (type_args, origins) in specializations.metadata_origins {
             specialize_metadata(db, &mut metadata, &type_args, &origins);
         }
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
         let rewritten_module =
             rewrite::rewrite_module(db, module, &source_function_types, &rewrite_map);
-        let specialized_decls: Vec<Decl<TypedRef<'db>>> =
-            specialized_decls.into_iter().map(Decl::Function).collect();
+        let specialized_decls: Vec<Decl<TypedRef<'db>>> = specializations
+            .specialized_declarations
+            .into_iter()
+            .map(Decl::Function)
+            .collect();
         let rewritten_specialized =
             rewrite::rewrite_decls(db, specialized_decls, &source_function_types, &rewrite_map);
 
         let mut decls = rewritten_module.decls;
         decls.extend(rewritten_specialized);
         module = Module::new(rewritten_module.id, rewritten_module.name, decls);
-        all_function_types.extend(specialized_fn_types);
+        all_function_types.extend(specializations.specialized_function_types);
     }
     assert!(
         reached_fixpoint,
