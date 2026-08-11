@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
+use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeDefId, TypeScheme, TypedRef};
 use crate::typeck::subst::substitute_bound_vars;
 use crate::typeck::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 
@@ -121,6 +121,12 @@ pub fn monomorphize_functions<'db>(
         // Generate specialized struct/enum declarations
         let specialized_structs =
             specialize::generate_struct_specializations(db, &module, &type_instantiations);
+        specialize_struct_constructor_metadata(
+            db,
+            &module,
+            &type_instantiations,
+            &mut metadata.constructor_types,
+        );
         let specialized_enums =
             specialize::generate_enum_specializations(db, &module, &type_instantiations);
 
@@ -143,6 +149,65 @@ pub fn monomorphize_functions<'db>(
         function_types: fn_types_vec,
         metadata,
     }
+}
+
+/// Generate exact constructor schemes for specialized struct declarations.
+///
+/// A struct constructor shares its canonical qualified identity with its type,
+/// so source-logical lowering looks up the generated mangled name directly.
+fn specialize_struct_constructor_metadata<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    constructor_types: &mut HashMap<CtorId<'db>, TypeScheme<'db>>,
+) {
+    let struct_decls = specialize::collect_struct_decls(db, module);
+    let mut entries = Vec::new();
+
+    for (id, type_arg_sets) in instantiations {
+        let Some(structure) = struct_decls.get(id) else {
+            continue;
+        };
+        if structure.type_params.is_empty() {
+            continue;
+        }
+        let Some(source_scheme) = constructor_types
+            .get(&CtorId::new(db, id.qualified(db)))
+            .copied()
+        else {
+            continue;
+        };
+        for type_args in type_arg_sets {
+            entries.push(specialize_struct_constructor_scheme(
+                db,
+                *id,
+                type_args,
+                source_scheme,
+            ));
+        }
+    }
+
+    entries.sort_by_key(|(id, _)| id.qualified(db));
+    for (ctor, scheme) in entries {
+        constructor_types.entry(ctor).or_insert(scheme);
+    }
+}
+
+fn specialize_struct_constructor_scheme<'db>(
+    db: &'db dyn salsa::Database,
+    type_id: TypeDefId<'db>,
+    type_args: &[Type<'db>],
+    source_scheme: TypeScheme<'db>,
+) -> (CtorId<'db>, TypeScheme<'db>) {
+    let name = mangle::mangle_type_name(db, type_id, type_id.qualified(db), type_args);
+    let body = substitute_type(db, source_scheme.body(db), type_args);
+    let scheme = TypeScheme::new(
+        db,
+        Vec::new(),
+        source_scheme.effect_params(db).clone(),
+        body,
+    );
+    (CtorId::new(db, name), scheme)
 }
 
 fn specialize_metadata<'db>(
@@ -305,7 +370,10 @@ fn build_rewrite_map<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, EffectRow, OpDeclKind, TypeKind};
+    use crate::ast::{
+        AbilityId, CallingConvention, EffectRow, OpDeclKind, StructDecl, TypeKind, TypeParam,
+        TypeParamDecl,
+    };
 
     #[salsa::db]
     #[derive(Default)]
@@ -315,6 +383,72 @@ mod tests {
 
     #[salsa::db]
     impl salsa::Database for TestDb {}
+
+    #[test]
+    fn specialized_struct_constructor_scheme_uses_mangled_key_and_concrete_fields() {
+        let db = TestDb::default();
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let int = Type::new(&db, TypeKind::Int);
+        let structure = StructDecl {
+            id: NodeId::from_raw(1),
+            is_pub: false,
+            name: Symbol::new("nested::Holder"),
+            type_params: vec![TypeParamDecl {
+                id: NodeId::from_raw(2),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            fields: vec![],
+        };
+        let type_id = TypeDefId::source(&db, structure.name, structure.id);
+        let holder = Type::new(
+            &db,
+            TypeKind::Named {
+                id: type_id,
+                name: structure.name,
+                args: vec![bound],
+            },
+        );
+        let source_scheme = TypeScheme::new(
+            &db,
+            vec![TypeParam::anonymous()],
+            Vec::new(),
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![bound],
+                    result: holder,
+                    effect: EffectRow::pure(&db),
+                    minimum_convention: CallingConvention::Direct,
+                },
+            ),
+        );
+        let module = Module::new(NodeId::from_raw(0), None, vec![Decl::Struct(structure)]);
+        let instantiations = HashMap::from([(type_id, HashSet::from([vec![int]]))]);
+        let source_ctor = CtorId::new(&db, Symbol::new("nested::Holder"));
+        let mut constructor_types = HashMap::from([(source_ctor, source_scheme)]);
+        specialize_struct_constructor_metadata(
+            &db,
+            &module,
+            &instantiations,
+            &mut constructor_types,
+        );
+
+        let ctor = CtorId::new(&db, Symbol::new("nested::Holder$Int"));
+        assert_eq!(constructor_types.get(&source_ctor), Some(&source_scheme));
+        let specialized = constructor_types
+            .get(&ctor)
+            .expect("one generic struct instantiation must produce one constructor scheme");
+        assert!(specialized.is_mono(&db));
+        let TypeKind::Func { params, result, .. } = specialized.body(&db).kind(&db) else {
+            panic!("specialized constructor must retain a callable schema")
+        };
+        assert!(matches!(params.as_slice(), [param] if *param == int));
+        assert!(matches!(
+            result.kind(&db),
+            TypeKind::Named { args, .. } if args.as_slice() == [int]
+        ));
+    }
 
     #[test]
     fn specialization_metadata_rekeys_and_substitutes_sparse_tables() {

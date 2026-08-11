@@ -505,7 +505,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
     TypeAnnotation { id, kind }
 }
 
-fn collect_struct_decls<'a, 'db>(
+pub(super) fn collect_struct_decls<'a, 'db>(
     db: &'db dyn salsa::Database,
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<TypeDefId<'db>, &'a StructDecl> {
