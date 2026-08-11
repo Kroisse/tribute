@@ -301,3 +301,120 @@ fn build_rewrite_map<'db>(
 
     rewrite_map
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AbilityId, CallingConvention, EffectRow, OpDeclKind, TypeKind};
+
+    #[salsa::db]
+    #[derive(Default)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
+
+    #[test]
+    fn specialization_metadata_rekeys_and_substitutes_sparse_tables() {
+        let db = TestDb::default();
+        let origin = NodeId::from_raw(1);
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let int = Type::new(&db, TypeKind::Int);
+        let function = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![bound],
+                result: bound,
+                effect: EffectRow::pure(&db),
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let specialized_function = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect: EffectRow::pure(&db),
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let ability = AbilityId::source(&db, Symbol::new("Audit"));
+        let operation = |kind| InstantiatedHandlerOperation {
+            ability,
+            ability_args: vec![bound],
+            kind,
+            params: vec![bound],
+            result: bound,
+        };
+        let mut metadata = MonomorphizeMetadata {
+            constructor_types: HashMap::new(),
+            node_types: HashMap::from([(origin, bound)]),
+            call_callee_types: HashMap::from([(origin, bound)]),
+            handler_operations: HashMap::from([(origin, operation(OpDeclKind::Op))]),
+            perform_operations: HashMap::from([(
+                origin,
+                InstantiatedPerformOperation {
+                    ability,
+                    ability_args: vec![bound],
+                    kind: OpDeclKind::Op,
+                    params: vec![bound],
+                    result: bound,
+                },
+            )]),
+            lambda_signatures: HashMap::from([(
+                origin,
+                LambdaSignature {
+                    function_type: function,
+                    convention: CallingConvention::Direct,
+                },
+            )]),
+            exhaustive_cases: HashSet::from([origin]),
+        };
+        let type_args = vec![int];
+        let origins = HashSet::from([origin]);
+
+        specialize_metadata(&db, &mut metadata, &type_args, &origins);
+
+        let clone = origin.with_variant(specialize::type_args_variant(&type_args));
+        assert_eq!(metadata.node_types.get(&clone), Some(&int));
+        assert_eq!(metadata.call_callee_types.get(&clone), Some(&int));
+        assert_eq!(
+            metadata
+                .handler_operations
+                .get(&clone)
+                .unwrap()
+                .ability_args,
+            [int]
+        );
+        assert_eq!(
+            metadata.handler_operations.get(&clone).unwrap().params,
+            [int]
+        );
+        assert_eq!(metadata.handler_operations.get(&clone).unwrap().result, int);
+        assert_eq!(
+            metadata
+                .perform_operations
+                .get(&clone)
+                .unwrap()
+                .ability_args,
+            [int]
+        );
+        assert_eq!(
+            metadata.perform_operations.get(&clone).unwrap().params,
+            [int]
+        );
+        assert_eq!(metadata.perform_operations.get(&clone).unwrap().result, int);
+        assert_eq!(
+            metadata
+                .lambda_signatures
+                .get(&clone)
+                .unwrap()
+                .function_type,
+            specialized_function
+        );
+        assert!(metadata.exhaustive_cases.contains(&clone));
+        assert!(metadata.handler_operations.contains_key(&origin));
+    }
+}
