@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
+use tribute_core::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::ability::{
     self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
 };
@@ -63,6 +64,9 @@ pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
 
 fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
     if is_evidence_runtime_fn(func_op.sym_name(ctx)) {
+        return Ok(());
+    }
+    if ctx.op(func_op.op_ref()).regions.is_empty() {
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
@@ -466,9 +470,9 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
             ],
             result_ty,
         );
-        let new_result = call.result(ctx);
+        let result = call.result(ctx);
         rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![new_result]);
+        rewriter.erase_op(vec![result]);
         true
     }
 }
@@ -487,7 +491,9 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         };
 
         let loc = ctx.op(op).location;
-        let ptr_ty = core_ptr_type(ctx);
+        if !ctx.op_result_types(op).is_empty() {
+            return false;
+        }
         let i32_ty = core_i32_type(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -497,59 +503,52 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let ability_id_val = ability_id_op.result(ctx);
         rewriter.insert_op(ability_id_op.op_ref());
 
-        let dispatch_closure = func::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_val],
-            ptr_ty,
-            Symbol::new(evidence_abi::LOOKUP_HANDLER),
-        );
-        let dispatch_val = dispatch_closure.result(ctx);
-        rewriter.insert_op(dispatch_closure.op_ref());
-
-        // The native lookup ABI already returns the Marker prompt tag. Thread
-        // that dynamic owner into the general handler closure; it is compared
-        // only against a proven private Escape by shared lowering.
-        let owner_lookup = func::call(
+        let prompt = func::call(
             ctx,
             loc,
             [dispatch_op.evidence(ctx), ability_id_val],
             i32_ty,
             Symbol::new(evidence_abi::LOOKUP),
         );
-        let owner_tag = owner_lookup.result(ctx);
-        rewriter.insert_op(owner_lookup.op_ref());
+        let prompt_val = prompt.result(ctx);
+        rewriter.insert_op(prompt.op_ref());
 
         let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
         let op_idx_val = op_idx_op.result(ctx);
         rewriter.insert_op(op_idx_op.op_ref());
 
-        let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+        let fn_ptr_get =
+            adt::struct_get(ctx, loc, dispatch_op.dispatch(ctx), i32_ty, closure_ty, 0);
         let fn_ptr = fn_ptr_get.result(ctx);
         rewriter.insert_op(fn_ptr_get.op_ref());
 
-        let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+        let env_get = adt::struct_get(
+            ctx,
+            loc,
+            dispatch_op.dispatch(ctx),
+            anyref_ty,
+            closure_ty,
+            1,
+        );
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
-        let result_ty = ctx.op_result_types(op)[0];
-        let call = func::call_indirect(
+        let tail = func::tail_call_indirect(
             ctx,
             loc,
             fn_ptr,
             [
                 dispatch_op.evidence(ctx),
                 env_val,
-                dispatch_op.continuation(ctx),
-                owner_tag,
+                dispatch_op.resume(ctx),
+                prompt_val,
+                ability_id_val,
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
-            result_ty,
         );
-        let new_result = call.result(ctx);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![new_result]);
+        set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
+        rewriter.replace_op(tail.op_ref());
         true
     }
 }
@@ -812,7 +811,7 @@ mod tests {
     use super::*;
     use std::ops::ControlFlow;
     use trunk_ir::Span;
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::context::{BlockArgData, BlockData, OperationDataBuilder, RegionData};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::smallvec::smallvec;
@@ -1073,5 +1072,87 @@ mod tests {
             entry_arg(&ctx, inner, 0),
             "nested native evidence lowering should pass the nested function's own evidence"
         );
+    }
+
+    #[test]
+    fn textual_dispatch_cps_uses_exact_resultless_handler_tail_abi() {
+        let input = r#"core.module @test {
+  func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        lower_evidence_to_native(&mut ctx, module);
+
+        let run = func_by_name_recursive(&ctx, module, "run");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let ops = ctx.block(entry).ops.to_vec();
+        let tails: Vec<_> = ops
+            .iter()
+            .copied()
+            .filter(|&op| func::TailCallIndirect::from_op(&ctx, op).is_ok())
+            .collect();
+        assert_eq!(tails.len(), 1);
+        let operands = ctx.op_operands(tails[0]);
+        assert_eq!(
+            operands.len(),
+            8,
+            "callee plus evidence, environment and five Dispatch arguments"
+        );
+        assert_eq!(operands[1], entry_arg(&ctx, run, 0));
+        assert_eq!(operands[3], entry_arg(&ctx, run, 2));
+        assert_eq!(operands[7], entry_arg(&ctx, run, 3));
+        assert_eq!(
+            tribute_core::get_calling_convention(&ctx, tails[0]),
+            Some(CallingConvention::Cps)
+        );
+
+        let direct_callees: Vec<_> = ops
+            .iter()
+            .copied()
+            .filter_map(|op| func::Call::from_op(&ctx, op).ok())
+            .map(|call| call.callee(&ctx))
+            .collect();
+        assert_eq!(direct_callees, [Symbol::new(evidence_abi::LOOKUP)]);
+    }
+
+    #[test]
+    fn result_bearing_dispatch_cps_fails_before_mutation() {
+        let input = r#"core.module @test {
+  func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let run = func_by_name_recursive(&ctx, module, "run");
+        let entry = ctx.region(run.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+        let anyref = ctx.value_ty(args[1]);
+        let ability_ref = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .build(),
+        );
+        let malformed_data = OperationDataBuilder::new(
+            ctx.op(run.op_ref()).location,
+            Symbol::new("effect"),
+            Symbol::new("dispatch_cps"),
+        )
+        .operands(args)
+        .result(anyref)
+        .attr("ability_ref", Attribute::Type(ability_ref))
+        .attr("op_name", Attribute::Symbol(Symbol::new("get")))
+        .build(&mut ctx);
+        let malformed = ctx.create_op(malformed_data);
+        let terminator = ctx.block(entry).ops[0];
+        ctx.insert_op_before(entry, terminator, malformed);
+
+        let before = print_module(&ctx, module.op());
+        let error = try_lower_evidence_to_native_func(&mut ctx, run)
+            .expect_err("result-bearing dispatch_cps must remain illegal");
+        assert!(error.to_string().contains("effect.dispatch_cps"));
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

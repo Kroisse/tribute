@@ -2,10 +2,12 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::refs::OpRef;
-use trunk_ir::types::Attribute;
+use trunk_ir::dialect::core;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
+pub const CPS_PARENT_RESULT_ATTR: &str = "tribute.cps_parent_result";
 
 /// The ABI strength required to call a function.
 ///
@@ -75,9 +77,153 @@ pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConve
     code.try_into().ok()
 }
 
+/// Result-indexed CPS completion target `Done<R>`.
+pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
+    let never = core::never(ctx).as_type_ref();
+    let function = core::func(ctx, never, [result]).as_type_ref();
+    physical_closure_type(ctx, function, CallingConvention::Cps)
+}
+
+/// Make the nominal reference for one private immutable `Flow<R>` pack.
+/// The paired struct layout may recursively use this reference.
+pub fn cps_parent_ref_type(ctx: &mut IrContext, name: Symbol, result: TypeRef) -> TypeRef {
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+            .attr("name", Attribute::Symbol(name))
+            .attr(CPS_PARENT_RESULT_ATTR, Attribute::Type(result))
+            .build(),
+    )
+}
+
+/// Make the exact layout for [`cps_parent_ref_type`].
+pub fn cps_parent_layout_type(
+    ctx: &mut IrContext,
+    name: Symbol,
+    result: TypeRef,
+    done: TypeRef,
+    dispatch: TypeRef,
+) -> TypeRef {
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("name", Attribute::Symbol(name))
+            .attr(CPS_PARENT_RESULT_ATTR, Attribute::Type(result))
+            .attr(
+                "fields",
+                Attribute::List(vec![
+                    Attribute::List(vec![
+                        Attribute::Symbol(Symbol::new("done")),
+                        Attribute::Type(done),
+                    ]),
+                    Attribute::List(vec![
+                        Attribute::Symbol(Symbol::new("dispatch")),
+                        Attribute::Type(dispatch),
+                    ]),
+                ]),
+            )
+            .build(),
+    )
+}
+
+/// Strict suffix continuation
+/// `Completion<X, R> = (Evidence, Parent<R>, X) -> never`.
+pub fn cps_completion_type(
+    ctx: &mut IrContext,
+    evidence: TypeRef,
+    value: TypeRef,
+    parent: TypeRef,
+) -> TypeRef {
+    let never = core::never(ctx).as_type_ref();
+    let function = core::func(ctx, never, [evidence, parent, value]).as_type_ref();
+    physical_closure_type(ctx, function, CallingConvention::Cps)
+}
+
+/// Exact operation resumption
+/// `ResumeExact<I, R> = (Evidence, Parent<R>, I) -> never`.
+pub fn cps_resume_exact_type(
+    ctx: &mut IrContext,
+    evidence: TypeRef,
+    input: TypeRef,
+    parent: TypeRef,
+) -> TypeRef {
+    cps_completion_type(ctx, evidence, input, parent)
+}
+
+/// Erased-input resumption
+/// `Resume<R> = (Evidence, Parent<R>, anyref) -> never`.
+pub fn cps_resume_type(
+    ctx: &mut IrContext,
+    evidence: TypeRef,
+    parent: TypeRef,
+    anyref: TypeRef,
+) -> TypeRef {
+    cps_completion_type(ctx, evidence, anyref, parent)
+}
+
+/// Result-indexed general-operation dispatcher.
+pub fn cps_dispatch_type(
+    ctx: &mut IrContext,
+    evidence: TypeRef,
+    parent: TypeRef,
+    anyref: TypeRef,
+    i32_type: TypeRef,
+) -> TypeRef {
+    let never = core::never(ctx).as_type_ref();
+    let resume = cps_resume_type(ctx, evidence, parent, anyref);
+    let function = core::func(
+        ctx,
+        never,
+        [evidence, resume, i32_type, i32_type, i32_type, anyref],
+    )
+    .as_type_ref();
+    physical_closure_type(ctx, function, CallingConvention::Cps)
+}
+
+/// Return the underlying exact `core.func` only for a convention-proven CPS
+/// closure. Callers must reject absent provenance rather than infer it from
+/// structural shape.
+pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
+    if get_physical_closure_convention(ctx, closure) != Some(CallingConvention::Cps) {
+        return None;
+    }
+    let [function] = ctx.types.get(closure).params.as_slice() else {
+        return None;
+    };
+    let data = ctx.types.get(*function);
+    (data.dialect == Symbol::new("core") && data.name == Symbol::new("func")).then_some(*function)
+}
+
+/// Build a physical closure type that preserves its exact callable
+/// convention on the outer `closure.closure` occurrence.
+pub fn physical_closure_type(
+    ctx: &mut IrContext,
+    function: TypeRef,
+    convention: CallingConvention,
+) -> TypeRef {
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+            .param(function)
+            .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+            .build(),
+    )
+}
+
+/// Read exact convention provenance from a physical outer closure type.
+pub fn get_physical_closure_convention(
+    ctx: &IrContext,
+    closure: TypeRef,
+) -> Option<CallingConvention> {
+    let data = ctx.types.get(closure);
+    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+        return None;
+    }
+    let code = data.attrs.get_u8(CALLING_CONVENTION_ATTR).ok()??;
+    code.try_into().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::types::TypeDataBuilder;
 
     #[test]
     fn integer_codes_round_trip() {
@@ -87,5 +233,111 @@ mod tests {
         }
 
         assert_eq!(CallingConvention::try_from(3), Err(3));
+    }
+
+    #[test]
+    fn physical_closure_convention_is_type_identity() {
+        let mut ctx = IrContext::new();
+        let never = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("never")).build());
+        let function = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(never)
+                .build(),
+        );
+        let direct = physical_closure_type(&mut ctx, function, CallingConvention::Direct);
+        let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
+
+        assert_ne!(direct, cps);
+        assert_eq!(
+            get_physical_closure_convention(&ctx, direct),
+            Some(CallingConvention::Direct)
+        );
+        assert_eq!(
+            get_physical_closure_convention(&ctx, cps),
+            Some(CallingConvention::Cps)
+        );
+    }
+
+    #[test]
+    fn result_indexed_cps_types_preserve_all_boundary_types() {
+        let mut ctx = IrContext::new();
+        let evidence = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("ability"), Symbol::new("evidence")).build());
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let anyref = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+        let parent = cps_parent_ref_type(&mut ctx, Symbol::new("ParentI32"), i32_ty);
+        let done = cps_done_type(&mut ctx, i32_ty);
+        let dispatch = cps_dispatch_type(&mut ctx, evidence, parent, anyref, i32_ty);
+        let layout =
+            cps_parent_layout_type(&mut ctx, Symbol::new("ParentI32"), i32_ty, done, dispatch);
+        let completion = cps_completion_type(&mut ctx, evidence, i32_ty, parent);
+        let resume_exact = cps_resume_exact_type(&mut ctx, evidence, i32_ty, parent);
+        let resume = cps_resume_type(&mut ctx, evidence, parent, anyref);
+        let never = core::never(&mut ctx).as_type_ref();
+
+        assert_eq!(
+            ctx.types.get(layout).attrs.get_type(CPS_PARENT_RESULT_ATTR),
+            Some(i32_ty)
+        );
+        assert_eq!(
+            ctx.types.get(layout).attrs.get("fields"),
+            Some(&Attribute::List(vec![
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("done")),
+                    Attribute::Type(done)
+                ]),
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("dispatch")),
+                    Attribute::Type(dispatch),
+                ]),
+            ]))
+        );
+
+        for (closure, expected) in [
+            (completion, vec![never, evidence, parent, i32_ty]),
+            (resume_exact, vec![never, evidence, parent, i32_ty]),
+            (resume, vec![never, evidence, parent, anyref]),
+            (
+                dispatch,
+                vec![never, evidence, resume, i32_ty, i32_ty, i32_ty, anyref],
+            ),
+        ] {
+            let function = cps_closure_function_type(&ctx, closure).unwrap();
+            assert_eq!(
+                ctx.types.get(function).params.as_slice(),
+                expected.as_slice()
+            );
+        }
+        assert_ne!(parent, anyref);
+        assert_ne!(
+            completion,
+            cps_completion_type(&mut ctx, evidence, anyref, parent)
+        );
+    }
+
+    #[test]
+    fn cps_closure_function_type_rejects_extra_outer_parameters() {
+        let mut ctx = IrContext::new();
+        let never = core::never(&mut ctx).as_type_ref();
+        let function = core::func(&mut ctx, never, []).as_type_ref();
+        let malformed = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+                .param(function)
+                .param(never)
+                .attr(
+                    CALLING_CONVENTION_ATTR,
+                    Attribute::Int(CallingConvention::Cps as i128),
+                )
+                .build(),
+        );
+
+        assert_eq!(cps_closure_function_type(&ctx, malformed), None);
     }
 }
