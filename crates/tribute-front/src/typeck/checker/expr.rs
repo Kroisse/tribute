@@ -32,6 +32,14 @@ struct HandlerOperationRequest<'a, 'db> {
     handle_ctx: &'a super::super::func_context::HandleContext<'db>,
 }
 
+/// One local introduced by a pattern, together with its resolved binding type.
+struct PatternBinding<'db> {
+    name: Symbol,
+    local_id: Option<LocalId>,
+    scope: NodeId,
+    ty: Type<'db>,
+}
+
 /// Check if a type contains any unification variables (UniVar).
 ///
 /// This is used to determine if it's safe to use Mode::Check with the type.
@@ -1638,23 +1646,29 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
-        for (name, local_id, binding_scope, binding_ty) in bindings {
+        for PatternBinding {
+            name,
+            local_id,
+            scope,
+            ty,
+        } in bindings
+        {
             let scheme = if should_generalize {
                 let (generalized, type_params, mapping) = type_subst
                     .generalize_excluding_with_mapping(
                         self.db(),
-                        binding_ty,
+                        ty,
                         &row_subst,
                         &environment_type_vars,
                     );
-                ctx.record_local_generalization(binding_scope, mapping);
+                ctx.record_local_generalization(scope, mapping);
                 let effect_params: Vec<_> = collect_effect_vars(self.db(), generalized)
                     .into_iter()
                     .filter(|var| !environment_effect_vars.contains(var))
                     .collect();
                 TypeScheme::new(self.db(), type_params, effect_params, generalized)
             } else {
-                TypeScheme::mono(self.db(), binding_ty)
+                TypeScheme::mono(self.db(), ty)
             };
             if let Some(local_id) = local_id {
                 ctx.bind_local_scheme(local_id, scheme);
@@ -1670,12 +1684,17 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
-        bindings: &mut Vec<(Symbol, Option<LocalId>, NodeId, Type<'db>)>,
+        bindings: &mut Vec<PatternBinding<'db>>,
     ) {
         let resolve = |ty| type_subst.apply_with_rows(self.db(), ty, row_subst);
         match &*pattern.kind {
             PatternKind::Bind { name, local_id } => {
-                bindings.push((*name, *local_id, pattern.id, resolve(ty)));
+                bindings.push(PatternBinding {
+                    name: *name,
+                    local_id: *local_id,
+                    scope: pattern.id,
+                    ty: resolve(ty),
+                });
             }
             PatternKind::Tuple(patterns)
             | PatternKind::Variant {
@@ -1707,7 +1726,12 @@ impl<'db> TypeChecker<'db> {
                             ctx, pattern, field_ty, type_subst, row_subst, bindings,
                         );
                     } else {
-                        bindings.push((field.name, None, field.id, field_ty));
+                        bindings.push(PatternBinding {
+                            name: field.name,
+                            local_id: None,
+                            scope: field.id,
+                            ty: field_ty,
+                        });
                     }
                 }
             }
@@ -1726,7 +1750,12 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
                 if let Some(name) = rest {
-                    bindings.push((*name, *rest_local_id, pattern.id, resolve(ty)));
+                    bindings.push(PatternBinding {
+                        name: *name,
+                        local_id: *rest_local_id,
+                        scope: pattern.id,
+                        ty: resolve(ty),
+                    });
                 }
             }
             PatternKind::As {
@@ -1735,7 +1764,12 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => {
                 let resolved_ty = resolve(ty);
-                bindings.push((*name, *local_id, pattern.id, resolved_ty));
+                bindings.push(PatternBinding {
+                    name: *name,
+                    local_id: *local_id,
+                    scope: pattern.id,
+                    ty: resolved_ty,
+                });
                 self.collect_pattern_bindings_with_ctx(
                     ctx,
                     pattern,
