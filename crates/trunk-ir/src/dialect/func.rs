@@ -1,5 +1,9 @@
 //! Arena-based func dialect.
 
+/// Exact callable signature retained after a typed indirect callee becomes a
+/// runtime function or table index.
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "func.indirect_call_signature";
+
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
 crate::register_isolated_op!(func.func);

@@ -2,10 +2,13 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::refs::OpRef;
-use trunk_ir::types::Attribute;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str =
+    trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR;
+pub const CLOSURE_CALLABLE_TYPE_ATTR: &str = "tribute.closure_callable_type";
 
 /// The ABI strength required to call a function.
 ///
@@ -75,6 +78,63 @@ pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConve
     code.try_into().ok()
 }
 
+/// Attach the exact callable signature to an indirect transfer.
+pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) {
+    ctx.op_mut(op).attributes.insert(
+        Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+        Attribute::Type(signature),
+    );
+}
+
+/// Read the exact callable signature retained on an indirect transfer.
+pub fn get_indirect_call_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    ctx.op(op).attributes.get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+}
+
+/// Retain a typed closure contract on its canonical runtime pair.
+pub fn set_closure_callable_type(ctx: &mut IrContext, op: OpRef, closure: TypeRef) {
+    ctx.op_mut(op).attributes.insert(
+        Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR),
+        Attribute::Type(closure),
+    );
+}
+
+/// Read typed closure provenance from a canonical runtime pair.
+pub fn get_closure_callable_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    ctx.op(op).attributes.get_type(CLOSURE_CALLABLE_TYPE_ATTR)
+}
+
+/// Build a closure type whose outer occurrence carries exact convention
+/// provenance. This is dormant until a producer selects the physical CPS path.
+pub fn physical_closure_type(
+    ctx: &mut IrContext,
+    function: TypeRef,
+    convention: CallingConvention,
+) -> TypeRef {
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+            .param(function)
+            .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+            .build(),
+    )
+}
+
+/// Read exact convention provenance from an outer physical closure type.
+pub fn get_physical_closure_convention(
+    ctx: &IrContext,
+    closure: TypeRef,
+) -> Option<CallingConvention> {
+    let data = ctx.types.get(closure);
+    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+        return None;
+    }
+    data.attrs
+        .get_u8(CALLING_CONVENTION_ATTR)
+        .ok()??
+        .try_into()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +147,20 @@ mod tests {
         }
 
         assert_eq!(CallingConvention::try_from(3), Err(3));
+    }
+
+    #[test]
+    fn physical_closure_convention_is_exact_type_identity() {
+        let mut ctx = IrContext::new();
+        let never = trunk_ir::dialect::core::never(&mut ctx).as_type_ref();
+        let function = trunk_ir::dialect::core::func(&mut ctx, never, []).as_type_ref();
+        let direct = physical_closure_type(&mut ctx, function, CallingConvention::Direct);
+        let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
+
+        assert_ne!(direct, cps);
+        assert_eq!(
+            get_physical_closure_convention(&ctx, cps),
+            Some(CallingConvention::Cps)
+        );
     }
 }
