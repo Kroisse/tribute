@@ -781,6 +781,54 @@ fn call_operation_metadata<'db>(
     )
 }
 
+fn adapt_operation_arguments(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    values: Vec<ValueRef>,
+    parameter_types: &[TypeRef],
+) -> Option<Vec<ValueRef>> {
+    if values.len() != parameter_types.len() {
+        return None;
+    }
+    Some(
+        values
+            .into_iter()
+            .zip(parameter_types.iter().copied())
+            .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
+            .collect(),
+    )
+}
+
+fn adapt_operation_arguments_or_recover<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    values: Vec<ValueRef>,
+    declaration: &OperationDeclaration,
+    ability: Symbol,
+    operation: Symbol,
+) -> Result<Vec<ValueRef>, ValueRef> {
+    let argument_count = values.len();
+    match adapt_operation_arguments(builder, location, values, &declaration.parameter_types) {
+        Some(values) => Ok(values),
+        None => {
+            Diagnostic::new(
+                format!(
+                    "ability operation `{}::{}` has {} arguments, expected {}",
+                    ability,
+                    operation,
+                    argument_count,
+                    declaration.parameter_types.len()
+                ),
+                location.span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
+            .accumulate(builder.db());
+            Err(builder.emit_nil(location))
+        }
+    }
+}
+
 fn lower_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
@@ -1502,6 +1550,17 @@ fn lower_call<'db>(
                         semantic,
                     },
                 );
+                values = match adapt_operation_arguments_or_recover(
+                    builder,
+                    location,
+                    values,
+                    &declaration,
+                    ability.qualified(builder.db()),
+                    operation,
+                ) {
+                    Ok(values) => values,
+                    Err(nil) => return Some(nil),
+                };
                 let perform = op(builder.ir, builder.block, location, "perform", |builder| {
                     builder
                         .operands(values)
@@ -2019,4 +2078,92 @@ fn lower_handler<'db>(
             .region(region)
     });
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::context::BlockData;
+    use trunk_ir::location::Span;
+
+    #[salsa::tracked]
+    fn operation_arguments_use_resolved_parameter_types_inner<'db>(
+        db: &'db dyn salsa::Database,
+    ) -> bool {
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("logical.trb".to_owned());
+        let mut ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+        let location = Location::new(path, Span::new(0, 0));
+        let block = ir.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let anyref = ctx.anyref_type(&mut ir);
+        let value = adt::ref_null(&mut ir, location, anyref, anyref);
+        ir.push_op(block, value.op_ref());
+        let value = value.result(&ir);
+        let parameter = ctx.adt_typeref(&mut ir, Symbol::new("String"));
+        let declaration = OperationDeclaration::new(
+            parameter,
+            Symbol::new("throw"),
+            Symbol::new("op"),
+            [parameter],
+            parameter,
+        );
+        let mut scope = ctx.scope();
+        let mut builder = IrBuilder::new(&mut scope, &mut ir, block);
+        let adapted = adapt_operation_arguments_or_recover(
+            &mut builder,
+            location,
+            vec![value],
+            &declaration,
+            Symbol::new("Test"),
+            Symbol::new("throw"),
+        )
+        .expect("matching operation arity should adapt arguments");
+        assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
+
+        let mismatch = OperationDeclaration::new(
+            parameter,
+            Symbol::new("throw"),
+            Symbol::new("op"),
+            [],
+            parameter,
+        );
+        let recovered = adapt_operation_arguments_or_recover(
+            &mut builder,
+            location,
+            vec![value],
+            &mismatch,
+            Symbol::new("Test"),
+            Symbol::new("throw"),
+        )
+        .expect_err("mismatched operation arity should recover with nil");
+        let nil_type = builder.ctx.nil_type(builder.ir);
+        assert_eq!(builder.ir.value_ty(recovered), nil_type);
+        true
+    }
+
+    #[test]
+    fn operation_arguments_use_resolved_parameter_types() {
+        let db = salsa::DatabaseImpl::new();
+        assert!(operation_arguments_use_resolved_parameter_types_inner(&db));
+        let diagnostics =
+            operation_arguments_use_resolved_parameter_types_inner::accumulated::<Diagnostic>(&db);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].inner.message,
+            "ability operation `Test::throw` has 1 arguments, expected 0"
+        );
+    }
 }
