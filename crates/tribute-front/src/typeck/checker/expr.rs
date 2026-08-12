@@ -112,6 +112,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Nil => ctx.nil_type(),
             ExprKind::RuneLit(_) => ctx.rune_type(),
 
+            ExprKind::Var(resolved @ ResolvedRef::Local { .. }) => {
+                self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
+            }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
@@ -639,6 +642,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(_) => ctx.bytes_type(),
             ExprKind::Nil => ctx.nil_type(),
             ExprKind::RuneLit(_) => ctx.rune_type(),
+            ExprKind::Var(resolved @ ResolvedRef::Local { .. }) => {
+                self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
+            }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
@@ -821,8 +827,9 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     ctx.lookup_local(*id)
                 };
-                let by_name = ctx.lookup_local_by_name(*name);
-                by_id.or(by_name).unwrap_or_else(|| ctx.fresh_type_var())
+                by_id
+                    .or_else(|| ctx.lookup_local_by_name(*name))
+                    .unwrap_or_else(|| ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => ctx
                 .instantiate_function(*id)
@@ -896,6 +903,19 @@ impl<'db> TypeChecker<'db> {
                 ctx.error_type()
             }
         }
+    }
+
+    fn infer_local_reference_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        resolved: &ResolvedRef<'db>,
+    ) -> Type<'db> {
+        let ResolvedRef::Local { id, name } = resolved else {
+            unreachable!("local-reference inference requires a local reference");
+        };
+        ctx.lookup_local_reference(node, *id, *name)
+            .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
     /// Infer the result type of a function call.
@@ -1340,13 +1360,21 @@ impl<'db> TypeChecker<'db> {
                 // Bind lambda parameters so that references to them in the body
                 // resolve to their concrete types (not fresh UniVars). Without this,
                 // TDNR cannot determine receiver types for method calls inside lambdas.
-                let param_types: Vec<Type<'db>> = params
-                    .iter()
-                    .map(|p| match &p.ty {
-                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
-                        None => ctx.fresh_type_var(),
+                let param_types = ctx
+                    .get_node_type(expr_id)
+                    .and_then(|ty| match ty.kind(self.db()) {
+                        TypeKind::Func { params, .. } => Some(params.clone()),
+                        _ => None,
                     })
-                    .collect();
+                    .unwrap_or_else(|| {
+                        params
+                            .iter()
+                            .map(|p| match &p.ty {
+                                Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
+                                None => ctx.fresh_type_var(),
+                            })
+                            .collect()
+                    });
                 ctx.push_scope();
                 for (param, ty) in params.iter().zip(param_types.iter()) {
                     tracing::debug!(
@@ -1418,9 +1446,16 @@ impl<'db> TypeChecker<'db> {
         node_id: Option<crate::ast::NodeId>,
         resolved: ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = node_id
-            .and_then(|node| ctx.get_call_callee_type(node))
-            .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved));
+        let ty = match (node_id, &resolved) {
+            (Some(node), ResolvedRef::Local { id, name }) => ctx
+                .lookup_local_reference(node, *id, *name)
+                .unwrap_or_else(|| ctx.fresh_type_var()),
+            (Some(node), _) => ctx
+                .get_call_callee_type(node)
+                .or_else(|| ctx.get_node_type(node))
+                .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved)),
+            (None, _) => self.infer_var_with_ctx(ctx, &resolved),
+        };
         TypedRef { resolved, ty }
     }
 

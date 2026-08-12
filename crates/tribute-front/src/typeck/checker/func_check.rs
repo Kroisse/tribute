@@ -163,30 +163,6 @@ impl<'db> TypeChecker<'db> {
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
 
-        // Keep the established body conversion mapping for non-local
-        // inference artifacts. Local generalizations are selected first when
-        // materializing types, so they cannot become phantom function scheme
-        // parameters.
-        let mut all_univars = Vec::new();
-        type_subst.collect_univars_from_type(
-            self.db(),
-            instantiated_func_ty,
-            row_subst,
-            &mut all_univars,
-        );
-        self.collect_univars_from_body(&body, type_subst, row_subst, &mut all_univars);
-        self.collect_univars_from_deferred_resolutions(
-            &deferred_resolutions,
-            type_subst,
-            row_subst,
-            &mut all_univars,
-        );
-        let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
-            .into_iter()
-            .enumerate()
-            .map(|(index, id)| (id, index as u32))
-            .collect();
-
         // Only the exact root `main` is an entrypoint. Its omitted effect
         // annotation is closed over the effects actually performed by its body:
         // pure roots remain Direct and ambient-Io roots EvidenceDirect.  The
@@ -236,12 +212,9 @@ impl<'db> TypeChecker<'db> {
             instantiated_func_ty
         };
 
-        // Apply substitution and generalization to the function type.
-        let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
-
         // Solver aliases can point at a representative created after a local
-        // scheme was generalized. Preserve both spellings before finalizing
-        // typed references and callable metadata.
+        // scheme was generalized. Preserve both spellings before collecting
+        // body and deferred metadata variables for finalization.
         for (var, binding) in self.local_generalizations.clone() {
             let resolved = type_subst.apply_with_rows(
                 self.db(),
@@ -252,6 +225,33 @@ impl<'db> TypeChecker<'db> {
                 self.local_generalizations.entry(*id).or_insert(binding);
             }
         }
+
+        // Preserve the established whole-body and deferred-resolution mapping
+        // for non-local inference artifacts. Locally generalized variables are
+        // excluded below so they cannot become phantom function binders.
+        let mut all_univars = Vec::new();
+        type_subst.collect_univars_from_type(
+            self.db(),
+            instantiated_func_ty,
+            row_subst,
+            &mut all_univars,
+        );
+        self.collect_univars_from_body(&body, type_subst, row_subst, &mut all_univars);
+        self.collect_univars_from_deferred_resolutions(
+            &deferred_resolutions,
+            type_subst,
+            row_subst,
+            &mut all_univars,
+        );
+        all_univars.retain(|id| !self.local_generalizations.contains_key(id));
+        let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (id, index as u32))
+            .collect();
+
+        // Apply substitution and generalization to the function type.
+        let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
 
         // Validate that root `main` returns Nil.
         if is_root_main

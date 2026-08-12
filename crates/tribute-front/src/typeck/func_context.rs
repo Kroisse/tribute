@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use super::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
+
 use crate::ast::{
     CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
     UniVarId, UniVarSource,
@@ -78,6 +79,11 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// The solved function type selected for each direct call callee.
     call_callee_types: HashMap<NodeId, Type<'db>>,
+
+    /// Inference-time instances for quantified local reference occurrences.
+    /// Conversion reuses only these polymorphic instances; monomorphic locals
+    /// are deliberately looked up again.
+    quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
 
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
@@ -168,6 +174,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             node_types: HashMap::new(),
             local_generalizations: HashMap::new(),
             call_callee_types: HashMap::new(),
+            quantified_local_reference_types: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
@@ -280,12 +287,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///
     /// Searches from innermost to outermost scope.
     pub fn lookup_local(&mut self, local: LocalId) -> Option<Type<'db>> {
-        for scope in self.local_scopes.iter().rev() {
-            if let Some(scheme) = scope.get(&local).copied() {
-                return Some(self.instantiate_scheme(scheme));
-            }
-        }
-        None
+        self.local_scheme(local)
+            .map(|scheme| self.instantiate_scheme(scheme))
+    }
+
+    fn local_scheme(&self, local: LocalId) -> Option<TypeScheme<'db>> {
+        self.local_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&local).copied())
     }
 
     /// Bind a local variable by name in the current scope.
@@ -304,12 +314,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///
     /// Searches from innermost to outermost scope.
     pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
-        for scope in self.name_scopes.iter().rev() {
-            if let Some(scheme) = scope.get(&name).copied() {
-                return Some(self.instantiate_scheme(scheme));
-            }
-        }
-        None
+        self.local_scheme_by_name(name)
+            .map(|scheme| self.instantiate_scheme(scheme))
+    }
+
+    fn local_scheme_by_name(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+        self.name_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name).copied())
     }
 
     // =========================================================================
@@ -386,6 +399,30 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub fn get_call_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
         self.call_callee_types.get(&callee).copied()
+    }
+
+    pub(crate) fn lookup_local_reference(
+        &mut self,
+        node: NodeId,
+        local: LocalId,
+        name: Symbol,
+    ) -> Option<Type<'db>> {
+        let scheme = if local.is_unresolved() {
+            None
+        } else {
+            self.local_scheme(local)
+        }
+        .or_else(|| self.local_scheme_by_name(name))?;
+        if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
+            if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
+                return Some(ty);
+            }
+            let ty = self.instantiate_scheme(scheme);
+            self.quantified_local_reference_types.insert(node, ty);
+            Some(ty)
+        } else {
+            Some(self.instantiate_scheme(scheme))
+        }
     }
 
     /// Record the exact semantic operation selected for a handler arm.
