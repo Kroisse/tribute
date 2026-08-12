@@ -22,24 +22,30 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 
-use crate::function::{FunctionTranslator, translate_signature, translate_type};
+use crate::function::{
+    CPS_CALLING_CONVENTION, FunctionTranslator, TRIBUTE_CALLING_CONVENTION_ATTR,
+    call_conv_for_cps_signature, translate_signature, translate_type,
+};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
-
-const TRIBUTE_CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-const CPS_CALLING_CONVENTION: u8 = 2;
 
 /// CPS functions use Cranelift's internal tail-call convention.  The
 /// convention marker is part of the physical callable contract and is kept as
 /// an attribute so this language-agnostic backend does not depend on Tribute.
-fn function_call_conv(ctx: &IrContext, func_op: OpRef, default: isa::CallConv) -> isa::CallConv {
-    match ctx
-        .op(func_op)
-        .attributes
-        .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
-    {
-        Ok(Some(CPS_CALLING_CONVENTION)) => isa::CallConv::Tail,
-        _ => default,
-    }
+fn function_call_conv(
+    ctx: &IrContext,
+    func_op: OpRef,
+    func_type: trunk_ir::refs::TypeRef,
+    default: isa::CallConv,
+) -> isa::CallConv {
+    call_conv_for_cps_signature(
+        ctx,
+        func_type,
+        ctx.op(func_op)
+            .attributes
+            .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
+            == Ok(Some(CPS_CALLING_CONVENTION)),
+        default,
+    )
 }
 
 /// Mangle a TrunkIR symbol name for native linking.
@@ -390,7 +396,7 @@ fn emit_module_impl(
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
-        let func_call_conv = function_call_conv(ctx, func_op, call_conv);
+        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
         let op_data = ctx.op(func_op);
         let has_abi = op_data.attributes.contains_key("abi");
@@ -464,7 +470,7 @@ fn emit_module_impl(
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
-        let func_call_conv = function_call_conv(ctx, func_op, call_conv);
+        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
         let sig = translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty)?;
         let func_id = func_ids[&name_sym];

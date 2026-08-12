@@ -17,6 +17,41 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use crate::{CompilationError, CompilationResult};
 
+pub(crate) const TRIBUTE_CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
+pub(crate) const CPS_CALLING_CONVENTION: u8 = 2;
+
+/// Select Cranelift's tail-call convention only for the physical CPS ABI.
+///
+/// The convention attribute is also present on pre-physical logical CPS
+/// callables, whose non-empty signatures must retain the platform convention.
+pub(crate) fn call_conv_for_cps_signature(
+    ctx: &IrContext,
+    signature: TypeRef,
+    is_cps: bool,
+    default: CallConv,
+) -> CallConv {
+    if is_cps && has_physical_empty_result(ctx, signature) {
+        CallConv::Tail
+    } else {
+        default
+    }
+}
+
+fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
+    let signature = ctx.types.get(signature);
+    if signature.dialect != Symbol::new("core") || signature.name != Symbol::new("func") {
+        return false;
+    }
+
+    let Some(&result) = signature.params.first() else {
+        return false;
+    };
+    let result = ctx.types.get(result);
+    result.dialect == Symbol::new("core")
+        && result.name == Symbol::new("nil")
+        && result.params.is_empty()
+}
+
 /// Parse a condition symbol into a Cranelift integer condition code.
 fn parse_int_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::IntCC> {
     use cl_ir::condcodes::IntCC;
@@ -535,12 +570,15 @@ impl<'a> FunctionTranslator<'a> {
                 .collect::<CompilationResult<_>>()?;
 
             let sig_ty = call_ind.sig(ctx);
-            let call_conv =
-                if ctx.op(op).attributes.get_u8("tribute.calling_convention") == Ok(Some(2)) {
-                    CallConv::Tail
-                } else {
-                    self.default_call_conv
-                };
+            let call_conv = call_conv_for_cps_signature(
+                ctx,
+                sig_ty,
+                ctx.op(op)
+                    .attributes
+                    .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
+                    == Ok(Some(CPS_CALLING_CONVENTION)),
+                self.default_call_conv,
+            );
             let sig = translate_signature(ctx, sig_ty, call_conv, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
@@ -819,5 +857,33 @@ mod tests {
         assert_eq!(sig.params.len(), 0);
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.returns[0].value_type, cl_types::I64);
+    }
+
+    #[test]
+    fn logical_cps_indirect_signature_keeps_default_call_conv() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_core_type(&mut ctx, "i32");
+        let nil_ty = make_core_type(&mut ctx, "nil");
+        let logical_signature = ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new("func"),
+            params: trunk_ir::smallvec::smallvec![i32_ty, i32_ty],
+            attrs: Default::default(),
+        });
+        let physical_signature = ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new("func"),
+            params: trunk_ir::smallvec::smallvec![nil_ty, i32_ty],
+            attrs: Default::default(),
+        });
+
+        assert_eq!(
+            call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),
+            CallConv::SystemV,
+        );
+        assert_eq!(
+            call_conv_for_cps_signature(&ctx, physical_signature, true, CallConv::SystemV),
+            CallConv::Tail,
+        );
     }
 }
