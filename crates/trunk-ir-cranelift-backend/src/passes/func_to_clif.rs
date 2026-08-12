@@ -546,7 +546,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value
+    func.tail_call_indirect %callee, %value {tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -565,7 +565,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.i32, core.i32)}
+    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.i32, core.i32), tribute.calling_convention = 2}
   }
 }"#,
         );
