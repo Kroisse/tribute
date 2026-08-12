@@ -302,6 +302,20 @@ impl<'db> TypeSubst<'db> {
         row_subst: &RowSubst<'db>,
         excluded: &[UniVarId<'db>],
     ) -> (Type<'db>, Vec<TypeParam>) {
+        let (generalized, type_params, _) =
+            self.generalize_excluding_with_mapping(db, ty, row_subst, excluded);
+        (generalized, type_params)
+    }
+
+    /// Generalize unresolved variables except those free in the environment,
+    /// retaining the variable-to-local-scheme mapping for typed-body metadata.
+    pub fn generalize_excluding_with_mapping(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        excluded: &[UniVarId<'db>],
+    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
         let mut univars = Vec::new();
         self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
         univars.retain(|id| !excluded.contains(id));
@@ -313,7 +327,7 @@ impl<'db> TypeSubst<'db> {
             .collect();
         let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
         let type_params = univars.iter().map(|_| TypeParam::anonymous()).collect();
-        (generalized, type_params)
+        (generalized, type_params, var_to_index)
     }
 
     /// Generalize a type and return the UniVar → BoundVar index mapping.
@@ -362,6 +376,192 @@ impl<'db> TypeSubst<'db> {
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
         self.replace_univars_with_bound(db, ty, row_subst, var_to_index)
+    }
+
+    /// Finalize a typed body or its semantic metadata.
+    ///
+    /// Function-interface variables become `BoundVar`; variables owned by a
+    /// local generalized scheme become `LocalBoundVar`.
+    pub(crate) fn apply_generalization_with_local_vars(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        var_to_index: &HashMap<UniVarId<'db>, u32>,
+        local_vars: &HashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
+    ) -> Type<'db> {
+        self.replace_univars_with_bound_and_local(db, ty, row_subst, var_to_index, local_vars)
+    }
+
+    fn replace_univars_with_bound_and_local(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        var_to_index: &HashMap<UniVarId<'db>, u32>,
+        local_vars: &HashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
+    ) -> Type<'db> {
+        match ty.kind(db) {
+            TypeKind::UniVar { id } => {
+                if let Some(&(scope, index)) = local_vars.get(id) {
+                    Type::new(db, TypeKind::LocalBoundVar { scope, index })
+                } else if let Some(&index) = var_to_index.get(id) {
+                    Type::new(db, TypeKind::BoundVar { index })
+                } else if let Some(subst_ty) = self.get(*id) {
+                    self.replace_univars_with_bound_and_local(
+                        db,
+                        subst_ty,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                    )
+                } else {
+                    ty
+                }
+            }
+            TypeKind::Named { id, name, args } => Type::new(
+                db,
+                TypeKind::Named {
+                    id: *id,
+                    name: *name,
+                    args: args
+                        .iter()
+                        .map(|arg| {
+                            self.replace_univars_with_bound_and_local(
+                                db,
+                                *arg,
+                                row_subst,
+                                var_to_index,
+                                local_vars,
+                            )
+                        })
+                        .collect(),
+                },
+            ),
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+                minimum_convention,
+            } => Type::new(
+                db,
+                TypeKind::Func {
+                    params: params
+                        .iter()
+                        .map(|param| {
+                            self.replace_univars_with_bound_and_local(
+                                db,
+                                *param,
+                                row_subst,
+                                var_to_index,
+                                local_vars,
+                            )
+                        })
+                        .collect(),
+                    result: self.replace_univars_with_bound_and_local(
+                        db,
+                        *result,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                    ),
+                    effect: map_effect_row_type_args(db, row_subst.apply(db, *effect), |arg| {
+                        self.replace_univars_with_bound_and_local(
+                            db,
+                            arg,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                        )
+                    }),
+                    minimum_convention: *minimum_convention,
+                },
+            ),
+            TypeKind::Tuple(elements) => Type::new(
+                db,
+                TypeKind::Tuple(
+                    elements
+                        .iter()
+                        .map(|element| {
+                            self.replace_univars_with_bound_and_local(
+                                db,
+                                *element,
+                                row_subst,
+                                var_to_index,
+                                local_vars,
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+            TypeKind::App { ctor, args } => Type::new(
+                db,
+                TypeKind::App {
+                    ctor: self.replace_univars_with_bound_and_local(
+                        db,
+                        *ctor,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                    ),
+                    args: args
+                        .iter()
+                        .map(|arg| {
+                            self.replace_univars_with_bound_and_local(
+                                db,
+                                *arg,
+                                row_subst,
+                                var_to_index,
+                                local_vars,
+                            )
+                        })
+                        .collect(),
+                },
+            ),
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => Type::new(
+                db,
+                TypeKind::Continuation {
+                    arg: self.replace_univars_with_bound_and_local(
+                        db,
+                        *arg,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                    ),
+                    result: self.replace_univars_with_bound_and_local(
+                        db,
+                        *result,
+                        row_subst,
+                        var_to_index,
+                        local_vars,
+                    ),
+                    effect: map_effect_row_type_args(db, row_subst.apply(db, *effect), |entry| {
+                        self.replace_univars_with_bound_and_local(
+                            db,
+                            entry,
+                            row_subst,
+                            var_to_index,
+                            local_vars,
+                        )
+                    }),
+                },
+            ),
+            TypeKind::BoundVar { .. }
+            | TypeKind::LocalBoundVar { .. }
+            | TypeKind::Int
+            | TypeKind::Nat
+            | TypeKind::Float
+            | TypeKind::Bool
+            | TypeKind::Bytes
+            | TypeKind::Rune
+            | TypeKind::Nil
+            | TypeKind::Never
+            | TypeKind::Error => ty,
+        }
     }
 
     /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
@@ -459,104 +659,7 @@ impl<'db> TypeSubst<'db> {
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
-        match ty.kind(db) {
-            TypeKind::UniVar { id } => {
-                // Check mapping first: if this UniVar should become a BoundVar,
-                // do so immediately without following the substitution chain.
-                // This is important because when unification binds UniVar(X) -> UniVar(Y),
-                // we want to generalize X (which is in the mapping), not Y (which may not be).
-                if let Some(&index) = var_to_index.get(id) {
-                    Type::new(db, TypeKind::BoundVar { index })
-                } else if let Some(subst_ty) = self.get(*id) {
-                    self.replace_univars_with_bound(db, subst_ty, row_subst, var_to_index)
-                } else {
-                    ty
-                }
-            }
-            TypeKind::Named { id, name, args } => {
-                let new_args: Vec<_> = args
-                    .iter()
-                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
-                    .collect();
-                Type::new(
-                    db,
-                    TypeKind::Named {
-                        id: *id,
-                        name: *name,
-                        args: new_args,
-                    },
-                )
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-                minimum_convention,
-            } => {
-                let new_params: Vec<_> = params
-                    .iter()
-                    .map(|p| self.replace_univars_with_bound(db, *p, row_subst, var_to_index))
-                    .collect();
-                let new_result =
-                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
-                let applied_row = row_subst.apply(db, *effect);
-                let new_effect = map_effect_row_type_args(db, applied_row, |a| {
-                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
-                });
-                Type::new(
-                    db,
-                    TypeKind::Func {
-                        params: new_params,
-                        result: new_result,
-                        effect: new_effect,
-                        minimum_convention: *minimum_convention,
-                    },
-                )
-            }
-            TypeKind::Tuple(elems) => {
-                let new_elems: Vec<_> = elems
-                    .iter()
-                    .map(|e| self.replace_univars_with_bound(db, *e, row_subst, var_to_index))
-                    .collect();
-                Type::new(db, TypeKind::Tuple(new_elems))
-            }
-            TypeKind::App { ctor, args } => {
-                let new_ctor = self.replace_univars_with_bound(db, *ctor, row_subst, var_to_index);
-                let new_args: Vec<_> = args
-                    .iter()
-                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
-                    .collect();
-                Type::new(
-                    db,
-                    TypeKind::App {
-                        ctor: new_ctor,
-                        args: new_args,
-                    },
-                )
-            }
-            TypeKind::Continuation {
-                arg,
-                result,
-                effect,
-            } => {
-                let new_arg = self.replace_univars_with_bound(db, *arg, row_subst, var_to_index);
-                let new_result =
-                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
-                let applied_row = row_subst.apply(db, *effect);
-                let new_effect = map_effect_row_type_args(db, applied_row, |a| {
-                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
-                });
-                Type::new(
-                    db,
-                    TypeKind::Continuation {
-                        arg: new_arg,
-                        result: new_result,
-                        effect: new_effect,
-                    },
-                )
-            }
-            _ => ty,
-        }
+        self.replace_univars_with_bound_and_local(db, ty, row_subst, var_to_index, &HashMap::new())
     }
 }
 
@@ -810,11 +913,14 @@ impl<'db> TypeSolver<'db> {
                 Ok(())
             }
 
-            // BoundVar should never reach the solver — it must be instantiated first
-            (TypeKind::BoundVar { .. }, _) | (_, TypeKind::BoundVar { .. }) => {
+            // BoundVar and LocalBoundVar should never reach the solver — they must be instantiated first.
+            (TypeKind::BoundVar { .. }, _)
+            | (_, TypeKind::BoundVar { .. })
+            | (TypeKind::LocalBoundVar { .. }, _)
+            | (_, TypeKind::LocalBoundVar { .. }) => {
                 debug_assert!(
                     false,
-                    "BoundVar reached solver — should have been instantiated"
+                    "quantified type variable (BoundVar or LocalBoundVar) reached solver — should have been instantiated"
                 );
                 Err(SolveError::TypeMismatch {
                     expected: t1,
@@ -2275,9 +2381,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "BoundVar reached solver")]
+    #[should_panic(
+        expected = "quantified type variable (BoundVar or LocalBoundVar) reached solver"
+    )]
     fn test_bound_var_panics_in_debug() {
-        // BoundVar should never reach the solver — it must be instantiated first.
+        // BoundVar and LocalBoundVar should never reach the solver — they must be instantiated first.
         // In debug mode, this triggers a debug_assert panic.
         let db = test_db();
         let mut solver = TypeSolver::new(&db);

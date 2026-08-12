@@ -32,6 +32,14 @@ struct HandlerOperationRequest<'a, 'db> {
     handle_ctx: &'a super::super::func_context::HandleContext<'db>,
 }
 
+/// One local introduced by a pattern, together with its resolved binding type.
+struct PatternBinding<'db> {
+    name: Symbol,
+    local_id: Option<LocalId>,
+    scope: NodeId,
+    ty: Type<'db>,
+}
+
 /// Check if a type contains any unification variables (UniVar).
 ///
 /// This is used to determine if it's safe to use Mode::Check with the type.
@@ -73,6 +81,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Nil
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::Error => false,
     }
 }
@@ -111,6 +120,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Nil => ctx.nil_type(),
             ExprKind::RuneLit(_) => ctx.rune_type(),
 
+            ExprKind::Var(resolved @ ResolvedRef::Local { .. }) => {
+                self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
+            }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
@@ -180,36 +192,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => {
-                // Get the struct constructor type and extract return type
-                let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
-                let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
-                    // Constructor has function type: fn(fields...) -> StructType
-                    *result
-                } else {
-                    // Fallback: use constructor type directly (shouldn't happen)
-                    ctor_ty
-                };
-
-                // Validate each field expression against the declared field type
-                for (field_name, field_expr) in fields {
-                    let expr_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
-                    if let Some(expected_field_ty) =
-                        self.lookup_struct_field_type(ctx, struct_ty, *field_name)
-                    {
-                        ctx.constrain_eq(expr_ty, expected_field_ty);
-                    }
-                    // If field not found, we'll let later phases handle the error
-                }
-
-                // Validate spread expression if present
-                if let Some(spread_expr) = spread {
-                    let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
-                    ctx.constrain_eq(spread_ty, struct_ty);
-                }
-
-                struct_ty
-            }
+            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -638,6 +621,9 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(_) => ctx.bytes_type(),
             ExprKind::Nil => ctx.nil_type(),
             ExprKind::RuneLit(_) => ctx.rune_type(),
+            ExprKind::Var(resolved @ ResolvedRef::Local { .. }) => {
+                self.infer_local_reference_with_ctx(ctx, expr.id, resolved)
+            }
             ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
             ExprKind::Call { callee, args } => {
                 let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
@@ -700,6 +686,11 @@ impl<'db> TypeChecker<'db> {
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
@@ -806,6 +797,37 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Infer a record literal's nominal type and constrain its fields and spread.
+    fn infer_record_type_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        type_name: &ResolvedRef<'db>,
+        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        spread: Option<&Expr<ResolvedRef<'db>>>,
+    ) -> Type<'db> {
+        let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+        let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
+            *result
+        } else {
+            ctor_ty
+        };
+
+        for (field_name, field_expr) in fields {
+            let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
+            if let Some(expected_field_ty) =
+                self.lookup_struct_field_type(ctx, struct_ty, *field_name)
+            {
+                ctx.constrain_eq(field_ty, expected_field_ty);
+            }
+        }
+        if let Some(spread_expr) = spread {
+            let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
+            ctx.constrain_eq(spread_ty, struct_ty);
+        }
+
+        struct_ty
+    }
+
     /// Infer the type of a variable reference.
     fn infer_var_with_ctx(
         &self,
@@ -820,8 +842,9 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     ctx.lookup_local(*id)
                 };
-                let by_name = ctx.lookup_local_by_name(*name);
-                by_id.or(by_name).unwrap_or_else(|| ctx.fresh_type_var())
+                by_id
+                    .or_else(|| ctx.lookup_local_by_name(*name))
+                    .unwrap_or_else(|| ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => ctx
                 .instantiate_function(*id)
@@ -895,6 +918,19 @@ impl<'db> TypeChecker<'db> {
                 ctx.error_type()
             }
         }
+    }
+
+    fn infer_local_reference_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        resolved: &ResolvedRef<'db>,
+    ) -> Type<'db> {
+        let ResolvedRef::Local { id, name } = resolved else {
+            unreachable!("local-reference inference requires a local reference");
+        };
+        ctx.lookup_local_reference(node, *id, *name)
+            .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
     /// Infer the result type of a function call.
@@ -1339,13 +1375,21 @@ impl<'db> TypeChecker<'db> {
                 // Bind lambda parameters so that references to them in the body
                 // resolve to their concrete types (not fresh UniVars). Without this,
                 // TDNR cannot determine receiver types for method calls inside lambdas.
-                let param_types: Vec<Type<'db>> = params
-                    .iter()
-                    .map(|p| match &p.ty {
-                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
-                        None => ctx.fresh_type_var(),
+                let param_types = ctx
+                    .get_node_type(expr_id)
+                    .and_then(|ty| match ty.kind(self.db()) {
+                        TypeKind::Func { params, .. } => Some(params.clone()),
+                        _ => None,
                     })
-                    .collect();
+                    .unwrap_or_else(|| {
+                        params
+                            .iter()
+                            .map(|p| match &p.ty {
+                                Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
+                                None => ctx.fresh_type_var(),
+                            })
+                            .collect()
+                    });
                 ctx.push_scope();
                 for (param, ty) in params.iter().zip(param_types.iter()) {
                     tracing::debug!(
@@ -1417,9 +1461,16 @@ impl<'db> TypeChecker<'db> {
         node_id: Option<crate::ast::NodeId>,
         resolved: ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = node_id
-            .and_then(|node| ctx.get_call_callee_type(node))
-            .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved));
+        let ty = match (node_id, &resolved) {
+            (Some(node), ResolvedRef::Local { id, name }) => ctx
+                .lookup_local_reference(node, *id, *name)
+                .unwrap_or_else(|| ctx.fresh_type_var()),
+            (Some(node), _) => ctx
+                .get_call_callee_type(node)
+                .or_else(|| ctx.get_node_type(node))
+                .unwrap_or_else(|| self.infer_var_with_ctx(ctx, &resolved)),
+            (None, _) => self.infer_var_with_ctx(ctx, &resolved),
+        };
         TypedRef { resolved, ty }
     }
 
@@ -1575,21 +1626,29 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
-        for (name, local_id, binding_ty) in bindings {
+        for PatternBinding {
+            name,
+            local_id,
+            scope,
+            ty,
+        } in bindings
+        {
             let scheme = if should_generalize {
-                let (generalized, type_params) = type_subst.generalize_excluding(
-                    self.db(),
-                    binding_ty,
-                    &row_subst,
-                    &environment_type_vars,
-                );
+                let (generalized, type_params, mapping) = type_subst
+                    .generalize_excluding_with_mapping(
+                        self.db(),
+                        ty,
+                        &row_subst,
+                        &environment_type_vars,
+                    );
+                ctx.record_local_generalization(scope, mapping);
                 let effect_params: Vec<_> = collect_effect_vars(self.db(), generalized)
                     .into_iter()
                     .filter(|var| !environment_effect_vars.contains(var))
                     .collect();
                 TypeScheme::new(self.db(), type_params, effect_params, generalized)
             } else {
-                TypeScheme::mono(self.db(), binding_ty)
+                TypeScheme::mono(self.db(), ty)
             };
             if let Some(local_id) = local_id {
                 ctx.bind_local_scheme(local_id, scheme);
@@ -1605,12 +1664,17 @@ impl<'db> TypeChecker<'db> {
         ty: Type<'db>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
-        bindings: &mut Vec<(Symbol, Option<LocalId>, Type<'db>)>,
+        bindings: &mut Vec<PatternBinding<'db>>,
     ) {
         let resolve = |ty| type_subst.apply_with_rows(self.db(), ty, row_subst);
         match &*pattern.kind {
             PatternKind::Bind { name, local_id } => {
-                bindings.push((*name, *local_id, resolve(ty)));
+                bindings.push(PatternBinding {
+                    name: *name,
+                    local_id: *local_id,
+                    scope: pattern.id,
+                    ty: resolve(ty),
+                });
             }
             PatternKind::Tuple(patterns)
             | PatternKind::Variant {
@@ -1642,7 +1706,12 @@ impl<'db> TypeChecker<'db> {
                             ctx, pattern, field_ty, type_subst, row_subst, bindings,
                         );
                     } else {
-                        bindings.push((field.name, None, field_ty));
+                        bindings.push(PatternBinding {
+                            name: field.name,
+                            local_id: None,
+                            scope: field.id,
+                            ty: field_ty,
+                        });
                     }
                 }
             }
@@ -1661,7 +1730,12 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
                 if let Some(name) = rest {
-                    bindings.push((*name, *rest_local_id, resolve(ty)));
+                    bindings.push(PatternBinding {
+                        name: *name,
+                        local_id: *rest_local_id,
+                        scope: pattern.id,
+                        ty: resolve(ty),
+                    });
                 }
             }
             PatternKind::As {
@@ -1670,7 +1744,12 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => {
                 let resolved_ty = resolve(ty);
-                bindings.push((*name, *local_id, resolved_ty));
+                bindings.push(PatternBinding {
+                    name: *name,
+                    local_id: *local_id,
+                    scope: pattern.id,
+                    ty: resolved_ty,
+                });
                 self.collect_pattern_bindings_with_ctx(
                     ctx,
                     pattern,

@@ -333,6 +333,48 @@ fn score_b(thing: B::Thing) -> Nat { thing.score() }
 }
 
 #[salsa_test]
+fn test_tdnr_resolves_nested_generic_nominal_receivers(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "nested_generic_nominal_identity.trb",
+        r#"
+pub mod A {
+    pub struct Token(a) {}
+    pub fn tag(_value: Token(Nat)) -> Nat { 1 }
+}
+
+pub mod B {
+    pub struct Token(a) {}
+    pub fn tag(_value: Token(Nat)) -> Nat { 12 }
+}
+
+fn test() -> #(Nat, Nat) {
+    let a = A::Token {}
+    let b = B::Token {}
+    #(a.tag(), b.tag())
+}
+"#,
+    );
+
+    assert_eq!(
+        tdnr_function_summary(db, source, "test"),
+        TdnrSummary {
+            method_calls: vec![],
+            calls: vec![
+                TdnrCall {
+                    target: "A::tag".to_owned(),
+                    arg_count: 1,
+                },
+                TdnrCall {
+                    target: "B::tag".to_owned(),
+                    arg_count: 1,
+                },
+            ],
+        }
+    );
+}
+
+#[salsa_test]
 fn string_literal_method_uses_prelude_identity_when_shadowed(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

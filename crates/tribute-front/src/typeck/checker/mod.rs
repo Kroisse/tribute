@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
-    Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
+    Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef, UniVarId,
 };
 
 use super::context::ModuleTypeEnv;
@@ -100,6 +100,9 @@ pub struct TypeChecker<'db> {
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    /// Quantifiers owned by generalized local schemes in the function currently
+    /// being finalized. They remain separate from exported function schemes.
+    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
     exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
@@ -138,6 +141,7 @@ impl<'db> TypeChecker<'db> {
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
+            local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
             effect_annotation_origins: HashMap::new(),
         }

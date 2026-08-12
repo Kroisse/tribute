@@ -297,6 +297,7 @@ fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         | TypeKind::Nil
         | TypeKind::Never => true,
         TypeKind::BoundVar { .. }
+        | TypeKind::LocalBoundVar { .. }
         | TypeKind::UniVar { .. }
         | TypeKind::App { .. }
         | TypeKind::Error => false,
@@ -394,7 +395,10 @@ fn collect_from_type<'db>(
 ) {
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } => {
-            if !args.is_empty() && generic_types.contains(id) {
+            if !args.is_empty()
+                && generic_types.contains(id)
+                && args.iter().all(|arg| is_concrete_type(db, *arg))
+            {
                 result.entry(*id).or_default().insert(args.clone());
             }
             // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
@@ -558,7 +562,7 @@ impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, TypeParam, TypeScheme};
+    use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, NodeId, TypeParam, TypeScheme};
     use trunk_ir::Symbol;
 
     use super::*;
@@ -858,7 +862,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_collect_type_from_named() {
+    fn test_collect_type_retains_concrete_specialization() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
         let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
@@ -880,6 +884,87 @@ mod tests {
         assert_eq!(result.len(), 1);
         let option_insts = result.get(&option_id).unwrap();
         assert!(option_insts.contains(&vec![int]));
+    }
+
+    #[test]
+    fn test_collect_type_skips_bound_var_specialization() {
+        let db = TestDb::default();
+        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let option_bound = Type::new(
+            &db,
+            TypeKind::Named {
+                id: option_id,
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![Type::new(&db, TypeKind::BoundVar { index: 0 })],
+            },
+        );
+
+        let mut generic_types = HashSet::new();
+        generic_types.insert(option_id);
+
+        let mut result = HashMap::new();
+        collect_from_type(&db, option_bound, &generic_types, &mut result);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_collect_type_skips_local_bound_var_specialization() {
+        let db = TestDb::default();
+        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let option_bound = Type::new(
+            &db,
+            TypeKind::Named {
+                id: option_id,
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![Type::new(
+                    &db,
+                    TypeKind::LocalBoundVar {
+                        scope: NodeId::from_raw(0),
+                        index: 0,
+                    },
+                )],
+            },
+        );
+
+        let mut generic_types = HashSet::new();
+        generic_types.insert(option_id);
+
+        let mut result = HashMap::new();
+        collect_from_type(&db, option_bound, &generic_types, &mut result);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_collect_type_retains_concrete_child_below_skipped_parent() {
+        let db = TestDb::default();
+        let result_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Result"));
+        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let int = Type::new(&db, TypeKind::Int);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                id: option_id,
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let result_bound_option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                id: result_id,
+                name: trunk_ir::Symbol::new("Result"),
+                args: vec![Type::new(&db, TypeKind::BoundVar { index: 0 }), option_int],
+            },
+        );
+
+        let generic_types = HashSet::from([result_id, option_id]);
+        let mut result = HashMap::new();
+        collect_from_type(&db, result_bound_option_int, &generic_types, &mut result);
+
+        assert!(!result.contains_key(&result_id));
+        assert_eq!(result[&option_id], HashSet::from([vec![int]]));
     }
 
     #[test]
