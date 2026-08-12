@@ -707,6 +707,33 @@ impl<'db> TypeChecker<'db> {
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+            } => {
+                let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+                let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
+                    *result
+                } else {
+                    ctor_ty
+                };
+
+                for (field_name, field_expr) in fields {
+                    let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
+                    if let Some(expected_field_ty) =
+                        self.lookup_struct_field_type(ctx, struct_ty, *field_name)
+                    {
+                        ctx.constrain_eq(field_ty, expected_field_ty);
+                    }
+                }
+                if let Some(spread_expr) = spread {
+                    let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
+                    ctx.constrain_eq(spread_ty, struct_ty);
+                }
+
+                struct_ty
+            }
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
