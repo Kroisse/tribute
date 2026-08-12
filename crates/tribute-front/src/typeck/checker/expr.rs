@@ -192,36 +192,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => {
-                // Get the struct constructor type and extract return type
-                let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
-                let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
-                    // Constructor has function type: fn(fields...) -> StructType
-                    *result
-                } else {
-                    // Fallback: use constructor type directly (shouldn't happen)
-                    ctor_ty
-                };
-
-                // Validate each field expression against the declared field type
-                for (field_name, field_expr) in fields {
-                    let expr_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
-                    if let Some(expected_field_ty) =
-                        self.lookup_struct_field_type(ctx, struct_ty, *field_name)
-                    {
-                        ctx.constrain_eq(expr_ty, expected_field_ty);
-                    }
-                    // If field not found, we'll let later phases handle the error
-                }
-
-                // Validate spread expression if present
-                if let Some(spread_expr) = spread {
-                    let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
-                    ctx.constrain_eq(spread_ty, struct_ty);
-                }
-
-                struct_ty
-            }
+            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -719,29 +690,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => {
-                let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
-                let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
-                    *result
-                } else {
-                    ctor_ty
-                };
-
-                for (field_name, field_expr) in fields {
-                    let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
-                    if let Some(expected_field_ty) =
-                        self.lookup_struct_field_type(ctx, struct_ty, *field_name)
-                    {
-                        ctx.constrain_eq(field_ty, expected_field_ty);
-                    }
-                }
-                if let Some(spread_expr) = spread {
-                    let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
-                    ctx.constrain_eq(spread_ty, struct_ty);
-                }
-
-                struct_ty
-            }
+            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
@@ -846,6 +795,37 @@ impl<'db> TypeChecker<'db> {
             }
             _ => ctx.fresh_type_var(),
         }
+    }
+
+    /// Infer a record literal's nominal type and constrain its fields and spread.
+    fn infer_record_type_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        type_name: &ResolvedRef<'db>,
+        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        spread: Option<&Expr<ResolvedRef<'db>>>,
+    ) -> Type<'db> {
+        let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+        let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
+            *result
+        } else {
+            ctor_ty
+        };
+
+        for (field_name, field_expr) in fields {
+            let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
+            if let Some(expected_field_ty) =
+                self.lookup_struct_field_type(ctx, struct_ty, *field_name)
+            {
+                ctx.constrain_eq(field_ty, expected_field_ty);
+            }
+        }
+        if let Some(spread_expr) = spread {
+            let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
+            ctx.constrain_eq(spread_ty, struct_ty);
+        }
+
+        struct_ty
     }
 
     /// Infer the type of a variable reference.
