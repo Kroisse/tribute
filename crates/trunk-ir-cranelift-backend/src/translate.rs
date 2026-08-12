@@ -366,15 +366,7 @@ fn emit_module_impl(
     rodata: &[RodataEntry],
 ) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
-    let triple = host_object_triple();
-    let mut flag_builder = settings::builder();
-    flag_builder
-        .set("is_pic", "true")
-        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
-    let isa_builder = isa::lookup(triple).map_err(|e| CompilationError::codegen(format!("{e}")))?;
-    let isa = isa_builder
-        .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa = native_isa()?;
     let call_conv = isa.default_call_conv();
 
     // 2. ObjectModule creation
@@ -604,6 +596,21 @@ fn emit_module_impl(
     Ok(bytes)
 }
 
+fn native_isa() -> CompilationResult<isa::OwnedTargetIsa> {
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    flag_builder
+        .set("preserve_frame_pointers", "true")
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa_builder =
+        isa::lookup(host_object_triple()).map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|e| CompilationError::codegen(format!("{e}")))
+}
+
 fn host_object_triple() -> Triple {
     let mut triple = Triple::host();
     if let OperatingSystem::Darwin(version) = triple.operating_system {
@@ -709,5 +716,10 @@ mod tests {
                 OperatingSystem::MacOSX(_)
             ));
         }
+    }
+
+    #[test]
+    fn native_isa_preserves_frame_pointers_for_tail_calls() {
+        assert!(native_isa().unwrap().flags().preserve_frame_pointers());
     }
 }

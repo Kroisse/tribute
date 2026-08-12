@@ -23,6 +23,8 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::Attribute;
 
+use crate::function::{CPS_CALLING_CONVENTION, TRIBUTE_CALLING_CONVENTION_ATTR};
+
 /// Lower func dialect to clif dialect.
 pub fn lower(
     ctx: &mut IrContext,
@@ -317,6 +319,14 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         if func::TailCallIndirect::from_op(ctx, op).is_err() {
             return false;
         }
+        if ctx
+            .op(op)
+            .attributes
+            .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
+            != Ok(Some(CPS_CALLING_CONVENTION))
+        {
+            return false;
+        }
 
         let signature = match ctx
             .op(op)
@@ -565,6 +575,48 @@ mod tests {
             error.to_string().contains("func.tail_call_indirect"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn tail_call_indirect_without_cps_metadata_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+  }
+}"#,
+        );
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(
+            error.to_string().contains("func.tail_call_indirect"),
+            "{error}"
+        );
+        let after = print_module(&ctx, module.op());
+        assert!(after.contains("func.tail_call_indirect"), "{after}");
+        assert!(!after.contains("clif.return_call_indirect"), "{after}");
+    }
+
+    #[test]
+    fn tail_call_indirect_with_non_cps_metadata_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32), tribute.calling_convention = 0}
+  }
+}"#,
+        );
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(
+            error.to_string().contains("func.tail_call_indirect"),
+            "{error}"
+        );
+        let after = print_module(&ctx, module.op());
+        assert!(after.contains("func.tail_call_indirect"), "{after}");
+        assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
 
     #[test]
