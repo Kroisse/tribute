@@ -30,13 +30,13 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 2, type = !Triple_1} : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @"Pair::extend"(%0: !Pair, %1: core.i32) -> !Triple convention(cps) {
+  tribute_control.func @"Pair::extend"(%0: !Pair, %1: core.i32) -> !Triple convention(direct) {
       %2 = tribute_control.call %0 {callee = @"Pair::x"} : core.i32
       %3 = tribute_control.call %0 {callee = @"Pair::y"} : core.i32
       %4 = adt.struct_new %2, %3, %1 {type = !Triple_1} : !Triple
       tribute_control.return %4
   }
-  tribute_control.func @test(%0: !Pair) -> !Triple convention(cps) {
+  tribute_control.func @test(%0: !Pair) -> !Triple convention(direct) {
       %1 = arith.const {value = 3} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"Pair::extend"} : !Triple
       tribute_control.return %2

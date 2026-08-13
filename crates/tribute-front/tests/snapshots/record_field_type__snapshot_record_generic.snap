@@ -15,7 +15,7 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
       tribute_control.return %1
   }
-  tribute_control.func @make_pair() -> !Pair_1 convention(cps) {
+  tribute_control.func @make_pair() -> !Pair_1 convention(direct) {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = true} : core.i1
       %2 = adt.struct_new %0, %1 {type = !Pair} : !Pair_1

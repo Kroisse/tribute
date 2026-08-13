@@ -3,9 +3,9 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  !t0 = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
 
-  tribute_control.func @id(%0: core.i32) -> core.i32 convention(cps) {
+  tribute_control.func @id(%0: core.i32) -> core.i32 convention(direct) {
       tribute_control.return %0
   }
   tribute_control.func @test_ref() -> core.i32 convention(cps) {

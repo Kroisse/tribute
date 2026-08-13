@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @nothing() -> core.nil convention(cps) {
+  tribute_control.func @nothing() -> core.nil convention(direct) {
       %0 = arith.const {value = unit} : core.nil
       tribute_control.return %0
   }

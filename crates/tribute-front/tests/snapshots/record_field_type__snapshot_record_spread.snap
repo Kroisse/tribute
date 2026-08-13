@@ -15,7 +15,7 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @update_x(%0: !Point_1) -> !Point_1 convention(cps) {
+  tribute_control.func @update_x(%0: !Point_1) -> !Point_1 convention(direct) {
       %1 = arith.const {value = 100} : core.i32
       %2 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
       %3 = adt.struct_new %1, %2 {type = !Point} : !Point_1
