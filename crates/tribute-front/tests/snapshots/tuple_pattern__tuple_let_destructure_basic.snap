@@ -6,7 +6,7 @@ core.module @test {
   !__logical_tuple_tuple_3_1_2_3_nat_3_nat = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__logical_tuple_tuple_3_1_2_3_nat_3_nat}
   !__logical_tuple_tuple_3_1_2_3_nat_3_nat_1 = adt.typeref() {name = @__logical_tuple_tuple_3_1_2_3_nat_3_nat}
 
-  tribute_control.func @test() -> core.i32 convention(cps) {
+  tribute_control.func @test() -> core.i32 convention(direct) {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = adt.struct_new %0, %1 {type = !__logical_tuple_tuple_3_1_2_3_nat_3_nat} : !__logical_tuple_tuple_3_1_2_3_nat_3_nat_1

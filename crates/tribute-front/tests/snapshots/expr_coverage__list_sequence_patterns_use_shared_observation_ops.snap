@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  tribute_control.func @observe(%0: tribute_rt.anyref) -> core.i32 convention(cps) {
+  tribute_control.func @observe(%0: tribute_rt.anyref) -> core.i32 convention(direct) {
       %1 = list.is_empty %0 {element_type = core.i32} : core.i1
       %2 = scf.if %1 : core.i32 {
           %3 = arith.const {value = 0} : core.i32

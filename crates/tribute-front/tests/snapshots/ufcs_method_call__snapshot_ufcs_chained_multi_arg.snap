@@ -4,9 +4,9 @@ expression: ir_text
 ---
 core.module @test {
   !Triple = adt.typeref() {name = @Triple}
+  !t0 = tribute_control.callable(core.i32, !Triple) {tribute.calling_convention = 0}
   !Triple_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}
   !Pair = adt.typeref() {name = @Pair}
-  !t0 = tribute_control.callable(core.i32, !Triple) {tribute.calling_convention = 0}
   !t1 = tribute_control.callable(core.i32, !Pair) {tribute.calling_convention = 0}
   !Pair_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}
 
@@ -30,13 +30,13 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 2, type = !Triple_1} : core.i32
       tribute_control.return %1
   }
-  tribute_control.func @"Pair::extend"(%0: !Pair, %1: core.i32) -> !Triple convention(cps) {
+  tribute_control.func @"Pair::extend"(%0: !Pair, %1: core.i32) -> !Triple convention(direct) {
       %2 = tribute_control.call %0 {callee = @"Pair::x"} : core.i32
       %3 = tribute_control.call %0 {callee = @"Pair::y"} : core.i32
       %4 = adt.struct_new %2, %3, %1 {type = !Triple_1} : !Triple
       tribute_control.return %4
   }
-  tribute_control.func @"Triple::sum"(%0: !Triple) -> core.i32 convention(cps) {
+  tribute_control.func @"Triple::sum"(%0: !Triple) -> core.i32 convention(direct) {
       %1 = tribute_control.call %0 {callee = @"Triple::x"} : core.i32
       %2 = tribute_control.call %0 {callee = @"Triple::y"} : core.i32
       %3 = arith.addi %1, %2 : core.i32
@@ -44,7 +44,7 @@ core.module @test {
       %5 = arith.addi %3, %4 : core.i32
       tribute_control.return %5
   }
-  tribute_control.func @test(%0: !Pair) -> core.i32 convention(cps) {
+  tribute_control.func @test(%0: !Pair) -> core.i32 convention(direct) {
       %1 = arith.const {value = 3} : core.i32
       %2 = tribute_control.call %0, %1 {callee = @"Pair::extend"} : !Triple
       %3 = tribute_control.call %2 {callee = @"Triple::sum"} : core.i32

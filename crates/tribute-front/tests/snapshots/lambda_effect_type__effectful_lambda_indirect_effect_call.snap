@@ -35,7 +35,7 @@ core.module @test {
       }
       tribute_control.return %1
   }
-  tribute_control.func @main() -> core.i32 convention(direct) {
+  tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.i32} {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.call {callee = @counter} : core.i32
           tribute_control.return %1

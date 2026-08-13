@@ -21,13 +21,14 @@ use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
-    Arm, CallingConvention, CtorId, Decl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm,
-    HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef,
+    Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FuncDecl,
+    HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
+    TypedRef,
 };
 
 use super::super::context::IrLoweringCtx;
 use super::super::{FrontendIrModule, TypedModule};
-use super::{FuncSignature, IrBuilder};
+use super::{FuncSignature, IrBuilder, expr};
 
 struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only
@@ -124,6 +125,14 @@ fn callable_type(
     tribute_control::callable(ir, result, params, control_convention(convention)).as_type_ref()
 }
 
+fn declaration_name(prefix: &mut String, name: Symbol) -> Symbol {
+    if name.with_str(|text| text.contains("::")) {
+        name
+    } else {
+        crate::qualified_symbol(prefix, name)
+    }
+}
+
 pub(super) fn lower_module<'db>(
     typed: TypedModule<'db>,
     db: &'db dyn salsa::Database,
@@ -170,6 +179,8 @@ pub(super) fn lower_module<'db>(
         lambda_signatures,
         exhaustive_cases,
     };
+    prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
+    promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
     let mut well_known_type_prescan = super::decl::WellKnownTypePrescan::new(well_known_types);
     collect_logical_nominal_identities(&mut ctx, &ast.decls, &mut String::new());
     prescan_logical_nominal_layouts(
@@ -196,6 +207,95 @@ pub(super) fn lower_module<'db>(
     FrontendIrModule {
         module: IrModule::new(ir, module.op_ref()).expect("valid core.module operation"),
         operation_declarations: declarations.values,
+    }
+}
+
+/// Seed worker conventions from each body's concrete residual effects. The
+/// semantic function type remains untouched: an omitted annotation can still
+/// expose an open-row callable at a first-class call site.
+fn prescan_definition_conventions<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    declarations: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+) {
+    for declaration in declarations {
+        match declaration {
+            Decl::Function(function) => {
+                let name = declaration_name(prefix, function.name);
+                let Some(scheme) = ctx.lookup_function_type(name).copied() else {
+                    continue;
+                };
+                let body = scheme.body(ctx.db);
+                let Some(mut convention) = ctx.calling_convention_for_type(body) else {
+                    continue;
+                };
+                if (function.effects.is_none()
+                    || crate::is_root_main(function.name, prefix.is_empty()))
+                    && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
+                {
+                    convention = ctx.calling_convention_for_effect_row(EffectRow::new(
+                        ctx.db,
+                        effect.effects(ctx.db).clone(),
+                        None,
+                    ));
+                }
+                ctx.register_definition_convention(name, convention);
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, module.name);
+                    prescan_definition_conventions(ctx, body, prefix);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Strengthen workers until direct calls and structured logical evaluation no
+/// longer leave a Direct/EvidenceDirect worker responsible for CPS control.
+fn promote_definition_conventions_to_fixed_point<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    declarations: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+) {
+    loop {
+        let mut changed = false;
+        promote_definition_conventions_pass(ctx, declarations, prefix, &mut changed);
+        if !changed {
+            return;
+        }
+    }
+}
+
+fn promote_definition_conventions_pass<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    declarations: &[Decl<TypedRef<'db>>],
+    prefix: &mut String,
+    changed: &mut bool,
+) {
+    for declaration in declarations {
+        match declaration {
+            Decl::Function(function) => {
+                let name = declaration_name(prefix, function.name);
+                if ctx.function_calling_convention(name) != Some(CallingConvention::Cps)
+                    && expr::logical_evaluation_control_class(ctx, &function.body)
+                        == expr::EvaluationControlClass::Cps
+                {
+                    ctx.register_definition_convention(name, CallingConvention::Cps);
+                    *changed = true;
+                }
+            }
+            Decl::Module(module) => {
+                if let Some(body) = &module.body {
+                    let saved = crate::push_prefix(prefix, module.name);
+                    promote_definition_conventions_pass(ctx, body, prefix, changed);
+                    prefix.truncate(saved);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -541,20 +641,24 @@ fn function_signature<'db>(
     function: &FuncDecl<TypedRef<'db>>,
 ) -> FuncSignature {
     let qualified = ctx.qualify_name(function.name);
-    let signature = if qualified == function.name {
+    let mut signature = (if qualified == function.name {
         FuncSignature::lookup_logical(ctx, ir, function.name)
     } else {
         // Nested declarations are exported under their qualified identity; a
         // short-name lookup can silently select an unrelated root declaration.
         FuncSignature::lookup_logical(ctx, ir, qualified)
             .or_else(|| FuncSignature::lookup_logical(ctx, ir, function.name))
-    };
-    signature.unwrap_or_else(|| {
+    })
+    .unwrap_or_else(|| {
         panic!(
             "missing typechecked signature for function {}",
             function.name
         )
-    })
+    });
+    signature.convention = ctx
+        .function_calling_convention(qualified)
+        .unwrap_or(signature.convention);
+    signature
 }
 
 fn lower_function<'db>(
@@ -565,6 +669,15 @@ fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
+    let root_export_convention = crate::is_root_main(function.name, ctx.module_path().len() == 1)
+        .then(|| {
+            let name = ctx.qualify_name(function.name);
+            let scheme = ctx
+                .lookup_function_type(name)
+                .expect("root main has a typechecked logical signature");
+            ctx.calling_convention_for_type(scheme.body(ctx.db))
+                .expect("root main has a function type")
+        });
     let signature = function_signature(ctx, ir, &function);
     let callable = callable_type(
         ir,
@@ -618,6 +731,19 @@ fn lower_function<'db>(
     let function = tribute_control::func_declaration(ir, location, name, callable);
     ir.op_mut(function.op_ref()).regions.push(body);
     ir.region_mut(body).parent_op = Some(function.op_ref());
+    if let Some(convention) = root_export_convention
+        && convention != signature.convention
+    {
+        assert_ne!(convention, CallingConvention::Cps);
+        ir.op_mut(function.op_ref()).attributes.insert(
+            Symbol::new("tribute.root_export_convention"),
+            Attribute::Int(convention as i128),
+        );
+        ir.op_mut(function.op_ref()).attributes.insert(
+            Symbol::new("tribute.root_source_result"),
+            Attribute::Type(signature.return_type),
+        );
+    }
     ir.push_op(top, function.op_ref());
 }
 
@@ -898,10 +1024,14 @@ fn lower_expr<'db>(
             ),
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+                let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
                     .unwrap_or_else(|| {
                         panic!("missing logical signature for function reference {name}")
                     });
+                signature.convention = builder
+                    .ctx
+                    .function_calling_convention(name)
+                    .unwrap_or(signature.convention);
                 ensure_prelude_declaration(builder, location, name, &signature);
                 let ty = callable_type(
                     builder.ir,

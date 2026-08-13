@@ -6,7 +6,7 @@ core.module @test {
   !__logical_tuple_tuple_3_1_2_3_nat_4_bool = adt.struct() {fields = [[@0, core.i32], [@1, core.i1]], name = @__logical_tuple_tuple_3_1_2_3_nat_4_bool}
   !__logical_tuple_tuple_3_1_2_3_nat_4_bool_1 = adt.typeref() {name = @__logical_tuple_tuple_3_1_2_3_nat_4_bool}
 
-  tribute_control.func @pair() -> !__logical_tuple_tuple_3_1_2_3_nat_4_bool_1 convention(cps) {
+  tribute_control.func @pair() -> !__logical_tuple_tuple_3_1_2_3_nat_4_bool_1 convention(direct) {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = true} : core.i1
       %2 = adt.struct_new %0, %1 {type = !__logical_tuple_tuple_3_1_2_3_nat_4_bool} : !__logical_tuple_tuple_3_1_2_3_nat_4_bool_1

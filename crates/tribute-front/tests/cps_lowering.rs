@@ -642,8 +642,21 @@ fn apply_closed(value: Int, callback: fn(Int) ->{} Int) ->{} Int {
     callback(value)
 }
 
+fn evidence() ->{std::io::Io} Nil { Nil }
+
+struct Box(a) { value: a }
+fn unwrap(value: Box(a)) ->{} a { value.value }
+
+mod Nested {
+    struct Box(a) { value: a }
+    fn unwrap(value: Box(a)) ->{} a { value.value }
+    fn use_nested() ->{} Int { unwrap(Box { value: +41 }) }
+}
+
 fn main() {
     let _ = forward_open(+41, fn(value) { value })
+    let _ = unwrap(Box { value: +1 })
+    let _ = Nested::use_nested()
 }
 "#,
     );
@@ -670,23 +683,68 @@ fn main() {
         pure_header.contains("convention(direct)"),
         "pure worker must remain Direct:\n{pure_header}"
     );
-    for name in ["apply_closed", "main"] {
-        let header = ir_text
-            .lines()
-            .find(|line| {
-                line.trim_start()
-                    .starts_with(&format!("tribute_control.func @{name}("))
-            })
-            .unwrap_or_else(|| panic!("missing lowered worker {name}"));
-        assert!(
-            header.contains("convention(direct)"),
-            "{name} must stay Direct:\n{header}"
-        );
-    }
+    let apply_closed_header = ir_text
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("tribute_control.func @apply_closed(")
+        })
+        .expect("missing lowered apply_closed worker");
+    assert!(
+        apply_closed_header.contains("convention(direct)"),
+        "apply_closed must stay Direct:\n{apply_closed_header}"
+    );
+    let evidence_header = ir_text
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("tribute_control.func @evidence(")
+        })
+        .expect("missing lowered evidence worker");
+    assert!(
+        evidence_header.contains("convention(evidence_direct)"),
+        "evidence worker must stay EvidenceDirect:\n{evidence_header}"
+    );
+    let main = checked_logical_function(&ir_text, "main");
+    let main_header = main.lines().next().expect("logical function has a header");
+    assert!(
+        main_header.contains("convention(cps)"),
+        "root main worker must be promoted to Cps:\n{main_header}"
+    );
+    assert!(
+        main_header.contains("tribute.root_export_convention = 0"),
+        "pure root export must stay Direct:\n{main_header}"
+    );
+    assert!(
+        main_header.contains("tribute.root_source_result = core.nil"),
+        "root source result must stay core.nil:\n{main_header}"
+    );
+    assert!(
+        main.contains("tribute_control.call"),
+        "root main must contain the direct worker call:\n{main}"
+    );
+    assert!(
+        main.contains("callee = @forward_open"),
+        "root main must call the promoted forward_open worker:\n{main}"
+    );
+    assert!(
+        !ir_text.contains("Nested::Nested::"),
+        "nested workers must not be requalified:\n{ir_text}"
+    );
+    assert!(
+        logical_function(&ir_text, "Nested::unwrap").contains("callee = @\"Nested::Box::value\""),
+        "nested worker must call the exact qualified accessor:\n{ir_text}"
+    );
+    assert!(
+        ir_text.lines().any(|line| line
+            .trim_start()
+            .starts_with("tribute_control.func @\"Box::value\"")),
+        "specialized accessor must keep its exact root identity:\n{ir_text}"
+    );
 }
 
-/// An `Io` root keeps its EvidenceDirect ABI while the frontend delimiter
-/// closes the CPS implementation convention of an open callback worker.
+/// An `Io` root retains EvidenceDirect export metadata while its worker is
+/// promoted for an open-callback call.
 #[salsa_test]
 fn test_open_callback_evidence_root_main_stays_evidence_direct(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -710,8 +768,9 @@ fn main() ->{std::io::Io} Nil {
         .find(|line| line.trim_start().starts_with("tribute_control.func @main("))
         .expect("missing lowered root main");
     assert!(
-        main_header.contains("convention(evidence_direct)"),
-        "Io root main must remain EvidenceDirect, not Cps:\n{main_header}"
+        main_header.contains("convention(cps)")
+            && main_header.contains("tribute.root_export_convention = 1"),
+        "Io root export must remain EvidenceDirect while its worker is Cps:\n{main_header}"
     );
 }
 
