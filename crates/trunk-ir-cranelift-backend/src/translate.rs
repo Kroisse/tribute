@@ -22,8 +22,31 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 
-use crate::function::{FunctionTranslator, translate_signature, translate_type};
+use crate::function::{
+    CPS_CALLING_CONVENTION, FunctionTranslator, TRIBUTE_CALLING_CONVENTION_ATTR,
+    call_conv_for_cps_signature, translate_signature, translate_type,
+};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
+
+/// CPS functions use Cranelift's internal tail-call convention.  The
+/// convention marker is part of the physical callable contract and is kept as
+/// an attribute so this language-agnostic backend does not depend on Tribute.
+fn function_call_conv(
+    ctx: &IrContext,
+    func_op: OpRef,
+    func_type: trunk_ir::refs::TypeRef,
+    default: isa::CallConv,
+) -> isa::CallConv {
+    call_conv_for_cps_signature(
+        ctx,
+        func_type,
+        ctx.op(func_op)
+            .attributes
+            .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
+            == Ok(Some(CPS_CALLING_CONVENTION)),
+        default,
+    )
+}
 
 /// Mangle a TrunkIR symbol name for native linking.
 ///
@@ -343,15 +366,7 @@ fn emit_module_impl(
     rodata: &[RodataEntry],
 ) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
-    let triple = host_object_triple();
-    let mut flag_builder = settings::builder();
-    flag_builder
-        .set("is_pic", "true")
-        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
-    let isa_builder = isa::lookup(triple).map_err(|e| CompilationError::codegen(format!("{e}")))?;
-    let isa = isa_builder
-        .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa = native_isa()?;
     let call_conv = isa.default_call_conv();
 
     // 2. ObjectModule creation
@@ -373,6 +388,7 @@ fn emit_module_impl(
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
+        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
         let op_data = ctx.op(func_op);
         let has_abi = op_data.attributes.contains_key("abi");
@@ -386,7 +402,7 @@ fn emit_module_impl(
 
         // Skip imported functions whose types can't be translated to Cranelift
         // (e.g., prelude extern functions using core.bytes that are never called).
-        let sig = match translate_signature(ctx, func_type_ref, call_conv, ptr_ty) {
+        let sig = match translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty) {
             Ok(sig) => sig,
             Err(_) if has_abi => continue,
             Err(e) => return Err(e),
@@ -446,8 +462,9 @@ fn emit_module_impl(
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
+        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
-        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
+        let sig = translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty)?;
         let func_id = func_ids[&name_sym];
 
         let mut cl_func =
@@ -579,6 +596,21 @@ fn emit_module_impl(
     Ok(bytes)
 }
 
+fn native_isa() -> CompilationResult<isa::OwnedTargetIsa> {
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    flag_builder
+        .set("preserve_frame_pointers", "true")
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa_builder =
+        isa::lookup(host_object_triple()).map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|e| CompilationError::codegen(format!("{e}")))
+}
+
 fn host_object_triple() -> Triple {
     let mut triple = Triple::host();
     if let OperatingSystem::Darwin(version) = triple.operating_system {
@@ -684,5 +716,10 @@ mod tests {
                 OperatingSystem::MacOSX(_)
             ));
         }
+    }
+
+    #[test]
+    fn native_isa_preserves_frame_pointers_for_tail_calls() {
+        assert!(native_isa().unwrap().flags().preserve_frame_pointers());
     }
 }

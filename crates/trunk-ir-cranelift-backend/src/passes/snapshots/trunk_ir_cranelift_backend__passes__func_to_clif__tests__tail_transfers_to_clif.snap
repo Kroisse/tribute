@@ -1,0 +1,18 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+expression: result
+---
+core.module @test {
+  clif.func {sym_name = @direct_target, tribute.calling_convention = 2, type = core.func(core.nil, core.i32)} {
+    ^bb0(%0: core.i32):
+      clif.return
+  }
+  clif.func {sym_name = @direct_caller, tribute.calling_convention = 2, type = core.func(core.nil, core.i32)} {
+    ^bb0(%0: core.i32):
+      clif.return_call %0 {callee = @direct_target, tribute.calling_convention = 2}
+  }
+  clif.func {sym_name = @indirect_caller, tribute.calling_convention = 2, type = core.func(core.nil, core.ptr, core.i32)} {
+    ^bb0(%0: core.ptr, %1: core.i32):
+      clif.return_call_indirect %0, %1 {sig = core.func(core.nil, core.i32), tribute.calling_convention = 2}
+  }
+}
