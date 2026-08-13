@@ -98,8 +98,9 @@ operand를 복원하는 것은 illegal이다.
 Environment-bearing `func.func`는 zero-based physical slot을
 `tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
 function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
-같은 slot이어야 한다. Slot은 convention-defined `CallableAbi` 순서와 exact
-`tribute_rt.anyref` type에 일치해야 하며 type이나 arity로 추측하지 않는다.
+같은 slot이어야 한다. Slot은 outer convention-proven closure type이 기록한 exact
+physical order와 exact `tribute_rt.anyref` type에 일치해야 하며 type이나 arity로
+추측하지 않는다.
 
 생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
 type의 convention을 기존 `tribute.calling_convention` attribute로 복사한다.
