@@ -469,6 +469,10 @@ mod tests {
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
   }
+  func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %table_index, %value : core.i32
+    func.return %result
+  }
 }"#,
         );
 
@@ -483,6 +487,7 @@ mod tests {
             output.contains("wasm.return_call_indirect %0, %1"),
             "{output}"
         );
+        assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
             output.contains("func.indirect_call_signature = core.func(core.nil, core.i32)"),
             "{output}"

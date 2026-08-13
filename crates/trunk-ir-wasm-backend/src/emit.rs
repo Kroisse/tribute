@@ -1279,13 +1279,56 @@ mod tests {
     }
 
     #[test]
+    fn collects_and_encodes_tableless_return_call_indirect_exact_signature() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+        );
+        let info = collect_module_info(&mut ctx, module).expect("collect module info");
+        let [(type_index, _)] = info.call_indirect_types.as_slice() else {
+            panic!("expected one collected exact signature")
+        };
+        assert_eq!(info.tables.len(), 1, "implicit function table");
+
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("valid tail-transfer module")
+            .bytes;
+        let encoded = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .filter_map(|payload| match payload {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .flat_map(|body| body.get_operators_reader().expect("operators").into_iter())
+            .find_map(
+                |instruction| match instruction.expect("decode instruction") {
+                    Operator::ReturnCallIndirect {
+                        type_index,
+                        table_index,
+                    } => Some((type_index, table_index)),
+                    _ => None,
+                },
+            )
+            .expect("encoded return_call_indirect");
+        assert_eq!(encoded, (*type_index, 0));
+    }
+
+    #[test]
     fn region_contains_call_indirect_recognizes_return_call_indirect() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.block {
+      wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    }
   }
   wasm.func @tail_direct(%value: core.i32) -> core.nil {
     wasm.return_call %value {callee = @target}

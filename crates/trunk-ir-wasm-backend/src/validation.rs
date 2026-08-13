@@ -114,37 +114,66 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     #[test]
-    fn rejects_return_call_indirect_without_an_exact_empty_signature() {
-        let mut ctx = IrContext::new();
-        let missing = parse_test_module(
-            &mut ctx,
+    fn rejects_invalid_return_call_indirect_exact_contracts() {
+        let rejects = |source: &str, diagnostic: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, source);
+            let error = validate_wasm_ir(&ctx, module).unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        };
+
+        rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index, %value {table = 0, type_idx = 0}
   }
 }"#,
-        );
-        let error = validate_wasm_ir(&ctx, missing).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("lacks func.indirect_call_signature"),
-            "{error}"
+            "lacks func.indirect_call_signature",
         );
 
-        let mut ctx = IrContext::new();
-        let malformed = parse_test_module(
-            &mut ctx,
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.i32, table = 0, type_idx = 0}
+  }
+}"#,
+            "signature must be core.func",
+        );
+
+        rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.i32, core.i32), table = 0, type_idx = 0}
   }
 }"#,
+            "must have an empty result",
         );
-        let error = validate_wasm_ir(&ctx, malformed).unwrap_err();
-        assert!(
-            error.to_string().contains("must have an empty result"),
-            "{error}"
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller() -> core.nil {
+    wasm.return_call_indirect {func.indirect_call_signature = core.func(core.nil), table = 0, type_idx = 0}
+  }
+}"#,
+            "requires a table index operand",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+            "first operand must be an i32 table index",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i64) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+            "operands do not match its exact signature",
         );
     }
 }
