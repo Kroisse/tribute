@@ -8,6 +8,8 @@
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef};
 
 use crate::{CompilationError, CompilationResult};
@@ -69,10 +71,22 @@ fn validate_operation(ctx: &IrContext, op: OpRef, depth: usize, errors: &mut Vec
     if !is_allowed_dialect(ctx, op, depth) {
         errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
     }
+    validate_return_call_indirect(ctx, op, errors);
 
     // Recursively validate nested regions
     for &region in &op_data.regions {
         validate_region(ctx, region, depth + 1, errors);
+    }
+}
+
+/// Validate the source-of-truth signature needed for a proper indirect tail
+/// transfer before emission has a chance to construct a type section.
+fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    if !wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
+        return;
+    }
+    if let Err(error) = crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
+        errors.push(error.to_string());
     }
 }
 
@@ -92,4 +106,74 @@ fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn rejects_invalid_return_call_indirect_exact_contracts() {
+        let rejects = |source: &str, diagnostic: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, source);
+            let error = validate_wasm_ir(&ctx, module).unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        };
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {table = 0, type_idx = 0}
+  }
+}"#,
+            "lacks func.indirect_call_signature",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.i32, table = 0, type_idx = 0}
+  }
+}"#,
+            "signature must be core.func",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.i32, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+            "must have an empty result",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller() -> core.nil {
+    wasm.return_call_indirect {func.indirect_call_signature = core.func(core.nil), table = 0, type_idx = 0}
+  }
+}"#,
+            "requires a table index operand",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+            "first operand must be an i32 table index",
+        );
+
+        rejects(
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32, %value: core.i64) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+}"#,
+            "operands do not match its exact signature",
+        );
+    }
 }

@@ -6,6 +6,7 @@
 //! - `func.call_indirect` -> `wasm.call_indirect`
 //! - `func.return` -> `wasm.return`
 //! - `func.tail_call` -> `wasm.return_call`
+//! - `func.tail_call_indirect` -> `wasm.return_call_indirect`
 //! - `func.unreachable` -> `wasm.unreachable`
 //! - `func.constant` -> `wasm.i32_const` (function table index)
 //!
@@ -46,6 +47,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncCallIndirectPattern)
             .add_pattern(FuncReturnPattern)
             .add_pattern(FuncTailCallPattern)
+            .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
                 table_indices: HashMap::new(),
@@ -73,6 +75,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
+        .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern {
             table_indices: table_indices.clone(),
@@ -302,6 +305,47 @@ impl RewritePattern for FuncTailCallPattern {
     }
 }
 
+/// Pattern for `func.tail_call_indirect` -> `wasm.return_call_indirect`.
+///
+/// The shared physical-ABI boundary retains the precise callee signature in
+/// `func.indirect_call_signature` after closure lowering has replaced the
+/// typed closure with a table index.  This backend must carry that metadata
+/// through instead of rebuilding a signature from the runtime operands.
+struct FuncTailCallIndirectPattern;
+
+impl RewritePattern for FuncTailCallIndirectPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if func::TailCallIndirect::from_op(ctx, op).is_err() {
+            return false;
+        }
+
+        // This is intentionally checked before creating any replacement.
+        // Missing or malformed metadata remains a residual `func.*` op and is
+        // rejected by the Wasm readiness boundary rather than guessed from
+        // table-index and argument values.
+        if crate::emit::helpers::exact_return_call_indirect_signature(ctx, op).is_err() {
+            return false;
+        }
+
+        let operands: Vec<_> = ctx.op_operands(op).to_vec();
+        if operands.is_empty() || !ctx.op_result_types(op).is_empty() {
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let attrs = ctx.op(op).attributes.clone();
+        let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0);
+        ctx.op_mut(new_op.op_ref()).attributes.extend(attrs);
+        rewriter.replace_op(new_op.op_ref());
+        true
+    }
+}
+
 /// Pattern for `func.unreachable` -> `wasm.unreachable`
 struct FuncUnreachablePattern;
 
@@ -381,6 +425,7 @@ fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
     use trunk_ir::types::Attribute;
 
     #[test]
@@ -407,5 +452,100 @@ mod tests {
             ctx.op(lowered).attributes.get("custom"),
             Some(&Attribute::Int(7))
         );
+    }
+
+    #[test]
+    fn lowers_direct_and_indirect_proper_tail_transfers() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @target(%value: core.i32) -> core.nil {
+    func.return
+  }
+  func.func @direct(%value: core.i32) -> core.nil {
+    func.tail_call %value {callee = @target}
+  }
+  func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+  }
+  func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %table_index, %value : core.i32
+    func.return %result
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains("wasm.return_call %0 {callee = @target}"),
+            "{output}"
+        );
+        assert!(
+            output.contains("wasm.return_call_indirect %0, %1"),
+            "{output}"
+        );
+        assert!(output.contains(" = wasm.call_indirect "), "{output}");
+        assert!(
+            output.contains("func.indirect_call_signature = core.func(core.nil, core.i32)"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn lowers_indirect_tail_transfer_with_a_function_table_entry() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @target(%value: core.i32) -> core.nil {
+    func.return
+  }
+  func.func @caller(%value: core.i32) -> core.nil {
+    %table_index = func.constant {func_ref = @target} : core.i32
+    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(output.contains("wasm.table"), "{output}");
+        assert!(output.contains("wasm.elem"), "{output}");
+        assert!(
+            output.contains("wasm.ref_func {func_name = @target}"),
+            "{output}"
+        );
+        assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
+        assert!(output.contains("wasm.return_call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn leaves_indirect_tail_transfers_without_an_exact_empty_signature_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %table_index, %value
+  }
+  func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.i32, core.i32)}
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(
+            output.matches("func.tail_call_indirect").count(),
+            2,
+            "{output}"
+        );
+        assert!(!output.contains("wasm.return_call_indirect"), "{output}");
     }
 }
