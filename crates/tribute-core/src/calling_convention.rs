@@ -9,6 +9,7 @@ pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 pub const INDIRECT_CALL_SIGNATURE_ATTR: &str =
     trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR;
 pub const CLOSURE_CALLABLE_TYPE_ATTR: &str = "tribute.closure_callable_type";
+pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
 /// The ABI strength required to call a function.
 ///
@@ -46,6 +47,11 @@ impl CallingConvention {
     /// Whether the convention carries a done continuation.
     pub fn needs_done_k(self) -> bool {
         self == Self::Cps
+    }
+
+    /// Physical closure environment slot for this convention.
+    pub fn closure_environment_index(self) -> usize {
+        usize::from(self.needs_evidence())
     }
 }
 
@@ -158,6 +164,10 @@ mod tests {
         let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
 
         assert_ne!(direct, cps);
+        assert_eq!(
+            get_physical_closure_convention(&ctx, direct),
+            Some(CallingConvention::Direct)
+        );
         assert_eq!(
             get_physical_closure_convention(&ctx, cps),
             Some(CallingConvention::Cps)

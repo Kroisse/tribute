@@ -19,6 +19,8 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
+use std::ops::ControlFlow;
+
 use tribute_core::{
     CallableAbi, CallingConvention, get_calling_convention, get_closure_callable_type,
     get_physical_closure_convention, set_closure_callable_type, set_indirect_call_signature,
@@ -37,6 +39,7 @@ use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
@@ -471,7 +474,7 @@ fn exact_physical_call_contract(
             casts.push((index, *expected));
         }
     }
-    let environment_index = usize::from(convention.needs_evidence());
+    let environment_index = convention.closure_environment_index();
     if environment_index > args.len() {
         return None;
     }
@@ -572,6 +575,50 @@ fn evidence_param_for_func(ctx: &IrContext, func_op: func::Func) -> Option<Value
     ctx.block_args(entry).first().copied()
 }
 
+fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) -> bool {
+    let Some(&body) = ctx.op(func_op.op_ref()).regions.first() else {
+        return true;
+    };
+    let mut transfers = Vec::new();
+    let _ = walk_region::<()>(ctx, body, &mut |op| {
+        if func::Func::matches(ctx, op) {
+            return ControlFlow::Continue(WalkAction::Skip);
+        }
+        if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
+            transfers.push(op);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    if transfers.is_empty() {
+        return true;
+    }
+
+    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let never = core::never(ctx).as_type_ref();
+    transfers.into_iter().all(|op| {
+        let operands = ctx.op_operands(op).to_vec();
+        let Some((&callee, args)) = operands.split_first() else {
+            return false;
+        };
+        if physical_closure_type_for_callee(ctx, callee).is_none() {
+            return true;
+        }
+        let Some(convention) = get_calling_convention(ctx, op) else {
+            return false;
+        };
+        if func::CallIndirect::matches(ctx, op) {
+            let Some(&result) = ctx.op_result_types(op).first() else {
+                return false;
+            };
+            exact_physical_call_contract(ctx, callee, convention, args, result, anyref).is_some()
+        } else {
+            convention == CallingConvention::Cps
+                && exact_physical_call_contract(ctx, callee, convention, args, never, anyref)
+                    .is_some()
+        }
+    })
+}
+
 /// Lower closures using arena IR.
 ///
 /// This compatibility entry point prepares module-level function signatures,
@@ -604,6 +651,9 @@ pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
 /// only interposes the physical closure environment.
 pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
     if ctx.op(func_op.op_ref()).regions.is_empty() {
+        return;
+    }
+    if !tagged_closure_transfers_are_legal(ctx, func_op) {
         return;
     }
     let legacy_evidence = evidence_param_for_func(ctx, func_op);
@@ -672,7 +722,6 @@ impl Pass for LowerClosuresInFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::ControlFlow;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
@@ -925,6 +974,34 @@ mod tests {
         assert_eq!(callable.params(&ctx).len(), 5);
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
+    }
+
+    #[test]
+    fn metadata_less_tagged_closure_transfer_leaves_function_unchanged() {
+        let mut ctx = IrContext::new();
+        let evidence = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  !cps = closure.closure(core.func(core.never, {evidence}, core.i32)) {{tribute.calling_convention = 2}}
+  func.func @callee(%evidence: {evidence}, %env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
+    func.unreachable
+  }}
+  func.func @run(%evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
+    %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
+    %callee = closure.new %environment {{func_ref = @callee}} : !cps
+    func.tail_call_indirect %callee, %evidence, %done
+  }}
+}}"#
+            ),
+        );
+        let run = func_by_name(&ctx, module, "run");
+        let before = print_module(&ctx, module.op());
+
+        lower_closures_in_func(&mut ctx, run);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

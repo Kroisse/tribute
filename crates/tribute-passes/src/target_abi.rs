@@ -10,10 +10,12 @@ use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
 
+use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, INDIRECT_CALL_SIGNATURE_ATTR,
     get_calling_convention, get_indirect_call_signature, get_physical_closure_convention,
 };
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -58,7 +60,8 @@ pub fn lower_cps_signatures_to_physical(
     let ops = collect_ops(ctx, module.op());
     let never = core::never(ctx).as_type_ref();
     let nil = core::nil(ctx).as_type_ref();
-    let functions = collect_functions(ctx, &ops, never)?;
+    let anyref = tribute_rt::anyref(ctx).as_type_ref();
+    let functions = collect_functions(ctx, &ops, never, anyref)?;
     validate_transfers(ctx, &ops, &functions, never)?;
 
     let aliases = ctx.type_aliases().to_vec();
@@ -79,12 +82,35 @@ pub fn lower_cps_signatures_to_physical(
     for &op in &ops {
         if let Ok(function) = func::Func::from_op(converter.ctx, op) {
             let signature = function.r#type(converter.ctx);
-            let converted = match exact_convention(converter.ctx, op)? {
+            let convention = exact_convention(converter.ctx, op)?;
+            let converted = match convention {
                 Some(convention) => converter.convert_callable(signature, convention)?,
                 None => converter.convert_embedded(signature)?,
             };
             if converted != signature {
                 function_types.push((op, converted));
+            }
+            if convention.is_some() {
+                let identity = function_for_symbol(
+                    converter.ctx,
+                    op,
+                    function.sym_name(converter.ctx),
+                    &functions,
+                )?;
+                if let Some(index) = identity.environment_index
+                    && converter
+                        .ctx
+                        .op(op)
+                        .attributes
+                        .get(Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR))
+                        .is_none()
+                {
+                    attributes.push((
+                        op,
+                        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+                        Attribute::Int(index as i128),
+                    ));
+                }
             }
         }
 
@@ -211,6 +237,7 @@ fn collect_functions(
     ctx: &IrContext,
     ops: &[OpRef],
     never: TypeRef,
+    anyref: TypeRef,
 ) -> Result<HashMap<(OpRef, Symbol), FunctionIdentity>, TargetAbiError> {
     let mut functions = HashMap::new();
     for &op in ops {
@@ -234,7 +261,13 @@ fn collect_functions(
         let identity = FunctionIdentity {
             signature,
             convention,
-            environment_index: environment_index(ctx, op, callable.params(ctx))?,
+            environment_index: environment_index(
+                ctx,
+                op,
+                callable.params(ctx),
+                convention,
+                anyref,
+            )?,
         };
         if functions.insert(key, identity).is_some() {
             return Err(TargetAbiError::new(
@@ -420,12 +453,36 @@ fn environment_index(
     ctx: &IrContext,
     function: OpRef,
     params: &[TypeRef],
+    convention: CallingConvention,
+    anyref: TypeRef,
 ) -> Result<Option<usize>, TargetAbiError> {
+    let attributes = &ctx.op(function).attributes;
+    let present = attributes
+        .get(Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR))
+        .is_some();
+    let declared = attributes
+        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+        .ok()
+        .flatten()
+        .map(|index| index as usize);
+    if present && declared.is_none() {
+        return Err(TargetAbiError::new(
+            "target ABI: malformed closure environment index metadata",
+        ));
+    }
+    if let Some(index) = declared {
+        validate_environment_slot(params, convention, anyref, index)?;
+    }
+
     let Some(&region) = ctx.op(function).regions.first() else {
-        return Ok(None);
+        return Ok(declared);
     };
     let Some(&entry) = ctx.region(region).blocks.first() else {
-        return Ok(None);
+        return declared.map_or(Ok(None), |_| {
+            Err(TargetAbiError::new(
+                "target ABI: closure environment provenance has no entry block",
+            ))
+        });
     };
     let arguments = &ctx.block(entry).args;
     if arguments.len() != params.len() {
@@ -441,12 +498,15 @@ fn environment_index(
         })
         .collect();
     match indices.as_slice() {
+        [] if declared.is_some() => Err(TargetAbiError::new(
+            "target ABI: closure environment provenance has no matching `__env` parameter",
+        )),
         [] => Ok(None),
         [index] => {
-            let data = ctx.types.get(params[*index]);
-            if data.dialect != Symbol::new("tribute_rt") || data.name != Symbol::new("anyref") {
+            validate_environment_slot(params, convention, anyref, *index)?;
+            if declared.is_some_and(|declared| declared != *index) {
                 return Err(TargetAbiError::new(
-                    "target ABI: `__env` must have exact tribute_rt.anyref type",
+                    "target ABI: closure environment index differs from `__env` parameter",
                 ));
             }
             Ok(Some(*index))
@@ -455,6 +515,25 @@ fn environment_index(
             "target ABI: function has multiple `__env` parameters",
         )),
     }
+}
+
+fn validate_environment_slot(
+    params: &[TypeRef],
+    convention: CallingConvention,
+    anyref: TypeRef,
+    index: usize,
+) -> Result<(), TargetAbiError> {
+    if index != convention.closure_environment_index() {
+        return Err(TargetAbiError::new(
+            "target ABI: closure environment index differs from calling convention",
+        ));
+    }
+    if params.get(index) != Some(&anyref) {
+        return Err(TargetAbiError::new(
+            "target ABI: closure environment must have exact tribute_rt.anyref type",
+        ));
+    }
+    Ok(())
 }
 
 fn symbol_scope(ctx: &IrContext, op: OpRef) -> Result<OpRef, TargetAbiError> {
@@ -555,6 +634,11 @@ impl<'a> PhysicalTypeConverter<'a> {
             return Ok(converted);
         }
         if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
+            if data.params.is_empty() {
+                return Err(TargetAbiError::new(
+                    "target ABI: core.func type has no result parameter",
+                ));
+            }
             let callable = core::Func::from_type_ref(self.ctx, ty).unwrap();
             if callable.r#return(self.ctx) == self.never {
                 return Err(TargetAbiError::new(
@@ -716,14 +800,18 @@ mod tests {
     }
 
     #[test]
-    fn bodyless_cps_function_constant_physicalizes_without_a_body() {
+    fn bodied_and_bodyless_closure_targets_share_environment_provenance() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @external(%evidence: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2}
+  func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  func.func @defined(%evidence: core.i32, %__env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} {
+    func.unreachable
+  }
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : core.func(core.never, core.i32, core.i32)
+    %external = func.constant {func_ref = @external} : core.func(core.never, core.i32, core.i32)
+    %defined = func.constant {func_ref = @defined} : core.func(core.never, core.i32, core.i32)
     func.unreachable
   }
 }"#,
@@ -733,9 +821,84 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.func @external(%arg0: core.i32, %arg1: core.i32) -> core.nil")
+            printed.contains(
+                "func.func @external(%arg0: core.i32, %arg1: tribute_rt.anyref, %arg2: core.i32) -> core.nil"
+            ),
+            "{printed}"
         );
-        assert!(printed.contains("func.constant {func_ref = @external} : core.func(core.nil"));
+        assert!(
+            printed.contains("func.func @defined")
+                && printed.matches("func.constant").count() == 2
+                && printed
+                    .matches("core.func(core.nil, core.i32, core.i32)")
+                    .count()
+                    == 2,
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn malformed_or_missing_environment_provenance_fails_before_mutation() {
+        for (function, expected) in [
+            (
+                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2}",
+                "function reference differs",
+            ),
+            (
+                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 0}",
+                "differs from calling convention",
+            ),
+            (
+                "func.func @external(%evidence: core.i32, %environment: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1}",
+                "exact tribute_rt.anyref",
+            ),
+            (
+                "func.func @external(%evidence: core.i32, %environment: tribute_rt.anyref, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2, tribute.closure_environment_index = 1} { func.unreachable }",
+                "no matching `__env`",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  {function}
+  func.func @holder() -> core.i32 {{
+    %function = func.constant {{func_ref = @external}} : core.func(core.never, core.i32, core.i32)
+    func.unreachable
+  }}
+}}"#
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+
+            let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn malformed_zero_parameter_core_func_fails_without_panicking() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, "core.module @test {}");
+        let malformed = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build(),
+        );
+        ctx.op_mut(module.op()).attributes.insert(
+            Symbol::new("malformed_callable"),
+            Attribute::Type(malformed),
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error.to_string().contains("has no result parameter"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
