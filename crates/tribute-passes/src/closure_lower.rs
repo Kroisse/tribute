@@ -21,6 +21,7 @@
 
 use std::ops::ControlFlow;
 
+use tribute_core::calling_convention::get_physical_closure_environment_index;
 use tribute_core::{
     CallableAbi, CallingConvention, get_calling_convention, get_closure_callable_type,
     get_physical_closure_convention, set_closure_callable_type, set_indirect_call_signature,
@@ -474,7 +475,7 @@ fn exact_physical_call_contract(
             casts.push((index, *expected));
         }
     }
-    let environment_index = convention.closure_environment_index();
+    let environment_index = get_physical_closure_environment_index(ctx, closure_ty)?;
     if environment_index > args.len() {
         return None;
     }
@@ -950,7 +951,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure(core.func(core.never, {ev}, core.i32, core.i32, core.i32)) {{tribute.calling_convention = 2}}
+  !cps = closure.closure(core.func(core.never, {ev}, core.i32, core.i32, core.i32)) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2}}
   }}
@@ -958,7 +959,11 @@ mod tests {
             ),
         );
         let run = func_by_name(&ctx, module, "run");
-        let evidence = ctx.block_args(ctx.region(run.body(&ctx)).blocks[0])[1];
+        let entry_args = ctx.block_args(ctx.region(run.body(&ctx)).blocks[0]);
+        let evidence = entry_args[1];
+        let done = entry_args[2];
+        let dispatch = entry_args[3];
+        let value = entry_args[4];
 
         lower_closures_in_func(&mut ctx, run);
 
@@ -974,6 +979,13 @@ mod tests {
         assert_eq!(callable.params(&ctx).len(), 5);
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
+        assert_eq!(
+            ctx.value_ty(ctx.op_operands(tail)[2]),
+            tribute_rt::anyref(&mut ctx).as_type_ref()
+        );
+        assert_eq!(ctx.op_operands(tail)[3], done);
+        assert_eq!(ctx.op_operands(tail)[4], dispatch);
+        assert_eq!(ctx.op_operands(tail)[5], value);
     }
 
     #[test]

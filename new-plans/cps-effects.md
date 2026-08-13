@@ -86,6 +86,15 @@ adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
 `evidence, environment, done_k, source...`다. `call_indirect`도 같은 순서로
 environment를 삽입한다.
 
+Convention-proven physical `closure.closure` type은 outer type에 exact
+`tribute.closure_environment_index`도 기록한다. Ordinary callable은
+`CallableAbi`의 convention slot을 사용하지만, generated continuation은 capture한
+evidence/`done_k`를 entry parameter로 다시 만들지 않는다. 따라서 producer가
+실제 physical entry slot을 type provenance에 명시하고 lambda lifting과 indirect
+call lowering은 그 slot을 그대로 cross-check/consume한다. Consumer가 arity,
+parameter type, body shape, 또는 calling-convention marker만으로 slot이나 hidden
+operand를 복원하는 것은 illegal이다.
+
 Environment-bearing `func.func`는 zero-based physical slot을
 `tribute.closure_environment_index`로 기록한다. Bodyless declaration은 이
 function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
