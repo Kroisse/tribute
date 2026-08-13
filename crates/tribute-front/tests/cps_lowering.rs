@@ -708,21 +708,38 @@ fn main() {
     let main = checked_logical_function(&ir_text, "main");
     let main_header = main.lines().next().expect("logical function has a header");
     assert!(
-        main_header.contains("convention(cps)")
-            && main_header.contains("tribute.root_export_convention = 0")
-            && main_header.contains("tribute.root_source_result = core.nil")
-            && main.contains("tribute_control.call")
-            && main.contains("callee = @forward_open"),
-        "pure root export must keep Direct metadata while its worker calls CPS:\n{main}"
+        main_header.contains("convention(cps)"),
+        "root main worker must be promoted to Cps:\n{main_header}"
     );
     assert!(
-        !ir_text.contains("Nested::Nested::")
-            && logical_function(&ir_text, "Nested::unwrap")
-                .contains("callee = @\"Nested::Box::value\"")
-            && ir_text.lines().any(|line| line
-                .trim_start()
-                .starts_with("tribute_control.func @\"Box::value\"")),
-        "nested specialized workers must keep their exact qualified identities:\n{ir_text}"
+        main_header.contains("tribute.root_export_convention = 0"),
+        "pure root export must stay Direct:\n{main_header}"
+    );
+    assert!(
+        main_header.contains("tribute.root_source_result = core.nil"),
+        "root source result must stay core.nil:\n{main_header}"
+    );
+    assert!(
+        main.contains("tribute_control.call"),
+        "root main must contain the direct worker call:\n{main}"
+    );
+    assert!(
+        main.contains("callee = @forward_open"),
+        "root main must call the promoted forward_open worker:\n{main}"
+    );
+    assert!(
+        !ir_text.contains("Nested::Nested::"),
+        "nested workers must not be requalified:\n{ir_text}"
+    );
+    assert!(
+        logical_function(&ir_text, "Nested::unwrap").contains("callee = @\"Nested::Box::value\""),
+        "nested worker must call the exact qualified accessor:\n{ir_text}"
+    );
+    assert!(
+        ir_text.lines().any(|line| line
+            .trim_start()
+            .starts_with("tribute_control.func @\"Box::value\"")),
+        "specialized accessor must keep its exact root identity:\n{ir_text}"
     );
 }
 

@@ -463,6 +463,8 @@ impl<'db> IrLoweringCtx<'db> {
     ///
     /// - `["test", "String"]` + `"to_bytes"` → `"String::to_bytes"`
     /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
+    /// - `"Nested::Box::value"` → `"Nested::Box::value"` (already qualified,
+    ///   returned unchanged)
     pub fn qualify_name(&self, name: Symbol) -> Symbol {
         // Synthetic monomorphized declarations already carry their resolved
         // source path. Adding the current module again would change the
