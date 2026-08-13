@@ -464,6 +464,12 @@ impl<'db> IrLoweringCtx<'db> {
     /// - `["test", "String"]` + `"to_bytes"` → `"String::to_bytes"`
     /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
     pub fn qualify_name(&self, name: Symbol) -> Symbol {
+        // Synthetic monomorphized declarations already carry their resolved
+        // source path. Adding the current module again would change the
+        // identity used by convention lookup and logical declaration emission.
+        if name.with_str(|text| text.contains("::")) {
+            return name;
+        }
         // Skip the first segment (top-level module name from filename).
         // Only nested module segments contribute to the qualified name.
         let nested: Vec<_> = self.module_path.iter().skip(1).collect();

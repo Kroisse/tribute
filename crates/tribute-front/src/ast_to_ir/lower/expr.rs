@@ -914,6 +914,15 @@ pub(super) fn evaluation_control_class<'db>(
     evaluation_control_class_with_handle_propagation(ctx, expr, false)
 }
 
+/// Classify a source-logical worker before shared CPS legalization. A handled
+/// computation remains CPS until that later pass creates its continuation.
+pub(super) fn logical_evaluation_control_class<'db>(
+    ctx: &super::super::context::IrLoweringCtx<'db>,
+    expr: &Expr<TypedRef<'db>>,
+) -> EvaluationControlClass {
+    evaluation_control_class_with_handle_propagation(ctx, expr, true)
+}
+
 /// Classify evaluation with an explicit nested-handle propagation policy.
 ///
 /// Source convention selection treats handles as source delimiters. Ambient
