@@ -28,11 +28,11 @@ Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌�
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
 
-### CPS 변환 전 호출 대상 형상
+### CPS 변환의 호출 대상 형상
 
 입력 형상은 [ir.md](ir.md#direct-style-control)의 operation/type 계약을 따른다.
 모든 callable은 exact `tribute.calling_convention` code 0/1/2를 가진 logical
-type과 source parameter/result만 사용하며 evidence, environment, `done_k`는
+type과 source parameter/result만 사용하며 evidence, environment, `ContinuationFrame<R>`는
 아직 없다.
 
 `tribute_control_to_cps`는 closure extraction 전에 전체 callable graph를 하나의
@@ -42,11 +42,14 @@ type과 source parameter/result만 사용하며 evidence, environment, `done_k`�
 | ---- | ---- | ---- |
 | `Direct` | 소스 parameter | 소스 result |
 | `EvidenceDirect` | evidence 뒤 소스 parameter | 소스 result |
-| `Cps` | evidence, `done_k`, source parameter 순서 | logical `core.never`, physical empty result |
+| `Cps` | evidence, `ContinuationFrame<R>`, source parameter 순서 | logical `core.never`, physical empty result |
 
-Parameter 순서는 기존 `CallableAbi` 순서다. `Cps`의 `done_k`는 source result를
-받고 logical `core.never`를 반환한다. Control lowering 뒤 worker와 continuation은
-result vector가 비어 있으며 제어 값을 반환하지 않는다.
+Parameter 순서는 기존 `CallableAbi` 순서다. `ContinuationFrame<R>`는 CPS callable이
+전달하는 continuation/control frame이며 `Done<R>`와 내부의 어휘적 `Dispatch<R>`를
+함께 보존한다. `Completion<X, R>`와 `ResumeExact<I, R>`는 각각
+`(Evidence, ContinuationFrame<R>, X)`와 `(Evidence, ContinuationFrame<R>, I)`를 받아
+logical `core.never`로 끝난다. Control lowering
+뒤 worker와 continuation은 result vector가 비어 있으며 제어 값을 반환하지 않는다.
 
 Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref`,
 direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
@@ -65,15 +68,15 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   closure struct로 바꾼다.
 - `Direct`/`EvidenceDirect`의 `tribute_control.call`과 `call_indirect`는 각각
   physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
-  `done_k`로 전달하고 named target에는 `func.tail_call`, dynamic target에는
-  `func.tail_call_indirect`를 쓴다. Evidence와 environment는 `CallableAbi`
+  담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
+  `func.tail_call_indirect`를 쓴다. Evidence, ContinuationFrame과 environment는 `CallableAbi`
   순서로 삽입한다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
-  `Cps`에서는 `done_k(value)`로 `func.tail_call_indirect`하며 뒤에
+  `Cps`에서는 ContinuationFrame의 `Done<R>`으로 `value`를 이전하며 뒤에
   `func.return`이나 result가 없다.
 
 알려진 CPS target으로의 최종 이전은 `func.tail_call`, closure, continuation,
-`done_k`처럼 동적인 target으로의 이전은 `func.tail_call_indirect`를 사용한다.
+ContinuationFrame의 `Done<R>`처럼 동적인 target으로의 이전은 `func.tail_call_indirect`를 사용한다.
 Shared IR의 caller/callee result는 `core.never`이고 target signature의 result
 vector는 비어 있어야 한다.
 생성한 continuation, `done_k`, handler-dispatch function에도
@@ -83,13 +86,13 @@ vector는 비어 있어야 한다.
 기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
 adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
 `EvidenceDirect`에서 `evidence, environment, source...`, `Cps`에서
-`evidence, environment, done_k, source...`다. `call_indirect`도 같은 순서로
+`evidence, environment, ContinuationFrame<R>, source...`다. `call_indirect`도 같은 순서로
 environment를 삽입한다.
 
 Convention-proven physical `closure.closure` type은 outer type에 exact
-`tribute.closure_environment_index`도 기록한다. Ordinary callable은
-`CallableAbi`의 convention slot을 사용하지만, generated continuation은 capture한
-evidence/`done_k`를 entry parameter로 다시 만들지 않는다. 따라서 producer가
+`tribute.closure_environment_index`도 기록한다. 일반 callable과 생성된
+continuation은 `CallableAbi`가 정한 Evidence와 ContinuationFrame entry parameter를 사용한다.
+따라서 producer가
 실제 physical entry slot을 type provenance에 명시하고 lambda lifting과 indirect
 call lowering은 그 slot을 그대로 cross-check/consume한다. Consumer가 arity,
 parameter type, body shape, 또는 calling-convention marker만으로 slot이나 hidden
@@ -165,7 +168,9 @@ branch, guard, 오른쪽 항만 실행한다.
    performed-computation suffix와 completion region을 건너뛴다.
 5. Nested handle은 같은 delimiter를 재귀적으로 만든다. Resumed path는 perform과
    handler 사이에서 capture된 모든 case/conditional/short-circuit/nested-handle
-   frame에 다시 진입한다. Non-resumed path는 해당 frame을 포기한다.
+   frame에 다시 진입한다. Resume은 동적 `ContinuationFrame<R>`에서 새 불변 어휘적
+   dispatcher를 만들고, 그 ContinuationFrame을 다음 suffix와 resume에 전달한다. Non-resumed
+   path는 해당 frame을 포기한다.
 
 Converter는 region, block suffix, `tribute_control.yield`, 검증된
 `operation_kind`, callable convention metadata에서 모든 continuation을
@@ -206,8 +211,8 @@ location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 Backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
 `effect.*`를 각각 독립적으로 거부한다.
 
-논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 `done_k`의
-인자로만 전달되고 logical control result는 `core.never`다. Physical control
+논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 ContinuationFrame의
+`Done<R>`에만 전달되고 logical control result는 `core.never`다. Physical control
 lowering은 이를 empty-result 함수와 proper tail transfer로 바꾸며 반환되는
 control value를 만들지 않는다. Resume하지 않는 handler arm도
 `Escape`를 반환하는 대신 해당 handle의 exit continuation으로 직접 tail
@@ -289,6 +294,25 @@ tail-calls it:
 func.tail_call_indirect %fn(
   %ev, %env, %continuation_anyref, %op_idx, %arg_anyref)
 ```
+
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="dispatch-layers"></a>
+
+### Dispatch 계층
+
+여기에는 서로 다른 세 dispatch 계층이 있다.
+
+1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 resume에서 어휘적 dispatcher를 재구성하는
+   CPS closure이며 `(evidence, resume, prompt, ability_id, op_id, payload)`를 받는다.
+2. `effect.dispatch_cps(evidence, continuation, payload)`는 대상 독립적이고
+   result가 없는 effect operation이다.
+3. 대상 handler tail ABI는
+   `(evidence, env, continuation, op_idx, payload)`이며 handler closure를 직접
+   호출한다.
+
+정의, lambda, adapter, direct/indirect call, return, suffix, resume, handle은
+ContinuationFrame을 같은 callable provenance로 전달한다. 내부 Dispatch를 effect operation이나
+target handler ABI로 대체하지 않는다.
 
 Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므로,
 `ability.perform` 이후의 같은 function-body ops는 dead code가 된다.

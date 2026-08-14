@@ -62,7 +62,9 @@ tribute        -> tribute-front + tribute-passes
   verifier와 Tribute-specific whole-IR verifier를 소유한다.
 - `tribute-passes`는
   [atomic callable/control conversion](cps-effects.md#pre-cps-callable-shape)과
-  post-CPS legality, generic `func.tail_call_indirect`를 소유한다.
+  post-CPS legality, generic `func.tail_call_indirect`를 소유한다. 이 변환은
+  Cps 정의, lambda, adapter, call, return, suffix, resume, handle에
+  Evidence와 ContinuationFrame을 같은 callable contract로 전달한다.
 - Root `tribute` crate는 frontend emission과 shared conversion을 조합한다.
   Target-independent root bridge는 completion cell과 terminal continuation의 추상
   조합 계약만 정한다.
@@ -310,7 +312,8 @@ struct Marker {
 Operation table 대신 handler boundary에서 두 종류의 dispatch closure를 만든다:
 
 - `tr_dispatch_fn`: `fn` operation 전용. `(op_idx, value) -> anyref`
-- `handler_dispatch`: `op` operation 전용. `(k, op_idx, value) -> ()`
+- `handler_dispatch`: `op` operation 전용 대상 proper-tail closure.
+  `(evidence, env, continuation, op_idx, payload) -> empty result`
 
 `op_idx`는 ability 이름과 operation 이름의 stable hash로 계산한다. 호출 지점과
 handler dispatch closure가 같은 hash 함수를 사용하므로, handler arm 등록 순서에
@@ -390,7 +393,7 @@ fn state_get(ev: Evidence) -> s {
    `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete residual effect가 없다면
    worker 자체도 Direct일 수 있다
 2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
-3. **CPS 함수**는 evidence와 `done_k`를 받고 source result를 직접 반환하지 않는다
+3. **CPS 함수**는 evidence와 `ContinuationFrame<R>`를 받고 source result를 직접 반환하지 않는다
 4. **Handler 설치** 시 새 evidence를 할당한다
 5. **Handled ability operation** 시 evidence에서 marker를 조회한다
 
@@ -423,16 +426,18 @@ Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
 target-independent `ReadLineResult`를 사용한다. Native와 Wasm pipeline은 이후 각자의
 runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.
 
-논리적인 CPS ABI에서 함수와 `done_k`의 control result는 `Never`다:
+논리적인 CPS ABI에서 함수와 ContinuationFrame의 `Done<R>` transfer의 control result는
+`Never`다:
 
 ```text
-fn cps(ev: Evidence, done_k: fn(T) -> Never, args...) -> Never
+fn cps(ev: Evidence, frame: ContinuationFrame<R>, args...) -> Never
 ```
 
 최종 physical ABI는 empty result를 쓰고 direct transfer는 `func.tail_call`,
-closure/continuation/`done_k` transfer는 `func.tail_call_indirect`를 쓴다. CPS
-control carrier로 `anyref`를 사용할 수 없다. Boxed source value, payload, closure
-environment 같은 일반 reference erasure에는 사용할 수 있다.
+closure/continuation/ContinuationFrame의 `Done<R>` transfer는
+`func.tail_call_indirect`를 쓴다. CPS control carrier로 `anyref`를 사용할 수 없다.
+Boxed source value, payload, closure environment 같은 일반 reference erasure에는
+`anyref`를 사용할 수 있다.
 
 ### 런타임 함수
 
@@ -509,8 +514,8 @@ effect-polymorphic `add`는 Direct worker를 가질 수 있으며, first-class f
 boundary에서는 contextual convention에 맞는 adapter를 사용한다. 명시적인 `->{}`도
 닫힌 빈 row이므로 Direct를 사용한다.
 
-여기서 `Cps`는 source result를 직접 반환하지 않고 `done_k`로 전달한다는
-논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
+여기서 `Cps`는 source result를 직접 반환하지 않고 ContinuationFrame의 `Done<R>`으로
+전달한다는 논리적 convention이다. Lowering은 `core.never`를 empty-result proper tail
 transfer로 바꾸며 대체 carrier를 선택하지 않는다.
 
 따라서 `fn`과 `op`를 함께 선언한 ability는 함수 ABI를 정할 때 `Cps`로
@@ -580,7 +585,7 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 `f`가 순수인지 effectful인지 컴파일 타임에 모를 수 있다. 전략:
 
 1. **열린 row는 Cps**: 구체화 전에는 더 강한 convention을 요구할 가능성을
-   배제할 수 없으므로 `done_k`를 포함하는 ABI를 사용한다
+   배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
 2. **Evidence는 항상 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다
 3. **Tail-resumptive 최적화**: 구체적인 `fn` operation call-site에서는 실제 shift가
    필요 없다
@@ -770,6 +775,9 @@ Effect handling은 tail-call CPS로 구현한다.
 `lower_handle_dispatch`는 runtime dispatch loop가 아니라 body result에 `done`
 handler를 적용하는 정리 pass이다. Backend-specific lowering이 이후 `effect.*`를
 native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
+
+내부 ContinuationFrame dispatcher와 resultless `effect.dispatch_cps`, target handler
+tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
 
 상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 

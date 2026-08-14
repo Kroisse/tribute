@@ -461,7 +461,7 @@ tribute_control.handler {
   terminator, token 위치/parameter, 위 yield 규칙을 확인한다.
   `operation_result_type`이 `Never`인 general handler는 token argument가 없어야
   하며 nested region을 포함한 body 어디에도 `tribute_control.resume`이 없어야
-  한다. Parent placement, uniqueness와 `op -> Never` yield를 포함한 enclosing
+  한다. ContinuationFrame placement, uniqueness와 `op -> Never` yield를 포함한 enclosing
   handle result와의 equality는 containing handle의 local verifier가 확인하고,
   converter도 rewrite 전에 같은 equality와 resume 부재를 검사해 위반을
   conversion failure로 보고한다. Symbol-aware frontend 적합성 검사는 참조된
@@ -551,6 +551,12 @@ logical continuation으로 region을 lower한다:
    handler 중 가장 가까운 일치 handler가 처리한다. Resume하면 perform과 해당
    handler 사이에서 선택된 모든 structured frame에 다시 진입한다. Resume하지
    않고 완료하면 그 frame을 포기한다.
+
+CPS 변환 뒤 Cps callable은 `Evidence, ContinuationFrame<R>, source args`를 받고
+`core.never`로 끝난다. 생성된 completion과 exact resume도 Evidence와
+ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 불변 어휘적 dispatcher를
+재구성한 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
+형상은 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
 
 이 단일 region/suffix 규칙은 case arm과 guard, conditional, short-circuit
 오른쪽 항, nested handle body와 arm, resume path, 그리고 이들을 감싸는 strict
