@@ -200,16 +200,19 @@ pub fn cps_dispatch_type(
 /// Callers must reject absent or malformed outer closure provenance rather than infer a
 /// callable contract from a structurally similar type.
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
-    if get_physical_closure_convention(ctx, closure) != Some(CallingConvention::Cps)
-        || get_physical_closure_environment_index(ctx, closure).is_none()
-    {
+    let environment_index = get_physical_closure_environment_index(ctx, closure)?;
+    if get_physical_closure_convention(ctx, closure) != Some(CallingConvention::Cps) {
         return None;
     }
     let [function] = ctx.types.get(closure).params.as_slice() else {
         return None;
     };
     let data = ctx.types.get(*function);
-    (data.dialect == Symbol::new("core") && data.name == Symbol::new("func")).then_some(*function)
+    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        return None;
+    }
+    let argument_count = data.params.len().checked_sub(1)?;
+    (environment_index <= argument_count).then_some(*function)
 }
 
 fn generated_cps_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef {
@@ -440,6 +443,16 @@ mod tests {
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(0))
                 .build(),
         );
+        let out_of_range_environment = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+                .param(function)
+                .attr(
+                    CALLING_CONVENTION_ATTR,
+                    Attribute::Int(CallingConvention::Cps as i128),
+                )
+                .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
+                .build(),
+        );
         let unmarked_parent = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(Symbol::new("Parent")))
@@ -448,6 +461,10 @@ mod tests {
 
         assert_eq!(cps_closure_function_type(&ctx, missing_environment), None);
         assert_eq!(cps_closure_function_type(&ctx, extra_outer_parameter), None);
+        assert_eq!(
+            cps_closure_function_type(&ctx, out_of_range_environment),
+            None
+        );
         assert_eq!(cps_parent_result_type(&ctx, unmarked_parent), None);
         assert_eq!(cps_parent_result_type(&ctx, missing_environment), None);
     }
