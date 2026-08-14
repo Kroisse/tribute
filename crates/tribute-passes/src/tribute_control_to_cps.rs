@@ -8,8 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
+use tribute_core::calling_convention::physical_closure_type_with_environment_index;
 use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, set_calling_convention,
+    CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
+    set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -806,14 +808,18 @@ impl<'a> Converter<'a> {
     fn done_k_type(&mut self, answer: TypeRef) -> TypeRef {
         let never = self.never_type();
         let function = core::func(self.ctx, never, [answer]).as_type_ref();
-        closure::closure(self.ctx, function).as_type_ref()
+        self.generated_continuation_type(function)
     }
 
     fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
         let never = self.never_type();
         let done_k = self.done_k_type(answer);
         let function = core::func(self.ctx, never, [done_k, input]).as_type_ref();
-        closure::closure(self.ctx, function).as_type_ref()
+        self.generated_continuation_type(function)
+    }
+
+    fn generated_continuation_type(&mut self, function: TypeRef) -> TypeRef {
+        physical_closure_type_with_environment_index(self.ctx, function, CallingConvention::Cps, 0)
     }
 
     fn convert_attribute(&mut self, attribute: &Attribute) -> Attribute {
@@ -861,7 +867,7 @@ impl<'a> Converter<'a> {
                 result
             };
             let function = core::func(self.ctx, lowered_result, lowered_params).as_type_ref();
-            let converted = closure::closure(self.ctx, function).as_type_ref();
+            let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
         }
@@ -1488,7 +1494,7 @@ impl<'a> Converter<'a> {
         let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
         let function = core::func(self.ctx, never, std::iter::empty::<TypeRef>()).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
@@ -1624,7 +1630,7 @@ impl<'a> Converter<'a> {
         let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
         let function = core::func(self.ctx, never, [result_type]).as_type_ref();
-        let closure_ty = closure::closure(self.ctx, function).as_type_ref();
+        let closure_ty = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_ty, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
@@ -1787,7 +1793,7 @@ impl<'a> Converter<'a> {
         let captures = ordered_external_values(self.ctx, body);
         let never = self.never_type();
         let function = core::func(self.ctx, never, [arg_type]).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, body);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
@@ -2206,7 +2212,7 @@ impl<'a> Converter<'a> {
             self.convert_type(operation_result)
         };
         let function = core::func(self.ctx, result, params).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok(HandlerArmInfo {
@@ -2357,17 +2363,14 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let function = core::func(self.ctx, result, params).as_type_ref();
-        let closure_type = closure::closure(self.ctx, function).as_type_ref();
+        let convention = if general {
+            CallingConvention::Cps
+        } else {
+            CallingConvention::EvidenceDirect
+        };
+        let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
-        set_calling_convention(
-            self.ctx,
-            lambda.op_ref(),
-            if general {
-                CallingConvention::Cps
-            } else {
-                CallingConvention::EvidenceDirect
-            },
-        );
+        set_calling_convention(self.ctx, lambda.op_ref(), convention);
         (lambda.op_ref(), lambda.result(self.ctx))
     }
 
@@ -3096,6 +3099,7 @@ impl Pass for TributeControlToCps {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
@@ -3103,6 +3107,20 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
         (ctx, module)
+    }
+
+    fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
+        if closure::Lambda::matches(ctx, op) {
+            lambdas.push(op);
+            return;
+        }
+        for &region in &ctx.op(op).regions {
+            for &block in &ctx.region(region).blocks {
+                for &child in &ctx.block(block).ops {
+                    collect_lambdas(ctx, child, lambdas);
+                }
+            }
+        }
     }
 
     #[test]
@@ -3197,9 +3215,34 @@ mod tests {
         assert!(printed.contains("tribute.calling_convention = 2"));
         assert!(!printed.contains("tribute_control."), "{printed}");
 
-        let mut reparsed = IrContext::new();
-        let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        // `closure.lambda` assembly only preserves its callable shape. The
+        // exact outer closure convention remains canonical type provenance
+        // and is verified above before this printer/parser boundary.
+        let mut lambdas = Vec::new();
+        collect_lambdas(&ctx, module.op(), &mut lambdas);
+        let one_parameter_cps = lambdas.into_iter().find(|lambda| {
+            let closure_ty = ctx.op_result_types(*lambda)[0];
+            tribute_core::get_calling_convention(&ctx, *lambda) == Some(CallingConvention::Cps)
+                && closure::Closure::from_type_ref(&ctx, closure_ty)
+                    .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
+                    .is_some_and(|callable| callable.params(&ctx).len() == 1)
+        });
+        let lambda =
+            one_parameter_cps.expect("conversion should produce a one-parameter CPS continuation");
+        let closure_ty = ctx.op_result_types(lambda)[0];
+        assert_eq!(
+            tribute_core::calling_convention::get_physical_closure_environment_index(
+                &ctx, closure_ty
+            ),
+            Some(0)
+        );
+        crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+        crate::closure_lower::lower_closures(&mut ctx, module);
+        let lowered = print_module(&ctx, module.op());
+        assert!(
+            !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
+            "{lowered}"
+        );
     }
 
     #[test]
@@ -4080,9 +4123,39 @@ mod tests {
         assert!(printed.contains("func.call") && printed.contains("func.tail_call_indirect"));
         assert!(!printed.contains("tribute_control."));
 
-        let mut reparsed = IrContext::new();
-        let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        let mut lambdas = Vec::new();
+        collect_lambdas(&ctx, module.op(), &mut lambdas);
+        let mut generated_param_counts = Vec::new();
+        for lambda in lambdas {
+            if tribute_core::get_calling_convention(&ctx, lambda) != Some(CallingConvention::Cps) {
+                continue;
+            }
+            let closure_ty = ctx.op_result_types(lambda)[0];
+            assert_eq!(
+                tribute_core::get_physical_closure_convention(&ctx, closure_ty),
+                Some(CallingConvention::Cps)
+            );
+            let callable = closure::Closure::from_type_ref(&ctx, closure_ty)
+                .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
+                .unwrap();
+            generated_param_counts.push(callable.params(&ctx).len());
+        }
+        assert!(generated_param_counts.contains(&0), "{printed}");
+
+        crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+        let lifted = print_module(&ctx, module.op());
+        assert!(!lifted.contains("closure.lambda"), "{lifted}");
+        assert!(
+            lifted.contains("tribute.closure_environment_index = 0"),
+            "{lifted}"
+        );
+        crate::closure_lower::lower_closures(&mut ctx, module);
+        let lowered = print_module(&ctx, module.op());
+        assert!(!lowered.contains("closure.new"), "{lowered}");
+        assert!(
+            lowered.contains("func.indirect_call_signature"),
+            "{lowered}"
+        );
     }
 
     #[test]

@@ -111,16 +111,39 @@ pub fn get_closure_callable_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> 
 }
 
 /// Build a closure type whose outer occurrence carries exact convention
-/// provenance. This is dormant until a producer selects the physical CPS path.
+/// provenance for physical callable producers and consumers.
 pub fn physical_closure_type(
     ctx: &mut IrContext,
     function: TypeRef,
     convention: CallingConvention,
 ) -> TypeRef {
+    physical_closure_type_with_environment_index(
+        ctx,
+        function,
+        convention,
+        convention.closure_environment_index(),
+    )
+}
+
+/// Build a convention-proven closure type with its exact environment slot.
+///
+/// Most callables use the convention's standard slot. Generated continuation
+/// closures may have a narrower physical entry shape, so their producer must
+/// record the slot explicitly instead of asking a later consumer to infer it.
+pub fn physical_closure_type_with_environment_index(
+    ctx: &mut IrContext,
+    function: TypeRef,
+    convention: CallingConvention,
+    environment_index: usize,
+) -> TypeRef {
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
             .param(function)
             .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+            .attr(
+                CLOSURE_ENVIRONMENT_INDEX_ATTR,
+                Attribute::Int(environment_index as i128),
+            )
             .build(),
     )
 }
@@ -136,6 +159,19 @@ pub fn get_physical_closure_convention(
     }
     data.attrs
         .get_u8(CALLING_CONVENTION_ATTR)
+        .ok()??
+        .try_into()
+        .ok()
+}
+
+/// Read the exact environment slot from a convention-proven closure type.
+pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
+    let data = ctx.types.get(closure);
+    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+        return None;
+    }
+    data.attrs
+        .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
         .ok()??
         .try_into()
         .ok()
@@ -171,6 +207,18 @@ mod tests {
         assert_eq!(
             get_physical_closure_convention(&ctx, cps),
             Some(CallingConvention::Cps)
+        );
+        assert_eq!(get_physical_closure_environment_index(&ctx, cps), Some(1));
+
+        let continuation = physical_closure_type_with_environment_index(
+            &mut ctx,
+            function,
+            CallingConvention::Cps,
+            0,
+        );
+        assert_eq!(
+            get_physical_closure_environment_index(&ctx, continuation),
+            Some(0)
         );
     }
 }
