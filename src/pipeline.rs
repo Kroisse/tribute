@@ -92,6 +92,14 @@ impl From<PassError> for DumpIrError {
     }
 }
 
+impl From<tribute_passes::target_abi::TargetAbiError> for DumpIrError {
+    fn from(error: tribute_passes::target_abi::TargetAbiError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
 // =============================================================================
 // Compilation configuration
 // =============================================================================
@@ -868,6 +876,11 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
+    if tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
+        tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
+        tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
+    }
+
     run_cleanup_passes(ctx, m);
     Ok(())
 }
@@ -883,6 +896,11 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
+
+    if tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
+        tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
+        tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
+    }
 
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
