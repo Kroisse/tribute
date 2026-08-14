@@ -383,6 +383,10 @@ pub fn compose_root_entry_bridge(
     });
     let done_function = func::func(ctx, location, root_done_k, done_function_ty, done_region);
     set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
+    ctx.op_mut(done_function.op_ref()).attributes.insert(
+        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+        Attribute::Int(0),
+    );
 
     let wrapper_params = if export_convention == CallingConvention::EvidenceDirect {
         vec![evidence_ty]
@@ -1206,6 +1210,12 @@ mod tests {
                 nil
             );
         }
+        assert_eq!(
+            ctx.op(done_k.op_ref())
+                .attributes
+                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+            Ok(Some(0))
+        );
         assert!(
             !ctx.op(worker.op_ref())
                 .attributes
