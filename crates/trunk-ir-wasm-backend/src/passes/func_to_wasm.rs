@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -26,6 +26,7 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
 };
+use trunk_ir::types::Attribute;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{BlockData, RegionData};
 
@@ -189,17 +190,33 @@ impl RewritePattern for FuncFuncPattern {
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name(ctx);
         let func_type = func_op.r#type(ctx);
-        let body = func_op.body(ctx);
         let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
-        // Detach body region so it can be reused in the new wasm.func
-        ctx.detach_region(body);
+        // Generated Func::body() asserts for valid bodyless declarations.
+        // A func.func conversion accepts exactly zero or one body region.
+        let body = match ctx.op(op).regions.as_slice() {
+            [] => None,
+            [body] => Some(*body),
+            _ => return false,
+        };
 
-        let new_op = wasm_dialect::func(ctx, loc, sym_name, func_type, body);
-        ctx.op_mut(new_op.op_ref())
-            .attributes
-            .extend(attrs_to_preserve);
-        rewriter.replace_op(new_op.op_ref());
+        // Detach a definition's body region so it can be reused in the new wasm.func.
+        if let Some(body) = body {
+            ctx.detach_region(body);
+        }
+
+        let new_op = match body {
+            Some(body) => wasm_dialect::func(ctx, loc, sym_name, func_type, body).op_ref(),
+            None => {
+                let data = OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
+                    .attr("sym_name", Attribute::Symbol(sym_name))
+                    .attr("type", Attribute::Type(func_type))
+                    .build(ctx);
+                ctx.create_op(data)
+            }
+        };
+        ctx.op_mut(new_op).attributes.extend(attrs_to_preserve);
+        rewriter.replace_op(new_op);
         true
     }
 }
@@ -452,6 +469,85 @@ mod tests {
             ctx.op(lowered).attributes.get("custom"),
             Some(&Attribute::Int(7))
         );
+    }
+
+    #[test]
+    fn func_to_wasm_preserves_bodyless_declarations_and_definition_bodies() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @external(%value: core.i32) -> core.i32
+  func.func @defined(%value: core.i32) -> core.i32 {
+    func.return %value
+  }
+}"#,
+        );
+        let original_ops = module.ops(&ctx);
+        let declaration_location = ctx.op(original_ops[0]).location;
+        let definition_location = ctx.op(original_ops[1]).location;
+        ctx.op_mut(original_ops[0])
+            .attributes
+            .insert(Symbol::new("custom"), Attribute::Int(7));
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let lowered_ops = module.ops(&ctx);
+        assert_eq!(lowered_ops.len(), 2);
+        let declaration = wasm_dialect::Func::from_op(&ctx, lowered_ops[0])
+            .expect("bodyless declaration should lower to wasm.func");
+        let definition = wasm_dialect::Func::from_op(&ctx, lowered_ops[1])
+            .expect("definition should lower to wasm.func");
+        assert_eq!(declaration.sym_name(&ctx), Symbol::new("external"));
+        assert_eq!(definition.sym_name(&ctx), Symbol::new("defined"));
+        assert_eq!(ctx.op(lowered_ops[0]).location, declaration_location);
+        assert_eq!(ctx.op(lowered_ops[1]).location, definition_location);
+        assert!(ctx.op(lowered_ops[0]).regions.is_empty());
+        assert_eq!(ctx.op(lowered_ops[1]).regions.len(), 1);
+        assert_eq!(
+            ctx.op(lowered_ops[0]).attributes.get("custom"),
+            Some(&Attribute::Int(7))
+        );
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains(
+                "wasm.func {custom = 7, sym_name = @external, type = core.func(core.i32, core.i32)}"
+            ),
+            "{output}"
+        );
+        assert!(
+            output.contains("wasm.func {sym_name = @defined"),
+            "{output}"
+        );
+        assert!(output.contains("wasm.return %0"), "{output}");
+    }
+
+    #[test]
+    fn func_to_wasm_leaves_impossible_multi_region_functions_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @invalid() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let invalid = module.ops(&ctx)[0];
+        let location = ctx.op(invalid).location;
+        let extra_region = ctx.create_region(RegionData {
+            location,
+            blocks: Default::default(),
+            parent_op: None,
+        });
+        ctx.op_mut(invalid).regions.push(extra_region);
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let invalid = module.ops(&ctx)[0];
+        assert!(func::Func::from_op(&ctx, invalid).is_ok());
+        assert_eq!(ctx.op(invalid).regions.len(), 2);
     }
 
     #[test]
