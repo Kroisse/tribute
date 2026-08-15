@@ -88,6 +88,30 @@ fn main() {
 
 #[test]
 fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume() {
+    let source = cps_control_read_outcome_program();
+    let profiles = [
+        (
+            "production",
+            "cps_control_read_outcome_production.trb",
+            common::NativeTestProfile::Production,
+        ),
+        (
+            "baseline",
+            "cps_control_read_outcome_baseline.trb",
+            common::NativeTestProfile::Baseline,
+        ),
+        (
+            "asan",
+            "cps_control_read_outcome_asan.trb",
+            common::NativeTestProfile::Asan,
+        ),
+    ]
+    .map(|(profile, source_name, profile_kind)| {
+        (
+            profile,
+            common::compile_native_test_binary(source_name, source, profile_kind),
+        )
+    });
     for (name, stdin, expected) in [
         (
             "input",
@@ -100,33 +124,8 @@ fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume() {
             "eof\nline:resumed-suffix-inner-do-outer-do\nline:outer-do-eof\n",
         ),
     ] {
-        let profiles = [
-            (
-                "production",
-                common::compile_and_run_native_with_stdin(
-                    &format!("cps_control_read_outcome_{name}_production.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-            (
-                "baseline",
-                common::compile_and_run_native_with_stdin_baseline_optimizations(
-                    &format!("cps_control_read_outcome_{name}_baseline.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-            (
-                "asan",
-                common::compile_and_run_native_with_stdin_asan(
-                    &format!("cps_control_read_outcome_{name}_asan.trb"),
-                    cps_control_read_outcome_program(),
-                    stdin,
-                ),
-            ),
-        ];
-        for (profile, output) in profiles {
+        for (profile, binary) in &profiles {
+            let output = binary.run_with_stdin(stdin);
             assert!(
                 output.status.success(),
                 "{name}/{profile}: exit={:?}, stderr='{}'",

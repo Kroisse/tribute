@@ -168,13 +168,8 @@ pub fn compile_and_run_native_with_stdin(
     source_code: &str,
     stdin: &[u8],
 ) -> Output {
-    compile_and_run_native_impl(
-        source_name,
-        source_code,
-        false,
-        NativeTestOptimizations::production(),
-        NativeStdin::Bytes(stdin),
-    )
+    compile_native_test_binary(source_name, source_code, NativeTestProfile::Production)
+        .run_with_stdin(stdin)
 }
 
 /// Run with the baseline optimization profile and supplied stdin.
@@ -184,13 +179,8 @@ pub fn compile_and_run_native_with_stdin_baseline_optimizations(
     source_code: &str,
     stdin: &[u8],
 ) -> Output {
-    compile_and_run_native_impl(
-        source_name,
-        source_code,
-        false,
-        NativeTestOptimizations::baseline(),
-        NativeStdin::Bytes(stdin),
-    )
+    compile_native_test_binary(source_name, source_code, NativeTestProfile::Baseline)
+        .run_with_stdin(stdin)
 }
 
 /// Run the native binary with ASan and supplied stdin.
@@ -200,13 +190,8 @@ pub fn compile_and_run_native_with_stdin_asan(
     source_code: &str,
     stdin: &[u8],
 ) -> Output {
-    compile_and_run_native_impl(
-        source_name,
-        source_code,
-        true,
-        NativeTestOptimizations::production(),
-        NativeStdin::Bytes(stdin),
-    )
+    compile_native_test_binary(source_name, source_code, NativeTestProfile::Asan)
+        .run_with_stdin(stdin)
 }
 
 /// Compile and run Tribute source after closing native stdin.
@@ -268,87 +253,51 @@ pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Outp
     )
 }
 
-enum NativeStdin<'a> {
-    Null,
-    Bytes(&'a [u8]),
-    #[cfg(unix)]
-    Closed,
+pub enum NativeTestProfile {
+    Production,
+    Baseline,
+    Asan,
 }
-
-#[derive(Clone, Copy)]
-struct NativeTestOptimizations {
-    done_continuation: DoneContinuationPolicy,
-    paired_rc_elimination: PairedRcEliminationPolicy,
-    borrowed_parameters: BorrowedParameterPolicy,
-    temporary_borrows: TemporaryBorrowPolicy,
-}
-
-impl NativeTestOptimizations {
-    const fn baseline() -> Self {
-        Self {
-            done_continuation: DoneContinuationPolicy::PerUse,
-            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
-            borrowed_parameters: BorrowedParameterPolicy::Preserve,
-            temporary_borrows: TemporaryBorrowPolicy::Preserve,
-        }
-    }
-
-    const fn production() -> Self {
-        Self {
-            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
-            paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
-            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
-            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
-        }
-    }
-}
-
-fn compile_and_run_native_impl(
+pub fn compile_native_test_binary(
     source_name: &str,
     source_code: &str,
-    sanitize_address: bool,
-    test_optimizations: NativeTestOptimizations,
-    stdin: NativeStdin<'_>,
-) -> Output {
-    use tribute::database::parse_with_thread_local;
-
-    let source_rope = Rope::from_str(source_code);
-
-    TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_rope, None);
-        let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
-
-        let optimizations = OptimizationOptions {
-            ast_to_ir: AstToIrOptions {
-                done_continuation: test_optimizations.done_continuation,
-            },
-            native: NativeOptimizationOptions {
-                paired_rc_elimination: test_optimizations.paired_rc_elimination,
-                borrowed_parameters: test_optimizations.borrowed_parameters,
-                temporary_borrows: test_optimizations.temporary_borrows,
-            },
-        };
-        let object_bytes =
-            compile_native_or_panic_with_options(db, source_file, sanitize_address, optimizations);
-
-        // Link into executable
+    profile: NativeTestProfile,
+) -> NativeTestBinary {
+    let (sanitize_address, test_optimizations) = match profile {
+        NativeTestProfile::Production => (false, NativeTestOptimizations::production()),
+        NativeTestProfile::Baseline => (false, NativeTestOptimizations::baseline()),
+        NativeTestProfile::Asan => (true, NativeTestOptimizations::production()),
+    };
+    compile_native_test_binary_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        test_optimizations,
+    )
+}
+pub struct NativeTestBinary {
+    temp_dir: tempfile::TempDir,
+}
+impl NativeTestBinary {
+    fn from_object_bytes(object_bytes: &[u8]) -> Self {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let exec_path = temp_dir.path().join("tribute_test_bin");
-
-        link_native_binary(&object_bytes, &exec_path).unwrap_or_else(|e| {
+        link_native_binary(object_bytes, &exec_path).unwrap_or_else(|e| {
             panic!("Linking failed: {e}");
         });
-
-        // Make executable on Unix
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o755);
             std::fs::set_permissions(&exec_path, perms).expect("Failed to set permissions");
         }
-
-        // Run the executable
-        let mut command = Command::new(&exec_path);
+        Self { temp_dir }
+    }
+    pub fn run_with_stdin(&self, input: &[u8]) -> Output {
+        self.run(NativeStdin::Bytes(input))
+    }
+    fn run(&self, stdin: NativeStdin<'_>) -> Output {
+        let mut command = Command::new(self.temp_dir.path().join("tribute_test_bin"));
         match stdin {
             NativeStdin::Bytes(input) => {
                 let mut child = command
@@ -370,7 +319,6 @@ fn compile_and_run_native_impl(
             #[cfg(unix)]
             NativeStdin::Closed => {
                 use std::os::unix::process::CommandExt;
-
                 unsafe {
                     command.pre_exec(|| {
                         if close(0) == 0 {
@@ -388,5 +336,82 @@ fn compile_and_run_native_impl(
                 .output()
                 .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}")),
         }
+    }
+}
+enum NativeStdin<'a> {
+    Null,
+    Bytes(&'a [u8]),
+    #[cfg(unix)]
+    Closed,
+}
+#[derive(Clone, Copy)]
+struct NativeTestOptimizations {
+    done_continuation: DoneContinuationPolicy,
+    paired_rc_elimination: PairedRcEliminationPolicy,
+    borrowed_parameters: BorrowedParameterPolicy,
+    temporary_borrows: TemporaryBorrowPolicy,
+}
+impl NativeTestOptimizations {
+    const fn baseline() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerUse,
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+        }
+    }
+
+    const fn production() -> Self {
+        Self {
+            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
+            paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
+            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        }
+    }
+}
+fn compile_and_run_native_impl(
+    source_name: &str,
+    source_code: &str,
+    sanitize_address: bool,
+    test_optimizations: NativeTestOptimizations,
+    stdin: NativeStdin<'_>,
+) -> Output {
+    let binary = compile_native_test_binary_impl(
+        source_name,
+        source_code,
+        sanitize_address,
+        test_optimizations,
+    );
+    binary.run(stdin)
+}
+
+fn compile_native_test_binary_impl(
+    source_name: &str,
+    source_code: &str,
+    sanitize_address: bool,
+    test_optimizations: NativeTestOptimizations,
+) -> NativeTestBinary {
+    use tribute::database::parse_with_thread_local;
+
+    let source_rope = Rope::from_str(source_code);
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_rope, None);
+        let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
+
+        let optimizations = OptimizationOptions {
+            ast_to_ir: AstToIrOptions {
+                done_continuation: test_optimizations.done_continuation,
+            },
+            native: NativeOptimizationOptions {
+                paired_rc_elimination: test_optimizations.paired_rc_elimination,
+                borrowed_parameters: test_optimizations.borrowed_parameters,
+                temporary_borrows: test_optimizations.temporary_borrows,
+            },
+        };
+        let object_bytes =
+            compile_native_or_panic_with_options(db, source_file, sanitize_address, optimizations);
+        NativeTestBinary::from_object_bytes(&object_bytes)
     })
 }
