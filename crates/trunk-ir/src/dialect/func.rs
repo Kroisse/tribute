@@ -34,6 +34,13 @@ mod func {
     fn unreachable() {}
 }
 
+impl Func {
+    /// Return the function body when this declaration has one.
+    pub fn body_if_present(&self, ctx: &crate::IrContext) -> Option<crate::RegionRef> {
+        ctx.op(self.op_ref()).regions.first().copied()
+    }
+}
+
 // === Custom assembly format for func.func ===
 
 /// Print func.func with decomposed signature:

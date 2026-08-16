@@ -36,12 +36,6 @@ fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
-/// Return a function body when the `func.func` operation is a definition.
-/// External declarations intentionally have no body region.
-fn func_body_if_present(ctx: &IrContext, func_op: func::Func) -> Option<RegionRef> {
-    ctx.op(func_op.op_ref()).regions.first().copied()
-}
-
 #[derive(Debug)]
 pub(crate) struct ResolveEvidenceError {
     op: OpRef,
@@ -377,7 +371,7 @@ fn collect_handler_root_functions(
             if fns_with_evidence.contains(&func_name) {
                 continue;
             }
-            let Some(body) = func_body_if_present(ctx, func_op) else {
+            let Some(body) = func_op.body_if_present(ctx) else {
                 continue;
             };
             if region_contains_handle_dispatch(ctx, body) {
@@ -501,7 +495,7 @@ fn transform_handler_roots(
             continue;
         }
 
-        let Some(body) = func_body_if_present(ctx, func_op) else {
+        let Some(body) = func_op.body_if_present(ctx) else {
             continue;
         };
         let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
@@ -591,7 +585,7 @@ fn update_calls_to_newly_evidenced(
             continue;
         }
 
-        let Some(body) = func_body_if_present(ctx, func_op) else {
+        let Some(body) = func_op.body_if_present(ctx) else {
             continue;
         };
         update_calls_in_region(ctx, body, newly_evidenced, evidence_ty, i32_ty);
@@ -689,7 +683,7 @@ fn transform_shifts_in_module(
             continue;
         }
 
-        let Some(body) = func_body_if_present(ctx, func_op) else {
+        let Some(body) = func_op.body_if_present(ctx) else {
             continue;
         };
         let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();

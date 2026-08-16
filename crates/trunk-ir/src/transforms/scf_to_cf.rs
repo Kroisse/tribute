@@ -53,7 +53,10 @@ pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
 
 /// Lower all `scf` operations in one function to `cf` operations.
 pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
-    transform_region(ctx, func.body(ctx));
+    let Some(body) = func.body_if_present(ctx) else {
+        return;
+    };
+    transform_region(ctx, body);
 }
 
 /// Build a function-anchored SCF-to-CF lowering pass.
@@ -796,6 +799,26 @@ mod tests {
             untouched_names.iter().any(|n| n.starts_with("scf.")),
             "untouched function should retain scf ops: {untouched_names:?}"
         );
+    }
+
+    #[test]
+    fn scf_to_cf_pass_leaves_bodyless_func_unchanged() {
+        let (mut ctx, loc) = test_ctx();
+        let fn_ty = fn_type(&mut ctx);
+        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("external")))
+            .attr("type", Attribute::Type(fn_ty))
+            .build(&mut ctx);
+        let func_op = ctx.create_op(func_data);
+        let module = build_module(&mut ctx, loc, vec![func_op]);
+        let before = crate::printer::print_module(&ctx, module.op());
+        let func = func::Func::from_op(&ctx, func_op).unwrap();
+
+        scf_to_cf_pass().run(&mut ctx, func).unwrap();
+
+        assert!(func.body_if_present(&ctx).is_none());
+        assert!(ctx.op(func_op).regions.is_empty());
+        assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
     }
 
     #[test]
