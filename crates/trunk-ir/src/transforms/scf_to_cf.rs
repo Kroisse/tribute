@@ -130,19 +130,29 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
+fn is_removable_nil_result_use(ctx: &IrContext, op: OpRef) -> bool {
+    let data = ctx.op(op);
+    (data.dialect == Symbol::new("func") && data.name == Symbol::new("return"))
+        || (data.dialect == Symbol::new("scf") && data.name == Symbol::new("yield"))
+}
+
+fn nil_result_uses_are_removable(ctx: &IrContext, value: ValueRef) -> bool {
+    ctx.uses(value)
+        .iter()
+        .all(|use_entry| is_removable_nil_result_use(ctx, use_entry.user))
+}
+
 fn drop_nil_result_terminator_uses(ctx: &mut IrContext, value: ValueRef) {
     let mut uses = ctx.uses(value).to_vec();
     uses.sort_by_key(|use_entry| Reverse(use_entry.operand_index));
 
     for use_entry in uses {
-        let data = ctx.op(use_entry.user);
-        let is_void_terminator = (data.dialect == Symbol::new("func")
-            && data.name == Symbol::new("return"))
-            || (data.dialect == Symbol::new("scf") && data.name == Symbol::new("yield"));
         assert!(
-            is_void_terminator,
+            is_removable_nil_result_use(ctx, use_entry.user),
             "nil scf result {value} is used by non-terminator operation {}.{} ({})",
-            data.dialect, data.name, use_entry.user,
+            ctx.op(use_entry.user).dialect,
+            ctx.op(use_entry.user).name,
+            use_entry.user,
         );
         ctx.remove_op_operand(use_entry.user, use_entry.operand_index);
     }
@@ -161,7 +171,7 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
         None
     } else {
         let ty = ctx.value_ty(results[0]);
-        if core::Nil::matches(ctx, ty) {
+        if core::Nil::matches(ctx, ty) && nil_result_uses_are_removable(ctx, results[0]) {
             drop_nil_result_terminator_uses(ctx, results[0]);
             None
         } else {
@@ -896,6 +906,49 @@ mod tests {
         let blocks = ctx.region(func_body).blocks.to_vec();
         let merge = blocks.last().unwrap();
         assert_eq!(ctx.block_args(*merge).len(), 0);
+    }
+
+    #[test]
+    fn lower_scf_if_preserves_used_nil_result_for_tail_transfer() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    %selected = scf.if %cond : core.nil {
+      scf.yield %unit
+    } {
+      scf.yield %unit
+    }
+    func.tail_call_indirect %callee, %selected {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(
+            use_chains.is_ok(),
+            "nil tail-transfer lowering must preserve use chains: {use_chains}"
+        );
+
+        let nil_ty = nil_type(&mut ctx);
+        let merge = *ctx.region(body).blocks.last().unwrap();
+        assert!(
+            ctx.block_args(merge)
+                .iter()
+                .any(|&arg| ctx.value_ty(arg) == nil_ty),
+            "used core.nil result must become a merge block argument"
+        );
+
+        let printed = crate::printer::print_module(&ctx, module.op());
+        assert!(printed.contains("func.indirect_call_signature = core.func(core.never, core.nil)"));
+        assert!(printed.contains("tribute.calling_convention = 2"));
     }
 
     #[test]
