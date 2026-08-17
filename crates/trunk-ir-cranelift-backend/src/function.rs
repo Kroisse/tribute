@@ -46,10 +46,12 @@ fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
     let Some(&result) = signature.params.first() else {
         return false;
     };
-    let result = ctx.types.get(result);
-    result.dialect == Symbol::new("core")
-        && result.name == Symbol::new("nil")
-        && result.params.is_empty()
+    is_nil_type(ctx, result)
+}
+
+pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let ty = ctx.types.get(ty);
+    ty.dialect == Symbol::new("core") && ty.name == Symbol::new("nil") && ty.params.is_empty()
 }
 
 /// Parse a condition symbol into a Cranelift integer condition code.
@@ -169,6 +171,9 @@ pub(crate) fn translate_signature(
     let param_types = &td.params[1..];
 
     for &param_ty in param_types {
+        if is_nil_type(ctx, param_ty) {
+            continue;
+        }
         let cl_ty = translate_type(ctx, param_ty, ptr_ty)?;
         sig.params.push(cl_ir::AbiParam::new(cl_ty));
     }
@@ -254,9 +259,15 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Check if a value has `core.nil` type.
     fn is_nil_typed(&self, val: ValueRef) -> bool {
-        let ty = self.ctx.value_ty(val);
-        let td = self.ctx.types.get(ty);
-        td.dialect == Symbol::new("core") && td.name == Symbol::new("nil")
+        is_nil_type(self.ctx, self.ctx.value_ty(val))
+    }
+
+    fn runtime_values(&self, values: &[ValueRef]) -> CompilationResult<Vec<cl_ir::Value>> {
+        values
+            .iter()
+            .filter(|&&value| !self.is_nil_typed(value))
+            .map(|&value| self.lookup(value))
+            .collect()
     }
 
     pub(crate) fn lookup_block(&self, ir_block: BlockRef) -> CompilationResult<cl_ir::Block> {
@@ -362,10 +373,7 @@ impl<'a> FunctionTranslator<'a> {
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
-            let args: Vec<cl_ir::Value> = operands
-                .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+            let args = self.runtime_values(operands)?;
 
             let inst = self.builder.ins().call(func_ref, &args);
             let results = self.builder.inst_results(inst);
@@ -399,10 +407,11 @@ impl<'a> FunctionTranslator<'a> {
             let ir_dest = op_data.successors[0];
             let cl_dest = self.lookup_block(ir_dest)?;
             let operands = ctx.op_operands(op);
-            let args: Vec<cl_ir::BlockArg> = operands
-                .iter()
-                .map(|v| self.lookup(*v).map(cl_ir::BlockArg::from))
-                .collect::<CompilationResult<_>>()?;
+            let args: Vec<cl_ir::BlockArg> = self
+                .runtime_values(operands)?
+                .into_iter()
+                .map(cl_ir::BlockArg::from)
+                .collect();
             let dest_param_count = self.builder.block_params(cl_dest).len();
             if args.len() != dest_param_count {
                 return Err(CompilationError::codegen(format!(
@@ -532,10 +541,7 @@ impl<'a> FunctionTranslator<'a> {
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
-            let args: Vec<cl_ir::Value> = operands
-                .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+            let args = self.runtime_values(operands)?;
 
             self.builder.ins().return_call(func_ref, &args);
             return Ok(());
@@ -545,10 +551,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(rci) = clif::ReturnCallIndirect::from_op(ctx, op) {
             let operands = ctx.op_operands(op);
             let callee = self.lookup(operands[0])?;
-            let args: Vec<cl_ir::Value> = operands[1..]
-                .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+            let args = self.runtime_values(&operands[1..])?;
 
             let sig_ty = rci.sig(ctx);
             let sig = translate_signature(ctx, sig_ty, CallConv::Tail, self.ptr_ty)?;
@@ -564,10 +567,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(call_ind) = clif::CallIndirect::from_op(ctx, op) {
             let operands = ctx.op_operands(op);
             let callee = self.lookup(operands[0])?;
-            let args: Vec<cl_ir::Value> = operands[1..]
-                .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+            let args = self.runtime_values(&operands[1..])?;
 
             let sig_ty = call_ind.sig(ctx);
             let call_conv = call_conv_for_cps_signature(
@@ -839,6 +839,32 @@ mod tests {
         assert_eq!(sig.params.len(), 1);
         assert_eq!(sig.params[0].value_type, cl_types::I64);
         assert_eq!(sig.returns.len(), 0);
+    }
+
+    #[test]
+    fn test_translate_signature_omits_nil_parameters_in_order() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_core_type(&mut ctx, "i32");
+        let i64_ty = make_core_type(&mut ctx, "i64");
+        let nil_ty = make_core_type(&mut ctx, "nil");
+
+        let func_ty = ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new("func"),
+            params: trunk_ir::smallvec::smallvec![i32_ty, i32_ty, nil_ty, i64_ty],
+            attrs: Default::default(),
+        });
+
+        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
+        assert_eq!(
+            sig.params
+                .iter()
+                .map(|param| param.value_type)
+                .collect::<Vec<_>>(),
+            vec![cl_types::I32, cl_types::I64]
+        );
+        assert_eq!(sig.returns.len(), 1);
+        assert_eq!(sig.returns[0].value_type, cl_types::I32);
     }
 
     #[test]

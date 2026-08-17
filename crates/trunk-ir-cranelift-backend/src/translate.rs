@@ -24,7 +24,7 @@ use trunk_ir::rewrite::Module;
 
 use crate::function::{
     CPS_CALLING_CONVENTION, FunctionTranslator, TRIBUTE_CALLING_CONVENTION_ATTR,
-    call_conv_for_cps_signature, translate_signature, translate_type,
+    call_conv_for_cps_signature, is_nil_type, translate_signature, translate_type,
 };
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
 
@@ -510,6 +510,9 @@ fn emit_module_impl(
                 let ir_args = ctx.block_args(ir_block);
                 for &arg_val in ir_args {
                     let arg_ty = ctx.value_ty(arg_val);
+                    if is_nil_type(ctx, arg_ty) {
+                        continue;
+                    }
                     let cl_ty = translate_type(ctx, arg_ty, ptr_ty)?;
                     translator.builder.append_block_param(cl_block, cl_ty);
                 }
@@ -524,10 +527,14 @@ fn emit_module_impl(
                 // Map block arguments to Cranelift block params
                 let cl_params: Vec<_> = translator.builder.block_params(cl_block).to_vec();
                 let ir_args = ctx.block_args(ir_block);
-                let ir_arg_count = ir_args.len();
-                if ir_arg_count != cl_params.len() {
+                let runtime_ir_args: Vec<_> = ir_args
+                    .iter()
+                    .copied()
+                    .filter(|&arg| !is_nil_type(ctx, ctx.value_ty(arg)))
+                    .collect();
+                if runtime_ir_args.len() != cl_params.len() {
                     let is_entry = ir_blocks.first() == Some(&ir_block);
-                    let ir_arg_types: Vec<String> = ir_args
+                    let ir_arg_types: Vec<String> = runtime_ir_args
                         .iter()
                         .map(|&a| {
                             let ty = ctx.value_ty(a);
@@ -546,7 +553,7 @@ fn emit_module_impl(
                         .collect();
                     return Err(CompilationError::codegen(format!(
                         "block arg count mismatch: TrunkIR block has {} args ({:?}) but Cranelift block has {} params (function: {}, entry: {}, func_type_params: {:?})",
-                        ir_arg_count,
+                        runtime_ir_args.len(),
                         ir_arg_types,
                         cl_params.len(),
                         name_sym,
@@ -554,8 +561,7 @@ fn emit_module_impl(
                         func_ty_params,
                     )));
                 }
-                for (i, &cl_param) in cl_params.iter().enumerate() {
-                    let ir_arg = ir_args[i];
+                for (&ir_arg, &cl_param) in runtime_ir_args.iter().zip(&cl_params) {
                     translator.values.insert(ir_arg, cl_param);
                 }
 
@@ -695,6 +701,38 @@ fn declare_runtime_functions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
+  clif.func {sym_name = @call_target, type = core.func(core.i32, core.i32, core.nil, core.i64)} {
+    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+      clif.return %value
+  }
+  clif.func {sym_name = @direct_call, type = core.func(core.i32, core.i32, core.nil, core.i64)} {
+    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+      %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
+      clif.return %result
+  }
+  clif.func {sym_name = @indirect_call, type = core.func(core.i32, core.ptr, core.i32, core.nil, core.i64)} {
+    ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
+      %result = clif.call_indirect %callee, %value, %unit, %last {sig = core.func(core.i32, core.i32, core.nil, core.i64)} : core.i32
+      clif.return %result
+  }
+  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = core.func(core.nil, core.i32, core.nil, core.i64)} {
+    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+      clif.return_call %value, %unit, %last {callee = @direct_tail}
+  }
+  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = core.func(core.nil, core.ptr, core.i32, core.nil, core.i64)} {
+    ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = core.func(core.nil, core.i32, core.nil, core.i64)}
+  }
+  clif.func {sym_name = @jump, type = core.func(core.nil, core.i32, core.nil, core.i64)} {
+    ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
+      clif.jump %value, %unit, %last [^merge]
+    ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):
+      clif.return
+  }
+}"#;
 
     #[test]
     fn test_mangle_native_name() {
@@ -721,5 +759,13 @@ mod tests {
     #[test]
     fn native_isa_preserves_frame_pointers_for_tail_calls() {
         assert!(native_isa().unwrap().flags().preserve_frame_pointers());
+    }
+
+    #[test]
+    fn core_nil_is_zero_width_across_native_cfg_and_calls() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, NIL_ZERO_WIDTH_NATIVE);
+        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        assert!(!object.is_empty());
     }
 }

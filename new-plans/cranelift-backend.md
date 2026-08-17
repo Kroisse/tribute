@@ -136,6 +136,17 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
 
+### Zero-width `core.nil`
+
+`core.nil` is a logical TrunkIR `Unit` SSA value but has no runtime
+representation in Cranelift. The native emitter therefore omits nil values
+from function signatures, entry and non-entry block parameters, CFG edge
+operands, direct and indirect call operands, and direct and indirect tail-call
+operands. It preserves the ordering of all non-nil parameters and operands,
+including the non-nil indirect callee, while leaving logical TrunkIR
+unchanged. Nil returns, constants, and return operands follow the same
+zero-width convention.
+
 ---
 
 ## Effect 구현: CPS Tail-Call
