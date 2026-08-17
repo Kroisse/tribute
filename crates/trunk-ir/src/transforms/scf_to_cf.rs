@@ -30,13 +30,12 @@
 //! ```
 
 use smallvec::SmallVec;
-use std::cmp::Reverse;
 
 use crate::context::{BlockArgData, BlockData, IrContext};
-use crate::dialect::{arith, cf, core, func, scf};
-use crate::ops::{DialectOp, DialectType};
+use crate::dialect::{arith, cf, func, scf};
+use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
-use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
+use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
@@ -130,24 +129,6 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
-fn drop_nil_result_terminator_uses(ctx: &mut IrContext, value: ValueRef) {
-    let mut uses = ctx.uses(value).to_vec();
-    uses.sort_by_key(|use_entry| Reverse(use_entry.operand_index));
-
-    for use_entry in uses {
-        let data = ctx.op(use_entry.user);
-        let is_void_terminator = (data.dialect == Symbol::new("func")
-            && data.name == Symbol::new("return"))
-            || (data.dialect == Symbol::new("scf") && data.name == Symbol::new("yield"));
-        assert!(
-            is_void_terminator,
-            "nil scf result {value} is used by non-terminator operation {}.{} ({})",
-            data.dialect, data.name, use_entry.user,
-        );
-        ctx.remove_op_operand(use_entry.user, use_entry.operand_index);
-    }
-}
-
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
 fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
     let if_op = scf::If::from_op(ctx, scf_op).unwrap();
@@ -156,17 +137,10 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
     let else_region = if_op.else_region(ctx);
 
     // Determine result type (if any)
-    let results = ctx.op_results(scf_op);
-    let result_ty = if results.is_empty() {
-        None
-    } else {
-        let ty = ctx.value_ty(results[0]);
-        if core::Nil::matches(ctx, ty) {
-            drop_nil_result_terminator_uses(ctx, results[0]);
-            None
-        } else {
-            Some(ty)
-        }
+    let result_ty = match ctx.op_results(scf_op) {
+        [] => None,
+        [result] => Some(ctx.value_ty(*result)),
+        _ => return,
     };
 
     // Split block at the scf op: ops after scf_op go to merge block
@@ -222,17 +196,10 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
     let body_region = loop_op.body(ctx);
 
     // Determine result type
-    let results = ctx.op_results(scf_op);
-    let result_ty = if results.is_empty() {
-        None
-    } else {
-        let ty = ctx.value_ty(results[0]);
-        if core::Nil::matches(ctx, ty) {
-            drop_nil_result_terminator_uses(ctx, results[0]);
-            None
-        } else {
-            Some(ty)
-        }
+    let result_ty = match ctx.op_results(scf_op) {
+        [] => None,
+        [result] => Some(ctx.value_ty(*result)),
+        _ => return,
     };
 
     // Split block at scf op: ops after go to exit block
@@ -298,35 +265,17 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         }
     }
 
-    // Determine result type from the switch op's own results (like scf.if).
-    // scf.switch currently has no `-> result`, so this will be None.
-    let results = ctx.op_results(scf_op);
-    let result_ty = if results.is_empty() {
-        None
-    } else {
-        Some(ctx.value_ty(results[0]))
-    };
+    // `scf.switch` is resultless. Leave malformed result-bearing input
+    // untouched so the verifier can reject it without corrupting CFG edges.
+    if !ctx.op_results(scf_op).is_empty() {
+        return;
+    }
 
     // Split block at scf op: ops after go to merge block
     let merge_block = split_block(ctx, block, scf_op);
 
     // Remove the scf op (split_block moved it to merge_block)
     ctx.detach_op(scf_op);
-
-    // Add merge block argument for the result (if any)
-    if let Some(ty) = result_ty {
-        let merge_arg = ctx.add_block_arg(
-            merge_block,
-            BlockArgData {
-                ty,
-                attrs: Default::default(),
-            },
-        );
-        let results = ctx.op_results(scf_op);
-        if !results.is_empty() {
-            ctx.replace_all_uses(results[0], merge_arg);
-        }
-    }
 
     let parent_region = ctx.block(block).parent_region.unwrap();
 
@@ -501,6 +450,7 @@ fn replace_continue_break(
     exit: BlockRef,
     loc: Location,
 ) {
+    let exit_arg_count = ctx.block_args(exit).len();
     for &block in blocks {
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
         for op in ops {
@@ -513,7 +463,8 @@ fn replace_continue_break(
             } else if scf::Break::matches(ctx, op) {
                 let break_op = scf::Break::from_op(ctx, op).unwrap();
                 let value = break_op.value(ctx);
-                let br = cf::br(ctx, loc, [value], exit);
+                let values = (exit_arg_count != 0).then_some(value);
+                let br = cf::br(ctx, loc, values, exit);
                 crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             } else {
@@ -537,6 +488,7 @@ mod tests {
     use super::*;
     use crate::dialect::{arith, core, func, scf};
     use crate::location::Span;
+    use crate::refs::ValueRef;
     use crate::symbol::Symbol;
     use crate::*;
     use smallvec::smallvec;
@@ -609,8 +561,37 @@ mod tests {
         ctx.region(region).blocks.len()
     }
 
+    fn resultless_if(
+        ctx: &mut IrContext,
+        loc: Location,
+        cond: ValueRef,
+        then_region: RegionRef,
+        else_region: RegionRef,
+    ) -> scf::If {
+        let data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+            .operand(cond)
+            .region(then_region)
+            .region(else_region)
+            .build(ctx);
+        let op = ctx.create_op(data);
+        scf::If::from_op(ctx, op).unwrap()
+    }
+
+    fn resultless_loop(
+        ctx: &mut IrContext,
+        loc: Location,
+        init: impl IntoIterator<Item = ValueRef>,
+        body: RegionRef,
+    ) -> scf::Loop {
+        let data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("loop"))
+            .operands(init)
+            .region(body)
+            .build(ctx);
+        let op = ctx.create_op(data);
+        scf::Loop::from_op(ctx, op).unwrap()
+    }
+
     fn build_void_if_func(ctx: &mut IrContext, loc: Location, name: &'static str) -> func::Func {
-        let nil_ty = nil_type(ctx);
         let i1_ty = i1_type(ctx);
         let fn_ty = fn_type(ctx);
 
@@ -652,14 +633,7 @@ mod tests {
             parent_op: None,
         });
 
-        let if_op = scf::r#if(
-            ctx,
-            loc,
-            cond_const.result(ctx),
-            nil_ty,
-            then_region,
-            else_region,
-        );
+        let if_op = resultless_if(ctx, loc, cond_const.result(ctx), then_region, else_region);
         ctx.push_op(entry, if_op.op_ref());
 
         let ret = func::r#return(ctx, loc, std::iter::empty());
@@ -824,7 +798,6 @@ mod tests {
     #[test]
     fn lower_scf_if_void() {
         let (mut ctx, loc) = test_ctx();
-        let nil_ty = nil_type(&mut ctx);
         let i1_ty = i1_type(&mut ctx);
         let fn_ty = fn_type(&mut ctx);
 
@@ -868,7 +841,7 @@ mod tests {
         });
 
         let cond_v = cond_const.result(&ctx);
-        let if_op = scf::r#if(&mut ctx, loc, cond_v, nil_ty, then_region, else_region);
+        let if_op = resultless_if(&mut ctx, loc, cond_v, then_region, else_region);
         ctx.push_op(entry, if_op.op_ref());
 
         let ret = func::r#return(&mut ctx, loc, std::iter::empty());
@@ -896,6 +869,75 @@ mod tests {
         let blocks = ctx.region(func_body).blocks.to_vec();
         let merge = blocks.last().unwrap();
         assert_eq!(ctx.block_args(*merge).len(), 0);
+    }
+
+    fn assert_lowered_unit_tail_transfer(input: &str, expected_nil_merge_args: usize) {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        let nil_ty = nil_type(&mut ctx);
+        let nil_merge_args = ctx
+            .region(body)
+            .blocks
+            .iter()
+            .skip(1)
+            .flat_map(|&block| ctx.block_args(block))
+            .filter(|&&arg| ctx.value_ty(arg) == nil_ty)
+            .count();
+        assert_eq!(nil_merge_args, expected_nil_merge_args);
+
+        let printed = crate::printer::print_module(&ctx, module.op());
+        assert!(printed.contains("func.indirect_call_signature = core.func(core.never, core.nil)"));
+        assert!(printed.contains("tribute.calling_convention = 2"));
+    }
+
+    #[test]
+    fn lower_scf_if_preserves_used_nil_result_for_tail_transfer() {
+        assert_lowered_unit_tail_transfer(
+            r#"core.module @test {
+  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    %selected = scf.if %cond : core.nil {
+      scf.yield %unit
+    } {
+      scf.yield %unit
+    }
+    func.tail_call_indirect %callee, %selected {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+  }
+}"#,
+            1,
+        );
+    }
+
+    #[test]
+    fn lower_nested_nil_results_preserves_each_merge_value() {
+        assert_lowered_unit_tail_transfer(
+            r#"core.module @test {
+  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    %inner = scf.if %cond : core.nil {
+      scf.yield %unit
+    } {
+      scf.yield %unit
+    }
+    %outer = scf.if %cond : core.nil {
+      scf.yield %inner
+    } {
+      scf.yield %inner
+    }
+    func.tail_call_indirect %callee, %outer {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+  }
+}"#,
+            2,
+        );
     }
 
     #[test]
@@ -968,6 +1010,87 @@ mod tests {
     }
 
     #[test]
+    fn lower_scf_loop_resultless_drops_break_value() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let fn_ty = fn_type(&mut ctx);
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let init = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        ctx.push_op(entry, init.op_ref());
+
+        let body_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let loop_arg = ctx.block_arg(body_block, 0);
+        let break_op = scf::r#break(&mut ctx, loc, loop_arg);
+        ctx.push_op(body_block, break_op.op_ref());
+        let body_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![body_block],
+            parent_op: None,
+        });
+
+        let init_v = init.result(&ctx);
+        let loop_op = resultless_loop(&mut ctx, loc, [init_v], body_region);
+        ctx.push_op(entry, loop_op.op_ref());
+        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+
+        let func_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            !collect_op_names(&ctx, body)
+                .iter()
+                .any(|name| name.starts_with("scf."))
+        );
+        let exit = *blocks
+            .iter()
+            .find(|&&block| {
+                ctx.block(block).ops.iter().any(|&op| {
+                    ctx.op(op).dialect == Symbol::new("func")
+                        && ctx.op(op).name == Symbol::new("return")
+                })
+            })
+            .unwrap();
+        assert!(ctx.block_args(exit).is_empty());
+        for &block in &blocks {
+            for &op in &ctx.block(block).ops {
+                if ctx.op(op).successors.as_slice() == [exit] {
+                    assert!(
+                        ctx.op_operands(op).is_empty(),
+                        "{} has operands {:?}",
+                        ctx.op(op).name,
+                        ctx.op_operands(op)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn lower_scf_switch_basic() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
@@ -983,17 +1106,14 @@ mod tests {
         let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry, disc.op_ref());
 
-        // Case 0: yield 10
+        // Case 0: resultless yield
         let case0_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
-        let case0_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(10));
-        let case0_v = case0_val.result(&ctx);
-        ctx.push_op(case0_block, case0_val.op_ref());
-        let case0_yield = scf::r#yield(&mut ctx, loc, [case0_v]);
+        let case0_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
         ctx.push_op(case0_block, case0_yield.op_ref());
         let case0_region = ctx.create_region(RegionData {
             location: loc,
@@ -1002,17 +1122,14 @@ mod tests {
         });
         let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
 
-        // Case 1: yield 20
+        // Case 1: resultless yield
         let case1_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(20));
-        let case1_v = case1_val.result(&ctx);
-        ctx.push_op(case1_block, case1_val.op_ref());
-        let case1_yield = scf::r#yield(&mut ctx, loc, [case1_v]);
+        let case1_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
         ctx.push_op(case1_block, case1_yield.op_ref());
         let case1_region = ctx.create_region(RegionData {
             location: loc,
@@ -1021,17 +1138,14 @@ mod tests {
         });
         let case1_op = scf::case(&mut ctx, loc, Attribute::Int(1), case1_region);
 
-        // Default: yield 0
+        // Default: resultless yield
         let default_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
-        let default_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
-        let default_v = default_val.result(&ctx);
-        ctx.push_op(default_block, default_val.op_ref());
-        let default_yield = scf::r#yield(&mut ctx, loc, [default_v]);
+        let default_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
         ctx.push_op(default_block, default_yield.op_ref());
         let default_region = ctx.create_region(RegionData {
             location: loc,
@@ -1091,8 +1205,7 @@ mod tests {
 
     #[test]
     fn lower_scf_switch_no_result() {
-        // scf.switch doesn't produce a result, so merge block should have no args.
-        // Yield values from case regions are dropped (truncated to match merge block's 0 args).
+        // scf.switch doesn't produce a result, so case regions yield no values.
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let fn_ty = fn_type(&mut ctx);
@@ -1123,17 +1236,14 @@ mod tests {
         });
         let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
 
-        // Case 1: yield 42 (values are dropped since switch has no result)
+        // Case 1: resultless yield
         let case1_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
-        let case1_v = case1_val.result(&ctx);
-        ctx.push_op(case1_block, case1_val.op_ref());
-        let case1_yield = scf::r#yield(&mut ctx, loc, [case1_v]);
+        let case1_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
         ctx.push_op(case1_block, case1_yield.op_ref());
         let case1_region = ctx.create_region(RegionData {
             location: loc,
@@ -1190,6 +1300,54 @@ mod tests {
             0,
             "merge block should have 0 args since scf.switch has no result"
         );
+    }
+
+    #[test]
+    fn lower_scf_switch_with_result_fails_closed() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let fn_ty = fn_type(&mut ctx);
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        ctx.push_op(entry, disc.op_ref());
+        let body_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![body_block],
+            parent_op: None,
+        });
+        let switch_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("switch"))
+            .operand(disc.result(&ctx))
+            .result(i32_ty)
+            .region(body)
+            .build(&mut ctx);
+        let switch = ctx.create_op(switch_data);
+        ctx.push_op(entry, switch);
+        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+        let func_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let names = collect_op_names(&ctx, func_op.body(&ctx));
+        assert!(names.iter().any(|name| name == "scf.switch"));
+        assert!(!names.iter().any(|name| name == "cf.cond_br"));
     }
 
     #[test]

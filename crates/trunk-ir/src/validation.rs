@@ -325,6 +325,8 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
         validate_arith_cmpf_predicate(ctx, op, &mut errors);
         validate_scf_if_structure(ctx, op, &mut errors);
+        validate_scf_loop_result_arity(ctx, op, &mut errors);
+        validate_scf_switch_result_arity(ctx, op, &mut errors);
         validate_func_tail_call_indirect(ctx, op, &mut errors);
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
@@ -528,6 +530,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         return;
     }
 
+    let result_arity = ctx.op_results(op).len();
     for (region_name, &region) in [
         ("then_region", &data.regions[0]),
         ("else_region", &data.regions[1]),
@@ -572,7 +575,6 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         }
 
         let yield_arity = ctx.op_operands(yield_op).len();
-        let result_arity = ctx.op_results(op).len();
         if yield_arity != result_arity {
             errors.push(operation_verifier_error(
                 ctx,
@@ -582,6 +584,33 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 ),
             ));
         }
+    }
+}
+
+fn validate_scf_loop_result_arity(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let data = ctx.op(op);
+    if data.dialect == Symbol::new("scf")
+        && data.name == Symbol::new("loop")
+        && ctx.op_results(op).len() > 1
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "supports zero or one result, found {}",
+                ctx.op_results(op).len()
+            ),
+        ));
+    }
+}
+
+fn validate_scf_switch_result_arity(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let data = ctx.op(op);
+    if data.dialect == Symbol::new("scf")
+        && data.name == Symbol::new("switch")
+        && !ctx.op_results(op).is_empty()
+    {
+        errors.push(operation_verifier_error(ctx, op, "must be resultless"));
     }
 }
 
@@ -2050,6 +2079,92 @@ mod tests {
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
         assert!(operation_errors[0].contains("then_region expects 1 block, found 2"));
+    }
+
+    #[test]
+    fn scf_loop_and_switch_result_arity_is_rejected() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        let loop_body = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let loop_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![loop_body],
+            parent_op: None,
+        });
+        let loop_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("loop"))
+            .result(i32_ty)
+            .result(i32_ty)
+            .region(loop_region)
+            .build(&mut ctx);
+        let loop_op = ctx.create_op(loop_data);
+        ctx.push_op(entry, loop_op);
+
+        let discriminant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        ctx.push_op(entry, discriminant.op_ref());
+        let switch_body = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let switch_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![switch_body],
+            parent_op: None,
+        });
+        let switch_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("switch"))
+            .operand(discriminant.result(&ctx))
+            .result(i32_ty)
+            .region(switch_region)
+            .build(&mut ctx);
+        let switch_op = ctx.create_op(switch_data);
+        ctx.push_op(entry, switch_op);
+
+        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_ty = make_func_type(&mut ctx, &[], i32_ty);
+        let func_op = func::func(&mut ctx, loc, Symbol::new("malformed"), func_ty, body);
+        let module_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![func_op.op_ref()],
+            parent_region: None,
+        });
+        let module_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![module_block],
+            parent_op: None,
+        });
+        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), module_region);
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let messages = operation_error_messages(&result);
+        assert_eq!(messages.len(), 2, "{result}");
+        assert!(messages.iter().any(|message| message.contains("scf.loop")));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("scf.switch"))
+        );
     }
 
     #[test]
