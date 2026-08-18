@@ -544,6 +544,7 @@ impl TrustedOwnershipSummaries {
                 ctx,
                 function.body(ctx),
                 &self.call_contracts,
+                &entry_contracts,
                 &mut seen_ids,
                 &mut call_contracts,
             )?;
@@ -627,6 +628,7 @@ fn collect_validated_call_contracts(
     ctx: &IrContext,
     region: RegionRef,
     trusted: &HashMap<i128, TrustedCallContract>,
+    entry_contracts: &HashMap<Symbol, Vec<RcOwnership>>,
     seen_ids: &mut HashSet<i128>,
     validated: &mut HashMap<OpRef, TrustedCallContract>,
 ) -> Result<(), OwnershipContractError> {
@@ -662,8 +664,50 @@ fn collect_validated_call_contracts(
                     .op_operands(op)
                     .len()
                     .saturating_sub(usize::from(is_indirect));
-                if ctx.op(op).attributes.get(CALL_ARGUMENT_OWNERSHIP_ATTR)
-                    != Some(&RcOwnership::list_attribute(&expected.actions))
+                let expected_call_family = match (expected.is_tail, expected.is_indirect) {
+                    (false, false) => clif::Call::matches(ctx, op),
+                    (false, true) => clif::CallIndirect::matches(ctx, op),
+                    (true, false) => clif::ReturnCall::matches(ctx, op),
+                    (true, true) => clif::ReturnCallIndirect::matches(ctx, op),
+                };
+                // Direct operands may be ABI-equivalent `core.ptr` values after conversion;
+                // the already-validated callee entry contract is the exact parameter type proof.
+                let actions_match_types = if !expected.is_tail && !expected.is_indirect {
+                    expected
+                        .direct_callee
+                        .and_then(|callee| entry_contracts.get(&callee))
+                        .is_some_and(|entries| {
+                            entries.len() == expected.actions.len()
+                                && entries
+                                    .iter()
+                                    .zip(&expected.actions)
+                                    .all(|(entry, action)| match action {
+                                        RcOwnership::Plain => *entry == RcOwnership::Plain,
+                                        RcOwnership::Borrowed
+                                        | RcOwnership::Retained
+                                        | RcOwnership::Acquire => *entry != RcOwnership::Plain,
+                                        RcOwnership::Consumed | RcOwnership::Transfer => false,
+                                    })
+                        })
+                } else {
+                    args.iter()
+                        .zip(&expected.actions)
+                        .all(|(&argument, action)| match (expected.is_tail, action) {
+                            (true, RcOwnership::Plain) => !is_anyref_value(ctx, argument),
+                            (true, RcOwnership::Transfer) => is_anyref_value(ctx, argument),
+                            (false, RcOwnership::Plain) => !is_anyref_value(ctx, argument),
+                            (
+                                false,
+                                RcOwnership::Borrowed
+                                | RcOwnership::Retained
+                                | RcOwnership::Acquire,
+                            ) => is_anyref_value(ctx, argument),
+                            _ => false,
+                        })
+                };
+                if !expected_call_family
+                    || ctx.op(op).attributes.get(CALL_ARGUMENT_OWNERSHIP_ATTR)
+                        != Some(&RcOwnership::list_attribute(&expected.actions))
                     || is_tail != expected.is_tail
                     || is_indirect != expected.is_indirect
                     || expected.direct_callee != ctx.op(op).attributes.get_symbol("callee")
@@ -672,13 +716,7 @@ fn collect_validated_call_contracts(
                             .then(|| ctx.op(op).attributes.get_type("sig"))
                             .flatten())
                     || expected.actions.len() != argument_count
-                    || (is_tail
-                        && args
-                            .iter()
-                            .zip(&expected.actions)
-                            .any(|(&argument, action)| {
-                                is_anyref_value(ctx, argument) != (*action == RcOwnership::Transfer)
-                            }))
+                    || !actions_match_types
                 {
                     return Err(OwnershipContractError(
                         "call ownership contract changed during func_to_clif",
@@ -701,7 +739,14 @@ fn collect_validated_call_contracts(
                 return Err(OwnershipContractError("proper-tail transfer is untrusted"));
             }
             for &nested in &ctx.op(op).regions {
-                collect_validated_call_contracts(ctx, nested, trusted, seen_ids, validated)?;
+                collect_validated_call_contracts(
+                    ctx,
+                    nested,
+                    trusted,
+                    entry_contracts,
+                    seen_ids,
+                    validated,
+                )?;
             }
         }
     }
@@ -897,9 +942,11 @@ fn borrowed_use_kind(ctx: &IrContext, op: OpRef) -> BorrowedUseKind {
 mod tests {
     use super::*;
     use crate::native::rc_insertion::{BorrowedParameterPolicy, insert_rc_with_trusted_summaries};
+    use crate::native::type_converter::native_type_converter;
     use insta::assert_snapshot;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+    use trunk_ir_cranelift_backend::passes::func_to_clif;
 
     fn summarize(ir: &str) -> String {
         let mut ctx = IrContext::new();
@@ -1022,6 +1069,91 @@ mod tests {
                     lower_func_ops_to_clif(ctx, nested);
                 }
             }
+        }
+    }
+
+    fn lowered_ordinary_call_contract()
+    -> (IrContext, Module, TrustedOwnershipSummaries, OpRef, i128) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref, %1: core.i32) -> core.i32 {
+    %2 = clif.load %0 {offset = 0} : core.i32
+    func.return %1
+  }
+  func.func @caller(%0: tribute_rt.anyref, %1: core.i32) -> core.i32 {
+    %2 = func.call %0, %1 {callee = @target} : core.i32
+    func.return %2
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted =
+            compute_and_attach(&mut ctx, module, &type_converter).expect("ordinary call contract");
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        let module_block = module.first_block(&ctx).expect("module body");
+        let caller =
+            clif::Func::from_op(&ctx, ctx.block(module_block).ops[1]).expect("lowered caller");
+        let call = ctx
+            .region(caller.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .find(|&op| clif::Call::matches(&ctx, op))
+            .expect("ordinary direct call");
+        let id = match ctx.op(call).attributes.get(OWNERSHIP_CONTRACT_ID_ATTR) {
+            Some(Attribute::Int(id)) => *id,
+            _ => panic!("trusted contract identity"),
+        };
+        (ctx, module, trusted, call, id)
+    }
+
+    fn assert_rc_rejects_unchanged(
+        ctx: &mut IrContext,
+        module: Module,
+        trusted: &TrustedOwnershipSummaries,
+    ) {
+        let before = print_module(ctx, module.op());
+        assert!(
+            insert_rc_with_trusted_summaries(
+                ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                trusted,
+            )
+            .is_err()
+        );
+        assert_eq!(print_module(ctx, module.op()), before);
+    }
+
+    #[test]
+    fn ordinary_direct_contract_on_non_call_fails_before_mutation() {
+        let (mut ctx, module, trusted, call, _) = lowered_ordinary_call_contract();
+        ctx.op_mut(call).name = Symbol::new("load");
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
+    }
+
+    #[test]
+    fn ordinary_direct_action_type_mismatch_fails_before_mutation() {
+        for (argument_index, action) in [
+            (0, RcOwnership::Plain),
+            (1, RcOwnership::Borrowed),
+            (1, RcOwnership::Retained),
+            (1, RcOwnership::Acquire),
+            (0, RcOwnership::Consumed),
+            (0, RcOwnership::Transfer),
+        ] {
+            let (mut ctx, module, mut trusted, call, id) = lowered_ordinary_call_contract();
+            let contract = trusted.call_contracts.get_mut(&id).expect("trusted call");
+            contract.actions[argument_index] = action;
+            ctx.op_mut(call).attributes.insert(
+                Symbol::new(CALL_ARGUMENT_OWNERSHIP_ATTR),
+                RcOwnership::list_attribute(&contract.actions),
+            );
+
+            assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
         }
     }
 
