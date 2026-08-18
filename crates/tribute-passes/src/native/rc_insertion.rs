@@ -2356,6 +2356,41 @@ mod tests {
     }
 
     #[test]
+    fn zero_operand_indirect_tail_fails_before_rc_mutation() {
+        for keep_metadata in [true, false] {
+            let (mut ctx, module, trusted) = lowered_trusted_cps(
+                r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+}"#,
+            );
+            let tail = first_tail_call(&ctx, module, true);
+            while !ctx.op_operands(tail).is_empty() {
+                ctx.remove_op_operand(tail, 0);
+            }
+            if !keep_metadata {
+                ctx.op_mut(tail)
+                    .attributes
+                    .remove(OWNERSHIP_CONTRACT_ID_ATTR);
+                ctx.op_mut(tail)
+                    .attributes
+                    .remove(CALL_ARGUMENT_OWNERSHIP_ATTR);
+            }
+            let before = print_module(&ctx, module.op());
+            let _: OwnershipContractError = insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                TemporaryBorrowPolicy::Preserve,
+                &trusted,
+            )
+            .expect_err("zero-operand indirect tail must fail closed");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
     fn nonfinal_tail_placement_fails_before_rc_mutation() {
         let (mut ctx, module, trusted) = lowered_trusted_cps(
             r#"core.module @test {

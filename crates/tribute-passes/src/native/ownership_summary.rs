@@ -659,7 +659,10 @@ fn collect_validated_call_contracts(
                 let expected = trusted.get(&id).ok_or(OwnershipContractError(
                     "call ownership contract identity is untrusted",
                 ))?;
-                let args = &ctx.op_operands(op)[usize::from(is_indirect)..];
+                let args = ctx
+                    .op_operands(op)
+                    .get(usize::from(is_indirect)..)
+                    .unwrap_or_default();
                 let argument_count = ctx
                     .op_operands(op)
                     .len()
@@ -732,7 +735,10 @@ fn collect_validated_call_contracts(
                     "call ownership actions have no trusted identity",
                 ));
             } else if is_tail
-                && ctx.op_operands(op)[usize::from(is_indirect)..]
+                && ctx
+                    .op_operands(op)
+                    .get(usize::from(is_indirect)..)
+                    .unwrap_or_default()
                     .iter()
                     .any(|&argument| is_anyref_value(ctx, argument))
             {
