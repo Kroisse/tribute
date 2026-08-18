@@ -293,6 +293,60 @@ occur before unrealized cast resolution and RC lowering, which keeps alias
 handling conservative and makes the inserted and optimized RC boundaries
 directly observable in tests.
 
+#### Proper-tail ownership transfer
+
+Native RC distinguishes a callable's parameter-entry contract from the action
+at one call site. The existing `borrowed`/`owned` summary remains a borrow
+optimization and does not encode proper-tail transfer.
+
+Each RC-managed physical parameter has one exact entry mode:
+
+- **borrowed:** the callee receives no ownership unit, performs no entry retain,
+  and must neither release nor transfer the parameter;
+- **retained:** the callee acquires its own unit with an entry retain and must
+  release or return that unit; this is the existing ordinary owned-parameter
+  behavior; or
+- **consumed:** the caller supplies one ownership unit, the callee performs no
+  entry retain, and the callee must eventually release, return, or proper-tail
+  transfer that unit.
+
+Physically empty CPS callables use `consumed` for every parameter whose exact
+native conversion is RC-managed. Non-RC parameters have no RC action. This is
+a native callable contract, not a conclusion inferred by RC insertion from a
+name, operand type, body shape, or calling-convention integer alone.
+
+An ordinary call to a consumed parameter acquires a new unit with `retain`
+immediately before the call, leaving the caller's existing unit live. A
+non-returning proper-tail call transfers the caller's existing unit without a
+caller-side release. When the caller only borrows the value, it first retains
+once to create the transferred unit. If the same underlying value is supplied
+to `N` consumed parameters, the edge supplies `N` units: an owned value
+transfers one existing unit and retains `N - 1`, while a borrowed value retains
+`N`. Alias-transparent casts count as the same underlying ownership unit.
+
+Every RC-managed proper-tail operand must target a consumed parameter. A tail
+edge to a borrowed parameter would outlive the caller dynamic extent; a tail
+edge to a retained parameter would require cleanup after the terminator. Both
+are rejected. Dying RC values not transferred by the edge are released before
+the tail terminator. No RC operation may follow `clif.return_call` or
+`clif.return_call_indirect`.
+
+The native ownership producer runs after target-ABI validation and immediately
+before `func_to_clif`. It records versioned, positional parameter-entry and
+call-edge actions plus a fresh contract identity, and returns an opaque
+in-memory trust token. Direct edges must resolve one exact module-local symbol.
+Indirect edges additionally require the exact physical callable signature and
+explicit CPS provenance already carried by the transfer. `func_to_clif`
+preserves this metadata; RC insertion cross-checks it against the trust token
+after lowering. Textual metadata is never trusted.
+
+RC insertion validates the complete module before applying any mutation. Once
+that preflight succeeds, insertion planning has no remaining failure path.
+Missing, malformed, duplicate, external, stale, or inconsistent contracts; an
+indirect signature mismatch; and a tail operation that is not the final block
+operation all fail before mutation. The contract metadata is removed after
+successful consumption and does not become part of the emitted ABI.
+
 #### Trusted ownership summaries across `func_to_clif`
 
 Borrowed forwarding uses explicit pre-lowering metadata rather than rebuilding
