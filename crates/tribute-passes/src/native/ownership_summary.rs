@@ -18,6 +18,8 @@ pub const PARAMETER_OWNERSHIP_ATTR: &str = "tribute.rc.parameter_ownership_v1";
 pub const PARAMETER_ENTRY_OWNERSHIP_ATTR: &str = "tribute.rc.parameter_entry_ownership_v1";
 pub const CALL_ARGUMENT_OWNERSHIP_ATTR: &str = "tribute.rc.call_argument_ownership_v1";
 pub const OWNERSHIP_CONTRACT_ID_ATTR: &str = "tribute.rc.ownership_contract_id_v1";
+pub(crate) const PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR: &str =
+    "tribute.rc.physical_closure_value_provenance_v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterOwnership {
@@ -86,6 +88,7 @@ pub struct TrustedOwnershipSummaries {
     summaries: HashMap<Symbol, Vec<ParameterOwnership>>,
     entry_contracts: HashMap<Symbol, Vec<RcOwnership>>,
     entry_physical_closures: HashMap<Symbol, Vec<Option<TypeRef>>>,
+    physical_closure_values: HashMap<i128, TypeRef>,
     call_contracts: HashMap<i128, TrustedCallContract>,
 }
 
@@ -93,6 +96,7 @@ pub struct ValidatedOwnershipContracts {
     pub summaries: HashMap<Symbol, Vec<ParameterOwnership>>,
     pub entry_contracts: HashMap<Symbol, Vec<RcOwnership>>,
     pub(crate) entry_physical_closures: HashMap<Symbol, Vec<Option<TypeRef>>>,
+    pub(crate) physical_closure_values: HashMap<i128, ValueRef>,
     pub call_contracts: HashMap<OpRef, TrustedCallContract>,
 }
 
@@ -106,6 +110,7 @@ pub fn compute_and_attach(
             summaries: HashMap::new(),
             entry_contracts: HashMap::new(),
             entry_physical_closures: HashMap::new(),
+            physical_closure_values: HashMap::new(),
             call_contracts: HashMap::new(),
         });
     };
@@ -225,6 +230,15 @@ pub fn compute_and_attach(
 
     strip_contract_metadata(ctx, module.op());
 
+    let mut physical_closure_values = HashMap::new();
+    let mut next_physical_closure_value_id = 1i128;
+    collect_physical_closure_values(
+        ctx,
+        module.op(),
+        &mut next_physical_closure_value_id,
+        &mut physical_closure_values,
+    );
+
     for (&symbol, &op) in &unique_functions {
         let entries = summaries[&symbol]
             .iter()
@@ -257,6 +271,7 @@ pub fn compute_and_attach(
         summaries,
         entry_contracts,
         entry_physical_closures,
+        physical_closure_values,
         call_contracts,
     })
 }
@@ -268,12 +283,44 @@ fn strip_contract_metadata(ctx: &mut IrContext, op: OpRef) {
     attributes.remove(PARAMETER_ENTRY_OWNERSHIP_ATTR);
     attributes.remove(CALL_ARGUMENT_OWNERSHIP_ATTR);
     attributes.remove(OWNERSHIP_CONTRACT_ID_ATTR);
+    attributes.remove(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR);
     for region in regions {
         let blocks = ctx.region(region).blocks.clone();
         for block in blocks {
             let ops = ctx.block(block).ops.clone();
             for nested in ops {
                 strip_contract_metadata(ctx, nested);
+            }
+        }
+    }
+}
+
+fn collect_physical_closure_values(
+    ctx: &mut IrContext,
+    op: OpRef,
+    next_id: &mut i128,
+    values: &mut HashMap<i128, TypeRef>,
+) {
+    if adt::StructGet::matches(ctx, op) && ctx.op_results(op).len() == 1 {
+        let result = ctx.op_result(op, 0);
+        let ty = ctx.value_ty(result);
+        if type_is_proven_physical_closure(ctx, ty) {
+            let id = *next_id;
+            *next_id += 1;
+            values.insert(id, ty);
+            ctx.op_mut(op).attributes.insert(
+                Symbol::new(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR),
+                Attribute::Int(id),
+            );
+        }
+    }
+    let regions = ctx.op(op).regions.to_vec();
+    for region in regions {
+        let blocks = ctx.region(region).blocks.clone();
+        for block in blocks {
+            let ops = ctx.block(block).ops.clone();
+            for nested in ops {
+                collect_physical_closure_values(ctx, nested, next_id, values);
             }
         }
     }
@@ -658,10 +705,31 @@ impl TrustedOwnershipSummaries {
             ));
         }
 
+        let mut physical_closure_values = HashMap::new();
+        let mut seen_physical_closure_values = HashSet::new();
+        for &function_op in module_ops {
+            let Ok(function) = clif::Func::from_op(ctx, function_op) else {
+                continue;
+            };
+            collect_validated_physical_closure_values(
+                ctx,
+                function.body(ctx),
+                &self.physical_closure_values,
+                &mut seen_physical_closure_values,
+                &mut physical_closure_values,
+            )?;
+        }
+        if seen_physical_closure_values.len() != self.physical_closure_values.len() {
+            return Err(OwnershipContractError(
+                "trusted physical closure value disappeared during func_to_clif",
+            ));
+        }
+
         Ok(ValidatedOwnershipContracts {
             summaries,
             entry_contracts,
             entry_physical_closures,
+            physical_closure_values,
             call_contracts,
         })
     }
@@ -673,6 +741,7 @@ impl TrustedOwnershipSummaries {
                 summaries: HashMap::new(),
                 entry_contracts: HashMap::new(),
                 entry_physical_closures: HashMap::new(),
+                physical_closure_values: HashMap::new(),
                 call_contracts: HashMap::new(),
             };
         };
@@ -727,9 +796,53 @@ impl TrustedOwnershipSummaries {
             summaries,
             entry_contracts,
             entry_physical_closures,
+            physical_closure_values: HashMap::new(),
             call_contracts: HashMap::new(),
         }
     }
+}
+
+fn collect_validated_physical_closure_values(
+    ctx: &IrContext,
+    region: RegionRef,
+    trusted: &HashMap<i128, TypeRef>,
+    seen: &mut HashSet<i128>,
+    validated: &mut HashMap<i128, ValueRef>,
+) -> Result<(), OwnershipContractError> {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if let Some(attribute) = ctx
+                .op(op)
+                .attributes
+                .get(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR)
+            {
+                let Attribute::Int(id) = attribute else {
+                    return Err(OwnershipContractError(
+                        "physical closure value provenance is malformed",
+                    ));
+                };
+                if !clif::Load::matches(ctx, op)
+                    || ctx.op_results(op).len() != 1
+                    || !is_core_ptr_type(ctx, ctx.value_ty(ctx.op_result(op, 0)))
+                    || !seen.insert(*id)
+                {
+                    return Err(OwnershipContractError(
+                        "physical closure value provenance changed during func_to_clif",
+                    ));
+                }
+                if !trusted.contains_key(id) {
+                    return Err(OwnershipContractError(
+                        "physical closure value provenance is untrusted",
+                    ));
+                }
+                validated.insert(*id, ctx.op_result(op, 0));
+            }
+            for &nested in &ctx.op(op).regions {
+                collect_validated_physical_closure_values(ctx, nested, trusted, seen, validated)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_validated_call_contracts(
@@ -1096,7 +1209,7 @@ mod tests {
     use insta::assert_snapshot;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
-    use trunk_ir_cranelift_backend::passes::func_to_clif;
+    use trunk_ir_cranelift_backend::passes::{adt_to_clif, func_to_clif};
 
     fn summarize(ir: &str) -> String {
         let mut ctx = IrContext::new();
@@ -1448,6 +1561,70 @@ mod tests {
             .entry_physical_closures
             .get_mut(&Symbol::new("factory"))
             .expect("physical entry provenance")[0] = None;
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
+    }
+
+    #[test]
+    fn physical_closure_field_value_without_provenance_fails_closed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  !frame = adt.struct(!handler) {fields = [[@dispatch, !handler]], name = @Frame}
+  func.func @factory(%frame: !frame) -> core.nil attributes {tribute.calling_convention = 0} {
+    %dispatch = adt.struct_get %frame {field = 0, type = !frame} : !handler
+    func.unreachable
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let mut trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .expect("physical closure field contract");
+        assert_eq!(trusted.physical_closure_values.len(), 1);
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        adt_to_clif::lower(&mut ctx, module, type_converter).expect("adt_to_clif");
+        trusted.physical_closure_values.clear();
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
+    }
+
+    #[test]
+    fn forged_physical_closure_field_value_provenance_fails_closed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  !frame = adt.struct(!handler) {fields = [[@dispatch, !handler]], name = @Frame}
+  func.func @factory(%frame: !frame) -> core.nil attributes {tribute.calling_convention = 0} {
+    %dispatch = adt.struct_get %frame {field = 0, type = !frame} : !handler
+    func.unreachable
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .expect("physical closure field contract");
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        adt_to_clif::lower(&mut ctx, module, type_converter).expect("adt_to_clif");
+        let module_block = module.first_block(&ctx).expect("module body");
+        let factory =
+            clif::Func::from_op(&ctx, ctx.block(module_block).ops[0]).expect("lowered factory");
+        let load = ctx
+            .region(factory.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .find(|&op| clif::Load::matches(&ctx, op))
+            .expect("proven field load");
+        ctx.op_mut(load).attributes.insert(
+            Symbol::new(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR),
+            Attribute::Int(999),
+        );
 
         assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }

@@ -39,6 +39,9 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::TypeDataBuilder;
 
+const PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR: &str =
+    "tribute.rc.physical_closure_value_provenance_v1";
+
 /// Lower ADT operations to clif dialect.
 ///
 /// This is a partial lowering: struct access and reference operations are converted.
@@ -131,6 +134,17 @@ impl RewritePattern for StructGetPattern {
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
         let load_op = clif::load(ctx, loc, ref_val, result_ty, offset);
+        if let Some(provenance) = ctx
+            .op(op)
+            .attributes
+            .get(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR)
+            .cloned()
+        {
+            ctx.op_mut(load_op.op_ref()).attributes.insert(
+                Symbol::new(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR),
+                provenance,
+            );
+        }
         rewriter.replace_op(load_op.op_ref());
         true
     }

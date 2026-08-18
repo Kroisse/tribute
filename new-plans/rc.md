@@ -316,8 +316,8 @@ a native callable contract, not a conclusion inferred by RC insertion from a
 name, operand type, body shape, or calling-convention integer alone.
 Convention-proven physical closure types are RC-managed even after their
 representation is erased to `core.ptr`; a bare `core.ptr` remains plain.
-Entry and indirect-tail contracts retain that positional provenance through RC
-insertion.
+Entry, trusted physical field-load, and indirect-tail contracts retain that
+positional provenance through RC insertion.
 
 An ordinary call to a consumed parameter acquires a new unit with `retain`
 immediately before the call, leaving the caller's existing unit live. A

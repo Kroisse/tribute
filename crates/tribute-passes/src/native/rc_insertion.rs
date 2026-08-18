@@ -48,9 +48,9 @@ use tribute_ir::dialect::tribute_rt;
 
 use super::ownership_summary::{
     BorrowedUse, BorrowedUseKind, CALL_ARGUMENT_OWNERSHIP_ATTR, OWNERSHIP_CONTRACT_ID_ATTR,
-    OwnershipContractError, PARAMETER_ENTRY_OWNERSHIP_ATTR, ParameterOwnership, RcOwnership,
-    TrustedCallContract, TrustedOwnershipSummaries, ValidatedOwnershipContracts,
-    classify_borrowed_use,
+    OwnershipContractError, PARAMETER_ENTRY_OWNERSHIP_ATTR, PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR,
+    ParameterOwnership, RcOwnership, TrustedCallContract, TrustedOwnershipSummaries,
+    ValidatedOwnershipContracts, classify_borrowed_use,
 };
 
 pub type RcInsertionError = OwnershipContractError;
@@ -523,9 +523,12 @@ fn insert_rc_impl(
             summaries: HashMap::new(),
             entry_contracts: HashMap::new(),
             entry_physical_closures: HashMap::new(),
+            physical_closure_values: HashMap::new(),
             call_contracts: HashMap::new(),
         }
     };
+    let physical_closure_values: HashSet<ValueRef> =
+        trusted.physical_closure_values.values().copied().collect();
     let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
@@ -549,6 +552,7 @@ fn insert_rc_impl(
                 &trusted.summaries,
                 trusted.entry_contracts.get(&sym).map(Vec::as_slice),
                 trusted.entry_physical_closures.get(&sym).map(Vec::as_slice),
+                &physical_closure_values,
                 &trusted.call_contracts,
             );
         }
@@ -568,6 +572,7 @@ fn clear_contract_metadata(ctx: &mut IrContext, op: OpRef) {
     attributes.remove(PARAMETER_ENTRY_OWNERSHIP_ATTR);
     attributes.remove(CALL_ARGUMENT_OWNERSHIP_ATTR);
     attributes.remove(OWNERSHIP_CONTRACT_ID_ATTR);
+    attributes.remove(PHYSICAL_CLOSURE_VALUE_PROVENANCE_ATTR);
     for region in regions {
         let blocks = ctx.region(region).blocks.clone();
         for block in blocks {
@@ -794,6 +799,7 @@ fn insert_rc_in_function(
     trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
     entry_contract: Option<&[RcOwnership]>,
     entry_physical_closures: Option<&[Option<TypeRef>]>,
+    physical_closure_values: &HashSet<ValueRef>,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
     let consumed_parameters: HashSet<ValueRef> = entry_contract
@@ -825,19 +831,21 @@ fn insert_rc_in_function(
     // arguments remain unmanaged.
     ptr_values.extend(consumed_parameters.iter().copied());
     ptr_values.extend(retained_physical_parameters.iter().copied());
+    ptr_values.extend(physical_closure_values.iter().copied());
 
     if ptr_values.is_empty() {
         return;
     }
 
     let initial_ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
-    let promoted_ptr_values = collect_adapted_tail_store_escapes(
+    let mut promoted_ptr_values = collect_adapted_tail_store_escapes(
         ctx,
         body,
         &ptr_values,
         &initial_ptr_alias_map,
         call_contracts,
     );
+    promoted_ptr_values.extend(physical_closure_values.iter().copied());
     ptr_values.extend(promoted_ptr_values.iter().copied());
     let ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
     let mut temporary_borrows = match temporary_borrow_policy {
@@ -1778,7 +1786,7 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_use_chains;
-    use trunk_ir_cranelift_backend::passes::func_to_clif;
+    use trunk_ir_cranelift_backend::passes::{adt_to_clif, func_to_clif};
 
     fn run_pass(ir: &str) -> String {
         run_pass_with_policy(ir, BorrowedParameterPolicy::Preserve)
@@ -1845,6 +1853,26 @@ mod tests {
             module,
             BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_policy,
+            &trusted,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(print_module(&ctx, module.op()))
+    }
+
+    fn run_trusted_native_rc_pass(ir: &str) -> Result<String, String> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .map_err(|error| error.to_string())?;
+        func_to_clif::lower(&mut ctx, module, type_converter).map_err(|error| error.to_string())?;
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        adt_to_clif::lower(&mut ctx, module, type_converter).map_err(|error| error.to_string())?;
+        insert_rc_with_policies_and_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::Preserve,
             &trusted,
         )
         .map_err(|error| error.to_string())?;
@@ -2583,6 +2611,71 @@ mod tests {
             .find("tribute_rt.release %4")
             .unwrap_or_else(|| panic!("{producer}"));
         assert!(stores[1] < release, "{producer}");
+    }
+
+    #[test]
+    fn proven_physical_closure_field_load_retain_per_owning_store() {
+        let output = run_trusted_native_rc_pass(
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  !frame = adt.struct(!handler) {fields = [[@dispatch, !handler]], name = @Frame}
+  func.func @factory(%0: !frame) -> core.nil attributes {tribute.calling_convention = 0} {
+    %1 = adt.struct_get %0 {field = 0, type = !frame} : !handler
+    %2 = clif.iconst {value = 32} : core.i64
+    %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+    clif.store %1, %3 {offset = 24}
+    func.unreachable
+  }
+}"#,
+        )
+        .expect("proven physical closure field capture");
+        let factory = output
+            .split("sym_name = @factory")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let load = factory
+            .find("clif.load")
+            .unwrap_or_else(|| panic!("{factory}"));
+        let store = factory
+            .find("clif.store")
+            .unwrap_or_else(|| panic!("{factory}"));
+        let retains: Vec<_> = factory
+            .match_indices("tribute_rt.retain")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(retains.len(), 2, "{factory}");
+        assert!(
+            load < retains[0] && retains[0] < retains[1] && retains[1] < store,
+            "{factory}"
+        );
+        let release = factory
+            .find("tribute_rt.release")
+            .unwrap_or_else(|| panic!("{factory}"));
+        assert!(store < release, "{factory}");
+        assert!(!factory.contains("return_call"), "{factory}");
+    }
+
+    #[test]
+    fn plain_core_ptr_field_load_capture_remains_unmanaged() {
+        let output = run_trusted_native_rc_pass(
+            r#"core.module @test {
+  !frame = adt.struct(core.ptr) {fields = [[@dispatch, core.ptr]], name = @Frame}
+  func.func @factory(%0: !frame) -> core.nil attributes {tribute.calling_convention = 0} {
+    %1 = adt.struct_get %0 {field = 0, type = !frame} : core.ptr
+    %2 = clif.iconst {value = 32} : core.i64
+    %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+    clif.store %1, %3 {offset = 24}
+    func.unreachable
+  }
+}"#,
+        )
+        .expect("plain pointer field capture");
+        let factory = output
+            .split("sym_name = @factory")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        assert!(!factory.contains("tribute_rt.retain"), "{factory}");
+        assert!(!factory.contains("tribute_rt.release"), "{factory}");
     }
 
     #[test]
