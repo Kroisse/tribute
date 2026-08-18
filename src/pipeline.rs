@@ -1065,7 +1065,10 @@ fn prepare_module_to_native(
             ctx,
             module,
             &type_converter,
-        );
+        )
+        .map_err(|error| {
+            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+        })?;
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
@@ -1155,7 +1158,10 @@ fn prepare_module_to_native(
             borrowed_parameters,
             temporary_borrows,
             &ownership_summaries,
-        );
+        )
+        .map_err(|error| {
+            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+        })?;
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
