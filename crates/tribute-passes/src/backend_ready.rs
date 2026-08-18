@@ -191,28 +191,30 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
                 data.dialect, data.name
             )));
         }
-        for &parameter in &data.params {
-            self.verify_type(parameter, TypeSurface::Metadata, "nested type parameter")?;
+        let is_function = data.dialect == Symbol::new("core") && data.name == Symbol::new("func");
+        if is_function {
+            let Some((&result, parameters)) = data.params.split_first() else {
+                return Err(self.error(format!("`core.func` has no result type in {where_}")));
+            };
+            self.verify_type(result, TypeSurface::Result, "function result")?;
+            for &parameter in parameters {
+                self.verify_type(parameter, TypeSurface::Value, "function parameter")?;
+            }
+        } else {
+            for &parameter in &data.params {
+                self.verify_type(parameter, TypeSurface::Metadata, "nested type parameter")?;
+            }
         }
         for (key, attribute) in &data.attrs {
             self.verify_symbol(*key, "type attribute")?;
             self.verify_attribute(attribute, TypeSurface::Metadata, "type attribute")?;
         }
 
-        if surface == TypeSurface::Signature {
-            if data.dialect != Symbol::new("core")
-                || data.name != Symbol::new("func")
-                || data.params.is_empty()
-            {
-                return Err(self.error(format!(
-                    "`{}.{}` is not a callable signature in {where_}",
-                    data.dialect, data.name
-                )));
-            }
-            self.verify_type(data.params[0], TypeSurface::Result, "function result")?;
-            for &parameter in &data.params[1..] {
-                self.verify_type(parameter, TypeSurface::Value, "function parameter")?;
-            }
+        if surface == TypeSurface::Signature && !is_function {
+            return Err(self.error(format!(
+                "`{}.{}` is not a callable signature in {where_}",
+                data.dialect, data.name
+            )));
         }
         Ok(())
     }
@@ -474,6 +476,26 @@ mod tests {
         )
         .expect_err("backend boundary must reject nested logical types");
         assert!(error.contains("tribute_control.callable"), "{error}");
+    }
+
+    #[test]
+    fn rejects_illegal_types_nested_in_callable_signatures() {
+        for signature in [
+            "core.func(core.ref(core.ptr))",
+            "core.func(core.nil, core.ref(core.ptr))",
+        ] {
+            let ir = format!(
+                r#"core.module @test {{
+  !bad_callable = {signature}
+  wasm.func @main() -> core.nil {{
+    wasm.return
+  }}
+}}"#
+            );
+            let error = verify(&ir, TributeBackend::Wasm)
+                .expect_err("callable result and parameter slots must use physical value rules");
+            assert!(error.contains("core.ref"), "{error}");
+        }
     }
 
     #[test]
