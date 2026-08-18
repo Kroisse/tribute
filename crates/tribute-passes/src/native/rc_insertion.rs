@@ -3,8 +3,9 @@
 //! Automatically inserts `tribute_rt.retain` and `tribute_rt.release` operations
 //! for `tribute_rt.anyref`-typed values in the native backend pipeline.
 //!
-//! Only `tribute_rt.anyref` values are RC-managed. Plain `core.ptr` values
-//! (function pointers, continuations, null sentinels) are not affected.
+//! `tribute_rt.anyref` values and convention-proven physical closures are
+//! RC-managed. Plain `core.ptr` values (function pointers, continuations,
+//! null sentinels) are not affected.
 //!
 //! ## Pipeline Position
 //!
@@ -79,6 +80,11 @@ fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Check if a value is an anyref type (RC-managed).
 fn is_anyref_value(ctx: &IrContext, value: ValueRef) -> bool {
     is_anyref_type(ctx, ctx.value_ty(value))
+}
+
+fn is_core_ptr_value(ctx: &IrContext, value: ValueRef) -> bool {
+    let data = ctx.types.get(ctx.value_ty(value));
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
 }
 
 /// Check if an op is a block terminator.
@@ -179,6 +185,23 @@ struct LivenessInfo {
 struct TemporaryBorrowInfo {
     borrowed: HashSet<ValueRef>,
     lifetime_dependencies: HashMap<ValueRef, ValueRef>,
+}
+
+impl TemporaryBorrowInfo {
+    fn extend(&mut self, other: Self) -> bool {
+        let changed = other
+            .borrowed
+            .iter()
+            .any(|value| !self.borrowed.contains(value))
+            || other
+                .lifetime_dependencies
+                .iter()
+                .any(|(value, owner)| self.lifetime_dependencies.get(value) != Some(owner));
+        self.borrowed.extend(other.borrowed);
+        self.lifetime_dependencies
+            .extend(other.lifetime_dependencies);
+        changed
+    }
 }
 
 struct RcBorrowInfo<'a> {
@@ -300,7 +323,7 @@ fn compute_use_def_sets(
         let mut defs = HashSet::new();
 
         for &arg_val in ctx.block_args(block) {
-            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
+            if ptr_values.contains(&arg_val) {
                 defs.insert(arg_val);
             }
         }
@@ -322,10 +345,7 @@ fn compute_use_def_sets(
                 });
             }
             for &result_val in ctx.op_results(op) {
-                if is_anyref_type(ctx, ctx.value_ty(result_val))
-                    && !is_static_ptr(ctx, result_val)
-                    && ptr_values.contains(&result_val)
-                {
+                if ptr_values.contains(&result_val) {
                     defs.insert(result_val);
                 }
             }
@@ -773,19 +793,49 @@ fn insert_rc_in_function(
     entry_contract: Option<&[RcOwnership]>,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
+    let consumed_parameters: HashSet<ValueRef> = entry_contract
+        .into_iter()
+        .flat_map(|entries| entries.iter().enumerate())
+        .filter_map(|(index, entry)| {
+            (*entry == RcOwnership::Consumed)
+                .then(|| ctx.region(body).blocks.first())
+                .flatten()
+                .and_then(|&entry_block| ctx.block_args(entry_block).get(index).copied())
+        })
+        .collect();
     let mut ptr_values = collect_ptr_values(ctx, body);
+    // `func_to_clif` erases convention-proven physical closures to `core.ptr`.
+    // Their consumed entry contract is the exact provenance that keeps them in
+    // RC accounting; arbitrary pointer block arguments remain unmanaged.
+    ptr_values.extend(consumed_parameters.iter().copied());
 
     if ptr_values.is_empty() {
         return;
     }
 
+    let initial_ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
+    let promoted_ptr_values = collect_adapted_tail_store_escapes(
+        ctx,
+        body,
+        &ptr_values,
+        &initial_ptr_alias_map,
+        call_contracts,
+    );
+    ptr_values.extend(promoted_ptr_values.iter().copied());
     let ptr_alias_map = build_ptr_alias_map(ctx, body, &mut ptr_values);
-    let temporary_borrows = match temporary_borrow_policy {
+    let mut temporary_borrows = match temporary_borrow_policy {
         TemporaryBorrowPolicy::Preserve => TemporaryBorrowInfo::default(),
         TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
             analyze_temporary_borrows(ctx, body, &ptr_values, &ptr_alias_map, call_contracts)
         }
     };
+    temporary_borrows.extend(analyze_abi_adapted_indirect_tail_transfer_borrows(
+        ctx,
+        body,
+        &ptr_values,
+        &ptr_alias_map,
+        call_contracts,
+    ));
     let liveness = compute_liveness(
         ctx,
         body,
@@ -799,16 +849,6 @@ fn insert_rc_in_function(
             analyze_borrowed_parameters(ctx, function, body, trusted_summaries)
         }
     };
-    let consumed_parameters: HashSet<ValueRef> = entry_contract
-        .into_iter()
-        .flat_map(|entries| entries.iter().enumerate())
-        .filter_map(|(index, entry)| {
-            (*entry == RcOwnership::Consumed)
-                .then(|| ctx.region(body).blocks.first())
-                .flatten()
-                .and_then(|&entry_block| ctx.block_args(entry_block).get(index).copied())
-        })
-        .collect();
     borrowed_parameters.retain(|parameter| !consumed_parameters.contains(parameter));
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
@@ -823,6 +863,7 @@ fn insert_rc_in_function(
             block,
             block_idx == 0,
             &ptr_values,
+            &promoted_ptr_values,
             &liveness,
             &ptr_alias_map,
             &borrow_info,
@@ -832,12 +873,152 @@ fn insert_rc_in_function(
     }
 }
 
+/// Promote only physical closure loads that are proven to feed a trusted
+/// indirect-tail transfer and whose otherwise-safe use chain stores that
+/// closure as a value. The store receives its own RC unit; arbitrary pointers
+/// and other escaping uses remain outside ownership accounting.
+fn collect_adapted_tail_store_escapes(
+    ctx: &IrContext,
+    body: RegionRef,
+    ptr_values: &HashSet<ValueRef>,
+    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> HashSet<ValueRef> {
+    let dominance = DominatorTree::compute(ctx, body);
+    if !dominance.is_valid() {
+        return HashSet::new();
+    }
+
+    let known_owners = HashMap::new();
+    let mut promoted = HashSet::new();
+    for &block in &ctx.region(body).blocks {
+        if !dominance.is_reachable(block) {
+            continue;
+        }
+        for &op in &ctx.block(block).ops {
+            if !clif::Load::matches(ctx, op) || ctx.op_results(op).len() != 1 {
+                continue;
+            }
+            let loaded = ctx.op_result(op, 0);
+            if !is_core_ptr_value(ctx, loaded)
+                || !is_abi_adapted_indirect_tail_transfer(ctx, loaded, call_contracts)
+                || !has_store_value_use(ctx, loaded, &mut HashSet::new())
+            {
+                continue;
+            }
+            let Some(&address) = ctx.op_operands(op).first() else {
+                continue;
+            };
+            let Some(owner) = resolve_temporary_owner(
+                ctx,
+                address,
+                ptr_values,
+                ptr_alias_map,
+                &known_owners,
+                &mut HashSet::new(),
+            ) else {
+                continue;
+            };
+            if temporary_is_proven_borrowed(
+                ctx,
+                body,
+                op,
+                loaded,
+                owner,
+                &dominance,
+                call_contracts,
+                true,
+                true,
+            )
+            .is_some()
+            {
+                promoted.insert(loaded);
+            }
+        }
+    }
+    promoted
+}
+
+fn has_store_value_use(ctx: &IrContext, value: ValueRef, visited: &mut HashSet<ValueRef>) -> bool {
+    if !visited.insert(value) {
+        return false;
+    }
+    ctx.uses(value).iter().any(|use_| {
+        let op = use_.user;
+        let operand_index = use_.operand_index as usize;
+        (clif::Store::matches(ctx, op) && operand_index == 0)
+            || (core::UnrealizedConversionCast::matches(ctx, op)
+                && operand_index == 0
+                && ctx.op_operands(op).len() == 1
+                && ctx.op_results(op).len() == 1
+                && has_store_value_use(ctx, ctx.op_result(op, 0), visited))
+    })
+}
+
 fn analyze_temporary_borrows(
     ctx: &IrContext,
     body: RegionRef,
     ptr_values: &HashSet<ValueRef>,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> TemporaryBorrowInfo {
+    let known_owners = HashMap::new();
+    analyze_eligible_temporary_borrows(
+        ctx,
+        body,
+        ptr_values,
+        ptr_alias_map,
+        call_contracts,
+        &known_owners,
+        is_anyref_value,
+        false,
+        false,
+    )
+}
+
+/// Analyze only physical pointer loads whose trusted indirect-tail contract
+/// requires a transferred RC unit. This correctness path is independent of
+/// optional field-borrow elision.
+fn analyze_abi_adapted_indirect_tail_transfer_borrows(
+    ctx: &IrContext,
+    body: RegionRef,
+    ptr_values: &HashSet<ValueRef>,
+    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> TemporaryBorrowInfo {
+    let mut info = TemporaryBorrowInfo::default();
+    loop {
+        let discovered = analyze_eligible_temporary_borrows(
+            ctx,
+            body,
+            ptr_values,
+            ptr_alias_map,
+            call_contracts,
+            &info.lifetime_dependencies,
+            |ctx, temporary| {
+                !is_anyref_value(ctx, temporary)
+                    && is_abi_adapted_indirect_tail_transfer(ctx, temporary, call_contracts)
+            },
+            true,
+            false,
+        );
+        if !info.extend(discovered) {
+            return info;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_eligible_temporary_borrows(
+    ctx: &IrContext,
+    body: RegionRef,
+    ptr_values: &HashSet<ValueRef>,
+    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+    known_owners: &HashMap<ValueRef, ValueRef>,
+    is_eligible: impl Fn(&IrContext, ValueRef) -> bool,
+    follow_descendant_loads: bool,
+    allow_store_value: bool,
 ) -> TemporaryBorrowInfo {
     let dominance = DominatorTree::compute(ctx, body);
     if !dominance.is_valid() {
@@ -854,7 +1035,7 @@ fn analyze_temporary_borrows(
                 continue;
             }
             let temporary = ctx.op_result(op, 0);
-            if !is_anyref_value(ctx, temporary) {
+            if !is_eligible(ctx, temporary) {
                 continue;
             }
             let Some(&address) = ctx.op_operands(op).first() else {
@@ -865,6 +1046,7 @@ fn analyze_temporary_borrows(
                 address,
                 ptr_values,
                 ptr_alias_map,
+                known_owners,
                 &mut HashSet::new(),
             ) else {
                 continue;
@@ -877,10 +1059,13 @@ fn analyze_temporary_borrows(
                 owner,
                 &dominance,
                 call_contracts,
+                follow_descendant_loads,
+                allow_store_value,
             ) {
                 info.borrowed.insert(temporary);
                 info.lifetime_dependencies.insert(temporary, owner);
                 for alias in aliases {
+                    info.borrowed.insert(alias);
                     info.lifetime_dependencies.insert(alias, owner);
                 }
             }
@@ -889,11 +1074,69 @@ fn analyze_temporary_borrows(
     info
 }
 
+/// A physical `core.ptr` load may still carry an RC-managed value when the
+/// exact trusted indirect-tail signature classifies that operand as a transfer.
+/// Do not extend this exception to arbitrary pointer uses.
+fn is_abi_adapted_indirect_tail_transfer(
+    ctx: &IrContext,
+    value: ValueRef,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> bool {
+    fn reaches_transfer(
+        ctx: &IrContext,
+        value: ValueRef,
+        call_contracts: &HashMap<OpRef, TrustedCallContract>,
+        visited: &mut HashSet<ValueRef>,
+    ) -> bool {
+        if !visited.insert(value) {
+            return false;
+        }
+        ctx.uses(value).iter().any(|use_| {
+            let op = use_.user;
+            let operand_index = use_.operand_index as usize;
+            if core::UnrealizedConversionCast::matches(ctx, op)
+                && operand_index == 0
+                && ctx.op_operands(op).len() == 1
+                && ctx.op_results(op).len() == 1
+            {
+                return reaches_transfer(ctx, ctx.op_result(op, 0), call_contracts, visited);
+            }
+            if clif::Load::matches(ctx, op) && operand_index == 0 && ctx.op_results(op).len() == 1 {
+                let descendant = ctx.op_result(op, 0);
+                return (is_anyref_value(ctx, descendant) || is_core_ptr_value(ctx, descendant))
+                    && reaches_transfer(ctx, descendant, call_contracts, visited);
+            }
+            let Some(contract) = call_contracts.get(&op) else {
+                return false;
+            };
+            contract.is_tail
+                && contract.is_indirect
+                && operand_index
+                    .checked_sub(usize::from(contract.is_indirect))
+                    .and_then(|index| contract.actions.get(index))
+                    == Some(&RcOwnership::Transfer)
+        })
+    }
+
+    reaches_transfer(ctx, value, call_contracts, &mut HashSet::new())
+}
+
+fn is_trusted_indirect_tail_callee(
+    op: OpRef,
+    operand_index: usize,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> bool {
+    call_contracts
+        .get(&op)
+        .is_some_and(|contract| contract.is_tail && contract.is_indirect && operand_index == 0)
+}
+
 fn resolve_temporary_owner(
     ctx: &IrContext,
     value: ValueRef,
     ptr_values: &HashSet<ValueRef>,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    known_owners: &HashMap<ValueRef, ValueRef>,
     visited: &mut HashSet<ValueRef>,
 ) -> Option<ValueRef> {
     if !visited.insert(value) {
@@ -902,8 +1145,18 @@ fn resolve_temporary_owner(
     if ptr_values.contains(&value) {
         return Some(value);
     }
+    if let Some(&owner) = known_owners.get(&value) {
+        return Some(owner);
+    }
     if let Some(&owner) = ptr_alias_map.get(&value) {
-        return resolve_temporary_owner(ctx, owner, ptr_values, ptr_alias_map, visited);
+        return resolve_temporary_owner(
+            ctx,
+            owner,
+            ptr_values,
+            ptr_alias_map,
+            known_owners,
+            visited,
+        );
     }
     let ValueDef::OpResult(defining_op, _) = ctx.value_def(value) else {
         return None;
@@ -912,11 +1165,19 @@ fn resolve_temporary_owner(
         || clif::Iadd::matches(ctx, defining_op)
     {
         let input = *ctx.op_operands(defining_op).first()?;
-        return resolve_temporary_owner(ctx, input, ptr_values, ptr_alias_map, visited);
+        return resolve_temporary_owner(
+            ctx,
+            input,
+            ptr_values,
+            ptr_alias_map,
+            known_owners,
+            visited,
+        );
     }
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn temporary_is_proven_borrowed(
     ctx: &IrContext,
     body: RegionRef,
@@ -925,6 +1186,8 @@ fn temporary_is_proven_borrowed(
     owner: ValueRef,
     dominance: &DominatorTree,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
+    follow_descendant_loads: bool,
+    allow_store_value: bool,
 ) -> Option<Vec<ValueRef>> {
     let load_block = ctx.op(load).parent_block?;
     if !value_dominates_op(ctx, body, owner, load, dominance) {
@@ -942,6 +1205,8 @@ fn temporary_is_proven_borrowed(
         use_blocks: &mut use_blocks,
         aliases: &mut aliases,
         call_contracts,
+        follow_descendant_loads,
+        allow_store_value,
     };
     if !collector.collect(temporary) {
         return None;
@@ -986,6 +1251,8 @@ struct TemporaryUseCollector<'a> {
     use_blocks: &'a mut Vec<BlockRef>,
     aliases: &'a mut Vec<ValueRef>,
     call_contracts: &'a HashMap<OpRef, TrustedCallContract>,
+    follow_descendant_loads: bool,
+    allow_store_value: bool,
 }
 
 impl TemporaryUseCollector<'_> {
@@ -1016,7 +1283,26 @@ impl TemporaryUseCollector<'_> {
                 if !self.collect(alias) {
                     return false;
                 }
-            } else if !is_proven_temporary_use(self.ctx, user, operand_index, self.call_contracts) {
+            } else if self.follow_descendant_loads
+                && clif::Load::matches(self.ctx, user)
+                && operand_index == 0
+                && self.ctx.op_results(user).len() == 1
+            {
+                let descendant = self.ctx.op_result(user, 0);
+                if is_anyref_value(self.ctx, descendant) || is_core_ptr_value(self.ctx, descendant)
+                {
+                    self.aliases.push(descendant);
+                    if !self.collect(descendant) {
+                        return false;
+                    }
+                }
+            } else if !(self.allow_store_value
+                && clif::Store::matches(self.ctx, user)
+                && operand_index == 0)
+                && !(self.follow_descendant_loads
+                    && is_trusted_indirect_tail_callee(user, operand_index, self.call_contracts))
+                && !is_proven_temporary_use(self.ctx, user, operand_index, self.call_contracts)
+            {
                 return false;
             }
         }
@@ -1193,6 +1479,7 @@ fn insert_rc_in_block(
     block: BlockRef,
     is_entry: bool,
     ptr_values: &HashSet<ValueRef>,
+    promoted_ptr_values: &HashSet<ValueRef>,
     liveness: &LivenessInfo,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
     borrow_info: &RcBorrowInfo<'_>,
@@ -1304,8 +1591,12 @@ fn insert_rc_in_block(
         if let Ok(_store_op) = clif::Store::from_op(ctx, op) {
             let operands = ctx.op_operands(op).to_vec();
             if let Some(&stored_val) = operands.first()
-                && is_anyref_value(ctx, stored_val)
-                && !is_static_ptr(ctx, stored_val)
+                && ((is_anyref_value(ctx, stored_val) && !is_static_ptr(ctx, stored_val))
+                    || promoted_ptr_values.contains(&stored_val)
+                    || consumed_parameters.contains(&stored_val)
+                    || ptr_alias_map.get(&stored_val).is_some_and(|owner| {
+                        promoted_ptr_values.contains(owner) || consumed_parameters.contains(owner)
+                    }))
             {
                 let op_loc = ctx.op(op).location;
                 let retain_op = tribute_rt::retain(ctx, op_loc, stored_val, ptr_ty);
@@ -1316,13 +1607,12 @@ fn insert_rc_in_block(
             }
         }
 
-        if clif::Load::matches(ctx, op) {
-            let result_ty = ctx.op_result_types(op).first().copied();
-            if result_ty.is_some_and(|ty| is_anyref_type(ctx, ty)) {
-                let load_result = ctx.op_result(op, 0);
-                if borrow_info.temporaries.contains(&load_result) {
-                    continue;
-                }
+        if clif::Load::matches(ctx, op) && ctx.op_results(op).len() == 1 {
+            let load_result = ctx.op_result(op, 0);
+            if ((is_anyref_value(ctx, load_result) && !is_static_ptr(ctx, load_result))
+                || promoted_ptr_values.contains(&load_result))
+                && !borrow_info.temporaries.contains(&load_result)
+            {
                 let op_loc = ctx.op(op).location;
                 let retain_op = tribute_rt::retain(ctx, op_loc, load_result, ptr_ty);
                 plan.after
@@ -2181,6 +2471,75 @@ mod tests {
     }
 
     #[test]
+    fn consumed_physical_entry_retain_per_owning_store() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.nil)) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+  func.func @producer(%0: core.i64, %1: core.i64, %2: core.i64, %3: core.i64, %4: !handler) -> core.nil attributes {tribute.calling_convention = 2} {
+    %5 = clif.iconst {value = 32} : core.i64
+    %6 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %6 {offset = 24}
+    %7 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %7 {offset = 24}
+    %8 = core.unrealized_conversion_cast %6 : !handler
+    clif.store %8, %7 {offset = 40}
+    func.unreachable
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("consumed physical entry stores");
+        let producer = output
+            .split("sym_name = @producer")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let stores: Vec<_> = producer
+            .match_indices("clif.store %4,")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(stores.len(), 2, "{producer}");
+        assert_eq!(producer.matches("offset = 40").count(), 1, "{producer}");
+        let retains: Vec<_> = producer
+            .match_indices("tribute_rt.retain %4")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(retains.len(), 2, "{producer}");
+        assert!(
+            retains[0] < stores[0] && stores[0] < retains[1] && retains[1] < stores[1],
+            "{producer}"
+        );
+        let release = producer
+            .find("tribute_rt.release %4")
+            .unwrap_or_else(|| panic!("{producer}"));
+        assert!(stores[1] < release, "{producer}");
+    }
+
+    #[test]
+    fn plain_physical_entry_store_does_not_retain_core_ptr() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @producer(%0: core.i64, %1: core.i64, %2: core.i64, %3: core.i64, %4: core.ptr) -> core.nil attributes {tribute.calling_convention = 2} {
+    %5 = clif.iconst {value = 32} : core.i64
+    %6 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %6 {offset = 24}
+    %7 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %7 {offset = 24}
+    clif.store %6, %7 {offset = 40}
+    func.unreachable
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("plain physical entry stores");
+        let producer = output
+            .split("sym_name = @producer")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        assert!(!producer.contains("tribute_rt.retain %4"), "{producer}");
+        assert!(!producer.contains("tribute_rt.release %4"), "{producer}");
+    }
+
+    #[test]
     fn tail_transfer_multiplicity_acquires_only_additional_units() {
         let output = run_trusted_cps_pass(
             r#"core.module @test {
@@ -2237,6 +2596,227 @@ mod tests {
             .find("clif.return_call %2")
             .unwrap_or_else(|| panic!("{caller}"));
         assert!(retain < release && release < tail, "{caller}");
+        assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
+    }
+
+    #[test]
+    fn borrowed_indirect_tail_alias_operand_is_acquired_before_untransferred_owner_cleanup() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    clif.store %1, %1 {offset = 16}
+    %2 = core.unrealized_conversion_cast %1 : core.ptr
+    %3 = clif.load %2 {offset = 8} : core.ptr
+    func.tail_call_indirect %0, %3 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("borrowed indirect tail acquisition");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let load = caller
+            .lines()
+            .find(|line| line.contains("clif.load"))
+            .unwrap_or_else(|| panic!("{caller}"));
+        let loaded = load
+            .split_once(" = ")
+            .map(|(value, _)| value.trim())
+            .unwrap_or_else(|| panic!("{caller}"));
+        let retain_op = format!("tribute_rt.retain {loaded}");
+        let retain = caller
+            .find(&retain_op)
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert_eq!(caller.matches(&retain_op).count(), 1, "{caller}");
+        let release = caller
+            .find("tribute_rt.release %1")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let tail_op = format!("clif.return_call_indirect %0, {loaded}");
+        let tail = caller.find(&tail_op).unwrap_or_else(|| panic!("{caller}"));
+        let load = caller
+            .find("clif.load")
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert!(
+            load < retain && retain < release && release < tail,
+            "{caller}"
+        );
+        assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
+    }
+
+    #[test]
+    fn nested_borrowed_indirect_tail_operand_keeps_dispatcher_alive() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    clif.store %0, %0 {offset = 24}
+    %1 = core.unrealized_conversion_cast %0 : core.ptr
+    %2 = clif.load %1 {offset = 16} : core.ptr
+    %3 = core.unrealized_conversion_cast %2 : core.ptr
+    %4 = clif.load %3 {offset = 0} : core.ptr
+    %5 = clif.load %3 {offset = 8} : core.ptr
+    func.tail_call_indirect %4, %5 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("nested borrowed indirect tail acquisition");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let loaded_value = |offset| {
+            caller
+                .lines()
+                .find(|line| line.contains("clif.load") && line.contains(offset))
+                .and_then(|line| line.split_once(" = ").map(|(value, _)| value.trim()))
+                .unwrap_or_else(|| panic!("{caller}"))
+        };
+        let dispatcher = loaded_value("offset = 16");
+        let code = loaded_value("offset = 0");
+        let environment = loaded_value("offset = 8");
+        let retain_op = format!("tribute_rt.retain {environment}");
+        let retain = caller
+            .find(&retain_op)
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert_eq!(caller.matches(&retain_op).count(), 1, "{caller}");
+        assert!(
+            !caller.contains(&format!("tribute_rt.retain {dispatcher}")),
+            "{caller}"
+        );
+        let release = caller
+            .find("tribute_rt.release %0")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let tail_op = format!("clif.return_call_indirect {code}, {environment}");
+        let tail = caller.find(&tail_op).unwrap_or_else(|| panic!("{caller}"));
+        let environment_load = caller
+            .find("offset = 8")
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert!(
+            environment_load < retain && retain < release && release < tail,
+            "{caller}"
+        );
+        assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
+    }
+
+    #[test]
+    fn stored_borrowed_dispatcher_keeps_nested_tail_operands_alive() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    %1 = clif.load %0 {offset = 24} : core.ptr
+    %2 = clif.iconst {value = 32} : core.i64
+    %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+    clif.store %1, %3 {offset = 24}
+    %4 = clif.load %1 {offset = 0} : core.i64
+    %5 = clif.load %1 {offset = 8} : core.ptr
+    func.tail_call_indirect %4, %5 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("stored borrowed dispatcher acquisition");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let loaded_value = |offset| {
+            caller
+                .lines()
+                .find(|line| line.contains("clif.load") && line.contains(offset))
+                .and_then(|line| line.split_once(" = ").map(|(value, _)| value.trim()))
+                .unwrap_or_else(|| panic!("{caller}"))
+        };
+        let dispatcher = loaded_value("offset = 24");
+        let code = loaded_value("offset = 0");
+        let environment = loaded_value("offset = 8");
+        let dispatcher_retain = format!("tribute_rt.retain {dispatcher}");
+        let dispatcher_load = caller
+            .find("offset = 24")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let root_release = caller
+            .find("tribute_rt.release %0")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let environment_retain = format!("tribute_rt.retain {environment}");
+        let environment_retain = caller
+            .find(&environment_retain)
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert_eq!(caller.matches(&dispatcher_retain).count(), 2, "{caller}");
+        let first_dispatcher_retain = caller
+            .find(&dispatcher_retain)
+            .unwrap_or_else(|| panic!("{caller}"));
+        let dispatcher_release = caller
+            .find(&format!("tribute_rt.release {dispatcher}"))
+            .unwrap_or_else(|| panic!("{caller}"));
+        let tail_op = format!("clif.return_call_indirect {code}, {environment}");
+        let tail = caller.find(&tail_op).unwrap_or_else(|| panic!("{caller}"));
+        assert!(
+            dispatcher_load < first_dispatcher_retain
+                && first_dispatcher_retain < root_release
+                && environment_retain < dispatcher_release
+                && dispatcher_release < tail,
+            "{caller}"
+        );
+        assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
+    }
+
+    #[test]
+    fn plain_indirect_tail_store_does_not_promote_core_ptr() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    %1 = clif.load %0 {offset = 24} : core.ptr
+    %2 = clif.iconst {value = 32} : core.i64
+    %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+    clif.store %1, %3 {offset = 24}
+    %4 = clif.load %1 {offset = 0} : core.i64
+    %5 = clif.load %1 {offset = 8} : core.ptr
+    func.tail_call_indirect %4, %5 {func.indirect_call_signature = core.func(core.nil, core.ptr), tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("plain stored dispatcher stays unmanaged");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let dispatcher = caller
+            .lines()
+            .find(|line| line.contains("clif.load") && line.contains("offset = 24"))
+            .and_then(|line| line.split_once(" = ").map(|(value, _)| value.trim()))
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert!(
+            !caller.contains(&format!("tribute_rt.retain {dispatcher}")),
+            "{caller}"
+        );
+    }
+
+    #[test]
+    fn indirect_tail_plain_ptr_operand_preserves_loaded_anyref_ownership() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    %2 = clif.load %1 {offset = 8} : tribute_rt.anyref
+    %3 = core.unrealized_conversion_cast %2 : core.ptr
+    func.tail_call_indirect %0, %3 {func.indirect_call_signature = core.func(core.nil, core.ptr), tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        )
+        .expect("plain indirect tail preserves loaded ownership");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let load = caller
+            .find("clif.load")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let tail = caller
+            .find("clif.return_call_indirect")
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert!(caller[load..tail].contains("tribute_rt.retain"), "{caller}");
         assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
     }
 

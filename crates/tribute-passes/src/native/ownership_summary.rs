@@ -1,7 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use tribute_core::{CallingConvention, get_calling_convention, get_indirect_call_signature};
+use tribute_core::calling_convention::get_physical_closure_environment_index;
+use tribute_core::{
+    CallingConvention, get_calling_convention, get_indirect_call_signature,
+    get_physical_closure_convention,
+};
+use tribute_ir::dialect::closure;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, clif, core, func, mem};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -65,6 +70,7 @@ pub struct TrustedCallContract {
     pub is_indirect: bool,
     direct_callee: Option<Symbol>,
     indirect_signature: Option<TypeRef>,
+    indirect_physical_closures: Option<Vec<Option<TypeRef>>>,
 }
 
 impl ParameterOwnership {
@@ -79,6 +85,7 @@ impl ParameterOwnership {
 pub struct TrustedOwnershipSummaries {
     summaries: HashMap<Symbol, Vec<ParameterOwnership>>,
     entry_contracts: HashMap<Symbol, Vec<RcOwnership>>,
+    entry_physical_closures: HashMap<Symbol, Vec<Option<TypeRef>>>,
     call_contracts: HashMap<i128, TrustedCallContract>,
 }
 
@@ -97,6 +104,7 @@ pub fn compute_and_attach(
         return Ok(TrustedOwnershipSummaries {
             summaries: HashMap::new(),
             entry_contracts: HashMap::new(),
+            entry_physical_closures: HashMap::new(),
             call_contracts: HashMap::new(),
         });
     };
@@ -131,7 +139,8 @@ pub fn compute_and_attach(
         let initial: Vec<ParameterOwnership> = parameters
             .iter()
             .map(|&parameter| {
-                if !ineligible.contains(&symbol) && lowers_to_anyref(ctx, parameter, type_converter)
+                if !ineligible.contains(&symbol)
+                    && lowers_to_rc_managed(ctx, parameter, type_converter)
                 {
                     ParameterOwnership::Borrowed
                 } else {
@@ -167,14 +176,17 @@ pub fn compute_and_attach(
     }
 
     let mut entry_contracts = HashMap::new();
+    let mut entry_physical_closures = HashMap::new();
     for (&symbol, &op) in &unique_functions {
         let function = func::Func::from_op(ctx, op).expect("collected func.func");
         let consuming_cps = is_defined_physical_cps_function(ctx, op);
-        let entries = entry_parameters(ctx, function.body(ctx))
-            .into_iter()
+        let parameters = entry_parameters(ctx, function.body(ctx));
+        let entries = parameters
+            .iter()
+            .copied()
             .enumerate()
             .map(|(index, parameter)| {
-                if !lowers_to_anyref(ctx, parameter, type_converter) {
+                if !lowers_to_rc_managed(ctx, parameter, type_converter) {
                     RcOwnership::Plain
                 } else if consuming_cps {
                     RcOwnership::Consumed
@@ -185,7 +197,15 @@ pub fn compute_and_attach(
                 }
             })
             .collect();
+        let physical_closures = parameters
+            .iter()
+            .map(|&parameter| {
+                let ty = ctx.value_ty(parameter);
+                type_is_proven_physical_closure(ctx, ty).then_some(ty)
+            })
+            .collect();
         entry_contracts.insert(symbol, entries);
+        entry_physical_closures.insert(symbol, physical_closures);
     }
 
     let mut pending_calls = Vec::new();
@@ -235,6 +255,7 @@ pub fn compute_and_attach(
     Ok(TrustedOwnershipSummaries {
         summaries,
         entry_contracts,
+        entry_physical_closures,
         call_contracts,
     })
 }
@@ -284,6 +305,30 @@ fn type_lowers_to_anyref(ctx: &mut IrContext, ty: TypeRef, type_converter: &Type
     data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
 }
 
+fn type_is_proven_physical_closure(ctx: &IrContext, ty: TypeRef) -> bool {
+    let Some(environment_index) = get_physical_closure_environment_index(ctx, ty) else {
+        return false;
+    };
+    if get_physical_closure_convention(ctx, ty).is_none() {
+        return false;
+    }
+    let Some(closure) = closure::Closure::from_type_ref(ctx, ty) else {
+        return false;
+    };
+    let Some(callable) = core::Func::from_type_ref(ctx, closure.func_type(ctx)) else {
+        return false;
+    };
+    environment_index <= callable.params(ctx).len()
+}
+
+fn type_lowers_to_rc_managed(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    type_converter: &TypeConverter,
+) -> bool {
+    type_lowers_to_anyref(ctx, ty, type_converter) || type_is_proven_physical_closure(ctx, ty)
+}
+
 fn lowered_indirect_signature(
     ctx: &mut IrContext,
     signature: TypeRef,
@@ -299,6 +344,20 @@ fn lowered_indirect_signature(
         .map(|&parameter| type_converter.convert_type_or_identity(ctx, parameter))
         .collect();
     Ok(core::func(ctx, return_type, parameter_types.iter().copied()).as_type_ref())
+}
+
+fn indirect_physical_closures(
+    ctx: &IrContext,
+    signature: TypeRef,
+) -> Result<Vec<Option<TypeRef>>, OwnershipContractError> {
+    let callable = core::Func::from_type_ref(ctx, signature).ok_or(OwnershipContractError(
+        "indirect proper-tail signature is not core.func",
+    ))?;
+    Ok(callable
+        .params(ctx)
+        .iter()
+        .map(|&parameter| type_is_proven_physical_closure(ctx, parameter).then_some(parameter))
+        .collect())
 }
 
 fn collect_call_contracts(
@@ -322,7 +381,7 @@ fn collect_call_contracts(
                 let arguments = ctx.op_operands(op)[usize::from(indirect)..].to_vec();
                 if arguments
                     .into_iter()
-                    .any(|argument| lowers_to_anyref(ctx, argument, type_converter))
+                    .any(|argument| lowers_to_rc_managed(ctx, argument, type_converter))
                 {
                     return Err(OwnershipContractError(
                         "RC proper-tail call lacks exact CPS provenance",
@@ -386,7 +445,7 @@ fn collect_call_contracts(
                     parameters
                         .iter()
                         .map(|&ty| {
-                            if type_lowers_to_anyref(ctx, ty, type_converter) {
+                            if type_lowers_to_rc_managed(ctx, ty, type_converter) {
                                 RcOwnership::Transfer
                             } else {
                                 RcOwnership::Plain
@@ -414,6 +473,13 @@ fn collect_call_contracts(
                                 .map(|signature| {
                                     lowered_indirect_signature(ctx, signature, type_converter)
                                 })
+                                .transpose()?
+                        } else {
+                            None
+                        },
+                        indirect_physical_closures: if indirect {
+                            get_indirect_call_signature(ctx, op)
+                                .map(|signature| indirect_physical_closures(ctx, signature))
                                 .transpose()?
                         } else {
                             None
@@ -519,6 +585,12 @@ impl TrustedOwnershipSummaries {
 
         let mut entry_contracts = HashMap::new();
         for (&symbol, expected) in &self.entry_contracts {
+            let physical_closures =
+                self.entry_physical_closures
+                    .get(&symbol)
+                    .ok_or(OwnershipContractError(
+                        "trusted physical entry provenance disappeared during func_to_clif",
+                    ))?;
             let ops = definitions.get(&symbol).ok_or(OwnershipContractError(
                 "trusted function disappeared during func_to_clif",
             ))?;
@@ -531,7 +603,7 @@ impl TrustedOwnershipSummaries {
                 OwnershipContractError("trusted function did not lower to clif.func")
             })?;
             let parameters = entry_parameters(ctx, function.body(ctx));
-            if parameters.len() != expected.len() {
+            if parameters.len() != expected.len() || physical_closures.len() != expected.len() {
                 return Err(OwnershipContractError(
                     "parameter entry contract arity changed during func_to_clif",
                 ));
@@ -544,9 +616,16 @@ impl TrustedOwnershipSummaries {
                 || (expected.iter().any(|entry| *entry != RcOwnership::Plain)
                     && (expected.contains(&RcOwnership::Consumed)
                         != is_defined_physical_cps_function(ctx, ops[0])))
-                || expected.iter().zip(parameters).any(|(entry, parameter)| {
-                    matches!(entry, RcOwnership::Plain) == is_anyref_value(ctx, parameter)
-                })
+                || expected.iter().zip(parameters).zip(physical_closures).any(
+                    |((entry, parameter), physical_closure)| match entry {
+                        RcOwnership::Plain => is_anyref_value(ctx, parameter),
+                        _ if is_anyref_value(ctx, parameter) => false,
+                        _ => {
+                            physical_closure.is_none()
+                                || !is_core_ptr_type(ctx, ctx.value_ty(parameter))
+                        }
+                    },
+                )
             {
                 return Err(OwnershipContractError(
                     "parameter entry contract changed during func_to_clif",
@@ -589,11 +668,13 @@ impl TrustedOwnershipSummaries {
             return Self {
                 summaries: HashMap::new(),
                 entry_contracts: HashMap::new(),
+                entry_physical_closures: HashMap::new(),
                 call_contracts: HashMap::new(),
             };
         };
         let mut summaries = HashMap::new();
         let mut entry_contracts = HashMap::new();
+        let mut entry_physical_closures = HashMap::new();
         let op_count = ctx.block(module_block).ops.len();
         for index in 0..op_count {
             let op = ctx.block(module_block).ops[index];
@@ -635,11 +716,13 @@ impl TrustedOwnershipSummaries {
                 RcOwnership::list_attribute(&entry_contract),
             );
             entry_contracts.insert(symbol, entry_contract);
+            entry_physical_closures.insert(symbol, vec![None; summary.len()]);
             summaries.insert(symbol, summary);
         }
         Self {
             summaries,
             entry_contracts,
+            entry_physical_closures,
             call_contracts: HashMap::new(),
         }
     }
@@ -717,16 +800,27 @@ fn collect_validated_call_contracts(
                     expected
                         .indirect_signature
                         .and_then(|signature| core::Func::from_type_ref(ctx, signature))
-                        .is_some_and(|callable| {
+                        .zip(expected.indirect_physical_closures.as_deref())
+                        .is_some_and(|(callable, physical_closures)| {
                             let parameters = callable.params(ctx);
                             parameters.len() == expected.actions.len()
-                                && parameters.iter().zip(&expected.actions).all(
-                                    |(&parameter, action)| match action {
-                                        RcOwnership::Plain => !is_anyref_type(ctx, parameter),
-                                        RcOwnership::Transfer => is_anyref_type(ctx, parameter),
+                                && physical_closures.len() == expected.actions.len()
+                                && parameters
+                                    .iter()
+                                    .zip(&expected.actions)
+                                    .zip(physical_closures)
+                                    .all(|((&parameter, action), physical_closure)| match action {
+                                        RcOwnership::Plain => {
+                                            !is_anyref_type(ctx, parameter)
+                                                && physical_closure.is_none()
+                                        }
+                                        RcOwnership::Transfer => {
+                                            is_anyref_type(ctx, parameter)
+                                                || (physical_closure.is_some()
+                                                    && is_core_ptr_type(ctx, parameter))
+                                        }
                                         _ => false,
-                                    },
-                                )
+                                    })
                         })
                 } else {
                     args.iter()
@@ -812,11 +906,17 @@ fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     ty.dialect == Symbol::new("tribute_rt") && ty.name == Symbol::new("anyref")
 }
 
-fn lowers_to_anyref(ctx: &mut IrContext, value: ValueRef, type_converter: &TypeConverter) -> bool {
-    let original = ctx.value_ty(value);
-    let converted = type_converter.convert_type_or_identity(ctx, original);
-    let ty = ctx.types.get(converted);
-    ty.dialect == Symbol::new("tribute_rt") && ty.name == Symbol::new("anyref")
+fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let ty = ctx.types.get(ty);
+    ty.dialect == Symbol::new("core") && ty.name == Symbol::new("ptr")
+}
+
+fn lowers_to_rc_managed(
+    ctx: &mut IrContext,
+    value: ValueRef,
+    type_converter: &TypeConverter,
+) -> bool {
+    type_lowers_to_rc_managed(ctx, ctx.value_ty(value), type_converter)
 }
 
 fn collect_escaping_function_symbols(
@@ -1267,6 +1367,54 @@ mod tests {
             &trusted,
         )
         .expect("adapted indirect tail transfer");
+    }
+
+    #[test]
+    fn indirect_tail_transfer_accepts_a_proven_closure_ptr_signature() {
+        let (mut ctx, module, trusted, call, id) = lowered_indirect_tail_contract_with(
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.nil)) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+  func.func @caller(%0: core.ptr, %1: !handler) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, !handler), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let contract = trusted.call_contracts.get(&id).expect("trusted call");
+        assert_eq!(contract.actions, [RcOwnership::Transfer]);
+        let signature = ctx
+            .op(call)
+            .attributes
+            .get_type("sig")
+            .expect("lowered indirect signature");
+        let callable = core::Func::from_type_ref(&ctx, signature).expect("core.func signature");
+        assert!(is_core_ptr_type(&ctx, callable.params(&ctx)[0]));
+
+        insert_rc_with_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            &trusted,
+        )
+        .expect("proven closure indirect tail transfer");
+    }
+
+    #[test]
+    fn indirect_tail_closure_transfer_without_provenance_fails_closed() {
+        let (mut ctx, module, mut trusted, _call, id) = lowered_indirect_tail_contract_with(
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.nil)) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+  func.func @caller(%0: core.ptr, %1: !handler) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, !handler), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        trusted
+            .call_contracts
+            .get_mut(&id)
+            .expect("trusted call")
+            .indirect_physical_closures = None;
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }
 
     #[test]
