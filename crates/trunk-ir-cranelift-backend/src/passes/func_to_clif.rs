@@ -342,6 +342,19 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         if callable.r#return(ctx) != core::nil(ctx).as_type_ref() {
             return false;
         }
+        let return_type = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, callable.r#return(ctx));
+        let parameter_types: Vec<_> = callable
+            .params(ctx)
+            .iter()
+            .map(|&parameter| {
+                rewriter
+                    .type_converter()
+                    .convert_type_or_identity(ctx, parameter)
+            })
+            .collect();
+        let signature = core::func(ctx, return_type, parameter_types.iter().copied()).as_type_ref();
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,

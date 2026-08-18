@@ -284,6 +284,23 @@ fn type_lowers_to_anyref(ctx: &mut IrContext, ty: TypeRef, type_converter: &Type
     data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
 }
 
+fn lowered_indirect_signature(
+    ctx: &mut IrContext,
+    signature: TypeRef,
+    type_converter: &TypeConverter,
+) -> Result<TypeRef, OwnershipContractError> {
+    let callable = core::Func::from_type_ref(ctx, signature).ok_or(OwnershipContractError(
+        "indirect proper-tail signature is not core.func",
+    ))?;
+    let return_type = type_converter.convert_type_or_identity(ctx, callable.r#return(ctx));
+    let parameter_types: Vec<_> = callable
+        .params(ctx)
+        .iter()
+        .map(|&parameter| type_converter.convert_type_or_identity(ctx, parameter))
+        .collect();
+    Ok(core::func(ctx, return_type, parameter_types.iter().copied()).as_type_ref())
+}
+
 fn collect_call_contracts(
     ctx: &mut IrContext,
     region: RegionRef,
@@ -394,6 +411,10 @@ fn collect_call_contracts(
                         }),
                         indirect_signature: if indirect {
                             get_indirect_call_signature(ctx, op)
+                                .map(|signature| {
+                                    lowered_indirect_signature(ctx, signature, type_converter)
+                                })
+                                .transpose()?
                         } else {
                             None
                         },
@@ -1137,6 +1158,73 @@ mod tests {
     fn ordinary_direct_contract_on_non_call_fails_before_mutation() {
         let (mut ctx, module, trusted, call, _) = lowered_ordinary_call_contract();
         ctx.op_mut(call).name = Symbol::new("load");
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
+    }
+
+    fn lowered_indirect_tail_contract()
+    -> (IrContext, Module, TrustedOwnershipSummaries, OpRef, i128) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.intref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, tribute_rt.intref), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted =
+            compute_and_attach(&mut ctx, module, &type_converter).expect("indirect tail contract");
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        let module_block = module.first_block(&ctx).expect("module body");
+        let caller =
+            clif::Func::from_op(&ctx, ctx.block(module_block).ops[0]).expect("lowered caller");
+        let call = ctx
+            .region(caller.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .find(|&op| clif::ReturnCallIndirect::matches(&ctx, op))
+            .expect("indirect tail call");
+        let id = match ctx.op(call).attributes.get(OWNERSHIP_CONTRACT_ID_ATTR) {
+            Some(Attribute::Int(id)) => *id,
+            _ => panic!("trusted contract identity"),
+        };
+        (ctx, module, trusted, call, id)
+    }
+
+    #[test]
+    fn indirect_tail_contract_uses_the_converted_callable_signature() {
+        let (mut ctx, module, trusted, call, _) = lowered_indirect_tail_contract();
+        let signature = ctx
+            .op(call)
+            .attributes
+            .get_type("sig")
+            .expect("lowered indirect signature");
+        let callable = core::Func::from_type_ref(&ctx, signature).expect("core.func signature");
+        assert!(callable.params(&ctx).iter().all(|&parameter| {
+            let ty = ctx.types.get(parameter);
+            ty.dialect == Symbol::new("core") && ty.name == Symbol::new("ptr")
+        }));
+
+        insert_rc_with_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            &trusted,
+        )
+        .expect("converted indirect tail contract");
+    }
+
+    #[test]
+    fn indirect_tail_signature_mutation_fails_before_rc_mutation() {
+        let (mut ctx, module, trusted, call, _) = lowered_indirect_tail_contract();
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let malformed = core::func(&mut ctx, nil, [nil]).as_type_ref();
+        ctx.op_mut(call)
+            .attributes
+            .insert(Symbol::new("sig"), Attribute::Type(malformed));
 
         assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }

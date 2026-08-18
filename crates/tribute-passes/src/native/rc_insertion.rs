@@ -2135,6 +2135,10 @@ mod tests {
             output.contains("clif.return_call_indirect %0, %1"),
             "{output}"
         );
+        assert!(
+            output.contains("sig = core.func(core.nil, core.ptr)"),
+            "{output}"
+        );
         for body in output.split("clif.func").skip(1) {
             if body.contains("return_call") {
                 assert_eq!(
