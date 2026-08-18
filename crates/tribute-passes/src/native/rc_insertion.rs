@@ -34,7 +34,6 @@
 //! | Value dies in block (live-in but not live-out) | `release` at appropriate point |
 
 use std::collections::{HashMap, HashSet};
-
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -47,9 +46,13 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use tribute_ir::dialect::tribute_rt;
 
 use super::ownership_summary::{
-    BorrowedUse, BorrowedUseKind, ParameterOwnership, TrustedOwnershipSummaries,
+    BorrowedUse, BorrowedUseKind, CALL_ARGUMENT_OWNERSHIP_ATTR, OWNERSHIP_CONTRACT_ID_ATTR,
+    OwnershipContractError, PARAMETER_ENTRY_OWNERSHIP_ATTR, ParameterOwnership, RcOwnership,
+    TrustedCallContract, TrustedOwnershipSummaries, ValidatedOwnershipContracts,
     classify_borrowed_use,
 };
+
+pub type RcInsertionError = OwnershipContractError;
 
 /// Policy for eliding RC ownership of proven borrowed function parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -85,6 +88,7 @@ fn is_terminator_op(ctx: &IrContext, op: OpRef) -> bool {
         || clif::Brif::matches(ctx, op)
         || clif::Trap::matches(ctx, op)
         || clif::ReturnCall::matches(ctx, op)
+        || clif::ReturnCallIndirect::matches(ctx, op)
         || clif::BrTable::matches(ctx, op)
 }
 
@@ -415,7 +419,8 @@ pub fn insert_rc(ctx: &mut IrContext, module: Module) {
         module,
         BorrowedParameterPolicy::Preserve,
         TemporaryBorrowPolicy::Preserve,
-    );
+    )
+    .expect("legacy RC insertion without trusted CPS transfers");
 }
 
 /// Insert reference counting operations with an explicit borrowed-parameter
@@ -430,7 +435,8 @@ pub fn insert_rc_with_policy(
         module,
         borrowed_parameters,
         TemporaryBorrowPolicy::Preserve,
-    );
+    )
+    .expect("legacy RC insertion without trusted CPS transfers");
 }
 
 pub fn insert_rc_with_trusted_summaries(
@@ -438,14 +444,14 @@ pub fn insert_rc_with_trusted_summaries(
     module: Module,
     borrowed_parameters: BorrowedParameterPolicy,
     trusted_summaries: &TrustedOwnershipSummaries,
-) {
+) -> Result<(), RcInsertionError> {
     insert_rc_with_policies_and_trusted_summaries(
         ctx,
         module,
         borrowed_parameters,
         TemporaryBorrowPolicy::Preserve,
         trusted_summaries,
-    );
+    )
 }
 
 /// Insert reference counting operations with independently selectable borrow
@@ -459,8 +465,8 @@ pub fn insert_rc_with_policies(
     module: Module,
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
-) {
-    insert_rc_impl(ctx, module, borrowed_parameters, temporary_borrows, None);
+) -> Result<(), RcInsertionError> {
+    insert_rc_impl(ctx, module, borrowed_parameters, temporary_borrows, None)
 }
 
 pub fn insert_rc_with_policies_and_trusted_summaries(
@@ -469,14 +475,14 @@ pub fn insert_rc_with_policies_and_trusted_summaries(
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
     trusted_summaries: &TrustedOwnershipSummaries,
-) {
+) -> Result<(), RcInsertionError> {
     insert_rc_impl(
         ctx,
         module,
         borrowed_parameters,
         temporary_borrows,
         Some(trusted_summaries),
-    );
+    )
 }
 
 fn insert_rc_impl(
@@ -485,14 +491,20 @@ fn insert_rc_impl(
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
     trusted_summaries: Option<&TrustedOwnershipSummaries>,
-) {
+) -> Result<(), RcInsertionError> {
     let Some(first_block) = module.first_block(ctx) else {
-        return;
+        return Ok(());
     };
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
-    let trusted_summaries = trusted_summaries
-        .map(|summaries| summaries.validated_for_clif(ctx, &module_ops))
-        .unwrap_or_default();
+    let trusted = if let Some(summaries) = trusted_summaries {
+        summaries.validated_for_clif(ctx, &module_ops)?
+    } else {
+        ValidatedOwnershipContracts {
+            summaries: HashMap::new(),
+            entry_contracts: HashMap::new(),
+            call_contracts: HashMap::new(),
+        }
+    };
     let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
@@ -513,14 +525,36 @@ fn insert_rc_impl(
                 body,
                 function_policy,
                 temporary_borrows,
-                &trusted_summaries,
+                &trusted.summaries,
+                trusted.entry_contracts.get(&sym).map(Vec::as_slice),
+                &trusted.call_contracts,
             );
         }
     }
 
+    clear_contract_metadata(ctx, module.op());
+
     // After RC insertion, lower all remaining `tribute_rt.anyref` types to `core.ptr`.
     // This ensures anyref doesn't survive past RC insertion into the Cranelift emit phase.
     lower_anyref_to_ptr(ctx, module);
+    Ok(())
+}
+
+fn clear_contract_metadata(ctx: &mut IrContext, op: OpRef) {
+    let regions = ctx.op(op).regions.to_vec();
+    let attributes = &mut ctx.op_mut(op).attributes;
+    attributes.remove(PARAMETER_ENTRY_OWNERSHIP_ATTR);
+    attributes.remove(CALL_ARGUMENT_OWNERSHIP_ATTR);
+    attributes.remove(OWNERSHIP_CONTRACT_ID_ATTR);
+    for region in regions {
+        let blocks = ctx.region(region).blocks.clone();
+        for block in blocks {
+            let ops = ctx.block(block).ops.clone();
+            for nested in ops {
+                clear_contract_metadata(ctx, nested);
+            }
+        }
+    }
 }
 
 /// Functions whose callers are guaranteed to keep an owning frame alive for
@@ -728,6 +762,7 @@ fn rewrite_type_anyref(
 }
 
 /// Insert RC in a function body.
+#[allow(clippy::too_many_arguments)]
 fn insert_rc_in_function(
     ctx: &mut IrContext,
     function: Symbol,
@@ -735,6 +770,8 @@ fn insert_rc_in_function(
     borrowed_parameter_policy: BorrowedParameterPolicy,
     temporary_borrow_policy: TemporaryBorrowPolicy,
     trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
+    entry_contract: Option<&[RcOwnership]>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
     let mut ptr_values = collect_ptr_values(ctx, body);
 
@@ -746,7 +783,7 @@ fn insert_rc_in_function(
     let temporary_borrows = match temporary_borrow_policy {
         TemporaryBorrowPolicy::Preserve => TemporaryBorrowInfo::default(),
         TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
-            analyze_temporary_borrows(ctx, body, &ptr_values, &ptr_alias_map)
+            analyze_temporary_borrows(ctx, body, &ptr_values, &ptr_alias_map, call_contracts)
         }
     };
     let liveness = compute_liveness(
@@ -756,12 +793,23 @@ fn insert_rc_in_function(
         &ptr_alias_map,
         &temporary_borrows.lifetime_dependencies,
     );
-    let borrowed_parameters = match borrowed_parameter_policy {
+    let mut borrowed_parameters = match borrowed_parameter_policy {
         BorrowedParameterPolicy::Preserve => HashSet::new(),
         BorrowedParameterPolicy::ElideProvenBorrowed => {
             analyze_borrowed_parameters(ctx, function, body, trusted_summaries)
         }
     };
+    let consumed_parameters: HashSet<ValueRef> = entry_contract
+        .into_iter()
+        .flat_map(|entries| entries.iter().enumerate())
+        .filter_map(|(index, entry)| {
+            (*entry == RcOwnership::Consumed)
+                .then(|| ctx.region(body).blocks.first())
+                .flatten()
+                .and_then(|&entry_block| ctx.block_args(entry_block).get(index).copied())
+        })
+        .collect();
+    borrowed_parameters.retain(|parameter| !consumed_parameters.contains(parameter));
 
     let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
     let borrow_info = RcBorrowInfo {
@@ -778,6 +826,8 @@ fn insert_rc_in_function(
             &liveness,
             &ptr_alias_map,
             &borrow_info,
+            &consumed_parameters,
+            call_contracts,
         );
     }
 }
@@ -787,6 +837,7 @@ fn analyze_temporary_borrows(
     body: RegionRef,
     ptr_values: &HashSet<ValueRef>,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) -> TemporaryBorrowInfo {
     let dominance = DominatorTree::compute(ctx, body);
     if !dominance.is_valid() {
@@ -818,9 +869,15 @@ fn analyze_temporary_borrows(
             ) else {
                 continue;
             };
-            if let Some(aliases) =
-                temporary_is_proven_borrowed(ctx, body, op, temporary, owner, &dominance)
-            {
+            if let Some(aliases) = temporary_is_proven_borrowed(
+                ctx,
+                body,
+                op,
+                temporary,
+                owner,
+                &dominance,
+                call_contracts,
+            ) {
                 info.borrowed.insert(temporary);
                 info.lifetime_dependencies.insert(temporary, owner);
                 for alias in aliases {
@@ -867,6 +924,7 @@ fn temporary_is_proven_borrowed(
     temporary: ValueRef,
     owner: ValueRef,
     dominance: &DominatorTree,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) -> Option<Vec<ValueRef>> {
     let load_block = ctx.op(load).parent_block?;
     if !value_dominates_op(ctx, body, owner, load, dominance) {
@@ -883,6 +941,7 @@ fn temporary_is_proven_borrowed(
         visited: HashSet::new(),
         use_blocks: &mut use_blocks,
         aliases: &mut aliases,
+        call_contracts,
     };
     if !collector.collect(temporary) {
         return None;
@@ -926,6 +985,7 @@ struct TemporaryUseCollector<'a> {
     visited: HashSet<ValueRef>,
     use_blocks: &'a mut Vec<BlockRef>,
     aliases: &'a mut Vec<ValueRef>,
+    call_contracts: &'a HashMap<OpRef, TrustedCallContract>,
 }
 
 impl TemporaryUseCollector<'_> {
@@ -956,7 +1016,7 @@ impl TemporaryUseCollector<'_> {
                 if !self.collect(alias) {
                     return false;
                 }
-            } else if !is_proven_temporary_use(self.ctx, user, operand_index) {
+            } else if !is_proven_temporary_use(self.ctx, user, operand_index, self.call_contracts) {
                 return false;
             }
         }
@@ -1003,12 +1063,23 @@ fn op_dominates_op(
         .is_some_and(|(defining, use_)| defining < use_)
 }
 
-fn is_proven_temporary_use(ctx: &IrContext, op: OpRef, operand_index: usize) -> bool {
+fn is_proven_temporary_use(
+    ctx: &IrContext,
+    op: OpRef,
+    operand_index: usize,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
+) -> bool {
     if clif::Load::matches(ctx, op) {
         return operand_index == 0;
     }
     if clif::Store::matches(ctx, op) {
         return operand_index == 1;
+    }
+    if let Some(contract) = call_contracts.get(&op)
+        && contract.is_tail
+        && let Some(action_index) = operand_index.checked_sub(usize::from(contract.is_indirect))
+    {
+        return contract.actions.get(action_index) == Some(&RcOwnership::Transfer);
     }
     clif::Icmp::matches(ctx, op)
 }
@@ -1116,6 +1187,7 @@ fn borrowed_use_kind(ctx: &IrContext, op: OpRef) -> BorrowedUseKind {
 }
 
 /// Insert RC ops in a single block.
+#[allow(clippy::too_many_arguments)]
 fn insert_rc_in_block(
     ctx: &mut IrContext,
     block: BlockRef,
@@ -1124,6 +1196,8 @@ fn insert_rc_in_block(
     liveness: &LivenessInfo,
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
     borrow_info: &RcBorrowInfo<'_>,
+    consumed_parameters: &HashSet<ValueRef>,
+    call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let loc = ctx.block(block).location;
@@ -1164,6 +1238,50 @@ fn insert_rc_in_block(
     }
 
     let mut plan = InsertionPlan::default();
+    let mut transferred_values = HashSet::new();
+
+    for (op_idx, &op) in ops.iter().enumerate() {
+        let Some(contract) = call_contracts.get(&op) else {
+            continue;
+        };
+        let operands = ctx.op_operands(op).to_vec();
+        let args = operands
+            .get(usize::from(contract.is_indirect)..)
+            .unwrap_or_default();
+        if contract.is_tail {
+            let mut transfers: HashMap<ValueRef, (ValueRef, usize)> = HashMap::new();
+            for (&argument, action) in args.iter().zip(&contract.actions) {
+                if *action != RcOwnership::Transfer {
+                    continue;
+                }
+                let owned = ptr_alias_map.get(&argument).copied().unwrap_or(argument);
+                transferred_values.insert(argument);
+                transferred_values.insert(owned);
+                transfers
+                    .entry(owned)
+                    .and_modify(|(_, count)| *count += 1)
+                    .or_insert((argument, 1));
+            }
+            for (owned, (argument, count)) in transfers {
+                let borrowed = borrow_info.parameters.contains(&owned)
+                    || borrow_info.parameters.contains(&argument)
+                    || borrow_info.temporaries.contains(&owned)
+                    || borrow_info.temporaries.contains(&argument);
+                let retain_count = count.saturating_sub(usize::from(!borrowed));
+                for _ in 0..retain_count {
+                    let retain = tribute_rt::retain(ctx, ctx.op(op).location, argument, ptr_ty);
+                    plan.before.entry(op_idx).or_default().push(retain.op_ref());
+                }
+            }
+        } else {
+            for (&argument, action) in args.iter().zip(&contract.actions) {
+                if *action == RcOwnership::Acquire {
+                    let retain = tribute_rt::retain(ctx, ctx.op(op).location, argument, ptr_ty);
+                    plan.before.entry(op_idx).or_default().push(retain.op_ref());
+                }
+            }
+        }
+    }
 
     // --- Retain insertions ---
 
@@ -1173,6 +1291,7 @@ fn insert_rc_in_block(
         for arg_val in args {
             if is_anyref_type(ctx, ctx.value_ty(arg_val))
                 && !borrow_info.parameters.contains(&arg_val)
+                && !consumed_parameters.contains(&arg_val)
             {
                 let retain_op = tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
@@ -1222,6 +1341,7 @@ fn insert_rc_in_block(
     for v in &live_in {
         if !live_out.contains(v)
             && !returned_values.contains(v)
+            && !transferred_values.contains(v)
             && !borrow_info.parameters.contains(v)
             && !borrow_info.temporaries.contains(v)
         {
@@ -1231,6 +1351,7 @@ fn insert_rc_in_block(
     for v in &defs_in_block {
         if !live_out.contains(v)
             && !returned_values.contains(v)
+            && !transferred_values.contains(v)
             && !is_alloc_intermediate(ctx, *v)
             && !borrow_info.parameters.contains(v)
             && !borrow_info.temporaries.contains(v)
@@ -1337,10 +1458,14 @@ fn apply_insertion_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::ownership_summary::compute_and_attach;
+    use crate::native::type_converter::native_type_converter;
+    use trunk_ir::Attribute;
     use trunk_ir::context::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::validation::validate_use_chains;
+    use trunk_ir_cranelift_backend::passes::func_to_clif;
 
     fn run_pass(ir: &str) -> String {
         run_pass_with_policy(ir, BorrowedParameterPolicy::Preserve)
@@ -1378,9 +1503,11 @@ mod tests {
                 parameter_policy,
                 temporary_policy,
                 &trusted,
-            );
+            )
+            .expect("trusted RC insertion");
         } else {
-            insert_rc_with_policies(&mut ctx, module, parameter_policy, temporary_policy);
+            insert_rc_with_policies(&mut ctx, module, parameter_policy, temporary_policy)
+                .expect("legacy RC insertion");
         }
         let validation = validate_use_chains(&ctx, module);
         assert!(
@@ -1388,6 +1515,55 @@ mod tests {
             "RC insertion must preserve SSA use chains: {validation}"
         );
         print_module(&ctx, module.op())
+    }
+
+    fn run_trusted_cps_pass(
+        ir: &str,
+        temporary_policy: TemporaryBorrowPolicy,
+    ) -> Result<String, String> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .map_err(|error| error.to_string())?;
+        func_to_clif::lower(&mut ctx, module, type_converter).map_err(|error| error.to_string())?;
+        insert_rc_with_policies_and_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_policy,
+            &trusted,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(print_module(&ctx, module.op()))
+    }
+
+    fn lowered_trusted_cps(ir: &str) -> (IrContext, Module, TrustedOwnershipSummaries) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .expect("ownership contract production");
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        (ctx, module, trusted)
+    }
+
+    fn first_tail_call(ctx: &IrContext, module: Module, indirect: bool) -> OpRef {
+        let block = module.first_block(ctx).expect("module body");
+        ctx.block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| clif::Func::from_op(ctx, op).ok())
+            .flat_map(|function| ctx.region(function.body(ctx)).blocks.iter().copied())
+            .flat_map(|block| ctx.block(block).ops.iter().copied())
+            .find(|&op| {
+                if indirect {
+                    clif::ReturnCallIndirect::matches(ctx, op)
+                } else {
+                    clif::ReturnCall::matches(ctx, op)
+                }
+            })
+            .expect("tail call")
     }
 
     fn focused_rc_ops(output: &str) -> String {
@@ -1933,28 +2109,277 @@ mod tests {
     }
 
     #[test]
-    fn tail_call_target_preserves_owned_rc() {
-        let output = run_pass_with_policy(
+    fn direct_and_indirect_cps_tails_transfer_without_caller_cleanup() {
+        let output = run_trusted_cps_pass(
             r#"core.module @test {
-  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
-    %1 = clif.load %0 {offset = 0} : core.i32
-    clif.return %1
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
   }
-  clif.func @caller(%0: tribute_rt.anyref) -> core.i32 {
-    clif.return_call %0 {callee = @f}
+  func.func @direct(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call %0 {callee = @target, tribute.calling_convention = 2}
+  }
+  func.func @indirect(%0: core.ptr, %1: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
   }
 }"#,
-            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("trusted CPS transfer");
+        assert_eq!(output.matches("tribute_rt.retain").count(), 0, "{output}");
+        assert_eq!(output.matches("tribute_rt.release").count(), 1, "{output}");
+        assert!(
+            output.contains("clif.return_call %0 {callee = @target"),
+            "{output}"
         );
-        assert_focused_rc(
-            &output,
-            concat!(
-                "%1 = tribute_rt.retain %0 : core.ptr\n",
-                "tribute_rt.release %0 {alloc_size = 0}\n",
-                "%1 = tribute_rt.retain %0 : core.ptr\n",
-                "tribute_rt.release %0 {alloc_size = 0}"
-            ),
+        assert!(
+            output.contains("clif.return_call_indirect %0, %1"),
+            "{output}"
         );
+        for body in output.split("clif.func").skip(1) {
+            if body.contains("return_call") {
+                assert_eq!(
+                    body.lines()
+                        .rfind(|line| !line.trim().is_empty())
+                        .unwrap()
+                        .trim(),
+                    "}"
+                );
+                assert!(
+                    !body
+                        .split("return_call")
+                        .nth(1)
+                        .unwrap()
+                        .contains("tribute_rt."),
+                    "{body}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn consumed_cps_entry_owns_even_when_borrow_summary_is_eligible() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    func.unreachable
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("consumed CPS entry");
+        assert!(!output.contains("tribute_rt.retain"), "{output}");
+        assert_eq!(
+            output.matches("tribute_rt.release %0").count(),
+            1,
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn tail_transfer_multiplicity_acquires_only_additional_units() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call %0, %0 {callee = @target, tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("trusted duplicate transfer");
+        assert_eq!(output.matches("tribute_rt.retain").count(), 1, "{output}");
+        assert_eq!(output.matches("tribute_rt.release").count(), 2, "{output}");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        assert!(
+            caller.find("tribute_rt.retain").unwrap() < caller.find("clif.return_call").unwrap(),
+            "{caller}"
+        );
+        assert!(!caller.contains("tribute_rt.release"), "{caller}");
+    }
+
+    #[test]
+    fn borrowed_tail_operand_is_acquired_before_untransferred_owner_cleanup() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    clif.store %0, %0 {offset = 16}
+    %1 = clif.load %0 {offset = 8} : tribute_rt.anyref
+    func.tail_call %1 {callee = @target, tribute.calling_convention = 2}
+  }
+}"#,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        )
+        .expect("borrowed tail acquisition");
+        let caller = output
+            .split("sym_name = @caller")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let retain = caller
+            .find("tribute_rt.retain %2")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let release = caller
+            .find("tribute_rt.release %0")
+            .unwrap_or_else(|| panic!("{caller}"));
+        let tail = caller
+            .find("clif.return_call %2")
+            .unwrap_or_else(|| panic!("{caller}"));
+        assert!(retain < release && release < tail, "{caller}");
+        assert!(!caller[tail..].contains("tribute_rt."), "{caller}");
+    }
+
+    #[test]
+    fn ordinary_call_acquires_for_consumed_callee_and_return_still_transfers() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+    %1 = func.call %0 {callee = @target} : core.nil
+    func.return %0
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("ordinary acquisition");
+        let caller = output.split("sym_name = @caller").nth(1).unwrap();
+        assert_eq!(
+            caller.matches("tribute_rt.retain %0").count(),
+            2,
+            "{caller}"
+        );
+        assert!(
+            caller.rfind("tribute_rt.retain %0").unwrap() < caller.find("clif.call %0").unwrap(),
+            "{caller}"
+        );
+        assert!(!caller.contains("tribute_rt.release %0"), "{caller}");
+        assert!(caller.contains("clif.return %0"), "{caller}");
+    }
+
+    #[test]
+    fn malformed_trust_fails_before_rc_mutation() {
+        let (mut ctx, module, trusted) = lowered_trusted_cps(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @other(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call %0 {callee = @target, tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let tail = first_tail_call(&ctx, module, false);
+        let original_id = ctx
+            .op(tail)
+            .attributes
+            .get(OWNERSHIP_CONTRACT_ID_ATTR)
+            .cloned()
+            .expect("contract identity");
+        ctx.op_mut(tail)
+            .attributes
+            .insert(Symbol::new(OWNERSHIP_CONTRACT_ID_ATTR), Attribute::Int(999));
+        let before = print_module(&ctx, module.op());
+        assert!(
+            insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                TemporaryBorrowPolicy::Preserve,
+                &trusted,
+            )
+            .is_err()
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+
+        ctx.op_mut(tail)
+            .attributes
+            .insert(Symbol::new(OWNERSHIP_CONTRACT_ID_ATTR), original_id);
+        ctx.op_mut(tail).attributes.insert(
+            Symbol::new("callee"),
+            Attribute::Symbol(Symbol::new("other")),
+        );
+        let before = print_module(&ctx, module.op());
+        assert!(
+            insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                TemporaryBorrowPolicy::Preserve,
+                &trusted,
+            )
+            .is_err()
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn indirect_signature_mismatch_fails_before_rc_mutation() {
+        let (mut ctx, module, trusted) = lowered_trusted_cps(
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.anyref, %2: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1, %2 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref, core.i32), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let tail = first_tail_call(&ctx, module, true);
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let changed_signature = core::func(&mut ctx, nil, [anyref, ptr]).as_type_ref();
+        ctx.op_mut(tail)
+            .attributes
+            .insert(Symbol::new("sig"), Attribute::Type(changed_signature));
+        let before = print_module(&ctx, module.op());
+        assert!(
+            insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                TemporaryBorrowPolicy::Preserve,
+                &trusted,
+            )
+            .is_err()
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn nonfinal_tail_placement_fails_before_rc_mutation() {
+        let (mut ctx, module, trusted) = lowered_trusted_cps(
+            r#"core.module @test {
+  func.func @target(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+  func.func @caller(%0: tribute_rt.anyref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call %0 {callee = @target, tribute.calling_convention = 2}
+    func.unreachable
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+        assert!(
+            insert_rc_with_policies_and_trusted_summaries(
+                &mut ctx,
+                module,
+                BorrowedParameterPolicy::ElideProvenBorrowed,
+                TemporaryBorrowPolicy::Preserve,
+                &trusted,
+            )
+            .is_err()
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
