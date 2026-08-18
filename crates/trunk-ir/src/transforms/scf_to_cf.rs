@@ -244,6 +244,13 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
 
 /// Lower `scf.switch` to chained cond_br comparisons.
 fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
+    // `scf.switch` is resultless. Leave malformed result-bearing input
+    // untouched so the verifier can reject it without accessing malformed
+    // body regions or corrupting CFG edges.
+    if !ctx.op_results(scf_op).is_empty() {
+        return;
+    }
+
     let switch_op = scf::Switch::from_op(ctx, scf_op).unwrap();
     let discriminant = switch_op.discriminant(ctx);
     let body_region = switch_op.body(ctx);
@@ -263,12 +270,6 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
             let default_op = scf::Default::from_op(ctx, op).unwrap();
             default_region = Some(default_op.body(ctx));
         }
-    }
-
-    // `scf.switch` is resultless. Leave malformed result-bearing input
-    // untouched so the verifier can reject it without corrupting CFG edges.
-    if !ctx.op_results(scf_op).is_empty() {
-        return;
     }
 
     // Split block at scf op: ops after go to merge block
@@ -1303,7 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_scf_switch_with_result_fails_closed() {
+    fn lower_scf_switch_with_result_and_empty_body_fails_closed() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let fn_ty = fn_type(&mut ctx);
@@ -1315,15 +1316,9 @@ mod tests {
         });
         let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         ctx.push_op(entry, disc.op_ref());
-        let body_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
         let body = ctx.create_region(RegionData {
             location: loc,
-            blocks: smallvec![body_block],
+            blocks: smallvec![],
             parent_op: None,
         });
         let switch_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("switch"))
