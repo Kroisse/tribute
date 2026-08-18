@@ -713,6 +713,21 @@ fn collect_validated_call_contracts(
                                         RcOwnership::Consumed | RcOwnership::Transfer => false,
                                     })
                         })
+                } else if expected.is_tail && expected.is_indirect {
+                    expected
+                        .indirect_signature
+                        .and_then(|signature| core::Func::from_type_ref(ctx, signature))
+                        .is_some_and(|callable| {
+                            let parameters = callable.params(ctx);
+                            parameters.len() == expected.actions.len()
+                                && parameters.iter().zip(&expected.actions).all(
+                                    |(&parameter, action)| match action {
+                                        RcOwnership::Plain => !is_anyref_type(ctx, parameter),
+                                        RcOwnership::Transfer => is_anyref_type(ctx, parameter),
+                                        _ => false,
+                                    },
+                                )
+                        })
                 } else {
                     args.iter()
                         .zip(&expected.actions)
@@ -789,7 +804,11 @@ fn entry_parameters(ctx: &IrContext, body: RegionRef) -> Vec<ValueRef> {
 }
 
 fn is_anyref_value(ctx: &IrContext, value: ValueRef) -> bool {
-    let ty = ctx.types.get(ctx.value_ty(value));
+    is_anyref_type(ctx, ctx.value_ty(value))
+}
+
+fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let ty = ctx.types.get(ty);
     ty.dialect == Symbol::new("tribute_rt") && ty.name == Symbol::new("anyref")
 }
 
@@ -1162,17 +1181,11 @@ mod tests {
         assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }
 
-    fn lowered_indirect_tail_contract()
-    -> (IrContext, Module, TrustedOwnershipSummaries, OpRef, i128) {
+    fn lowered_indirect_tail_contract_with(
+        ir: &str,
+    ) -> (IrContext, Module, TrustedOwnershipSummaries, OpRef, i128) {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @caller(%0: core.ptr, %1: tribute_rt.intref) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, tribute_rt.intref), tribute.calling_convention = 2}
-  }
-}"#,
-        );
+        let module = parse_test_module(&mut ctx, ir);
         let (type_converter, _) = native_type_converter(&mut ctx);
         let trusted =
             compute_and_attach(&mut ctx, module, &type_converter).expect("indirect tail contract");
@@ -1192,6 +1205,17 @@ mod tests {
             _ => panic!("trusted contract identity"),
         };
         (ctx, module, trusted, call, id)
+    }
+
+    fn lowered_indirect_tail_contract()
+    -> (IrContext, Module, TrustedOwnershipSummaries, OpRef, i128) {
+        lowered_indirect_tail_contract_with(
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: tribute_rt.intref) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %0, %1 {func.indirect_call_signature = core.func(core.nil, tribute_rt.intref), tribute.calling_convention = 2}
+  }
+}"#,
+        )
     }
 
     #[test]
@@ -1215,6 +1239,50 @@ mod tests {
             &trusted,
         )
         .expect("converted indirect tail contract");
+    }
+
+    #[test]
+    fn indirect_tail_transfer_accepts_an_adapted_ptr_for_an_anyref_signature() {
+        let (mut ctx, module, trusted, call, _) = lowered_indirect_tail_contract_with(
+            r#"core.module @test {
+  func.func @caller(%0: core.ptr, %1: core.ptr) -> core.nil attributes {tribute.calling_convention = 2} {
+    %2 = core.unrealized_conversion_cast %1 : core.ptr
+    func.tail_call_indirect %0, %2 {func.indirect_call_signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let signature = ctx
+            .op(call)
+            .attributes
+            .get_type("sig")
+            .expect("lowered indirect signature");
+        let callable = core::Func::from_type_ref(&ctx, signature).expect("core.func signature");
+        assert!(is_anyref_type(&ctx, callable.params(&ctx)[0]));
+        assert!(!is_anyref_value(&ctx, ctx.op_operands(call)[1]));
+
+        insert_rc_with_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            &trusted,
+        )
+        .expect("adapted indirect tail transfer");
+    }
+
+    #[test]
+    fn indirect_tail_plain_signature_cannot_masquerade_as_transfer() {
+        let (mut ctx, module, mut trusted, call, id) = lowered_indirect_tail_contract();
+        let actions = {
+            let contract = trusted.call_contracts.get_mut(&id).expect("trusted call");
+            contract.actions[0] = RcOwnership::Transfer;
+            contract.actions.clone()
+        };
+        ctx.op_mut(call).attributes.insert(
+            Symbol::new(CALL_ARGUMENT_OWNERSHIP_ATTR),
+            RcOwnership::list_attribute(&actions),
+        );
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }
 
     #[test]
