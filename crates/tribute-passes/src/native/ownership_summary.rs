@@ -92,6 +92,7 @@ pub struct TrustedOwnershipSummaries {
 pub struct ValidatedOwnershipContracts {
     pub summaries: HashMap<Symbol, Vec<ParameterOwnership>>,
     pub entry_contracts: HashMap<Symbol, Vec<RcOwnership>>,
+    pub(crate) entry_physical_closures: HashMap<Symbol, Vec<Option<TypeRef>>>,
     pub call_contracts: HashMap<OpRef, TrustedCallContract>,
 }
 
@@ -584,6 +585,7 @@ impl TrustedOwnershipSummaries {
             .collect();
 
         let mut entry_contracts = HashMap::new();
+        let mut entry_physical_closures = HashMap::new();
         for (&symbol, expected) in &self.entry_contracts {
             let physical_closures =
                 self.entry_physical_closures
@@ -632,6 +634,7 @@ impl TrustedOwnershipSummaries {
                 ));
             }
             entry_contracts.insert(symbol, expected.clone());
+            entry_physical_closures.insert(symbol, physical_closures.clone());
         }
 
         let mut call_contracts = HashMap::new();
@@ -658,6 +661,7 @@ impl TrustedOwnershipSummaries {
         Ok(ValidatedOwnershipContracts {
             summaries,
             entry_contracts,
+            entry_physical_closures,
             call_contracts,
         })
     }
@@ -1413,6 +1417,37 @@ mod tests {
             .get_mut(&id)
             .expect("trusted call")
             .indirect_physical_closures = None;
+
+        assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
+    }
+
+    #[test]
+    fn retained_physical_entry_without_provenance_fails_closed() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  func.func @factory(%handler: !handler) -> core.nil attributes {tribute.calling_convention = 0} {
+    %size = clif.iconst {value = 32} : core.i64
+    %env = clif.call %size {callee = @__tribute_alloc} : core.ptr
+    clif.store %handler, %env {offset = 24}
+    func.unreachable
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let mut trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .expect("retained physical entry contract");
+        assert_eq!(
+            trusted.entry_contracts[&Symbol::new("factory")],
+            [RcOwnership::Retained]
+        );
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        trusted
+            .entry_physical_closures
+            .get_mut(&Symbol::new("factory"))
+            .expect("physical entry provenance")[0] = None;
 
         assert_rc_rejects_unchanged(&mut ctx, module, &trusted);
     }

@@ -522,6 +522,7 @@ fn insert_rc_impl(
         ValidatedOwnershipContracts {
             summaries: HashMap::new(),
             entry_contracts: HashMap::new(),
+            entry_physical_closures: HashMap::new(),
             call_contracts: HashMap::new(),
         }
     };
@@ -547,6 +548,7 @@ fn insert_rc_impl(
                 temporary_borrows,
                 &trusted.summaries,
                 trusted.entry_contracts.get(&sym).map(Vec::as_slice),
+                trusted.entry_physical_closures.get(&sym).map(Vec::as_slice),
                 &trusted.call_contracts,
             );
         }
@@ -791,6 +793,7 @@ fn insert_rc_in_function(
     temporary_borrow_policy: TemporaryBorrowPolicy,
     trusted_summaries: &HashMap<Symbol, Vec<ParameterOwnership>>,
     entry_contract: Option<&[RcOwnership]>,
+    entry_physical_closures: Option<&[Option<TypeRef>]>,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
     let consumed_parameters: HashSet<ValueRef> = entry_contract
@@ -803,11 +806,25 @@ fn insert_rc_in_function(
                 .and_then(|&entry_block| ctx.block_args(entry_block).get(index).copied())
         })
         .collect();
+    let retained_physical_parameters: HashSet<ValueRef> = entry_contract
+        .zip(entry_physical_closures)
+        .into_iter()
+        .flat_map(|(entries, physical_closures)| entries.iter().zip(physical_closures).enumerate())
+        .filter_map(|(index, (entry, physical_closure))| {
+            (*entry == RcOwnership::Retained && physical_closure.is_some())
+                .then(|| ctx.region(body).blocks.first())
+                .flatten()
+                .and_then(|&entry_block| ctx.block_args(entry_block).get(index).copied())
+                .filter(|&parameter| is_core_ptr_value(ctx, parameter))
+        })
+        .collect();
     let mut ptr_values = collect_ptr_values(ctx, body);
     // `func_to_clif` erases convention-proven physical closures to `core.ptr`.
-    // Their consumed entry contract is the exact provenance that keeps them in
-    // RC accounting; arbitrary pointer block arguments remain unmanaged.
+    // Their validated consumed or retained entry contract is the exact
+    // provenance that keeps them in RC accounting; arbitrary pointer block
+    // arguments remain unmanaged.
     ptr_values.extend(consumed_parameters.iter().copied());
+    ptr_values.extend(retained_physical_parameters.iter().copied());
 
     if ptr_values.is_empty() {
         return;
@@ -868,6 +885,7 @@ fn insert_rc_in_function(
             &ptr_alias_map,
             &borrow_info,
             &consumed_parameters,
+            &retained_physical_parameters,
             call_contracts,
         );
     }
@@ -1484,6 +1502,7 @@ fn insert_rc_in_block(
     ptr_alias_map: &HashMap<ValueRef, ValueRef>,
     borrow_info: &RcBorrowInfo<'_>,
     consumed_parameters: &HashSet<ValueRef>,
+    retained_physical_parameters: &HashSet<ValueRef>,
     call_contracts: &HashMap<OpRef, TrustedCallContract>,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
@@ -1576,9 +1595,10 @@ fn insert_rc_in_block(
     if is_entry {
         let args: Vec<ValueRef> = ctx.block_args(block).to_vec();
         for arg_val in args {
-            if is_anyref_type(ctx, ctx.value_ty(arg_val))
+            if (is_anyref_type(ctx, ctx.value_ty(arg_val))
                 && !borrow_info.parameters.contains(&arg_val)
-                && !consumed_parameters.contains(&arg_val)
+                && !consumed_parameters.contains(&arg_val))
+                || retained_physical_parameters.contains(&arg_val)
             {
                 let retain_op = tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
@@ -1594,8 +1614,11 @@ fn insert_rc_in_block(
                 && ((is_anyref_value(ctx, stored_val) && !is_static_ptr(ctx, stored_val))
                     || promoted_ptr_values.contains(&stored_val)
                     || consumed_parameters.contains(&stored_val)
+                    || retained_physical_parameters.contains(&stored_val)
                     || ptr_alias_map.get(&stored_val).is_some_and(|owner| {
-                        promoted_ptr_values.contains(owner) || consumed_parameters.contains(owner)
+                        promoted_ptr_values.contains(owner)
+                            || consumed_parameters.contains(owner)
+                            || retained_physical_parameters.contains(owner)
                     }))
             {
                 let op_loc = ctx.op(op).location;
@@ -2515,10 +2538,58 @@ mod tests {
     }
 
     #[test]
-    fn plain_physical_entry_store_does_not_retain_core_ptr() {
+    fn retained_physical_entry_retain_per_owning_store() {
         let output = run_trusted_cps_pass(
             r#"core.module @test {
-  func.func @producer(%0: core.i64, %1: core.i64, %2: core.i64, %3: core.i64, %4: core.ptr) -> core.nil attributes {tribute.calling_convention = 2} {
+  !completion = closure.closure(core.func(core.nil)) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  !dispatch = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  func.func @producer(%0: tribute_rt.anyref, %1: core.ptr, %2: core.i32, %3: !completion, %4: !handler) -> !dispatch attributes {tribute.calling_convention = 0} {
+    %5 = clif.iconst {value = 32} : core.i64
+    %6 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %6 {offset = 24}
+    %7 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+    clif.store %4, %7 {offset = 24}
+    %8 = core.unrealized_conversion_cast %6 : !handler
+    clif.store %8, %7 {offset = 40}
+    func.unreachable
+  }
+}"#,
+            TemporaryBorrowPolicy::Preserve,
+        )
+        .expect("retained physical entry stores");
+        let producer = output
+            .split("sym_name = @producer")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        let stores: Vec<_> = producer
+            .match_indices("clif.store %4,")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(stores.len(), 2, "{producer}");
+        let retains: Vec<_> = producer
+            .match_indices("tribute_rt.retain %4")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(retains.len(), 3, "{producer}");
+        assert!(
+            retains[0] < retains[1]
+                && retains[1] < stores[0]
+                && stores[0] < retains[2]
+                && retains[2] < stores[1],
+            "{producer}"
+        );
+        let release = producer
+            .find("tribute_rt.release %4")
+            .unwrap_or_else(|| panic!("{producer}"));
+        assert!(stores[1] < release, "{producer}");
+    }
+
+    #[test]
+    fn plain_direct_entry_store_does_not_retain_core_ptr() {
+        let output = run_trusted_cps_pass(
+            r#"core.module @test {
+  func.func @producer(%0: core.i64, %1: core.i64, %2: core.i64, %3: core.i64, %4: core.ptr) -> core.nil attributes {tribute.calling_convention = 0} {
     %5 = clif.iconst {value = 32} : core.i64
     %6 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
     clif.store %4, %6 {offset = 24}
@@ -2530,7 +2601,7 @@ mod tests {
 }"#,
             TemporaryBorrowPolicy::Preserve,
         )
-        .expect("plain physical entry stores");
+        .expect("plain direct entry stores");
         let producer = output
             .split("sym_name = @producer")
             .nth(1)
