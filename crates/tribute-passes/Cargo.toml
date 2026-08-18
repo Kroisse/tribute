@@ -13,6 +13,7 @@ tracing.workspace = true
 tribute-core.workspace = true
 tribute-ir.workspace = true
 trunk-ir.workspace = true
+trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
