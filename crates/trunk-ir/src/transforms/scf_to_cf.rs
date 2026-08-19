@@ -136,18 +136,21 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
     let then_region = if_op.then_region(ctx);
     let else_region = if_op.else_region(ctx);
 
-    // Determine result type (if any)
-    let result_ty = match ctx.op_results(scf_op) {
+    // Only results with users need a CFG merge value. This intentionally
+    // applies to every result type: an unused result does not need a block
+    // argument or branch operands merely because the structured op has one.
+    let result = match ctx.op_results(scf_op) {
         [] => None,
-        [result] => Some(ctx.value_ty(*result)),
+        [result] if ctx.has_uses(*result) => Some((*result, ctx.value_ty(*result))),
+        [_] => None,
         _ => return,
     };
 
     // Split block at the scf op: ops after scf_op go to merge block
     let merge_block = split_block(ctx, block, scf_op);
 
-    // Add merge block argument for the result (if any)
-    if let Some(ty) = result_ty {
+    // Add a merge block argument and RAUW only a used result.
+    if let Some((if_result, ty)) = result {
         let merge_arg = ctx.add_block_arg(
             merge_block,
             BlockArgData {
@@ -156,7 +159,6 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
             },
         );
         // RAUW: replace all uses of scf.if result with merge block arg
-        let if_result = ctx.op_results(scf_op)[0];
         ctx.replace_all_uses(if_result, merge_arg);
     }
 
@@ -916,6 +918,53 @@ mod tests {
   }
 }"#,
             1,
+        );
+    }
+
+    #[test]
+    fn lower_scf_if_drops_unused_never_result_for_tail_transfers() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    %discarded = scf.if %cond : core.never {
+      func.tail_call_indirect %callee, %unit {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    } {
+      func.tail_call_indirect %callee, %unit {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.as_str() == "func.tail_call_indirect")
+                .count(),
+            2
+        );
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+
+        let has_non_entry_never_arg = ctx
+            .region(body)
+            .blocks
+            .iter()
+            .skip(1)
+            .flat_map(|&block| ctx.block_args(block))
+            .any(|&arg| {
+                let ty = ctx.types.get(ctx.value_ty(arg));
+                ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
+            });
+        assert!(
+            !has_non_entry_never_arg,
+            "unused scf.if result must not create a core.never CFG block argument"
         );
     }
 
