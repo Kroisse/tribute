@@ -96,7 +96,7 @@ pub struct ValidatedOwnershipContracts {
     pub summaries: HashMap<Symbol, Vec<ParameterOwnership>>,
     pub entry_contracts: HashMap<Symbol, Vec<RcOwnership>>,
     pub(crate) entry_physical_closures: HashMap<Symbol, Vec<Option<TypeRef>>>,
-    pub(crate) physical_closure_values: HashMap<i128, ValueRef>,
+    pub(crate) physical_closure_values: HashMap<Symbol, HashSet<ValueRef>>,
     pub call_contracts: HashMap<OpRef, TrustedCallContract>,
 }
 
@@ -711,13 +711,17 @@ impl TrustedOwnershipSummaries {
             let Ok(function) = clif::Func::from_op(ctx, function_op) else {
                 continue;
             };
+            let mut function_values = HashSet::new();
             collect_validated_physical_closure_values(
                 ctx,
                 function.body(ctx),
                 &self.physical_closure_values,
                 &mut seen_physical_closure_values,
-                &mut physical_closure_values,
+                &mut function_values,
             )?;
+            if !function_values.is_empty() {
+                physical_closure_values.insert(function.sym_name(ctx), function_values);
+            }
         }
         if seen_physical_closure_values.len() != self.physical_closure_values.len() {
             return Err(OwnershipContractError(
@@ -807,7 +811,7 @@ fn collect_validated_physical_closure_values(
     region: RegionRef,
     trusted: &HashMap<i128, TypeRef>,
     seen: &mut HashSet<i128>,
-    validated: &mut HashMap<i128, ValueRef>,
+    validated: &mut HashSet<ValueRef>,
 ) -> Result<(), OwnershipContractError> {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
@@ -835,7 +839,7 @@ fn collect_validated_physical_closure_values(
                         "physical closure value provenance is untrusted",
                     ));
                 }
-                validated.insert(*id, ctx.op_result(op, 0));
+                validated.insert(ctx.op_result(op, 0));
             }
             for &nested in &ctx.op(op).regions {
                 collect_validated_physical_closure_values(ctx, nested, trusted, seen, validated)?;

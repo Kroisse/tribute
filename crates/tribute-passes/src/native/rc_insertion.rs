@@ -527,8 +527,6 @@ fn insert_rc_impl(
             call_contracts: HashMap::new(),
         }
     };
-    let physical_closure_values: HashSet<ValueRef> =
-        trusted.physical_closure_values.values().copied().collect();
     let borrow_safe_functions = borrow_safe_functions(ctx, &module_ops);
 
     for op in &module_ops {
@@ -543,6 +541,11 @@ fn insert_rc_impl(
             } else {
                 BorrowedParameterPolicy::Preserve
             };
+            let physical_closure_values = trusted
+                .physical_closure_values
+                .get(&sym)
+                .cloned()
+                .unwrap_or_default();
             insert_rc_in_function(
                 ctx,
                 sym,
@@ -2653,6 +2656,72 @@ mod tests {
             .unwrap_or_else(|| panic!("{factory}"));
         assert!(store < release, "{factory}");
         assert!(!factory.contains("return_call"), "{factory}");
+    }
+
+    #[test]
+    fn proven_physical_closure_field_values_stay_in_their_function() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !handler = closure.closure(core.func(core.never, tribute_rt.anyref)) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+  !frame = adt.struct(!handler) {fields = [[@dispatch, !handler]], name = @Frame}
+  func.func @capture(%0: !frame) -> core.nil attributes {tribute.calling_convention = 0} {
+    %1 = adt.struct_get %0 {field = 0, type = !frame} : !handler
+    %2 = clif.iconst {value = 32} : core.i64
+    %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+    clif.store %1, %3 {offset = 24}
+    func.unreachable
+  }
+  func.func @unrelated(%0: core.ptr) -> core.nil attributes {tribute.calling_convention = 0} {
+    func.unreachable
+  }
+}"#,
+        );
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        let trusted = compute_and_attach(&mut ctx, module, &type_converter)
+            .expect("physical closure field contract");
+        func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+        let (type_converter, _) = native_type_converter(&mut ctx);
+        adt_to_clif::lower(&mut ctx, module, type_converter).expect("adt_to_clif");
+        let module_ops = ctx
+            .block(module.first_block(&ctx).expect("module body"))
+            .ops
+            .to_vec();
+        let validated = trusted
+            .validated_for_clif(&ctx, &module_ops)
+            .expect("validated physical field contract");
+        assert_eq!(validated.physical_closure_values.len(), 1);
+        assert_eq!(
+            validated.physical_closure_values[&Symbol::new("capture")].len(),
+            1
+        );
+        assert!(
+            !validated
+                .physical_closure_values
+                .contains_key(&Symbol::new("unrelated"))
+        );
+
+        insert_rc_with_policies_and_trusted_summaries(
+            &mut ctx,
+            module,
+            BorrowedParameterPolicy::ElideProvenBorrowed,
+            TemporaryBorrowPolicy::Preserve,
+            &trusted,
+        )
+        .expect("function-local physical closure accounting");
+        let output = print_module(&ctx, module.op());
+        let capture = output
+            .split("sym_name = @capture")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        assert_eq!(capture.matches("tribute_rt.retain").count(), 2, "{capture}");
+        let unrelated = output
+            .split("sym_name = @unrelated")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{output}"));
+        assert!(!unrelated.contains("tribute_rt.retain"), "{unrelated}");
+        assert!(!unrelated.contains("tribute_rt.release"), "{unrelated}");
     }
 
     #[test]
