@@ -209,7 +209,7 @@ fn borrowed_parameters_preserve_native_execution() {
 }
 
 #[test]
-fn trusted_ownership_forwarding_preserves_native_execution() {
+fn trusted_ownership_forwarding_preserves_native_execution_slow() {
     for sanitize_address in [false, true] {
         let preserved = compile_and_run_native_with_borrowed_parameters(
             "trusted_ownership_forwarding_preserved.trb",
@@ -239,7 +239,7 @@ fn trusted_ownership_forwarding_preserves_native_execution() {
 }
 
 #[test]
-fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
+fn temporary_field_borrows_preserve_native_execution_with_sanitizer_slow() {
     for sanitize_address in [false, true] {
         let preserved = compile_and_run_native_with_temporary_borrows(
             "temporary_field_borrows_preserved.trb",

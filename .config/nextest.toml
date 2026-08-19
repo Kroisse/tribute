@@ -2,5 +2,5 @@
 slow-timeout = { period = "30s", terminate-after = 1 }
 
 [[profile.default.overrides]]
-filter = "package(tribute) & binary(optimization_conformance) & (test(trusted_ownership_forwarding_preserves_native_execution) | test(temporary_field_borrows_preserve_native_execution_with_sanitizer))"
+filter = "package(tribute) & binary(optimization_conformance) & test(/_slow$/)"
 slow-timeout = { period = "60s", terminate-after = 1 }
