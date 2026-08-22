@@ -120,6 +120,13 @@ These are dialect-level operations that will be:
 1. **Inserted** by the RC insertion pass (SSA-based liveness analysis)
 2. **Lowered** to inline code by the RC lowering pass
 
+Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
+managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
+operand position 또는 pointer provenance로 managed 성질을 얻을 수 없다.
+`adt.ref_null`은 nominal managed reference type의 null 값이고, 생성된 retain과
+release는 이 값에 대해 no-op이어야 한다. Callable과 managed-reference validation은
+ownership plan 또는 IR mutation이 이 분류를 사용하기 전에 완료된다.
+
 ### Inline Lowering (Phase 3a)
 
 ```text

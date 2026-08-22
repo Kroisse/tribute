@@ -82,6 +82,24 @@ tribute        -> tribute-front + tribute-passes
   검증한다. 성공한 경계에는 residual `tribute_control` operation/type이 없고
   backend-ready 경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
 
+Typed frontend output은 operation declaration metadata와 같은 out-of-band 경계에
+compiler intrinsic declaration metadata를 둔다. 각 entry는 canonical semantic
+identity, module-local symbol, complete logical callable type을 포함하고 deterministic
+order로 전달된다. Pre-CPS verifier는 bodyless function과 metadata를 exact-match한 뒤에만
+intrinsic identity attribute를 lowering에 맡긴다. 이후 intrinsic lowering은 이 verified
+identity와 signature를 소비하며 이름이나 `abi` 문자열을 fallback으로 사용하지 않는다.
+
+같은 pre-CPS 검사에서 `adt.typeref` callable boundary, `adt.ref_null`,
+`adt.ref_cast`, direct/indirect call과 return을 모두 검사한다. `core.ptr`에서 시작해
+unrealized cast 또는 reference cast를 거쳐 managed nominal reference가 되는 경로는
+전체 validation 실패이며 conversion은 시작하지 않는다. Defined Tribute function은
+managed logical parameter/result를 사용할 수 있지만, 등록되지 않은 bodyless external과
+private target runtime helper는 사용할 수 없다.
+
+기존 source-visible bytes/runtime bridge는 새 semantic callable origin을 만들지 않고
+현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기
+전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
+
 Logical CPS result는 `core.never`, physical CPS ABI는 empty result다. 모든 CPS
 이전은 direct/indirect proper tail call이며 backend-ready IR은 CPS control-result
 `anyref`, private control enum, `Step`과 trampoline을 거부한다. Boxed source

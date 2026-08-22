@@ -76,6 +76,11 @@ Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,
 operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노출하지
 않는다. Native와 Wasm은 각자 private layout으로 lower한다.
 
+Compiler intrinsic은 canonical prelude declaration identity와 typechecked complete
+signature가 registry에서 함께 확인될 때만 intrinsic이다. 같은 qualified symbol이나
+같은 `abi` 문자열을 사용한 source declaration은 ordinary external callable이며
+intrinsic 권한을 상속하지 않는다.
+
 ### Use 문법
 
 ```rust

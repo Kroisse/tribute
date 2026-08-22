@@ -242,6 +242,20 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
   block argument로 들어온다.
 - **위치:** source function 또는 extern declaration 전체 span이다.
 
+Named callable의 origin은 symbol이나 `abi` 문자열과 별개인 typed frontend
+metadata다. Source 정의는 body를 가진 Tribute callable이고, compiler intrinsic은
+canonical registry가 부여한 semantic identity와 완전한 logical signature를 함께
+가진다. Private runtime helper는 target stage에서만 physical signature로 만들며
+source-logical `adt.typeref`를 받을 수 없다. 아직 별도 user FFI 계약이 없는 bodyless
+declaration은 managed semantic parameter나 result를 사용할 수 없다. Textual attribute,
+symbol spelling, 위치 또는 printed IR만으로 origin을 복구하거나 승격하지 않는다.
+
+Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
+대조한다. Direct call은 module-local symbol을 유일하게 resolve하고 완전한 signature를
+맞춰야 한다. Indirect call은 exact `tribute_control.callable` signature와 source-logical
+callable producer를 요구한다. Return은 enclosing callable의 logical result와 일치해야
+한다. Body가 없는 declaration도 body traversal 없이 같은 검사를 받는다.
+
 #### `tribute_control.lambda`
 
 ```text
@@ -580,6 +594,15 @@ native uses function pointers plus heap environments.
 
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
+
+`adt.typeref`는 nominal managed reference type이다. 유효한 값은 이 type 자체로
+managed이며 pointer provenance로 managed 여부를 다시 판정하지 않는다.
+`adt.ref_null`은 정확히 지정한 `adt.typeref`의 null inhabitant이고 retain/release는
+null에 대해 no-op이다. `adt.ref_cast`는 확인된 같은 nominal identity의 managed
+reference 사이에서만 허용한다. `core.ptr`는 항상 unmanaged이므로 raw pointer,
+allocator result, code address, Evidence, borrowed buffer와 이를 통과하는 cast chain은
+`adt.typeref`가 될 수 없다. 이 규칙은 typed frontend 경계에서 reachable IR을 바꾸기
+전에 검사한다.
 
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
