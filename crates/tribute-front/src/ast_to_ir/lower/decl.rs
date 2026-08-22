@@ -267,6 +267,7 @@ impl<'db> TypedModule<'db> {
             perform_operations: _,
             lambda_signatures: _,
             exhaustive_cases: _,
+            compiler_intrinsics,
         } = self;
         let module_location = span_map.get_or_default(ast.id);
         let location = Location::new(path, module_location);
@@ -282,7 +283,8 @@ impl<'db> TypedModule<'db> {
             module_path,
             node_types,
         )
-        .with_options(options);
+        .with_options(options)
+        .with_compiler_intrinsics(compiler_intrinsics);
 
         prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
         promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
@@ -587,6 +589,13 @@ fn lower_extern_function<'db>(
     });
 
     let func_op = func::func(ir, location, qualified_name, func_type, body_region);
+
+    if let Some(identity) = ctx.compiler_intrinsic(func_decl.id) {
+        ir.op_mut(func_op.op_ref()).attributes.insert(
+            Symbol::new(tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR),
+            Attribute::Symbol(identity),
+        );
+    }
 
     // Mark as extern so the backend treats it as Import linkage
     let abi_str = func_decl.abi.to_string();

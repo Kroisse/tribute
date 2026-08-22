@@ -9,10 +9,11 @@ core.module @test {
       %2 = tribute_control.call_indirect %0, %1 : core.i32
       tribute_control.return %2
   }
+  tribute_control.func @"Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.i32} {
       %0 = tribute_control.lambda(%1: core.i32) -> core.i32 convention(cps) captures [] {
           %2 = arith.const {value = 1} : core.i32
-          %3 = arith.addi %1, %2 : core.i32
+          %3 = tribute_control.call %1, %2 {callee = @"Int::+"} : core.i32
           tribute_control.return %3
       }
       %4 = arith.const {value = 41} : core.i32

@@ -8,14 +8,20 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use itertools::Itertools;
+use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::{IrContext, Symbol};
 
+use super::list;
+
 /// Exact type-attribute key used by logical callable types.
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
+
+/// Exact semantic identity copied from the trusted compiler-intrinsic registry.
+pub const COMPILER_INTRINSIC_ATTR: &str = "tribute.compiler_intrinsic";
 
 /// Source-logical callable convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -204,6 +210,15 @@ pub fn func_declaration(
     .build(ctx);
     let op = ctx.create_op(data);
     Func::from_op(ctx, op).expect("newly built tribute_control.func")
+}
+
+impl Func {
+    /// Return the optional semantic identity attached by the trusted frontend registry.
+    pub fn compiler_intrinsic_identity(&self, ctx: &IrContext) -> Option<Symbol> {
+        ctx.op(self.op_ref())
+            .attributes
+            .get_symbol(COMPILER_INTRINSIC_ATTR)
+    }
 }
 
 // Only the named function is isolated. Lambda intentionally remains
@@ -611,6 +626,28 @@ pub struct OperationDeclaration {
     pub kind: Symbol,
     pub parameter_types: Vec<TypeRef>,
     pub result_type: TypeRef,
+}
+
+/// One exact compiler-intrinsic declaration supplied by the typed frontend.
+///
+/// This metadata is deliberately kept outside textual TrunkIR.  The symbol and
+/// operation attribute are accepted only when they match this declaration's
+/// registered identity and complete logical callable type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompilerIntrinsicDeclaration {
+    pub symbol: Symbol,
+    pub identity: Symbol,
+    pub callable_type: TypeRef,
+}
+
+impl CompilerIntrinsicDeclaration {
+    pub fn new(symbol: Symbol, identity: Symbol, callable_type: TypeRef) -> Self {
+        Self {
+            symbol,
+            identity,
+            callable_type,
+        }
+    }
 }
 
 impl OperationDeclaration {
@@ -1942,6 +1979,737 @@ fn declaration_map<'a>(
     map
 }
 
+fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref")
+}
+
+fn contains_adt_typeref(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
+    if !visiting.insert(ty) {
+        return false;
+    }
+    let data = ctx.types.get(ty);
+    let contains = is_adt_typeref(ctx, ty)
+        || data
+            .params
+            .iter()
+            .copied()
+            .any(|param| contains_adt_typeref(ctx, param, visiting))
+        || data
+            .attrs
+            .values()
+            .any(|attribute| attribute_contains_adt_typeref(ctx, attribute, visiting));
+    visiting.remove(&ty);
+    contains
+}
+
+fn attribute_contains_adt_typeref(
+    ctx: &IrContext,
+    attribute: &Attribute,
+    visiting: &mut HashSet<TypeRef>,
+) -> bool {
+    match attribute {
+        Attribute::Type(ty) => contains_adt_typeref(ctx, *ty, visiting),
+        Attribute::List(values) => values
+            .iter()
+            .any(|value| attribute_contains_adt_typeref(ctx, value, visiting)),
+        _ => false,
+    }
+}
+
+fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
+    let data = ctx.types.get(ty);
+    (data.dialect == Symbol::new("adt")
+        && matches!(
+            data.name,
+            name if name == Symbol::new("typeref")
+                || name == Symbol::new("struct")
+                || name == Symbol::new("enum")
+        ))
+    .then(|| data.attrs.get_symbol("name"))
+    .flatten()
+}
+
+fn canonical_nominal_layouts(
+    ctx: &IrContext,
+    reachable_types: &HashSet<TypeRef>,
+    errors: &mut Vec<ValidationError>,
+) -> HashMap<Symbol, TypeRef> {
+    let mut layouts = HashMap::new();
+    let mut referenced_names = HashSet::new();
+    for ty in reachable_types.iter().copied() {
+        let data = ctx.types.get(ty);
+        if is_adt_typeref(ctx, ty) {
+            if let Some(name) = data.attrs.get_symbol("name") {
+                referenced_names.insert(name);
+            }
+            continue;
+        }
+        if data.dialect != Symbol::new("adt")
+            || !(data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
+        {
+            continue;
+        }
+        let Some(name) = data.attrs.get_symbol("name") else {
+            continue;
+        };
+        if let Some(previous) = layouts.insert(name, ty)
+            && previous != ty
+        {
+            push_type_error(
+                errors,
+                format!("nominal layout @{name} is declared more than once ({previous} and {ty})"),
+            );
+        }
+    }
+    for name in referenced_names {
+        if layouts.contains_key(&name) {
+            continue;
+        }
+        let candidates = ctx
+            .types
+            .iter()
+            .filter_map(|(ty, data)| {
+                (data.dialect == Symbol::new("adt")
+                    && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
+                    && data.attrs.get_symbol("name") == Some(name))
+                .then_some(ty)
+            })
+            .collect::<Vec<_>>();
+        if let [layout] = candidates.as_slice() {
+            layouts.insert(name, *layout);
+        } else if let [first, second, ..] = candidates.as_slice() {
+            push_type_error(
+                errors,
+                format!("nominal layout @{name} is declared more than once ({first} and {second})"),
+            );
+        }
+    }
+    layouts
+}
+
+fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+}
+
+fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
+    match attribute {
+        Attribute::Type(ty) => collect_reachable_type(ctx, *ty, types),
+        Attribute::List(values) => {
+            for value in values {
+                collect_attribute_types(ctx, value, types);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<TypeRef>) {
+    if !types.insert(ty) {
+        return;
+    }
+    let data = ctx.types.get(ty);
+    for parameter in data.params.iter().copied() {
+        collect_reachable_type(ctx, parameter, types);
+    }
+    for attribute in data.attrs.values() {
+        collect_attribute_types(ctx, attribute, types);
+    }
+}
+
+/// Collect semantic types reachable from a module operation and its nested IR.
+///
+/// Context-wide type aliases are printer/parser conveniences, not IR roots:
+/// an alias whose type is never used by an operation, operand, result, block
+/// argument, or type-bearing attribute must not affect validation of this
+/// module. A reachable `adt.typeref` may resolve one unique layout alias; an
+/// ambiguous nominal name remains invalid.
+fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef> {
+    fn collect_op_types(ctx: &IrContext, op: OpRef, types: &mut HashSet<TypeRef>) {
+        for value in ctx.op_operands(op).iter().chain(ctx.op_results(op).iter()) {
+            collect_reachable_type(ctx, ctx.value_ty(*value), types);
+        }
+        for attribute in ctx.op(op).attributes.values() {
+            collect_attribute_types(ctx, attribute, types);
+        }
+        for region in ctx.op(op).regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for argument in ctx.block_args(block) {
+                    collect_reachable_type(ctx, ctx.value_ty(*argument), types);
+                }
+            }
+        }
+    }
+
+    let mut types = HashSet::new();
+    collect_op_types(ctx, module, &mut types);
+    for region in ctx.op(module).regions.iter().copied() {
+        walk_region_ops(ctx, region, &mut |op| collect_op_types(ctx, op, &mut types));
+    }
+    types
+}
+
+fn raw_pointer_cast_origin(
+    ctx: &IrContext,
+    value: ValueRef,
+    visiting: &mut HashSet<ValueRef>,
+) -> bool {
+    if !visiting.insert(value) {
+        return false;
+    }
+    if is_core_ptr(ctx, ctx.value_ty(value)) {
+        return true;
+    }
+    let ValueDef::OpResult(producer, _) = ctx.value_def(value) else {
+        return false;
+    };
+    let transparent_cast = core::UnrealizedConversionCast::from_op(ctx, producer).is_ok()
+        || adt::RefCast::from_op(ctx, producer).is_ok()
+        || arith::Cast::from_op(ctx, producer).is_ok();
+    transparent_cast
+        && ctx
+            .op_operands(producer)
+            .first()
+            .copied()
+            .is_some_and(|operand| raw_pointer_cast_origin(ctx, operand, visiting))
+}
+
+fn validate_managed_reference_boundaries(
+    ctx: &IrContext,
+    body: RegionRef,
+    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut reachable_types = HashSet::new();
+    walk_region_ops(ctx, body, &mut |op| {
+        for value in ctx.op_operands(op).iter().chain(ctx.op_results(op).iter()) {
+            collect_reachable_type(ctx, ctx.value_ty(*value), &mut reachable_types);
+        }
+        for attribute in ctx.op(op).attributes.values() {
+            collect_attribute_types(ctx, attribute, &mut reachable_types);
+        }
+        for region in ctx.op(op).regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for argument in ctx.block_args(block) {
+                    collect_reachable_type(ctx, ctx.value_ty(*argument), &mut reachable_types);
+                }
+            }
+        }
+    });
+
+    for ty in reachable_types {
+        if !is_adt_typeref(ctx, ty) {
+            continue;
+        }
+        let data = ctx.types.get(ty);
+        let Some(name) = data.attrs.get_symbol("name") else {
+            push_type_error(
+                errors,
+                format!("{ty}: adt.typeref requires nominal name metadata"),
+            );
+            continue;
+        };
+        if !data.params.is_empty() {
+            push_type_error(
+                errors,
+                format!("{ty}: adt.typeref cannot have type parameters"),
+            );
+        }
+        if !nominal_layouts.contains_key(&name) {
+            push_type_error(
+                errors,
+                format!("{ty}: adt.typeref @{name} has no verified nominal declaration"),
+            );
+        }
+    }
+
+    walk_region_ops(ctx, body, &mut |op| {
+        let data = ctx.op(op);
+        if data.dialect == Symbol::new("adt") && data.name == Symbol::new("ref_null") {
+            let ([], [result], Some(declared)) = (
+                ctx.op_operands(op),
+                ctx.op_result_types(op),
+                data.attributes.get_type("type"),
+            ) else {
+                push_op_error(ctx, op, errors, "adt.ref_null requires one typed result");
+                return;
+            };
+            if *result != declared || !is_adt_typeref(ctx, *result) {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "adt.ref_null result and type attribute must be the same managed adt.typeref",
+                );
+            }
+        }
+        if data.dialect == Symbol::new("adt") && data.name == Symbol::new("ref_cast") {
+            let ([operand], [result], Some(declared)) = (
+                ctx.op_operands(op),
+                ctx.op_result_types(op),
+                data.attributes.get_type("type"),
+            ) else {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "adt.ref_cast requires one typed operand and result",
+                );
+                return;
+            };
+            let operand_type = ctx.value_ty(*operand);
+            let source = nominal_identity(ctx, operand_type);
+            let target = nominal_identity(ctx, *result);
+            if declared != *result
+                || !is_adt_typeref(ctx, operand_type)
+                || !is_adt_typeref(ctx, *result)
+                || source.is_none()
+                || source != target
+            {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "adt.ref_cast requires compatible managed nominal reference types",
+                );
+            }
+        }
+        for result in ctx.op_results(op) {
+            if is_adt_typeref(ctx, ctx.value_ty(*result))
+                && raw_pointer_cast_origin(ctx, *result, &mut HashSet::new())
+            {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "core.ptr cast chain cannot produce a managed adt.typeref",
+                );
+            }
+        }
+    });
+}
+
+fn compiler_intrinsic_map<'a>(
+    ctx: &IrContext,
+    declarations: &'a [CompilerIntrinsicDeclaration],
+    errors: &mut Vec<ValidationError>,
+) -> HashMap<Symbol, &'a CompilerIntrinsicDeclaration> {
+    let mut map = HashMap::new();
+    let mut previous = None;
+    for declaration in declarations {
+        let key = (declaration.symbol, declaration.identity);
+        if previous.is_some_and(|previous| previous > key) {
+            push_type_error(
+                errors,
+                "compiler intrinsic declarations are not deterministically ordered",
+            );
+        }
+        previous = Some(key);
+        if callable_convention(ctx, declaration.callable_type) != Some(CallingConvention::Direct) {
+            push_type_error(
+                errors,
+                format!(
+                    "registered compiler intrinsic @{} must use Direct calling convention",
+                    declaration.symbol
+                ),
+            );
+        }
+        if map.insert(declaration.symbol, declaration).is_some() {
+            push_type_error(
+                errors,
+                format!(
+                    "duplicate compiler intrinsic declaration for @{}",
+                    declaration.symbol
+                ),
+            );
+        }
+    }
+    map
+}
+
+fn adt_projection_has_exact_callable_type(
+    ctx: &IrContext,
+    producer: OpRef,
+    result_type: TypeRef,
+    nominal_layouts: &HashMap<Symbol, TypeRef>,
+) -> bool {
+    if ctx.op_result_types(producer) != [result_type] {
+        return false;
+    }
+    if let Ok(get) = adt::StructGet::from_op(ctx, producer) {
+        let layout = get.r#type(ctx);
+        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
+            && struct_field_type(ctx, layout, get.field(ctx)) == Some(result_type);
+    }
+    if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
+        let layout = get.r#type(ctx);
+        return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
+            && variant_field_type(ctx, layout, get.tag(ctx), get.field(ctx)) == Some(result_type);
+    }
+    false
+}
+
+fn projection_source_matches_layout(
+    ctx: &IrContext,
+    source: ValueRef,
+    layout: TypeRef,
+    nominal_layouts: &HashMap<Symbol, TypeRef>,
+) -> bool {
+    let layout_identity = nominal_identity(ctx, layout);
+    layout_identity.is_some_and(|identity| nominal_layouts.get(&identity) == Some(&layout))
+        && nominal_identity(ctx, ctx.value_ty(source)) == layout_identity
+}
+
+fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
+    let data = ctx.types.get(layout);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
+        return None;
+    }
+    let Attribute::List(fields) = data.attrs.get("fields")? else {
+        return None;
+    };
+    let Attribute::List(pair) = fields.get(field as usize)? else {
+        return None;
+    };
+    match pair.as_slice() {
+        [Attribute::Symbol(_), Attribute::Type(field_type)] => Some(*field_type),
+        _ => None,
+    }
+}
+
+fn variant_field_type(
+    ctx: &IrContext,
+    layout: TypeRef,
+    tag: Symbol,
+    field: u32,
+) -> Option<TypeRef> {
+    let data = ctx.types.get(layout);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
+        return None;
+    }
+    let Attribute::List(variants) = data.attrs.get("variants")? else {
+        return None;
+    };
+    variants.iter().find_map(|variant| {
+        let Attribute::List(pair) = variant else {
+            return None;
+        };
+        let [Attribute::Symbol(variant_tag), Attribute::List(fields)] = pair.as_slice() else {
+            return None;
+        };
+        (*variant_tag == tag).then(|| match fields.get(field as usize) {
+            Some(Attribute::Type(field_type)) => Some(*field_type),
+            _ => None,
+        })?
+    })
+}
+
+struct CallableProvenance<'a> {
+    registered: &'a HashMap<Symbol, &'a CompilerIntrinsicDeclaration>,
+    declarations: &'a HashMap<(TypeRef, Symbol), &'a OperationDeclaration>,
+    nominal_layouts: &'a HashMap<Symbol, TypeRef>,
+}
+
+fn callable_block_arg_has_source_contract(
+    ctx: &IrContext,
+    block: BlockRef,
+    index: u32,
+    value: ValueRef,
+    provenance: &CallableProvenance<'_>,
+    visiting: &mut HashSet<ValueRef>,
+) -> bool {
+    let Some(region) = ctx.block(block).parent_region else {
+        return false;
+    };
+    let Some(owner) = ctx.region(region).parent_op else {
+        return false;
+    };
+    let value_type = ctx.value_ty(value);
+
+    let callable_type = if is_control_op(ctx, owner, "func") {
+        (ctx.op(owner).regions.as_slice() == [region])
+            .then(|| ctx.op(owner).attributes.get_type("type"))
+            .flatten()
+    } else if is_control_op(ctx, owner, "lambda") {
+        (ctx.op(owner).regions.as_slice() == [region])
+            .then(|| ctx.op_result_types(owner).first().copied())
+            .flatten()
+    } else {
+        None
+    };
+    if let Some((_, parameters, _)) = callable_type.and_then(|ty| callable_parts(ctx, ty)) {
+        return parameters.get(index as usize) == Some(&value_type);
+    }
+
+    if is_control_op(ctx, owner, "handler") && ctx.op(owner).regions.as_slice() == [region] {
+        let data = ctx.op(owner);
+        if let (Some(ability), Some(name), Some(kind)) = (
+            data.attributes.get_type("ability_ref"),
+            data.attributes.get_symbol("op_name"),
+            data.attributes.get_symbol("kind"),
+        ) {
+            return provenance
+                .declarations
+                .get(&(ability, name))
+                .is_some_and(|declaration| {
+                    declaration.kind == kind
+                        && declaration.parameter_types.get(index as usize) == Some(&value_type)
+                });
+        }
+    }
+
+    let [body_region, completion_region, _] = ctx.op(owner).regions.as_slice() else {
+        return false;
+    };
+    if !is_control_op(ctx, owner, "handle") || completion_region != &region || index != 0 {
+        return false;
+    }
+    let [body_block] = ctx.region(*body_region).blocks.as_slice() else {
+        return false;
+    };
+    let Some(body_yield) = ctx.block(*body_block).ops.last().copied() else {
+        return false;
+    };
+    let [body_value] = ctx.op_operands(body_yield) else {
+        return false;
+    };
+    is_control_op(ctx, body_yield, "yield")
+        && ctx.value_ty(*body_value) == value_type
+        && callable_has_semantic_provenance(ctx, *body_value, provenance, visiting)
+}
+
+fn callable_has_semantic_provenance(
+    ctx: &IrContext,
+    value: ValueRef,
+    provenance: &CallableProvenance<'_>,
+    visiting: &mut HashSet<ValueRef>,
+) -> bool {
+    if !visiting.insert(value) || Callable::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
+        return false;
+    }
+    match ctx.value_def(value) {
+        ValueDef::BlockArg(block, index) => {
+            callable_block_arg_has_source_contract(ctx, block, index, value, provenance, visiting)
+        }
+        ValueDef::OpResult(producer, _) => {
+            is_control_op(ctx, producer, "lambda")
+                || ((is_control_op(ctx, producer, "func_ref")
+                    || is_control_op(ctx, producer, "call"))
+                    && ctx
+                        .op(producer)
+                        .attributes
+                        .get_symbol(if is_control_op(ctx, producer, "func_ref") {
+                            "func_ref"
+                        } else {
+                            "callee"
+                        })
+                        .and_then(|symbol| resolve_visible_function(ctx, producer, symbol))
+                        .is_some_and(|function| {
+                            verified_callable_declaration(ctx, function, provenance.registered)
+                        }))
+                || (is_control_op(ctx, producer, "call_indirect")
+                    && ctx.op_operands(producer).first().is_some_and(|callee| {
+                        callable_has_semantic_provenance(ctx, *callee, provenance, visiting)
+                    }))
+                || list::Head::from_op(ctx, producer).is_ok_and(|head| {
+                    head.element_type(ctx) == ctx.value_ty(value)
+                        && ctx.op_result_types(producer) == [ctx.value_ty(value)]
+                })
+                || adt_projection_has_exact_callable_type(
+                    ctx,
+                    producer,
+                    ctx.value_ty(value),
+                    provenance.nominal_layouts,
+                )
+        }
+    }
+}
+
+fn resolve_visible_function(ctx: &IrContext, use_op: OpRef, symbol: Symbol) -> Option<OpRef> {
+    let mut owner = Some(use_op);
+    let scope = loop {
+        let current = owner?;
+        if is_core_module(ctx, current) {
+            break current;
+        }
+        owner = parent_op(ctx, current);
+    };
+    let body = ctx.op(scope).regions.first().copied()?;
+    let mut resolved = None;
+    let mut duplicate = false;
+    walk_symbol_scope_ops(ctx, body, &mut |op| {
+        if is_control_op(ctx, op, "func")
+            && ctx.op(op).attributes.get_symbol("sym_name") == Some(symbol)
+        {
+            duplicate |= resolved.replace(op).is_some();
+        }
+    });
+    (!duplicate).then_some(resolved).flatten()
+}
+
+fn verified_callable_declaration(
+    ctx: &IrContext,
+    function: OpRef,
+    registered: &HashMap<Symbol, &CompilerIntrinsicDeclaration>,
+) -> bool {
+    let data = ctx.op(function);
+    if !data.regions.is_empty() {
+        return true;
+    }
+    let (Some(symbol), Some(identity), Some(callable_type)) = (
+        data.attributes.get_symbol("sym_name"),
+        Func::from_op(ctx, function)
+            .ok()
+            .and_then(|function| function.compiler_intrinsic_identity(ctx)),
+        data.attributes.get_type("type"),
+    ) else {
+        return false;
+    };
+    registered.get(&symbol).is_some_and(|declaration| {
+        declaration.identity == identity && declaration.callable_type == callable_type
+    })
+}
+
+fn validate_callable_origins(
+    ctx: &IrContext,
+    body: RegionRef,
+    declarations: &[CompilerIntrinsicDeclaration],
+    operation_declarations: &HashMap<(TypeRef, Symbol), &OperationDeclaration>,
+    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let registered = compiler_intrinsic_map(ctx, declarations, errors);
+    let provenance = CallableProvenance {
+        registered: &registered,
+        declarations: operation_declarations,
+        nominal_layouts,
+    };
+    let mut seen = HashSet::new();
+    walk_region_ops(ctx, body, &mut |op| {
+        if is_control_op(ctx, op, "func") {
+            let data = ctx.op(op);
+            let (Some(symbol), Some(callable_type)) = (
+                data.attributes.get_symbol("sym_name"),
+                data.attributes.get_type("type"),
+            ) else {
+                return;
+            };
+            let intrinsic_identity = Func::from_op(ctx, op)
+                .ok()
+                .and_then(|function| function.compiler_intrinsic_identity(ctx));
+            let bodyless = data.regions.is_empty();
+            if !bodyless && intrinsic_identity.is_some() {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "defined Tribute function cannot claim compiler intrinsic identity",
+                );
+            }
+            if bodyless {
+                let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
+                    (Some(expected), Some(actual))
+                        if expected.identity == actual
+                            && expected.callable_type == callable_type =>
+                    {
+                        seen.insert(symbol);
+                        true
+                    }
+                    (Some(_), _) => {
+                        push_op_error(
+                            ctx,
+                            op,
+                            errors,
+                            "compiler intrinsic identity or complete signature does not match the registered declaration",
+                        );
+                        false
+                    }
+                    (None, Some(_)) => {
+                        push_op_error(
+                            ctx,
+                            op,
+                            errors,
+                            "unregistered declaration cannot claim compiler intrinsic identity",
+                        );
+                        false
+                    }
+                    (None, None) => false,
+                };
+                if !exact_intrinsic && contains_adt_typeref(ctx, callable_type, &mut HashSet::new())
+                {
+                    push_op_error(
+                        ctx,
+                        op,
+                        errors,
+                        "unclassified bodyless external declaration cannot use managed adt.typeref",
+                    );
+                }
+            }
+        } else if is_control_op(ctx, op, "call_indirect")
+            && let Some(callee) = ctx.op_operands(op).first().copied()
+            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::new())
+        {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "indirect callee lacks verified source-logical callable provenance",
+            );
+        }
+    });
+    for symbol in registered.keys() {
+        if !seen.contains(symbol) {
+            push_type_error(
+                errors,
+                format!(
+                    "registered compiler intrinsic @{symbol} has no exact bodyless declaration"
+                ),
+            );
+        }
+    }
+}
+
+fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
+    walk_region_ops(ctx, body, &mut |op| {
+        if !is_control_op(ctx, op, "return") {
+            return;
+        }
+        let mut owner = parent_op(ctx, op);
+        let callable = loop {
+            let Some(current) = owner else {
+                push_op_error(
+                    ctx,
+                    op,
+                    errors,
+                    "return has no containing semantic callable",
+                );
+                return;
+            };
+            if is_control_op(ctx, current, "func") {
+                break ctx.op(current).attributes.get_type("type");
+            }
+            if is_control_op(ctx, current, "lambda") {
+                break ctx.op_result_types(current).first().copied();
+            }
+            owner = parent_op(ctx, current);
+        };
+        let Some((expected, _, _)) = callable.and_then(|ty| callable_parts(ctx, ty)) else {
+            return;
+        };
+        if let [value] = ctx.op_operands(op)
+            && ctx.value_ty(*value) != expected
+        {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "return operand type does not match containing semantic callable",
+            );
+        }
+    });
+}
+
 fn validate_declaration_uses(
     ctx: &IrContext,
     body: RegionRef,
@@ -2346,6 +3114,7 @@ pub fn validate_whole_ir(
     ctx: &IrContext,
     module: Module,
     declarations: &[OperationDeclaration],
+    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
     let mut errors = Vec::new();
     let Some(body) = module.body(ctx) else {
@@ -2354,6 +3123,18 @@ pub fn validate_whole_ir(
     validate_module_symbol_scopes(ctx, module.op(), &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(declarations, &mut errors);
+    let reachable_types = collect_reachable_ir_types(ctx, module.op());
+    let nominal_layouts = canonical_nominal_layouts(ctx, &reachable_types, &mut errors);
+    validate_managed_reference_boundaries(ctx, body, &nominal_layouts, &mut errors);
+    validate_callable_origins(
+        ctx,
+        body,
+        compiler_intrinsics,
+        &declarations,
+        &nominal_layouts,
+        &mut errors,
+    );
+    validate_return_contracts(ctx, body, &mut errors);
     validate_declaration_uses(ctx, body, &declarations, &mut errors);
     validate_resume_ownership(ctx, body, &mut errors);
     validate_token_placements(ctx, body, &mut errors);
@@ -2368,11 +3149,12 @@ pub fn validate(
     ctx: &IrContext,
     module: Module,
     declarations: &[OperationDeclaration],
+    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
     let mut local = validate_local(ctx, module);
     local
         .errors
-        .extend(validate_whole_ir(ctx, module, declarations).errors);
+        .extend(validate_whole_ir(ctx, module, declarations, compiler_intrinsics).errors);
     local
 }
 
@@ -2835,7 +3617,7 @@ mod tests {
     #[test]
     fn generic_control_operations_round_trip_and_validate() {
         let fixture = valid_fixture();
-        let result = validate(&fixture.ctx, fixture.module, &fixture.declarations);
+        let result = validate(&fixture.ctx, fixture.module, &fixture.declarations, &[]);
         assert!(result.is_ok(), "{result}");
 
         let printed = assert_round_trip(&fixture.ctx, fixture.module);
@@ -3385,7 +4167,7 @@ mod tests {
   }
 }"#,
         );
-        let missing = validate_whole_ir(&missing_ctx, missing_module, &[]);
+        let missing = validate_whole_ir(&missing_ctx, missing_module, &[], &[]);
         assert!(messages(&missing).contains("capture list is missing external value"));
 
         let (excess_ctx, excess_module) = parse_fixture(
@@ -3399,7 +4181,7 @@ mod tests {
   }
 }"#,
         );
-        let excess = validate_whole_ir(&excess_ctx, excess_module, &[]);
+        let excess = validate_whole_ir(&excess_ctx, excess_module, &[], &[]);
         assert!(messages(&excess).contains("capture list contains unused external value"));
     }
 
@@ -3434,7 +4216,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(result.is_ok(), "{:?}", result.errors);
     }
 
@@ -3499,7 +4281,7 @@ mod tests {
             result_type: i32_ty,
         };
         let declarations = [declaration.clone(), declaration];
-        let result = validate_whole_ir(&ctx, module, &declarations);
+        let result = validate_whole_ir(&ctx, module, &declarations, &[]);
         assert_diagnostics(
             &result,
             &[
@@ -3563,7 +4345,7 @@ mod tests {
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
-        let result = validate(&ctx, module, &declarations);
+        let result = validate(&ctx, module, &declarations, &[]);
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -3590,7 +4372,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(messages(&result).contains("more than one tribute_control.resume"));
     }
 
@@ -3631,7 +4413,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert_diagnostics(
             &result,
             &[
@@ -3668,7 +4450,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert_diagnostics(
             &result,
             &["resume token is copied into multiple capture paths"],
@@ -3709,7 +4491,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         let diagnostics = messages(&result);
         for forbidden in [
             "resume token is copied into multiple capture paths",
@@ -3745,7 +4527,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(
             messages(&result).contains("multiple static terminal uses"),
             "{result}"
@@ -3771,7 +4553,7 @@ mod tests {
         );
         let local = validate_local(&ctx, module);
         assert!(messages(&local).contains("must not yield a resume token"));
-        let whole = validate_whole_ir(&ctx, module, &[]);
+        let whole = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(messages(&whole).contains("forbidden use"));
 
         let (ctx, module) = parse_fixture(
@@ -3883,7 +4665,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(
             messages(&result).contains("multiple static terminal uses"),
             "{result}"
@@ -3920,7 +4702,7 @@ mod tests {
   }
 }"#,
         );
-        let result = validate_whole_ir(&ctx, module, &[]);
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(
             messages(&result).contains("crosses into a different handler"),
             "{result}"
@@ -3940,6 +4722,496 @@ mod tests {
 
         let result = validate_local(&ctx, module);
         assert!(messages(&result).contains("references external value"));
+    }
+
+    #[test]
+    fn exact_registered_intrinsic_is_accepted_but_spelling_and_abi_are_not() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+}"#,
+        );
+        let function = control_op(&ctx, module, "func");
+        let callable_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let exact = CompilerIntrinsicDeclaration::new(
+            Symbol::new("Nat::+"),
+            Symbol::new("Nat::+"),
+            callable_type,
+        );
+        assert!(validate(&ctx, module, &[], std::slice::from_ref(&exact)).is_ok());
+
+        let wrong_signature = CompilerIntrinsicDeclaration::new(
+            exact.symbol,
+            exact.identity,
+            ctx.types.get(callable_type).params[0],
+        );
+        let result = validate(&ctx, module, &[], &[wrong_signature]);
+        assert!(messages(&result).contains("complete signature"), "{result}");
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("unregistered declaration"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn registered_intrinsic_requires_direct_convention() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @read(%value: core.i32) -> core.i32 convention(evidence_direct)
+    attributes {tribute.compiler_intrinsic = @read}
+}"#,
+        );
+        let function = control_op(&ctx, module, "func");
+        let callable_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let declaration = CompilerIntrinsicDeclaration::new(
+            Symbol::new("read"),
+            Symbol::new("read"),
+            callable_type,
+        );
+
+        let result = validate(&ctx, module, &[], &[declaration]);
+        assert!(
+            messages(&result).contains("must use Direct calling convention"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn exact_registered_intrinsic_has_indirect_callable_provenance() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32, core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+  tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
+    %callee = tribute_control.func_ref {func_ref = @"Nat::+"} : !F
+    %result = tribute_control.call_indirect %callee, %left, %right : core.i32
+    tribute_control.return %result
+  }
+}"#,
+        );
+        let intrinsic = control_ops(&ctx, module, "func")
+            .into_iter()
+            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("Nat::+")))
+            .unwrap();
+        let callable_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
+        let declaration = CompilerIntrinsicDeclaration::new(
+            Symbol::new("Nat::+"),
+            Symbol::new("Nat::+"),
+            callable_type,
+        );
+
+        let result = validate(&ctx, module, &[], &[declaration]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn intrinsic_registry_order_duplicates_and_defined_claims_fail_closed() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @"Int::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Int::+"}
+  tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+    tribute_control.return %left
+  }
+}"#,
+        );
+        let functions = control_ops(&ctx, module, "func");
+        let declaration = |symbol: Symbol| {
+            let function = functions
+                .iter()
+                .copied()
+                .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(symbol))
+                .unwrap();
+            CompilerIntrinsicDeclaration::new(
+                symbol,
+                symbol,
+                ctx.op(function).attributes.get_type("type").unwrap(),
+            )
+        };
+        let nat = declaration(Symbol::new("Nat::+"));
+        let int = declaration(Symbol::new("Int::+"));
+
+        let result = validate(&ctx, module, &[], &[nat.clone(), int, nat]);
+        let diagnostics = messages(&result);
+        assert!(
+            diagnostics.contains("not deterministically ordered"),
+            "{result}"
+        );
+        assert!(
+            diagnostics.contains("duplicate compiler intrinsic"),
+            "{result}"
+        );
+        assert!(
+            diagnostics.contains("defined Tribute function cannot claim compiler intrinsic"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn managed_reference_metadata_and_return_contracts_fail_closed() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !S = adt.struct() {name = @S, fields = []}
+  !Unnamed = adt.typeref()
+  !Parameterized = adt.typeref(core.i32) {name = @S}
+  !Missing = adt.typeref() {name = @Missing}
+  tribute_control.func @unnamed(%value: !Unnamed) -> !Unnamed convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @parameterized(%value: !Parameterized) -> !Parameterized convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @missing(%value: !Missing) -> !Missing convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @wrong_return(%integer: core.i32, %flag: core.bool) -> core.i32 convention(direct) {
+    tribute_control.return %flag
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        let diagnostics = messages(&result);
+        assert!(
+            diagnostics.contains("requires nominal name metadata"),
+            "{result}"
+        );
+        assert!(
+            diagnostics.contains("cannot have type parameters"),
+            "{result}"
+        );
+        assert!(
+            diagnostics.contains("has no verified nominal declaration"),
+            "{result}"
+        );
+        assert!(
+            diagnostics.contains("return operand type does not match containing semantic callable"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !S = adt.struct() {name = @S, fields = []}
+  !R = adt.typeref() {name = @S}
+  tribute_control.func @managed(%value: !R) -> !R convention(direct) {
+    %null = adt.ref_null {type = !R} : !R
+    %cast = adt.ref_cast %null {type = !R} : !R
+    tribute_control.return %cast
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn managed_bodyless_external_and_raw_pointer_cast_chain_fail_closed() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !S = adt.struct() {name = @S, fields = []}
+  !R = adt.typeref() {name = @S}
+  tribute_control.func @private_helper(%value: !R) -> !R convention(direct)
+    attributes {abi = "C"}
+  tribute_control.func @masquerade(%raw: core.ptr) -> !R convention(direct) {
+    %middle = arith.cast %raw : core.i64
+    %managed = core.unrealized_conversion_cast %middle : !R
+    tribute_control.return %managed
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        let diagnostics = messages(&result);
+        assert!(diagnostics.contains("bodyless external"), "{result}");
+        assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
+    }
+
+    #[test]
+    fn managed_nested_aggregate_in_bodyless_external_fails_closed() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !S = adt.struct() {name = @S, fields = []}
+  !R = adt.typeref() {name = @S}
+  !Container = adt.struct() {name = @Container, fields = [[@managed, !R]]}
+  tribute_control.func @private_helper(%value: !Container) -> core.i32 convention(direct)
+    attributes {abi = "C"}
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(messages(&result).contains("bodyless external"), "{result}");
+    }
+
+    #[test]
+    fn primitive_external_remains_a_conservative_boundary() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @primitive(%buffer: core.ptr, %length: core.i32) -> core.ptr convention(direct)
+    attributes {abi = "C"}
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn ref_cast_rejects_distinct_nominal_managed_references() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !S = adt.struct() {name = @S, fields = []}
+  !T = adt.struct() {name = @T, fields = []}
+  !RS = adt.typeref() {name = @S}
+  !RT = adt.typeref() {name = @T}
+  tribute_control.func @incompatible(%value: !RS) -> !RT convention(direct) {
+    %cast = adt.ref_cast %value {type = !RT} : !RT
+    tribute_control.return %cast
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("compatible managed nominal reference types"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn indirect_call_rejects_typed_callable_cast_without_semantic_provenance() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  tribute_control.func @caller(%raw: core.ptr, %value: core.i32) -> core.i32 convention(direct) {
+    %callee = core.unrealized_conversion_cast %raw : tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("callable provenance"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn indirect_call_rejects_callable_from_uncontracted_structured_block_argument() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @caller(%condition: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %result = scf.if %condition : core.i32 {
+      ^then(%callee: !F):
+        %called = tribute_control.call_indirect %callee, %value : core.i32
+        scf.yield %called
+    } {
+      ^else:
+        scf.yield %value
+    }
+    tribute_control.return %result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("callable provenance"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn callable_handle_completion_argument_traces_the_body_yield() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @caller(%value: core.i32) -> !F convention(direct) {
+    %callback = tribute_control.handle : !F {
+      %source = tribute_control.func_ref {func_ref = @id} : !F
+      tribute_control.yield %source
+    } {
+      ^completion(%callback: !F):
+        %ignored = tribute_control.call_indirect %callback, %value : core.i32
+        tribute_control.yield %callback
+    } {
+      ^handlers:
+    }
+    tribute_control.return %callback
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn callable_handler_parameter_requires_an_exact_operation_declaration() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
+    %handled = tribute_control.handle : core.i32 {
+      tribute_control.yield %value
+    } {
+      ^completion(%completed: core.i32):
+        tribute_control.yield %completed
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref() {name = @Callback}, kind = @fn, op_name = @apply, operation_result_type = core.i32} {
+        ^handler(%callback: !F):
+          %called = tribute_control.call_indirect %callback, %value : core.i32
+          tribute_control.yield %called
+      }
+    }
+    tribute_control.return %handled
+  }
+}"#,
+        );
+        let handler = control_op(&ctx, module, "handler");
+        let handler_region = ctx.op(handler).regions[0];
+        let handler_block = ctx.region(handler_region).blocks[0];
+        let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
+        let ability = ctx.op(handler).attributes.get_type("ability_ref").unwrap();
+        let operation_result = ctx
+            .op(handler)
+            .attributes
+            .get_type("operation_result_type")
+            .unwrap();
+        let declaration = OperationDeclaration::new(
+            ability,
+            Symbol::new("apply"),
+            Symbol::new("fn"),
+            [callback_type],
+            operation_result,
+        );
+
+        let result = validate(&ctx, module, &[declaration], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn exact_adt_callable_projections_have_semantic_provenance() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !Tuple = adt.struct() {name = @Tuple, fields = [[@callee, !F]]}
+  !TupleRef = adt.typeref() {name = @Tuple}
+  !Choice = adt.enum() {name = @Choice, variants = [[@Some, [!F]]]}
+  !ChoiceRef = adt.typeref() {name = @Choice}
+  tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
+    %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
+    %tuple_result = tribute_control.call_indirect %tuple_callee, %value : core.i32
+    %some = adt.variant_cast %choice {type = !Choice, tag = @Some} : !Choice
+    %choice_callee = adt.variant_get %some {type = !Choice, tag = @Some, field = 0} : !F
+    %choice_result = tribute_control.call_indirect %choice_callee, %tuple_result : core.i32
+    tribute_control.return %choice_result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn adt_callable_projection_requires_matching_declared_field_type() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !Tuple = adt.struct() {name = @Tuple, fields = [[@not_callable, core.i32]]}
+  !TupleRef = adt.typeref() {name = @Tuple}
+  !Choice = adt.enum() {name = @Choice, variants = [[@Some, [core.i32]]]}
+  !ChoiceRef = adt.typeref() {name = @Choice}
+  tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
+    %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
+    %tuple_result = tribute_control.call_indirect %tuple_callee, %value : core.i32
+    %some = adt.variant_cast %choice {type = !Choice, tag = @Some} : !Choice
+    %choice_callee = adt.variant_get %some {type = !Choice, tag = @Some, field = 0} : !F
+    %choice_result = tribute_control.call_indirect %choice_callee, %tuple_result : core.i32
+    tribute_control.return %choice_result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert_eq!(
+            messages(&result).matches("callable provenance").count(),
+            2,
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !Canonical = adt.struct() {name = @Tuple, fields = [[@value, core.i32]]}
+  !Spoofed = adt.struct() {name = @Tuple, fields = [[@callee, !F]]}
+  !TupleRef = adt.typeref() {name = @Tuple}
+  tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 convention(direct) {
+    %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
+    %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        let diagnostics = messages(&result);
+        assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
+    }
+
+    #[test]
+    fn unreachable_nominal_layout_collision_does_not_affect_validation() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !UnusedStruct = adt.struct() {name = @Unused, fields = [[@value, core.i32]]}
+  !UnusedEnum = adt.enum() {name = @Unused, variants = [[@Value, [core.i32]]]}
+  tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn indirect_call_rejects_callable_from_unclassified_external() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  tribute_control.func @factory() -> !F convention(direct) attributes {abi = "C"}
+  tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
+    %callee = tribute_control.call {callee = @factory} : !F
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }
+}"#,
+        );
+
+        let result = validate(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("callable provenance"),
+            "{result}"
+        );
     }
 
     #[test]

@@ -173,7 +173,7 @@ impl IrContext {
 
     /// Take all collected diagnostics, leaving the internal buffer empty.
     pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-        self.diagnostics.get_mut().drain(..).collect()
+        std::mem::take(self.diagnostics.get_mut())
     }
 
     /// Return a reference to the collected diagnostics.

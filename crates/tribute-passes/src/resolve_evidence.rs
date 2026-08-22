@@ -112,7 +112,7 @@ fn final_handle_dispatch_shape(
         )));
     }
     let mut dispatcher_pairs = Vec::with_capacity(ability_refs.len());
-    for (ability_ref, pair) in ability_refs.iter().zip(dispatchers.chunks_exact(2)) {
+    for (ability_ref, pair) in ability_refs.iter().zip(dispatchers.as_chunks::<2>().0) {
         let Attribute::Type(ability_ref) = ability_ref else {
             return Err(error("every ability_refs entry must be a type".into()));
         };

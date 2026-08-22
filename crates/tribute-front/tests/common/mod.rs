@@ -108,6 +108,12 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         result.handler_operations.into_iter().collect();
     let perform_operations: std::collections::HashMap<_, _> =
         result.perform_operations.into_iter().collect();
+    let compiler_intrinsics = prelude
+        .as_ref()
+        .map(|prelude| {
+            tribute_front::ast_to_ir::registered_compiler_intrinsics(&prelude.typed_module)
+        })
+        .unwrap_or_default();
     let mut ir = IrContext::new();
     let module = tribute_front::ast_to_ir::TypedModule {
         ast: tdnr_ast,
@@ -122,12 +128,14 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         lambda_signatures: result.lambda_signatures.into_iter().collect(),
         exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
         well_known_types: result.well_known_types,
+        compiler_intrinsics,
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(
         &ir,
         module.module,
         &module.operation_declarations,
+        &module.compiler_intrinsics,
     );
     assert!(
         validation.is_ok(),

@@ -1864,18 +1864,34 @@ fn assert_sequential_performs_shape(function: &str) {
 fn assert_nested_argument_shape(function: &str) {
     assert_in_order(function, &["callee = @read", "callee = @add_one"]);
 }
+fn assert_exact_integer_addition(function: &str) -> &'static str {
+    let callee = ["callee = @\"Int::+\"", "callee = @\"Nat::+\""]
+        .into_iter()
+        .find(|callee| function.contains(callee))
+        .unwrap_or_else(|| {
+            panic!("missing exact integer intrinsic call in canonical IR:\n{function}")
+        });
+    assert_in_order(function, &["tribute_control.call", callee]);
+    assert!(
+        !function.contains("arith.addi"),
+        "source-logical lowering must preserve the exact intrinsic call instead of lowering by name:\n{function}"
+    );
+    callee
+}
 fn assert_indirect_lambda_shape(function: &str) {
+    let callee = assert_exact_integer_addition(function);
     assert_in_order(
         function,
         &[
             "tribute_control.lambda",
             "tribute_control.call_indirect",
-            "arith.addi",
+            callee,
         ],
     );
 }
 fn assert_case_arm_shape(function: &str) {
-    assert_in_order(function, &["scf.if", "callee = @read", "arith.addi"]);
+    let callee = assert_exact_integer_addition(function);
+    assert_in_order(function, &["scf.if", "callee = @read", callee]);
 }
 fn assert_short_circuit_shape(function: &str) {
     assert_in_order(function, &["scf.if", "callee = @read"]);
@@ -1949,16 +1965,14 @@ fn assert_nested_handle_shape(function: &str) {
     );
 }
 fn assert_resume_then_suffix_shape(function: &str) {
-    assert_in_order(function, &["tribute_control.resume", "arith.addi"]);
+    let callee = assert_exact_integer_addition(function);
+    assert_in_order(function, &["tribute_control.resume", callee]);
 }
 fn assert_resume_capture_shape(function: &str) {
+    let callee = assert_exact_integer_addition(function);
     assert_in_order(
         function,
-        &[
-            "tribute_control.lambda",
-            "tribute_control.resume",
-            "arith.addi",
-        ],
+        &["tribute_control.lambda", "tribute_control.resume", callee],
     );
 }
 fn assert_normalized_region_shape(function: &str) {

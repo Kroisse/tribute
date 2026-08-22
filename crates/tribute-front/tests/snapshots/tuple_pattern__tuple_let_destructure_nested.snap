@@ -8,6 +8,7 @@ core.module @test {
   !__logical_tuple_tuple_3_1_2_3_nat_23_tuple_3_1_2_3_nat_3_nat = adt.struct() {fields = [[@0, core.i32], [@1, !__logical_tuple_tuple_3_1_2_3_nat_3_nat_1]], name = @__logical_tuple_tuple_3_1_2_3_nat_23_tuple_3_1_2_3_nat_3_nat}
   !__logical_tuple_tuple_3_1_2_3_nat_23_tuple_3_1_2_3_nat_3_nat_1 = adt.typeref() {name = @__logical_tuple_tuple_3_1_2_3_nat_23_tuple_3_1_2_3_nat_3_nat}
 
+  tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @test() -> core.i32 convention(direct) {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
@@ -18,8 +19,8 @@ core.module @test {
       %6 = adt.struct_get %4 {field = 1, type = !__logical_tuple_tuple_3_1_2_3_nat_23_tuple_3_1_2_3_nat_3_nat} : !__logical_tuple_tuple_3_1_2_3_nat_3_nat_1
       %7 = adt.struct_get %6 {field = 0, type = !__logical_tuple_tuple_3_1_2_3_nat_3_nat} : core.i32
       %8 = adt.struct_get %6 {field = 1, type = !__logical_tuple_tuple_3_1_2_3_nat_3_nat} : core.i32
-      %9 = arith.addi %5, %7 : core.i32
-      %10 = arith.addi %9, %8 : core.i32
+      %9 = tribute_control.call %5, %7 {callee = @"Nat::+"} : core.i32
+      %10 = tribute_control.call %9, %8 {callee = @"Nat::+"} : core.i32
       tribute_control.return %10
   }
 }

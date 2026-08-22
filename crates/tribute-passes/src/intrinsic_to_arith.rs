@@ -5,7 +5,10 @@
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::rc::Rc;
 
+use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
@@ -28,11 +31,29 @@ use trunk_ir::types::Location;
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
     let intrinsic_map: HashMap<Symbol, ArithMapping> = pattern.map.clone();
+    let eligible: Rc<HashSet<Symbol>> = Rc::new(
+        module
+            .ops(ctx)
+            .into_iter()
+            .filter_map(|op| {
+                let function = func::Func::from_op(ctx, op).ok()?;
+                let symbol = function.sym_name(ctx);
+                (ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR) == Some(symbol)
+                    && intrinsic_map.get(&symbol).is_some_and(|mapping| {
+                        exact_signature(ctx, function.r#type(ctx), symbol, mapping)
+                    }))
+                .then_some(symbol)
+            })
+            .collect(),
+    );
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
     applicator = applicator
-        .add_pattern(pattern)
-        .add_pattern(ArithIntrinsicFuncDeclPattern { intrinsic_map });
+        .add_pattern(pattern.with_eligible(Rc::clone(&eligible)))
+        .add_pattern(ArithIntrinsicFuncDeclPattern {
+            intrinsic_map,
+            eligible,
+        });
     applicator.apply_partial(ctx, module);
 }
 
@@ -67,6 +88,7 @@ enum ArithMapping {
 /// rewrites them to the corresponding `arith.*` dialect operations.
 struct ArithIntrinsicPattern {
     map: HashMap<Symbol, ArithMapping>,
+    eligible: Rc<HashSet<Symbol>>,
 }
 
 impl ArithIntrinsicPattern {
@@ -169,7 +191,15 @@ impl ArithIntrinsicPattern {
         cmpf!("Float::>", "ogt");
         cmpf!("Float::>=", "oge");
 
-        Self { map }
+        Self {
+            map,
+            eligible: Rc::new(HashSet::new()),
+        }
+    }
+
+    fn with_eligible(mut self, eligible: Rc<HashSet<Symbol>>) -> Self {
+        self.eligible = eligible;
+        self
     }
 }
 
@@ -185,6 +215,9 @@ impl RewritePattern for ArithIntrinsicPattern {
         };
         let callee = call_op.callee(ctx);
 
+        if !self.eligible.contains(&callee) {
+            return false;
+        }
         let Some(mapping) = self.map.get(&callee) else {
             return false;
         };
@@ -222,6 +255,7 @@ impl RewritePattern for ArithIntrinsicPattern {
 /// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern {
     intrinsic_map: HashMap<Symbol, ArithMapping>,
+    eligible: Rc<HashSet<Symbol>>,
 }
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern {
@@ -235,15 +269,11 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
             return false;
         };
 
-        // Check if this function has abi = "intrinsic"
-        let attrs = &ctx.op(op).attributes;
-        let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
-        if !is_intrinsic {
-            return false;
-        }
-
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = func_op.sym_name(ctx);
+        if !self.eligible.contains(&sym_name) {
+            return false;
+        }
         let Some(mapping) = self.intrinsic_map.get(&sym_name) else {
             return false;
         };
@@ -311,6 +341,45 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
     }
 }
 
+fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &ArithMapping) -> bool {
+    let data = ctx.types.get(ty);
+    let [result, left, right] = data.params.as_slice() else {
+        return false;
+    };
+    if left != right {
+        return false;
+    }
+    let operand = ctx.types.get(*left);
+    let result = ctx.types.get(*result);
+    let operand_is_i32 =
+        operand.dialect == Symbol::new("core") && operand.name == Symbol::new("i32");
+    let operand_is_f64 =
+        operand.dialect == Symbol::new("core") && operand.name == Symbol::new("f64");
+    match mapping {
+        ArithMapping::BinaryOp(_) => {
+            result.dialect == operand.dialect
+                && result.name == operand.name
+                && symbol.with_str(|symbol| {
+                    if symbol.starts_with("Float::") {
+                        operand_is_f64
+                    } else {
+                        operand_is_i32
+                    }
+                })
+        }
+        ArithMapping::CmpI(_) => {
+            operand_is_i32
+                && result.dialect == Symbol::new("core")
+                && result.name == Symbol::new("i1")
+        }
+        ArithMapping::CmpF(_) => {
+            operand_is_f64
+                && result.dialect == Symbol::new("core")
+                && result.name == Symbol::new("i1")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,7 +394,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -365,7 +434,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"Int::=="(%0: core.i32, %1: core.i32) -> core.i1
-                    attributes {abi = "intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Int::=="} {
                 ^bb0:
                     func.unreachable
                 }
@@ -394,7 +463,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic"}
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
             }
         "#,
         );
@@ -407,7 +476,28 @@ mod tests {
     }
 
     #[test]
-    fn direct_calls_still_rewritten() {
+    fn same_identity_with_wrong_complete_signature_is_not_lowered() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+                ^bb0:
+                    func.unreachable
+                }
+            }
+        "#,
+        );
+
+        let before = print_module(&ctx, module.op());
+        lower_intrinsic_to_arith(&mut ctx, module);
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn same_spelled_unregistered_declaration_is_not_lowered() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -415,6 +505,32 @@ mod tests {
             core.module @test {
                 func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic"} {
+                ^bb0:
+                    func.return %0
+                }
+                func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
+                ^bb0:
+                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    func.return %2
+                }
+            }
+        "#,
+        );
+
+        let before = print_module(&ctx, module.op());
+        lower_intrinsic_to_arith(&mut ctx, module);
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn direct_calls_still_rewritten() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }

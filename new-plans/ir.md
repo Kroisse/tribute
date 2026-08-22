@@ -245,7 +245,9 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
 Named callable의 origin은 symbol이나 `abi` 문자열과 별개인 typed frontend
 metadata다. Source 정의는 body를 가진 Tribute callable이고, compiler intrinsic은
 canonical registry가 부여한 semantic identity와 완전한 logical signature를 함께
-가진다. Private runtime helper는 target stage에서만 physical signature로 만들며
+가진다. 등록된 compiler intrinsic의 logical callable convention은 항상 `Direct`이며,
+이 조건은 identity와 signature 대조와 함께 mutation 전에 검증한다. Private runtime
+helper는 target stage에서만 physical signature로 만들며
 source-logical `adt.typeref`를 받을 수 없다. 아직 별도 user FFI 계약이 없는 bodyless
 declaration은 managed semantic parameter나 result를 사용할 수 없다. Textual attribute,
 symbol spelling, 위치 또는 printed IR만으로 origin을 복구하거나 승격하지 않는다.
