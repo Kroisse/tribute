@@ -199,29 +199,51 @@ clif.store(%value, %ptr, offset=0)
 
 ## RC Pipeline
 
-The RC implementation is divided into three passes:
+The RC implementation is divided into four stages:
 
-### 1. RC Insertion Pass (PR 3)
+### 1. Typed ownership and RTTI plan
 
-**Location:** `tribute-passes/src/native/rc_insertion.rs`
+**Location:** `tribute-passes/src/native/ownership_plan.rs`
 
-**Purpose:** Insert `tribute_rt.retain` and `tribute_rt.release` operations
-based on SSA liveness analysis.
+검증된 typed native IR에서 immutable ownership plan을 만든다. 이 단계는 IR을
+변경하지 않으며 `func_to_clif`와 native type erasure보다 먼저 실행한다.
 
 **Algorithm:**
 
-1. **Liveness analysis** — determine last use of each SSA value
-2. **Ownership rules:**
-   - Function parameters: `retain` at entry block
-   - Return values: ownership transfer (no retain/release)
-   - Local allocations: refcount=1 at creation, `release` at last use
-   - Struct field loads: `retain` after load, `release` at last use
-   - Struct field stores: `release` old value before store
-   - Branch targets: `retain` for each successor path
+1. Exact semantic type과 callable contract로 managed value, field와 parameter
+   entry mode를 분류한다.
+2. SSA liveness로 entry, call, owning store/copy, borrowed load, final-use,
+   return과 proper-tail action을 정한다.
+3. 같은 typed predicate로 aggregate별 RTTI managed-field bitmap을 만든다.
+4. 모든 identity, signature, CFG, action target과 ordering을 검증한 뒤 하나의
+   deterministic plan을 반환한다.
 
-**Pointer detection:** Use `core::Ptr::from_type()` to identify RC-managed values.
+`adt.typeref`는 type 자체로 managed다. Native RC-header allocation을 표현하는
+검증된 internal ADT/closure layout과 `tribute_rt.anyref`/`intref`도 각자의 typed
+contract로 분류한다. Evidence, function/code address, borrowed buffer,
+`core.ptr`, `core.bytes`, `core.array`는 unmanaged다. 변환 결과가 pointer라는
+사실은 이 분류에 참여하지 않는다.
 
-### 2. RC Optimization Pass
+Residual structured region, stale nominal identity, malformed callable metadata,
+duplicate/conflicting action 또는 SSA remapping ambiguity는 plan 생성 전체를
+실패시킨다. 실패하기 전후의 input IR은 동일해야 한다.
+
+Representation rewrite가 allocation layout의 `TypeRef`를 바꾸면 해당 pass는
+exact source-target identity mapping을 반환한다. RTTI bitmap은 이 mapping으로만
+이동하며 dialect, name 또는 layout shape로 target을 다시 찾지 않는다.
+
+### 2. Explicit RC materialization
+
+**Location:** `tribute-passes/src/native/rc_insertion.rs`
+
+Typed plan의 action을 `tribute_rt.retain`과 `tribute_rt.release`로 materialize한
+뒤 managed type을 physical type으로 바꾼다. Materializer는 type이나 pointer
+provenance에서 action을 새로 발견하지 않는다. Duplicate owning destination마다
+별도 unit을 확보하고 proper-tail operand는 선택된 unit을 이전한다. 이전되지 않고
+죽는 값은 terminator 앞에서 release하며 proper-tail terminator 뒤에는 RC operation을
+둘 수 없다.
+
+### 3. RC Optimization Pass
 
 **Location:** `tribute-passes/src/native/rc_optimization.rs`
 
@@ -241,7 +263,7 @@ into control flow and atomic operations by RC lowering.
   is used, its uses are replaced with the original pointer before erasing the
   pair. This optimization does not cross basic-block boundaries or chase
   aliases.
-- **Borrowed parameter elision:** Before RC insertion, classify an `anyref`
+- **Borrowed parameter elision:** Typed planning에서 managed
   function parameter as borrowed only when every use is proven to remain within
   the dynamic extent of the call. Loads through the parameter, comparisons,
   and stores that use it only as the destination address are borrowed uses.
@@ -262,11 +284,10 @@ into control flow and atomic operations by RC lowering.
   For a proven borrowed parameter, RC insertion omits both the entry `retain`
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
-- **Temporary field borrows:** RC insertion may omit ownership acquisition and
-  release for an `anyref` result of `clif.load` when the load is proven to be a
-  field-derived temporary borrow. The analysis runs on lowered Clif, where an
-  `adt.struct_get` is represented by `clif.load`; it does not match
-  `adt.struct_get` directly.
+- **Temporary field borrows:** Typed planning은 `adt.struct_get` 또는
+  `adt.variant_get`의 exact declared managed field를 temporary borrow로 분류할 수
+  있다. 변환된 `clif.load` result type이나 address provenance를 ownership
+  evidence로 사용하지 않는다.
 
   The load address must resolve directly to an RC-managed owner, optionally
   through transparent unrealized pointer casts and address calculations. The
@@ -298,15 +319,10 @@ selected independently by the native pipeline options, not stored in an IR
 lowering context. Production enables proven optimizations; the baseline profile
 disables them for conformance comparisons.
 
-**Pipeline position:** Ownership summaries are computed before `func_to_clif`.
-Borrowed-parameter and temporary-field-borrow analysis run as independent parts
-of RC insertion before their respective RC operations are created. Temporary
-borrow lifetime dependencies extend owner liveness before insertion; parameter
-summary validation does not replace or bypass that dominance/lifetime analysis.
-Paired elimination runs immediately after RC insertion. All three decisions
-occur before unrealized cast resolution and RC lowering, which keeps alias
-handling conservative and makes the inserted and optimized RC boundaries
-directly observable in tests.
+**Pipeline position:** Typed ownership/RTTI planning은 `scf_to_cf` 뒤와
+`func_to_clif` 앞에서 실행한다. Temporary borrow lifetime dependency는 같은
+plan의 owner liveness를 연장한다. Explicit materialization 뒤 paired elimination을
+실행하고, 그 뒤 unrealized cast resolution과 RC lowering을 실행한다.
 
 #### Proper-tail ownership transfer
 
@@ -325,10 +341,10 @@ Each RC-managed physical parameter has one exact entry mode:
   entry retain, and the callee must eventually release, return, or proper-tail
   transfer that unit.
 
-Physically empty CPS callables use `consumed` for every parameter whose exact
-native conversion is RC-managed. Non-RC parameters have no RC action. This is
-a native callable contract, not a conclusion inferred by RC insertion from a
-name, operand type, body shape, or calling-convention integer alone.
+Physically empty CPS callables use `consumed` for every parameter selected by
+the typed managed-reference contract. Unmanaged parameters have no RC action.
+This is a native callable contract, not a conclusion inferred from a converted
+type, name, operand position, body shape, or calling-convention integer alone.
 
 An ordinary call to a consumed parameter acquires a new unit with `retain`
 immediately before the call, leaving the caller's existing unit live. A
@@ -346,71 +362,14 @@ are rejected. Dying RC values not transferred by the edge are released before
 the tail terminator. No RC operation may follow `clif.return_call` or
 `clif.return_call_indirect`.
 
-The native ownership producer runs after target-ABI validation and immediately
-before `func_to_clif`. It records versioned, positional parameter-entry and
-call-edge actions plus a fresh contract identity, and returns an opaque
-in-memory trust token. Direct edges must resolve one exact module-local symbol.
-Indirect edges additionally require the exact physical callable signature and
-explicit CPS provenance already carried by the transfer. `func_to_clif`
-preserves this metadata; RC insertion cross-checks it against the trust token
-after lowering. Textual metadata is never trusted.
+Native ownership plan은 module-local direct symbol과 complete signature를 정확히
+resolve한다. Indirect edge는 exact callable signature가 필요하고 proper tail은
+검증된 CPS provenance도 필요하다. Borrowed forwarding은 direct call graph의
+monotone fixed point이며 recursive SCC, external/indirect/unknown call과 escape는
+conservative retained ownership을 선택한다. 이 정보는 textual attribute가 아니라
+현재 `IrContext`의 `OpRef`/`ValueRef`를 가리키는 opaque in-memory plan이다.
 
-RC insertion validates the complete module before applying any mutation. Once
-that preflight succeeds, insertion planning has no remaining failure path.
-Missing, malformed, duplicate, external, stale, or inconsistent contracts; an
-indirect signature mismatch; and a tail operation that is not the final block
-operation all fail before mutation. The contract metadata is removed after
-successful consumption and does not become part of the emitted ABI.
-
-#### Trusted ownership summaries across `func_to_clif`
-
-Borrowed forwarding uses explicit pre-lowering metadata rather than rebuilding
-a call graph after `func` operations have been erased. Immediately before
-`func_to_clif`, the native pipeline computes a module-local summary for every
-defined function and stores it on `func.func` as the versioned
-`tribute.rc.parameter_ownership_v1` attribute. `func_to_clif` preserves this
-attribute unchanged on the corresponding `clif.func`; RC insertion is its only
-consumer. The producer also returns an opaque in-memory trust token containing
-the expected summaries. RC insertion requires that token and cross-checks every
-attribute against it, so textual metadata alone is never trusted.
-
-The attribute is a list with exactly one entry per function parameter. Each
-entry is the symbol `borrowed` or `owned`. A summary is trusted only when all of
-the following hold:
-
-- it was recomputed by the current native pipeline invocation, not merely found
-  on input IR;
-- its version, shape, and parameter count are exact;
-- its function symbol resolves uniquely to a module-local definition; and
-- the summarized parameter is still `tribute_rt.anyref` at RC insertion.
-
-Missing, malformed, stale, duplicate, or inconsistent metadata is ignored as a
-whole for that function. Ignored summaries mean every parameter is owned. This
-fail-closed rule also applies if lowering drops or changes the metadata.
-
-Summary computation is a monotone fixed point over the direct-call graph.
-Every `anyref` parameter starts `borrowed` and is demoted permanently to `owned`
-when a use escapes. Loads, pointer comparisons, destination-address stores, and
-transparent unrealized casts are local borrowed uses. Forwarding to parameter
-`i` of a uniquely resolved direct callee is borrowed only when that callee's
-entry `i` is borrowed. Return/tail calls, storing as a value, nested-region
-capture, indirect calls, external calls, unresolved calls, and unknown
-operations demote the parameter.
-
-Strongly connected components are solved to a fixed point, but recursive SCCs
-are not trusted for borrowed forwarding: all parameters participating in a
-direct or mutual recursive cycle are owned. This avoids circular proofs whose
-only evidence is the cycle itself. Acyclic direct-call chains can therefore
-propagate borrowed parameters transitively while recursion stays conservative.
-
-RC insertion consumes only summaries produced and validated by the current
-pipeline run. Its local parameter-use analysis still treats every call without
-a trusted borrowed callee entry as an unknown-call barrier. Summary validation
-and temporary-field-borrow analysis are independently selectable and compose:
-trusted forwarding may elide parameter ownership while dominance and lifetime
-dependencies separately govern field-derived temporaries.
-
-### 3. RC Lowering Pass (PR 4)
+### 4. RC Lowering Pass
 
 **Location:** `tribute-passes/src/native/rc_lowering.rs`
 

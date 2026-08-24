@@ -89,12 +89,14 @@ flowchart TB
     subgraph native_passes["tribute-passes/src/native/"]
         cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
-        rc_pass["RC insertion\nretain/release 삽입"]
+        cfg["structured control normalization\nscf_to_cf"]
+        rc_plan["typed ownership/RTTI plan\nsemantic type + CFG"]
+        rc_pass["explicit RC materialization\nretain/release 삽입"]
     end
 
     subgraph clif_passes["trunk-ir-cranelift-backend/passes/"]
         arith["arith_to_clif\narith.* → clif.iadd, clif.fadd, ..."]
-        scf["scf_to_clif\nscf.if → clif.brif + blocks"]
+        cf["cf_to_clif\ncf.* → clif.brif/jump + blocks"]
         adt["adt_to_clif\nadt.* → clif.load/store + malloc"]
         func["func_to_clif\nfunc.* → clif.func, clif.call, ..."]
         intrinsic["intrinsic_to_posix\nstd::intrinsics::posix → clif.call"]
@@ -109,8 +111,8 @@ flowchart TB
 
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
-    input --> cont --> list_lower --> rc_pass
-    rc_pass --> arith --> scf --> adt --> func --> intrinsic --> const_pass
+    input --> cont --> list_lower --> cfg --> rc_plan --> rc_pass
+    rc_pass --> arith --> cf --> adt --> func --> intrinsic --> const_pass
     const_pass --> validate --> codegen --> obj --> output
 ```
 
@@ -169,6 +171,12 @@ Private native runtime helper는 target stage에서 exact physical callable ABI�
 선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며
 `adt.typeref`를 사용할 수 없다. Source-logical managed reference와 private runtime
 pointer 사이의 경계는 이름, `abi` 문자열 또는 symbol 위치로 추론하지 않는다.
+
+Native ownership/RTTI plan은 `scf_to_cf` 뒤와 `func_to_clif` 앞에서 한 번 만들며
+IR을 변경하지 않는다. `adt.typeref`와 compiler-generated managed layout의 semantic
+type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release field와
+entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
+`core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
 ### ADT 메모리 레이아웃
 
