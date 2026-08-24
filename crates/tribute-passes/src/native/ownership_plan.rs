@@ -342,13 +342,8 @@ fn collect_and_validate_managed_layouts(
     let mut layouts = HashSet::new();
     let mut nominal_layouts: HashMap<Symbol, Vec<TypeRef>> = HashMap::new();
     let mut typerefs = HashSet::new();
-    for (ty, data) in ctx.types.iter() {
-        if data.dialect == Symbol::new("adt")
-            && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
-            && let Some(name) = data.attrs.get_symbol("name")
-        {
-            nominal_layouts.entry(name).or_default().push(ty);
-        }
+    for &(_, ty) in ctx.type_aliases() {
+        collect_type_contract(ctx, ty, &mut typerefs, &mut nominal_layouts);
     }
     walk_module(ctx, module, |op| {
         for &ty in ctx.op_result_types(op) {

@@ -762,6 +762,7 @@ fn plan_final_releases(
         if owned.contains(value)
             && !liveness.live_out[&block].contains(value)
             && !transferred.contains(value)
+            && !borrowed.contains_key(value)
         {
             dying.insert(*value);
         }

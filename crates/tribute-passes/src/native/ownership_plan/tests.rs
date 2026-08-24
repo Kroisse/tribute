@@ -6,6 +6,7 @@ use crate::native::rc_insertion::{
 use crate::native::type_converter::native_type_converter;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
+use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
 
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
@@ -145,6 +146,107 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
     assert_eq!(count(function, ActionKind::CopyAcquire), 1);
     assert_eq!(count(function, ActionKind::ReturnTransfer), 1);
     assert_eq!(count(function, ActionKind::FinalRelease), 0);
+}
+
+#[test]
+fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
+  !ChildRef = adt.typeref() {name = @Child}
+  !Choice = adt.enum() {name = @Choice, variants = [[@Some, [!ChildRef]]]}
+  !ChoiceRef = adt.typeref() {name = @Choice}
+  func.func @load(%choice: !ChoiceRef) -> !ChildRef {
+    %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
+    %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
+    %child = adt.variant_get %restored {type = !Choice, tag = @Some, field = 0} : !ChildRef
+    func.return %child
+  }
+}"#,
+    );
+    let function = plan.function(Symbol::new("load")).unwrap();
+    assert_eq!(function.entries(), [EntryOwnership::Borrowed]);
+    assert_eq!(count(function, ActionKind::BorrowLoad), 1);
+    assert_eq!(count(function, ActionKind::CopyAcquire), 1);
+    assert_eq!(count(function, ActionKind::ReturnTransfer), 1);
+    assert_eq!(count(function, ActionKind::FinalRelease), 0);
+
+    let mut projection = None;
+    walk_module(&ctx, module, |op| {
+        if adt::VariantGet::matches(&ctx, op) {
+            projection = Some(op);
+        }
+    });
+    let projection = projection.expect("variant projection");
+    for (key, invalid) in [
+        (
+            Symbol::new("tag"),
+            trunk_ir::Attribute::Symbol(Symbol::new("Missing")),
+        ),
+        (Symbol::new("field"), trunk_ir::Attribute::Int(1)),
+    ] {
+        let original = ctx
+            .op(projection)
+            .attributes
+            .get(key)
+            .expect("projection attribute")
+            .clone();
+        ctx.op_mut(projection).attributes.insert(key, invalid);
+        let before = print_module(&ctx, module.op());
+        assert!(build_native_ownership_plan(&ctx, module).is_err());
+        assert_eq!(print_module(&ctx, module.op()), before);
+        ctx.op_mut(projection).attributes.insert(key, original);
+    }
+}
+
+#[test]
+fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
+  !ChildRef = adt.typeref() {name = @Child}
+  !Box = adt.struct() {name = @Box, fields = [[@child, !ChildRef]]}
+  !BoxRef = adt.typeref() {name = @Box}
+  func.func @observe(%child: !ChildRef) -> core.i32 {
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @load(%child: !ChildRef) -> core.nil {
+    ^entry:
+      %owner = adt.struct_new %child {type = !Box} : !BoxRef
+      %loaded = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+      cf.br [^next]
+    ^next:
+      %seen = func.call %loaded {callee = @observe} : core.i32
+      func.return
+  }
+}"#,
+    );
+    let function = plan.function(Symbol::new("load")).unwrap();
+    let body = ctx.op(function.operation()).regions[0];
+    let [entry, next] = ctx.region(body).blocks.as_slice() else {
+        panic!("two-block fixture")
+    };
+    let owner = ctx.op_result(ctx.block(*entry).ops[0], 0);
+    let loaded = ctx.op_result(ctx.block(*entry).ops[1], 0);
+    let observe = ctx.block(*next).ops[0];
+
+    assert!(function.actions().iter().any(|action| {
+        action.kind == ActionKind::BorrowLoad
+            && action.value == loaded
+            && action.anchor == ActionAnchor::After(ctx.block(*entry).ops[1])
+    }));
+    assert!(
+        !function
+            .actions()
+            .iter()
+            .any(|action| { action.kind == ActionKind::FinalRelease && action.value == loaded })
+    );
+    assert!(function.actions().iter().any(|action| {
+        action.kind == ActionKind::FinalRelease
+            && action.value == owner
+            && action.anchor == ActionAnchor::After(observe)
+    }));
 }
 
 #[test]
@@ -345,6 +447,25 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
     func.return %wrong
   }
 }"#,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R) -> !R {
+    %result = func.call %value {callee = @missing} : !R
+    func.return %result
+  }
+}"#,
+        r#"core.module @test {
+  !ARef = adt.typeref() {name = @A}
+  !A = adt.struct() {name = @A, fields = [[@x, core.i32]]}
+  !BRef = adt.typeref() {name = @B}
+  !B = adt.struct() {name = @B, fields = [[@x, core.i32]]}
+  !Env = adt.struct() {name = @Env, fields = [[@value, !ARef]]}
+  func.func @f(%value: !BRef) -> core.nil {
+    %env = adt.struct_new %value {type = !Env} : !Env
+    func.return
+  }
+}"#,
     ] {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
@@ -352,6 +473,51 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         assert!(build_native_ownership_plan(&ctx, module).is_err());
         assert_eq!(print_module(&ctx, module.op()), before);
     }
+}
+
+#[test]
+fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R) -> !R { func.return %value }
+}"#,
+    );
+    let i64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let stale = ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("name", trunk_ir::Attribute::Symbol(Symbol::new("R")))
+            .attr(
+                "fields",
+                trunk_ir::Attribute::List(vec![trunk_ir::Attribute::List(vec![
+                    trunk_ir::Attribute::Symbol(Symbol::new("x")),
+                    trunk_ir::Attribute::Type(i64_ty),
+                ])]),
+            )
+            .build(),
+    );
+    assert!(ctx.type_alias_by_type(stale).is_none());
+    build_native_ownership_plan(&ctx, module)
+        .expect("an unreachable stale layout must not shadow the module declaration");
+
+    let mut ambiguous_ctx = IrContext::new();
+    let ambiguous = parse_test_module(
+        &mut ambiguous_ctx,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !First = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  !Second = adt.struct() {name = @R, fields = [[@x, core.i64]]}
+  func.func @f(%value: !R, %first: !First, %second: !Second) -> !R {
+    func.return %value
+  }
+}"#,
+    );
+    assert!(build_native_ownership_plan(&ambiguous_ctx, ambiguous).is_err());
 }
 
 #[test]
@@ -397,6 +563,8 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
 }"#,
     );
     let before = print_module(&ctx, module.op());
+    plan.validate_against(&ctx, module)
+        .expect("freshly built plan must validate");
     let [first, second] = plan.rtti_types() else {
         panic!("two exact RTTI layouts")
     };
@@ -437,6 +605,10 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let mut stale_function = plan.clone();
     stale_function.functions[0].operation = module.op();
     assert!(stale_function.validate_against(&ctx, module).is_err());
+
+    let mut stale_entry = plan.clone();
+    stale_entry.functions[0].entries[1] = EntryOwnership::Plain;
+    assert!(stale_entry.validate_against(&ctx, module).is_err());
     assert_eq!(print_module(&ctx, module.op()), before);
 }
 
