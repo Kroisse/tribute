@@ -390,8 +390,10 @@ fn merge_and_lower_to_ir_with<'db, M>(
         merged_call_callee_types,
         merged_ability_conventions,
         merged_span_map,
+        compiler_intrinsics,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
+        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(prelude_module_ast);
         let prelude_fn_types = prelude.function_types(db);
         let prelude_node_types = &prelude.expression_types(db).node_types;
         let prelude_call_callee_types = &prelude.expression_types(db).call_callee_types;
@@ -436,6 +438,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             call_callee_types,
             ability_conventions,
             merged_span_map,
+            compiler_intrinsics,
         )
     } else {
         let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
@@ -451,6 +454,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             call_callee_types,
             ability_conventions,
             user_span_map.clone(),
+            std::collections::HashMap::new(),
         )
     };
 
@@ -492,6 +496,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             lambda_signatures: mono_result.metadata.lambda_signatures,
             exhaustive_cases: mono_result.metadata.exhaustive_cases,
             well_known_types: typed.well_known_types(db),
+            compiler_intrinsics,
         },
         db,
         &mut ir,
@@ -2161,6 +2166,96 @@ fn main() {
                 "specialized List body must not retain generic intrinsic binders:\n{ast}"
             );
         });
+    }
+
+    #[salsa_test]
+    fn frontend_registers_only_compiler_owned_intrinsic_origins(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "intrinsic_origin.trb",
+            r#"
+extern "intrinsic" fn user_intrinsic(value: Int) -> Int
+
+fn comparison(left: Float, right: Float) -> Bool { left == right }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let (_, registered) = merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| {
+            typed.compiler_intrinsics
+        });
+
+        assert!(
+            registered
+                .values()
+                .any(|identity| *identity == trunk_ir::Symbol::new("Float::==")),
+            "canonical prelude intrinsic must retain exact identity"
+        );
+        assert!(
+            registered
+                .values()
+                .all(|identity| *identity != trunk_ir::Symbol::new("user_intrinsic")),
+            "user abi spelling must not register an intrinsic"
+        );
+
+        let (mut logical_ctx, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
+                typed.ast.decls.retain(|declaration| match declaration {
+                    tribute_front::ast::Decl::Module(module) => {
+                        module.name == trunk_ir::Symbol::new("Float")
+                    }
+                    tribute_front::ast::Decl::ExternFunction(declaration) => {
+                        declaration.name == trunk_ir::Symbol::new("user_intrinsic")
+                    }
+                    tribute_front::ast::Decl::Function(declaration) => {
+                        declaration.name == trunk_ir::Symbol::new("comparison")
+                    }
+                    _ => false,
+                });
+                typed.lower_to_ir(db, ir, uri)
+            });
+        let source_logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
+        assert!(
+            source_logical_ir.contains("tribute_control.call"),
+            "logical lowering must preserve the call for exact declaration-based lowering:\n{source_logical_ir}"
+        );
+        assert!(
+            !source_logical_ir.contains("arith.cmpf"),
+            "logical lowering must not trust an intrinsic name alone:\n{source_logical_ir}"
+        );
+        let validation = tribute_ir::dialect::tribute_control::validate(
+            &logical_ctx,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        );
+        assert!(validation.is_ok(), "{validation}");
+        tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
+            &mut logical_ctx,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        )
+        .unwrap();
+        let logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
+        assert!(
+            logical_ir.contains("tribute.compiler_intrinsic = @\"Float::==\""),
+            "verified identity must cross the logical boundary:\n{logical_ir}"
+        );
+        assert!(
+            !logical_ir.contains("tribute.compiler_intrinsic = @user_intrinsic"),
+            "source ABI spelling must remain untrusted logically:\n{logical_ir}"
+        );
+
+        let (ctx, module) =
+            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let converted = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(
+            converted.contains("tribute.compiler_intrinsic = @\"Float::==\""),
+            "verified identity must cross the current frontend boundary:\n{converted}"
+        );
+        assert!(
+            !converted.contains("tribute.compiler_intrinsic = @user_intrinsic"),
+            "unregistered source declaration must remain ordinary:\n{converted}"
+        );
     }
 
     #[salsa_test]

@@ -33,9 +33,10 @@ mod context;
 mod lower;
 mod normalize;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
-use tribute_ir::dialect::tribute_control::OperationDeclaration;
+use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
@@ -54,6 +55,94 @@ pub use context::IrLoweringCtx;
 pub struct FrontendIrModule {
     pub module: IrModule,
     pub operation_declarations: Vec<OperationDeclaration>,
+    pub compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
+}
+
+static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(|| {
+    [
+        "List::__tribute_list_prepend_intrinsic",
+        "Int::+",
+        "Int::-",
+        "Int::*",
+        "Int::/",
+        "Int::%",
+        "Int::==",
+        "Int::!=",
+        "Int::<",
+        "Int::<=",
+        "Int::>",
+        "Int::>=",
+        "Nat::+",
+        "Nat::-",
+        "Nat::*",
+        "Nat::/",
+        "Nat::%",
+        "Nat::==",
+        "Nat::!=",
+        "Nat::<",
+        "Nat::<=",
+        "Nat::>",
+        "Nat::>=",
+        "Float::+",
+        "Float::-",
+        "Float::*",
+        "Float::/",
+        "Float::==",
+        "Float::!=",
+        "Float::<",
+        "Float::<=",
+        "Float::>",
+        "Float::>=",
+    ]
+    .into_iter()
+    .map(Symbol::new)
+    .collect()
+});
+
+fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
+    SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
+}
+
+/// Register compiler intrinsics from the canonical prelude AST.
+///
+/// Callers must invoke this only for the compiler-owned prelude module.  A
+/// user module with the same declarations must never be passed here.
+pub fn registered_compiler_intrinsics<V>(module: &AstModule<V>) -> HashMap<NodeId, Symbol>
+where
+    V: salsa::Update,
+{
+    fn collect<V>(
+        declarations: &[crate::ast::Decl<V>],
+        prefix: &mut String,
+        result: &mut HashMap<NodeId, Symbol>,
+    ) where
+        V: salsa::Update,
+    {
+        for declaration in declarations {
+            match declaration {
+                crate::ast::Decl::ExternFunction(function)
+                    if function.abi == Symbol::new("intrinsic") =>
+                {
+                    let symbol = crate::qualified_symbol(prefix, function.name);
+                    if is_supported_compiler_intrinsic(symbol) {
+                        result.insert(function.id, symbol);
+                    }
+                }
+                crate::ast::Decl::Module(module) => {
+                    if let Some(body) = &module.body {
+                        let saved = crate::push_prefix(prefix, module.name);
+                        collect(body, prefix, result);
+                        prefix.truncate(saved);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut result = HashMap::new();
+    collect(&module.decls, &mut String::new(), &mut result);
+    result
 }
 
 /// Policy for compiler-generated identity done continuations.
@@ -110,6 +199,8 @@ pub struct TypedModule<'db> {
     /// Case expressions whose source coverage is known to be exhaustive.
     pub exhaustive_cases: std::collections::HashSet<NodeId>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
+    /// Exact declaration IDs registered from the compiler-owned prelude.
+    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
 }
 
 impl<'db> TypedModule<'db> {
@@ -151,6 +242,14 @@ mod tests {
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    #[test]
+    fn compiler_intrinsic_registry_is_explicit() {
+        assert!(is_supported_compiler_intrinsic(Symbol::new("Float::==")));
+        assert!(!is_supported_compiler_intrinsic(Symbol::new(
+            "user_intrinsic"
+        )));
     }
 
     #[test]

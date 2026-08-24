@@ -138,6 +138,8 @@ pub struct IrLoweringCtx<'db> {
     /// are built. This lets recursive and forward fields retain `adt.typeref`
     /// while their layout is still incomplete.
     logical_nominal_declarations: HashSet<Symbol>,
+    /// Exact compiler-owned prelude declaration ID to intrinsic identity.
+    compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Counter for generating unique prompt tags (per-module deterministic).
     prompt_tag_counter: u32,
     /// Stack of active prompt tags for nested handlers.
@@ -200,6 +202,7 @@ impl<'db> IrLoweringCtx<'db> {
             struct_fields: HashMap::new(),
             type_map: im::HashMap::new(),
             logical_nominal_declarations: HashSet::new(),
+            compiler_intrinsics: HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
 
@@ -216,6 +219,18 @@ impl<'db> IrLoweringCtx<'db> {
         debug_assert!(self.generated_functions.normal_done_k.is_none());
         self.options = options;
         self
+    }
+
+    pub(crate) fn with_compiler_intrinsics(
+        mut self,
+        compiler_intrinsics: HashMap<NodeId, Symbol>,
+    ) -> Self {
+        self.compiler_intrinsics = compiler_intrinsics;
+        self
+    }
+
+    pub(crate) fn compiler_intrinsic(&self, declaration: NodeId) -> Option<Symbol> {
+        self.compiler_intrinsics.get(&declaration).copied()
     }
 
     /// Get the current module path.

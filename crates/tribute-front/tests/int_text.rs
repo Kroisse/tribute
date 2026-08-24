@@ -170,6 +170,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
         well_known_types: checked.well_known_types(db),
+        compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
@@ -239,6 +240,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
         well_known_types: checked.well_known_types(db),
+        compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
@@ -287,6 +289,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
         exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
         well_known_types: checked.well_known_types(db),
+        compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations = &output.operation_declarations;
@@ -357,8 +360,12 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             (Symbol::new("core"), Symbol::new("i1"))
         );
     }
-    let validation =
-        tribute_ir::dialect::tribute_control::validate(&ir, output.module, declarations);
+    let validation = tribute_ir::dialect::tribute_control::validate(
+        &ir,
+        output.module,
+        declarations,
+        &output.compiler_intrinsics,
+    );
     assert!(
         validation.is_ok(),
         "public logical frontend output must pass complete validation: {validation}"

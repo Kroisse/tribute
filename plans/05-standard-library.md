@@ -207,7 +207,7 @@ mod List {
 1. **Ability-first**: I/O and errors expressed as abilities
 2. **Explicit effects**: Effects visible in types
 3. **Handler composability**: Various execution strategies via handler composition
-4. **GC-managed memory**: No explicit memory management required
+4. **Compiler-managed memory**: No explicit source-level memory management required
 5. **Persistent by default**: Collections use persistent data structures
 
 ## Success Criteria

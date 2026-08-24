@@ -36,12 +36,13 @@ core.module @test {
       %4 = adt.struct_new %2, %3, %1 {type = !Triple_1} : !Triple
       tribute_control.return %4
   }
+  tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @"Triple::sum"(%0: !Triple) -> core.i32 convention(direct) {
       %1 = tribute_control.call %0 {callee = @"Triple::x"} : core.i32
       %2 = tribute_control.call %0 {callee = @"Triple::y"} : core.i32
-      %3 = arith.addi %1, %2 : core.i32
+      %3 = tribute_control.call %1, %2 {callee = @"Nat::+"} : core.i32
       %4 = tribute_control.call %0 {callee = @"Triple::z"} : core.i32
-      %5 = arith.addi %3, %4 : core.i32
+      %5 = tribute_control.call %3, %4 {callee = @"Nat::+"} : core.i32
       tribute_control.return %5
   }
   tribute_control.func @test(%0: !Pair) -> core.i32 convention(direct) {

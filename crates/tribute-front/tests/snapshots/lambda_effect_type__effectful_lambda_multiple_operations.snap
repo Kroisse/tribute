@@ -28,11 +28,12 @@ core.module @test {
       }
       tribute_control.return %1
   }
+  tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_export_convention = 0, tribute.root_source_result = core.i32} {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.perform {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get, operation_kind = @op} : core.i32
           %2 = arith.const {value = 1} : core.i32
-          %3 = arith.addi %1, %2 : core.i32
+          %3 = tribute_control.call %1, %2 {callee = @"Nat::+"} : core.i32
           %4 = tribute_control.perform %3 {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @set, operation_kind = @op} : core.nil
           tribute_control.return %1
       }

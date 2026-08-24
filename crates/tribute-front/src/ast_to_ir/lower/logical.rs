@@ -10,7 +10,7 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::{
     list,
-    tribute_control::{self, OperationDeclaration},
+    tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration},
 };
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
@@ -34,6 +34,7 @@ struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
+    compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
     schemas: std::collections::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     handler_operations: std::collections::HashMap<
         crate::ast::NodeId,
@@ -152,6 +153,7 @@ pub(super) fn lower_module<'db>(
         lambda_signatures,
         exhaustive_cases,
         well_known_types,
+        compiler_intrinsics,
     } = typed;
     let location = Location::new(path, span_map.get_or_default(ast.id));
     let module_name = ast.name.unwrap_or_else(|| Symbol::new("main"));
@@ -163,7 +165,8 @@ pub(super) fn lower_module<'db>(
         ability_conventions,
         smallvec::smallvec![module_name],
         node_types,
-    );
+    )
+    .with_compiler_intrinsics(compiler_intrinsics);
     let module_block = ir.create_block(BlockData {
         location,
         args: vec![],
@@ -173,6 +176,7 @@ pub(super) fn lower_module<'db>(
     ctx.set_module_block(module_block);
     let mut declarations = Declarations {
         values: vec![],
+        compiler_intrinsics: vec![],
         schemas: ability_definitions,
         handler_operations,
         perform_operations,
@@ -207,6 +211,7 @@ pub(super) fn lower_module<'db>(
     FrontendIrModule {
         module: IrModule::new(ir, module.op_ref()).expect("valid core.module operation"),
         operation_declarations: declarations.values,
+        compiler_intrinsics: declarations.compiler_intrinsics,
     }
 }
 
@@ -319,7 +324,7 @@ fn lower_decl<'db>(
 ) {
     match declaration {
         Decl::Function(function) => lower_function(ctx, ir, top, function, declarations),
-        Decl::ExternFunction(function) => lower_extern(ctx, ir, top, function),
+        Decl::ExternFunction(function) => lower_extern(ctx, ir, top, function, declarations),
         Decl::Struct(declaration) => lower_struct_accessors(ctx, ir, top, declaration),
         Decl::Module(module) => {
             if let Some(body) = module.body {
@@ -752,6 +757,7 @@ fn lower_extern<'db>(
     ir: &mut IrContext,
     top: BlockRef,
     decl: ExternFuncDecl,
+    declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(decl.id);
     let qualified = ctx.qualify_name(decl.name);
@@ -775,6 +781,18 @@ fn lower_extern<'db>(
     );
     let name = ctx.qualify_name(decl.name);
     let function = tribute_control::func_declaration(ir, location, name, callable);
+    if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
+        ir.op_mut(function.op_ref()).attributes.insert(
+            Symbol::new(tribute_control::COMPILER_INTRINSIC_ATTR),
+            Attribute::Symbol(identity),
+        );
+        declarations
+            .compiler_intrinsics
+            .push(CompilerIntrinsicDeclaration::new(name, identity, callable));
+        declarations
+            .compiler_intrinsics
+            .sort_by_key(|declaration| (declaration.symbol, declaration.identity));
+    }
     ir.op_mut(function.op_ref())
         .attributes
         .insert(Symbol::new("abi"), Attribute::String(decl.abi.to_string()));
@@ -1710,15 +1728,6 @@ fn lower_call<'db>(
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Function { id } => {
-                if let Some(value) = lower_arith_intrinsic(
-                    builder,
-                    location,
-                    id.qualified(builder.ctx.db),
-                    &values,
-                    result_ty,
-                ) {
-                    return Some(value);
-                }
                 let name = id.qualified(builder.ctx.db);
                 let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
                     .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
@@ -1807,35 +1816,6 @@ fn lower_call<'db>(
         let value = result(builder.ir, call);
         Some(builder.cast_if_needed(location, value, result_ty))
     }
-}
-
-fn lower_arith_intrinsic<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    location: Location,
-    name: Symbol,
-    values: &[ValueRef],
-    result_ty: TypeRef,
-) -> Option<ValueRef> {
-    let [lhs, rhs] = values else {
-        return None;
-    };
-    let name = name.to_string();
-    let op = match name.as_str() {
-        "Int::+" | "Nat::+" => arith::addi(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Int::-" | "Nat::-" => arith::subi(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Int::*" | "Nat::*" => arith::muli(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Int::/" => arith::divsi(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Nat::/" => arith::divui(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Int::%" => arith::remsi(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Nat::%" => arith::remui(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Float::+" => arith::addf(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Float::-" => arith::subf(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Float::*" => arith::mulf(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        "Float::/" => arith::divf(builder.ir, location, *lhs, *rhs, result_ty).op_ref(),
-        _ => return None,
-    };
-    builder.ir.push_op(builder.block, op);
-    Some(result(builder.ir, op))
 }
 
 fn lower_lambda<'db>(

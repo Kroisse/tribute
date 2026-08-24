@@ -47,7 +47,7 @@ fn describe(value: Option(Int)) -> Text {
     }
 }
 
-// Post-M1 illustrative List algorithms; M1은 이 API를 보장하지 않는다.
+// Illustrative List algorithms; 별도 public API 절에서 확정되기 전까지 예시다.
 // UFCS 체이닝 (인자 없으면 괄호 생략)
 fn process(data: List(Int)) -> Int {
     data
@@ -99,7 +99,7 @@ pub mod Option {
     pub fn map(value: Option(a), f: fn(a) -> b) -> Option(b) { ... }
 }
 
-// M1 List construction과 UFCS 사용
+// List construction과 UFCS 사용
 let xs = [1, 2, 3]
 let prefixed = List::prepend(0, xs)
 let option = Option::Some(1)
@@ -107,11 +107,11 @@ let mapped = option.map(fn(x) x + 1)  // Option::map(option, ...) 로 해석
 ```
 
 `List(a)`는 compiler-owned canonical identity를 가진 opaque nominal immutable
-persistent sequence다. `[]`와 `[a, b, c]`가 유일한 M1 construction syntax이며,
-원소 표현식은 왼쪽에서 오른쪽으로 정확히 한 번 평가된다. `Empty`/`Cons` 같은
-representation constructor는 source API가 아니다. List의 shared IR operation과
-source-visible observation은 sequence 의미만 표현하고, native와 Wasm backend는 서로
-다른 private layout을 선택할 수 있다.
+persistent RRB tree다. List literal과 canonical persistent operation은 원소 표현식을
+왼쪽에서 오른쪽으로 정확히 한 번 평가한다. `Empty`/`Cons` 같은 representation
+constructor나 RRB node shape은 source API가 아니다. List의 shared IR operation과
+source-visible observation은 sequence 의미만 표현하고, native와 Wasm backend는 같은
+RRB invariant를 만족하는 target-private physical layout을 사용한다.
 
 ---
 
@@ -383,12 +383,8 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 ### 구현
 
-- [libmprompt](https://github.com/koka-lang/libmprompt) -
-  Delimited continuation 런타임
 - [Binaryen](https://github.com/WebAssembly/binaryen) - WasmGC 최적화
 - [Cranelift](https://cranelift.dev/) - 네이티브 코드 생성
-- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) -
-  Continuation proposal
 
 ### 논문
 

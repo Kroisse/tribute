@@ -64,19 +64,21 @@ hand-written or text-round-tripped IR from silently selecting a user lookalike.
 ### Private List layout
 
 The native backend must eliminate shared `list.*` operations before the
-backend-ready boundary. M1 may use a private immutable singly linked node:
+backend-ready boundary. It lowers them to a private immutable RC-managed RRB
+tree. A representative physical shape is:
 
 ```text
-empty       = null
-non-empty   = RC object [element, tail]
+root          = RC object [length, depth, root_node, tail_leaf]
+internal node = RC object [child_count, cumulative_sizes, children...]
+leaf node     = RC object [element_count, elements...]
 ```
 
-This is a target-private lowering choice, not an `adt.enum List` contract.
-Frontend/shared IR never names node fields or `Empty`/`Cons`. Node allocation
-uses the standard RC header, RTTI, retain/release insertion, and deep-release
-path. A node owns reference-typed elements and its tail; tail observation
-preserves order and persistence. Later replacement with an RRB representation
-must not require source or shared-IR changes.
+The exact branching factor, packing, and empty sentinel are target-private and
+are not an `adt.enum List` contract. Frontend/shared IR never names RRB node
+fields. Node allocation uses the standard RC header, RTTI, retain/release
+insertion, and deep-release path. Internal nodes own their children and leaves
+own reference-typed elements. Sequence observations preserve order and
+persistence without exposing this layout.
 
 ### Native 타겟
 
@@ -162,6 +164,11 @@ ability 연산을 handler_dispatch 클로저 호출로 변환한다.
 ## 메모리 관리: Reference Counting
 
 상세 내용은 [implementation.md](implementation.md#cranelift-reference-counting)를 참조.
+
+Private native runtime helper는 target stage에서 exact physical callable ABI로만
+선언한다. 이 helper의 parameter와 result는 `core.ptr` 또는 scalar physical type이며
+`adt.typeref`를 사용할 수 없다. Source-logical managed reference와 private runtime
+pointer 사이의 경계는 이름, `abi` 문자열 또는 symbol 위치로 추론하지 않는다.
 
 ### ADT 메모리 레이아웃
 

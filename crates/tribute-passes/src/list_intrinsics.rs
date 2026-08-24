@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use tribute_ir::dialect::list;
+use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -54,7 +55,17 @@ impl Pass for LowerListIntrinsics {
             let name = function.sym_name(ctx);
             intrinsic_declarations.all.insert(name);
             if is_prepend_intrinsic(name)
-                && ctx.op(op).attributes.get_str("abi") == Some("intrinsic")
+                && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
+                    == Some(Symbol::new(PREPEND_INTRINSIC))
+                && {
+                    let data = ctx.types.get(function.r#type(ctx));
+                    matches!(data.params.as_slice(), [result, element, tail]
+                    if [result, element, tail].into_iter().all(|ty| {
+                        let data = ctx.types.get(*ty);
+                        data.dialect == Symbol::new("tribute_rt")
+                            && data.name == Symbol::new("anyref")
+                    }))
+                }
             {
                 intrinsic_declarations.eligible.insert(name);
             }
@@ -162,7 +173,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -221,7 +232,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
+                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
+                    attributes {tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.return %0
                 }
@@ -253,7 +265,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }

@@ -15,7 +15,7 @@ The native backend uses **reference counting** for heap-allocated objects
 - **libc only** — depends solely on `malloc`/`free` (via allocator indirection)
 - **Dialect-based** — RC operations are `tribute_rt.retain`/`tribute_rt.release`
   dialect ops, lowered to inline code
-- **Phased rollout** — Phase 3a (shallow), 3b (deep release), 4 (continuations)
+- **Typed planning** — ownership and RTTI decisions precede type erasure
 
 ## Allocator Interface
 
@@ -57,7 +57,7 @@ with user code and to clearly mark compiler-generated functions.
 
 ## Memory Layout
 
-### Object Header (Phase 3a+)
+### Object Header
 
 Every heap-allocated RC object has an 8-byte header prepended before the
 payload. Compiled code always sees the pointer at offset 0 (first field);
@@ -68,10 +68,6 @@ header access uses `ptr - 8`.
 [-4] rtti_idx: u32   — runtime type info index
 [ 0] payload...      — first field (naturally aligned)
 ```
-
-> **Current state (pre-RC):** Struct allocation via `adt_to_clif` and
-> boxing via `tribute_rt_to_clif` do NOT include the header yet. The
-> header will be added when the RC insertion pass (PR 3) lands.
 
 ### Struct Layout
 
@@ -96,13 +92,13 @@ Boxed primitives are the simplest heap objects — just the raw value:
 
 ### Private native List nodes
 
-The M1 native `List(a)` representation may use the ordinary RC object header
-with a target-private immutable payload `[element, tail]`; empty is a private
-null sentinel. A non-empty node owns every reference-typed field, including its
-tail. Sequence observation may borrow fields transiently, but a tail that
-escapes the observation or outlives the original list must be retained by the
-normal ownership rules. The representation is replaceable and is not visible
-as public `Empty`/`Cons` constructors or shared-IR field indices.
+The native `List(a)` representation uses immutable RRB nodes with the ordinary
+RC object header. Internal nodes own their child references, leaves own their
+reference-typed elements, and the root owns the reachable tree. Sequence views
+may borrow nodes transiently, but a view that escapes or outlives the original
+root must retain the referenced structure under the normal ownership rules.
+Branching factor, node packing, and the empty representation are target-private
+and are not visible as source constructors or shared-IR field indices.
 
 ---
 
@@ -120,15 +116,32 @@ These are dialect-level operations that will be:
 1. **Inserted** by the RC insertion pass (SSA-based liveness analysis)
 2. **Lowered** to inline code by the RC lowering pass
 
-### Inline Lowering (Phase 3a)
+Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
+managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
+operand position 또는 pointer provenance로 managed 성질을 얻을 수 없다.
+`adt.ref_null`은 nominal managed reference type의 null 값이고, 생성된 retain과
+release는 이 값에 대해 no-op이어야 한다. Callable과 managed-reference validation은
+ownership plan 또는 IR mutation이 이 분류를 사용하기 전에 완료된다.
+
+Type erasure가 managed reference를 `core.ptr`로 바꾼 뒤에는 pointer type 자체가
+ownership을 증명하지 않는다. Pre-erasure ownership plan이 물리 IR에 명시적으로
+materialize한 `tribute_rt.retain`과 `tribute_rt.release`만 RC 의미를 보존한다. 따라서
+이 operation의 `core.ptr` operand가 RC allocation을 가리킬 수 있다는 사실과
+`core.ptr` 자체가 unmanaged라는 규칙은 모순되지 않는다.
+
+### Inline Lowering
 
 ```text
 // tribute_rt.retain(ptr):
+if ptr == null:
+    return ptr
 refcount = load(ptr - 8)
 refcount = refcount + 1
 store(refcount, ptr - 8)
 
 // tribute_rt.release(ptr):
+if ptr == null:
+    return
 refcount = load(ptr - 8)
 refcount = refcount - 1
 store(refcount, ptr - 8)
@@ -136,8 +149,10 @@ if refcount == 0:
     call @__tribute_dealloc(ptr - 8, size + 8)
 ```
 
-Phase 3b will replace the simple dealloc with type-specific destructors
-via RTTI dispatch.
+The abbreviated sequence above omits type-specific field destruction. Every
+complete retain and release path returns for a null managed reference before
+accessing its header, refcount, or RTTI. The complete release path uses RTTI
+dispatch as described below.
 
 ---
 
@@ -406,6 +421,7 @@ dependencies separately govern field-derived temporaries.
 
 ```text
 tribute_rt.retain(ptr) ->
+    if ptr == null: return ptr
     %rc_addr = clif.iadd(ptr, clif.iconst(-8))
     %rc = clif.load(%rc_addr)
     %new_rc = clif.iadd(%rc, clif.iconst(1))
@@ -413,6 +429,7 @@ tribute_rt.retain(ptr) ->
     // result: ptr (unchanged)
 
 tribute_rt.release(ptr) ->
+    if ptr == null: jump continue_block
     %rc_addr = clif.iadd(ptr, clif.iconst(-8))
     %rc = clif.load(%rc_addr)
     %new_rc = clif.isub(%rc, clif.iconst(1))
@@ -434,40 +451,27 @@ continue_block:
 
 ---
 
-## Phasing
+## Ownership and Lowering Order
 
-RC is implemented in three phases:
+RC lowering follows a semantic-to-physical order:
 
-### Phase 3a: Shallow Free (Current PR + Next PR)
+1. Validate callable origins and managed-reference boundaries on typed IR.
+2. Compute ownership actions and RTTI field information while `adt.typeref`
+   identity is still available.
+3. Materialize explicit `tribute_rt.retain` and `tribute_rt.release` operations.
+4. Erase managed references to `core.ptr` and lower the explicit RC operations
+   to physical refcount updates and type-specific destruction.
 
-**Goal:** Basic RC infrastructure without deep release.
+No later pass may reconstruct managedness from a raw pointer, symbol spelling,
+ABI marker, operand position, or erased provenance. A shallow release may be
+used only as an explicitly documented intermediate implementation stage; the
+semantic contract requires type-specific release of owned managed fields.
 
-**Components:**
+### Type-specific release
 
-- ✅ **PR 1:** Allocator indirection (`__tribute_alloc`, `__tribute_dealloc`)
-- ✅ **PR 2:** Boxing/unboxing + `retain`/`release` ops (this PR)
-- ⏳ **PR 3:** RC insertion pass (SSA-based liveness)
-- ⏳ **PR 4:** RC lowering pass (inline refcount ops)
-
-**State after Phase 3a:**
-
-- All heap objects have 8-byte headers (refcount + rtti_idx)
-- Boxing/unboxing work for primitives
-- `retain`/`release` inserted and lowered to inline code
-- **Limitation:** `release` only does shallow free (no recursive release of fields)
-- Leak detection: Use Valgrind/AddressSanitizer to verify no double-frees
-
-### Phase 3b: Deep Release (Deferred)
-
-**Goal:** Recursive release of pointer fields.
-
-**New components:**
-
-- **Type-specific release functions:** Compiler generates
-  `__tribute_release_T(ptr)` for each struct type
-- **RTTI table:** Maps `rtti_idx` to release function pointer
-- **Deep release logic:** Release function calls `tribute_rt.release` on
-  pointer fields before dealloc
+The compiler generates a release function for each managed aggregate type. When
+the refcount reaches zero, RTTI dispatch selects that function, which releases
+owned managed fields before deallocating the object.
 
 **Example (struct with pointer field):**
 
@@ -487,6 +491,8 @@ __tribute_release_Point(ptr):
 
 ```text
 tribute_rt.release(ptr) ->
+    if ptr == null:
+        return
     %rc = decrement_refcount(ptr)
     if %rc == 0:
         %rtti_idx = load(ptr - 4)
@@ -494,96 +500,19 @@ tribute_rt.release(ptr) ->
         call %release_fn(ptr)
 ```
 
-### Phase 4a: Continuation RC Protection (Implemented)
+### Continuation ownership
 
-**Goal:** Prevent use-after-free when handlers release RC pointers that
-live across `mp_yield` boundaries.
+Tail-call CPS represents a continuation as a typed closure with an explicit
+ContinuationFrame. Capturing a managed value into that frame creates an
+independent owned reference and therefore materializes a retain. Destroying an
+unresumed one-shot continuation releases every owned frame field through the
+ordinary type-specific destructor. Resuming transfers the frame-owned values
+according to the continuation callable contract.
 
-**Problem:** When `mp_yield` captures a continuation, the stack segment is
-copied to the heap. If the handler releases a pointer that was live on the
-captured stack, resuming the continuation accesses freed memory.
-
-**Solution — three components:**
-
-1. **`insert_rc` extension (Phase 2.8):** At each `__tribute_yield` call site,
-   inserts extra `retain` for all live RC pointers before yield, and matching
-   `release` after yield returns (resume path). Also stores the RC roots in
-   TLS via `__tribute_yield_set_rc_roots`.
-
-2. **`TributeContinuation` wrapper (runtime):** Opaque wrapper around the raw
-   `mp_resume` pointer that carries an array of `RcRoot` captured at
-   yield time. Created by `__tribute_cont_wrap_from_tls`.
-
-3. **`cont_rc` rewrite pass (Phase 2.85):** Wraps raw resume pointers by
-   inserting `__tribute_cont_wrap_from_tls` after each
-   `__tribute_get_yield_continuation()`. The existing `__tribute_resume`
-   and `__tribute_resume_drop` functions accept the wrapped
-   `TributeContinuation*` directly.
-
-**RC flow:**
-
-```text
-Before yield:  retain(ptr)     → refcount + 1 (capture protection)
-               store ptr in TLS RC roots
-               __tribute_yield(...)
-
-Resume path:   yield returns
-               release(ptr)    → refcount - 1 (cancel extra retain)
-               body continues with normal release path
-
-Drop path:     __tribute_resume_drop(wrapped_k)
-               runtime: release each rc_root → refcount - 1
-               runtime: mp_resume_drop → discard captured stack
-```
-
-**Drop path cleanup (Phase 4b):** On the drop path, the body's normal
-`release` calls do not execute (the captured stack is discarded). Phase 4b
-mitigates this via double `release_deep` per RC root in
-`__tribute_resume_drop`: the first cancels the extra retain, the
-second replaces the body's missing normal release.
-
-### Phase 4b: Continuation Cleanup on Drop Path (Implemented)
-
-**Goal:** Eliminate resource leaks on the drop path when a captured
-continuation is discarded without being resumed.
-
-**Two problems solved:**
-
-1. **Roots buffer leak:** The temporary roots array (heap-allocated by
-   `insert_rc` via `__tribute_alloc`) was freed only on the resume path
-   by post-yield `__tribute_dealloc`, but leaked on the drop path.
-   **Fix:** `__tribute_cont_wrap_from_tls` now frees the original buffer
-   after copying its contents. The post-yield dealloc was removed to
-   prevent double-free.
-
-2. **Lost normal releases:** When `mp_resume_drop` discards a captured
-   continuation, the body's remaining `release` calls never execute,
-   leaking objects. **Fix:** `__tribute_resume_drop` now performs
-   **two** deep releases per RC root:
-   - 1st: cancel the extra retain (refcount N+1 → N)
-   - 2nd: replace the body's missing normal release (refcount N → N-1)
-
-**Implementation details:**
-
-- **Roots array layout changed** from `[ptr, ...]` (8 bytes/entry) to
-  `[(ptr, alloc_size), ...]` (16 bytes/entry). The `alloc_size` is
-  determined at compile time by `infer_alloc_size()`.
-
-- **`RcRoot` struct** replaces `RcObject` in the runtime:
-  `RcRoot { ptr: NonNull<u8>, alloc_size: u64 }`
-
-- **`__tribute_deep_release`** is now exported (`Linkage::Export`) from
-  compiled code, allowing the runtime to call it for RTTI-dispatched
-  recursive field release when refcount reaches 0.
-
-- **`release_deep()`**: decrements refcount; if 0, calls
-  `__tribute_deep_release(ptr, alloc_size)` for full cleanup.
-
-**Known limitation:** When `infer_alloc_size()` returns 0 (e.g., for block
-arguments with unknown provenance), the deep release's shallow path calls
-`__tribute_dealloc(raw, 0)` which is a no-op — the object leaks. This is
-the same constraint as normal release paths. Adding size info to the RTTI
-table would fix this (separate future work).
+There is no stack-copying continuation runtime, TLS root buffer, `mp_yield`, or
+special double-release protocol. Proper-tail lowering emits releases for dying,
+non-transferred values before `func.tail_call` or
+`func.tail_call_indirect`; no RC operation may follow the tail terminator.
 
 ---
 
@@ -613,10 +542,7 @@ static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
   - `2` = boxed i32 (Bool/Nat)
   - `3+` = user-defined structs/enums
 
-**Phase 3a behavior:** `rtti_idx` is recorded but not used (all objects
-use shallow free).
-
-**Phase 3b behavior:** `release` dispatch via RTTI table for deep release.
+`release` uses the stored RTTI index to select the type-specific destructor.
 
 ---
 
@@ -689,6 +615,5 @@ for both sides of the optimization comparison.
 
 - **Cycle detection:** Weak references? Tracing GC fallback?
 - **Thread-safety:** Atomic refcount for multi-threaded code?
-- **Continuation cleanup:** ~~Phase 4b cleanup functions for drop-path leaks~~ (implemented)
 - **FFI boundaries:** How to handle RC objects at C FFI boundaries?
 - **Optimization:** Compile-time escape analysis to elide RC?

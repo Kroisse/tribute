@@ -11,9 +11,9 @@
 | 의미론 | 동적 (호출 시점 핸들러) | 정적 (생성 시점 캡처) |
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
-| Polymorphic 함수 | Evidence 전달 | Monomorphization, 전면 CPS |
+| Polymorphic 함수 | Monomorphization + 필요한 Evidence/CPS convention | Uniform erasure, dictionary passing |
 | Evidence 구조 | 포인터 전달 + 정렬된 slice | bitmap, HashMap, 연결 리스트 |
-| GC (Cranelift) | Boehm GC (초기) | Custom tracing GC |
+| 메모리 관리 (Cranelift) | Reference counting | Tracing GC |
 | GC (WasmGC) | 런타임 내장 GC | - |
 
 ---
@@ -82,6 +82,24 @@ tribute        -> tribute-front + tribute-passes
   검증한다. 성공한 경계에는 residual `tribute_control` operation/type이 없고
   backend-ready 경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
 
+Typed frontend output은 operation declaration metadata와 같은 out-of-band 경계에
+compiler intrinsic declaration metadata를 둔다. 각 entry는 canonical semantic
+identity, module-local symbol, complete logical callable type을 포함하고 deterministic
+order로 전달된다. Pre-CPS verifier는 bodyless function과 metadata를 exact-match한 뒤에만
+intrinsic identity attribute를 lowering에 맡긴다. 이후 intrinsic lowering은 이 verified
+identity와 signature를 소비하며 이름이나 `abi` 문자열을 fallback으로 사용하지 않는다.
+
+같은 pre-CPS 검사에서 `adt.typeref` callable boundary, `adt.ref_null`,
+`adt.ref_cast`, direct/indirect call과 return을 모두 검사한다. `core.ptr`에서 시작해
+unrealized cast 또는 reference cast를 거쳐 managed nominal reference가 되는 경로는
+전체 validation 실패이며 conversion은 시작하지 않는다. Defined Tribute function은
+managed logical parameter/result를 사용할 수 있지만, 등록되지 않은 bodyless external과
+private target runtime helper는 사용할 수 없다.
+
+기존 source-visible bytes/runtime bridge는 새 semantic callable origin을 만들지 않고
+현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기
+전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
+
 Logical CPS result는 `core.never`, physical CPS ABI는 empty result다. 모든 CPS
 이전은 direct/indirect proper tail call이며 backend-ready IR은 CPS control-result
 `anyref`, private control enum, `Step`과 trampoline을 거부한다. Boxed source
@@ -145,24 +163,23 @@ violates that precondition; they never synthesize a fallback element or tail.
 
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
-and the shared pipeline replaces only that private ABI-marked call with
+and the shared pipeline replaces only that registry-verified private call with
 `list.prepend`. An ordinary source function with the same public qualified name
 is not an intrinsic. User code depends only on the public function signature and
 canonical `List(a)` contract; the private intrinsic, shared operation, and native
 node layout are not separately addressable collection APIs.
 
-Native may lower the operations to private immutable singly linked
-RC-managed nodes with empty represented by a private null sentinel. Each
-non-empty node owns its element when reference-typed and its tail. Existing RTTI,
-RC insertion, deep release, and borrowed-field rules apply after the private
-node operations become native ADT/load/store operations. Returning or binding a
-tail must keep it alive independently of the original list. Mutation based on a
-uniqueness proof is an optional optimization and cannot change semantics.
+Native lowers the operations to private immutable RC-managed RRB nodes. Internal
+nodes own their child references, leaves own their reference-typed elements, and
+the root owns the reachable tree. Existing RTTI, RC insertion, deep release, and
+borrowed-field rules apply after private RRB operations become native
+ADT/load/store operations. Returning a sequence view must keep the referenced
+tree alive independently of the original value.
 
-WasmGC selects its own private GC layout. Native layout choices are not shared
-IR conventions and do not establish Wasm execution parity. Full RRB trees,
-efficient concatenation, slicing, and transients are outside the canonical
-`List` contract.
+WasmGC uses its own private RRB-node layout. Concrete branching factors and node
+packing are target details rather than shared IR conventions. Efficient
+concatenation and slicing are required RRB properties; transient mutation based
+on a uniqueness proof is an optional optimization and cannot change semantics.
 
 ## Canonical Native Calculator
 
@@ -421,7 +438,7 @@ cell을 읽는다. Shared `func.call`에 zero-result 형상을 추가하지 않�
 nested-module `main`은 특별하지 않다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
-Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
+Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와
 `tribute_io.read_line` operation으로 바꾼다. 이 boundary는 rope 표현 대신 `Bytes`와
 target-independent `ReadLineResult`를 사용한다. Native와 Wasm pipeline은 이후 각자의
 runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.
