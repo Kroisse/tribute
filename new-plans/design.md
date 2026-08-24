@@ -385,8 +385,6 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 - [Binaryen](https://github.com/WebAssembly/binaryen) - WasmGC 최적화
 - [Cranelift](https://cranelift.dev/) - 네이티브 코드 생성
-- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) -
-  Continuation proposal
 
 ### 논문
 

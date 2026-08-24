@@ -133,11 +133,15 @@ materialize한 `tribute_rt.retain`과 `tribute_rt.release`만 RC 의미를 보�
 
 ```text
 // tribute_rt.retain(ptr):
+if ptr == null:
+    return ptr
 refcount = load(ptr - 8)
 refcount = refcount + 1
 store(refcount, ptr - 8)
 
 // tribute_rt.release(ptr):
+if ptr == null:
+    return
 refcount = load(ptr - 8)
 refcount = refcount - 1
 store(refcount, ptr - 8)
@@ -145,8 +149,10 @@ if refcount == 0:
     call @__tribute_dealloc(ptr - 8, size + 8)
 ```
 
-The abbreviated sequence above omits null handling and type-specific field
-destruction. The complete release path uses RTTI dispatch as described below.
+The abbreviated sequence above omits type-specific field destruction. Every
+complete retain and release path returns for a null managed reference before
+accessing its header, refcount, or RTTI. The complete release path uses RTTI
+dispatch as described below.
 
 ---
 
@@ -415,6 +421,7 @@ dependencies separately govern field-derived temporaries.
 
 ```text
 tribute_rt.retain(ptr) ->
+    if ptr == null: return ptr
     %rc_addr = clif.iadd(ptr, clif.iconst(-8))
     %rc = clif.load(%rc_addr)
     %new_rc = clif.iadd(%rc, clif.iconst(1))
@@ -422,6 +429,7 @@ tribute_rt.retain(ptr) ->
     // result: ptr (unchanged)
 
 tribute_rt.release(ptr) ->
+    if ptr == null: jump continue_block
     %rc_addr = clif.iadd(ptr, clif.iconst(-8))
     %rc = clif.load(%rc_addr)
     %new_rc = clif.isub(%rc, clif.iconst(1))
@@ -483,6 +491,8 @@ __tribute_release_Point(ptr):
 
 ```text
 tribute_rt.release(ptr) ->
+    if ptr == null:
+        return
     %rc = decrement_refcount(ptr)
     if %rc == 0:
         %rtti_idx = load(ptr - 4)

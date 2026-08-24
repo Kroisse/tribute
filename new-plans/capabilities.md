@@ -112,20 +112,23 @@ documentation:
    `tests/fixtures/` and `tests/expected/`; the scripted session also has
    AddressSanitizer and LSP protocol evidence. The product test additionally
    covers NUL-leading valid UTF-8 malformed input and invalid UTF-8.
-2. `lang-examples/native_effects.trb` is a retained **native-run** artifact.
-   Its expected stdout is `Recovered: the failure was handled`.
-3. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
+2. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
    example. Wasmtime execution must assert its expected String/Bytes output.
-4. `lang-examples/invalid_unresolved_name.trb` is the canonical frontend
+3. `lang-examples/invalid_unresolved_name.trb` is the canonical frontend
    failure example. Its diagnostic must include
    `` unresolved name `missing_value` ``.
 
+### Retained User-Facing Artifacts
+
+`lang-examples/native_effects.trb` is a retained **native-run** artifact. Its
+expected stdout is `Recovered: the failure was handled`.
+
 `lang-examples/README.md` is the companion catalog that records how to run
-these artifacts and their expected results.
+the canonical and retained artifacts and their expected results.
 
 ### Internal Regression Selection
 
-The user-facing artifacts above are the canonical examples. Separately, CI
+The canonical artifacts above are the required examples. Separately, CI
 should keep this broader internal regression selection to cross important
 compiler boundaries without treating every compile test as a runtime test:
 

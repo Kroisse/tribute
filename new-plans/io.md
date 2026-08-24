@@ -179,7 +179,8 @@ Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write
 `tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
 사용하는 private runtime bridge stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
 target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포함하지 않으며,
-native와 Wasm lowering이 각 target boundary에서 operation을 완전히 소비한다.
+지원하는 native와 Wasm operation만 각 target boundary에서 완전히 소비된다. Wasm
+`read_line`은 해당 lowering이 구현되기 전까지 지원하지 않으며 검증에서 거부한다.
 
 - Native lowering은 `tribute-runtime`의 stdin/stdout ABI로 변환한다.
 - Wasm lowering은 현재 backend가 지원하는 WASI 또는 custom host import로 변환한다.

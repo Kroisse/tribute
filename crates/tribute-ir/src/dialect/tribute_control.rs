@@ -2037,7 +2037,9 @@ fn canonical_nominal_layouts(
 ) -> HashMap<Symbol, TypeRef> {
     let mut layouts = HashMap::new();
     let mut referenced_names = HashSet::new();
-    for ty in reachable_types.iter().copied() {
+    let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
+    sorted_reachable_types.sort_unstable();
+    for ty in sorted_reachable_types {
         let data = ctx.types.get(ty);
         if is_adt_typeref(ctx, ty) {
             if let Some(name) = data.attrs.get_symbol("name") {
@@ -2053,13 +2055,17 @@ fn canonical_nominal_layouts(
         let Some(name) = data.attrs.get_symbol("name") else {
             continue;
         };
-        if let Some(previous) = layouts.insert(name, ty)
-            && previous != ty
-        {
-            push_type_error(
-                errors,
-                format!("nominal layout @{name} is declared more than once ({previous} and {ty})"),
-            );
+        if let Some(previous) = layouts.get(&name).copied() {
+            if previous != ty {
+                push_type_error(
+                    errors,
+                    format!(
+                        "nominal layout @{name} is declared more than once ({previous} and {ty})"
+                    ),
+                );
+            }
+        } else {
+            layouts.insert(name, ty);
         }
     }
     for name in referenced_names {
@@ -2178,27 +2184,11 @@ fn raw_pointer_cast_origin(
 fn validate_managed_reference_boundaries(
     ctx: &IrContext,
     body: RegionRef,
+    reachable_types: &HashSet<TypeRef>,
     nominal_layouts: &HashMap<Symbol, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
-    let mut reachable_types = HashSet::new();
-    walk_region_ops(ctx, body, &mut |op| {
-        for value in ctx.op_operands(op).iter().chain(ctx.op_results(op).iter()) {
-            collect_reachable_type(ctx, ctx.value_ty(*value), &mut reachable_types);
-        }
-        for attribute in ctx.op(op).attributes.values() {
-            collect_attribute_types(ctx, attribute, &mut reachable_types);
-        }
-        for region in ctx.op(op).regions.iter().copied() {
-            for block in ctx.region(region).blocks.iter().copied() {
-                for argument in ctx.block_args(block) {
-                    collect_reachable_type(ctx, ctx.value_ty(*argument), &mut reachable_types);
-                }
-            }
-        }
-    });
-
-    for ty in reachable_types {
+    for ty in reachable_types.iter().copied() {
         if !is_adt_typeref(ctx, ty) {
             continue;
         }
@@ -3125,7 +3115,13 @@ pub fn validate_whole_ir(
     let declarations = declaration_map(declarations, &mut errors);
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
     let nominal_layouts = canonical_nominal_layouts(ctx, &reachable_types, &mut errors);
-    validate_managed_reference_boundaries(ctx, body, &nominal_layouts, &mut errors);
+    validate_managed_reference_boundaries(
+        ctx,
+        body,
+        &reachable_types,
+        &nominal_layouts,
+        &mut errors,
+    );
     validate_callable_origins(
         ctx,
         body,
@@ -5175,6 +5171,7 @@ mod tests {
         let result = validate(&ctx, module, &[], &[]);
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
+        assert!(diagnostics.contains("callable provenance"), "{result}");
     }
 
     #[test]

@@ -20,6 +20,7 @@ See **[../new-plans/](../new-plans/)** directory:
 | [ir.md](../new-plans/ir.md) | TrunkIR multi-level dialect IR |
 | [implementation.md](../new-plans/implementation.md) | Ability implementation strategy |
 | [cranelift-backend.md](../new-plans/cranelift-backend.md) | Cranelift native backend architecture |
+| [wasm-backend.md](../new-plans/wasm-backend.md) | WasmGC backend architecture |
 
 ---
 
