@@ -251,7 +251,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
 
 #[test]
 fn cfg_copy_and_tail_dying_value_actions_are_complete() {
-    let (_ctx, _module, plan) = build(
+    let (ctx, module, plan) = build(
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
@@ -280,6 +280,23 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
             .iter()
             .all(|action| { !matches!(action.anchor, ActionAnchor::After(_)) })
     );
+
+    let tail_index = plan
+        .functions
+        .iter()
+        .position(|function| function.symbol == Symbol::new("tail"))
+        .unwrap();
+    let body = ctx.op(plan.functions[tail_index].operation).regions[0];
+    let block = ctx.region(body).blocks[0];
+    let tail_op = *ctx.block(block).ops.last().unwrap();
+    let action_index = plan.functions[tail_index]
+        .actions
+        .iter()
+        .position(|action| action.kind == ActionKind::TailTransfer)
+        .unwrap();
+    let mut after_tail = plan.clone();
+    after_tail.functions[tail_index].actions[action_index].anchor = ActionAnchor::After(tail_op);
+    assert!(after_tail.validate_against(&ctx, module).is_err());
 }
 
 #[test]
@@ -466,6 +483,31 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
     func.return
   }
 }"#,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R, %callee: core.func(!R, !R)) -> !R {
+    %result = func.call_indirect %callee, %value : !R
+    func.return %result
+  }
+}"#,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R) -> !R {
+    ^entry:
+      cf.br [^next]
+    ^next(%next: !R):
+      func.return %next
+  }
+}"#,
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R) -> !R {
+    func.return
+  }
+}"#,
     ] {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
@@ -546,6 +588,10 @@ fn plan_order_is_deterministic_and_duplicate_actions_fail_validation() {
         ..action
     });
     assert!(conflicting.validate_against(&ctx, module).is_err());
+
+    let mut duplicate_function = plan.clone();
+    duplicate_function.functions.push(plan.functions[0].clone());
+    assert!(duplicate_function.validate_against(&ctx, module).is_err());
 }
 
 #[test]
@@ -560,6 +606,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     %b = adt.struct_new %x {type = !B} : !B
     func.return %a
   }
+  func.func @other(%value: !R) -> !R { func.return %value }
 }"#,
     );
     let before = print_module(&ctx, module.op());
@@ -609,6 +656,17 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let mut stale_entry = plan.clone();
     stale_entry.functions[0].entries[1] = EntryOwnership::Plain;
     assert!(stale_entry.validate_against(&ctx, module).is_err());
+
+    let mut stale_anchor = plan.clone();
+    stale_anchor.functions[0].actions[0].anchor = ActionAnchor::Before(module.op());
+    assert!(stale_anchor.validate_against(&ctx, module).is_err());
+
+    let other = plan.function(Symbol::new("other")).unwrap();
+    let other_body = ctx.op(other.operation).regions[0];
+    let other_entry = ctx.region(other_body).blocks[0];
+    let mut stale_value = plan.clone();
+    stale_value.functions[0].actions[0].value = ctx.block_args(other_entry)[0];
+    assert!(stale_value.validate_against(&ctx, module).is_err());
     assert_eq!(print_module(&ctx, module.op()), before);
 }
 
