@@ -50,9 +50,20 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .param(i32_ty)
-            .param(anyref_ty)
             .attr("name", Attribute::Symbol(Symbol::new("_closure")))
+            .attr(
+                "fields",
+                Attribute::List(vec![
+                    Attribute::List(vec![
+                        Attribute::Symbol(Symbol::new("func_ptr")),
+                        Attribute::Type(i32_ty),
+                    ]),
+                    Attribute::List(vec![
+                        Attribute::Symbol(Symbol::new("env")),
+                        Attribute::Type(anyref_ty),
+                    ]),
+                ]),
+            )
             .build(),
     )
 }
@@ -312,6 +323,13 @@ impl RewritePattern for LowerClosureCallArena {
             let attributes = ctx.op(op).attributes.clone();
             ctx.op_mut(new_call.op_ref()).attributes.extend(attributes);
             set_indirect_call_signature(ctx, new_call.op_ref(), contract.signature);
+        } else {
+            let parameter_types = ctx.op_operands(new_call.op_ref())[1..]
+                .iter()
+                .map(|&value| ctx.value_ty(value))
+                .collect::<Vec<_>>();
+            let signature = core::func(ctx, callee_return_ty, parameter_types).as_type_ref();
+            set_indirect_call_signature(ctx, new_call.op_ref(), signature);
         }
 
         rewriter.insert_op(table_idx_op.op_ref());
@@ -899,7 +917,11 @@ mod tests {
             !ir.contains("closure.func") && !ir.contains("closure.env"),
             "module entrypoint should lower closure accessors:\n{ir}"
         );
-        assert!(!ir.contains("func.indirect_call_signature"), "{ir}");
+        assert_eq!(
+            ir.matches("func.indirect_call_signature").count(),
+            2,
+            "each lowered indirect call must retain an exact signature:\n{ir}"
+        );
 
         for name in ["selected", "untouched"] {
             let func_op = func_by_name(&ctx, module, name);

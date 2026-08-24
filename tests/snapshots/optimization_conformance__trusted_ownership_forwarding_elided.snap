@@ -1,5 +1,5 @@
 ---
 source: tests/optimization_conformance.rs
-expression: elided
+expression: "if elided.is_empty() { \"<no RC ops>\" } else { &elided }"
 ---
-<no RC ops>
+tribute_rt.release %7 {alloc_size = 0}

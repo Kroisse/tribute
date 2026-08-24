@@ -7,20 +7,23 @@ core.module @float_comparisons {
   !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
-  !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+  !_closure = adt.struct() {fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], name = @_closure}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !"Result::map_err::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map_err::__clam_0::env"}
   !"Option::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Option::map::__clam_0::env"}
   !"Result::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map::__clam_0::env"}
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
-  !t3 = core.func(tribute_rt.anyref, tribute_rt.anyref)
-  !t1 = closure.closure(!t3)
-  !t4 = core.ability_ref() {name = @"abilities::Throw"}
+  !t5 = core.func(tribute_rt.anyref, tribute_rt.anyref)
+  !t2 = closure.closure(!t5)
+  !t6 = core.ability_ref() {name = @"abilities::Throw"}
   !__tuple_i1_i1_i1_i1_i1_i1 = adt.struct() {fields = [[@0, core.i1], [@1, core.i1], [@2, core.i1], [@3, core.i1], [@4, core.i1], [@5, core.i1]], name = @__tuple_i1_i1_i1_i1_i1_i1}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
-  !t2 = closure.closure(core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref))
+  !t1 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref)
+  !t3 = closure.closure(!t1)
+  !t4 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure, tribute_rt.anyref)
+  !t7 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
   !__tuple_i1_i1_i1_i1_i1_i1_1 = adt.typeref() {name = @__tuple_i1_i1_i1_i1_i1_i1}
 

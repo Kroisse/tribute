@@ -4,3 +4,4 @@ expression: preserved
 ---
 %1 = tribute_rt.retain %0 : core.ptr
 tribute_rt.release %0 {alloc_size = 0}
+tribute_rt.release %7 {alloc_size = 0}

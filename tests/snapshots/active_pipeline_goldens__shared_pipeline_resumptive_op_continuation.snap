@@ -4,14 +4,14 @@ expression: ir_text
 ---
 core.module @resumptive_op {
   !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
-  !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+  !_closure = adt.struct() {fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], name = @_closure}
   !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
-  !t2 = core.func(tribute_rt.anyref, tribute_rt.anyref)
-  !t1 = closure.closure(!t2)
+  !t3 = core.func(tribute_rt.anyref, tribute_rt.anyref)
+  !t2 = closure.closure(!t3)
   !"bump::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32], [@_1, tribute_rt.anyref]], name = @"bump::__clam_0::__clam_0::env"}
   !"run_state::__clam_1::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"run_state::__clam_1::__clam_0::env"}
   !"run_state::__clam_1::__clam_1::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"run_state::__clam_1::__clam_1::env"}
@@ -21,10 +21,13 @@ core.module @resumptive_op {
   !"bump::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"bump::__clam_0::env"}
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
-  !t4 = core.ability_ref() {name = @"abilities::Throw"}
+  !t6 = core.ability_ref() {name = @"abilities::Throw"}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
-  !t3 = closure.closure(core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref))
+  !t1 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref)
+  !t4 = closure.closure(!t1)
+  !t5 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure, tribute_rt.anyref)
+  !t7 = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
 
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
@@ -42,7 +45,7 @@ core.module @resumptive_op {
 
   func.func @bump(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref attributes {tribute.calling_convention = 2} {
       %2 = adt.struct_new %1 {type = !"bump::__clam_0::env"} : !"bump::__clam_0::env"
-      %3 = func.constant {func_ref = @"bump::__clam_0"} : !t2
+      %3 = func.constant {func_ref = @"bump::__clam_0"} : !t3
       %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %6 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
@@ -63,13 +66,13 @@ core.module @resumptive_op {
       %0 = arith.const {value = 0} : core.i32
       %1 = adt.array_new %0 {type = !t0} : !t0
       %2 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t2
+      %3 = func.constant {func_ref = @"resumptive_op::__lambda_0"} : !t3
       %4 = adt.struct_new %3, %2 {type = !_closure} : !_closure
       %5 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %6 = func.constant {func_ref = @"run_state::__clam_0"} : !t2
+      %6 = func.constant {func_ref = @"run_state::__clam_0"} : !t3
       %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
       %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %9 = func.constant {func_ref = @"resumptive_op::__lambda_1"} : !t2
+      %9 = func.constant {func_ref = @"resumptive_op::__lambda_1"} : !t3
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = adt.ref_null {type = !t0} : !t0
       %12 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
@@ -80,7 +83,7 @@ core.module @resumptive_op {
       %17 = arith.const {value = 0} : tribute_rt.anyref
       %18 = func.call {callee = @__tribute_next_tag} : core.i32
       %19 = effect.extend %1, %18, %17, %16 {ability_ref = core.ability_ref() {name = @State}} : !t0
-      %20 = func.call_indirect %12, %19, %13, %10 : tribute_rt.anyref
+      %20 = func.call_indirect %12, %19, %13, %10 {func.indirect_call_signature = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
       %21 = adt.variant_is %20 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %22 = scf.if %21 : tribute_rt.anyref {
           %23 = adt.variant_cast %20 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -90,7 +93,7 @@ core.module @resumptive_op {
           %27 = adt.ref_null {type = !t0} : !t0
           %28 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
           %29 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-          %30 = func.call_indirect %28, %19, %29, %26 : tribute_rt.anyref
+          %30 = func.call_indirect %28, %19, %29, %26 {func.indirect_call_signature = !t1} : tribute_rt.anyref
           scf.yield %30
       } {
           %31 = adt.variant_cast %20 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -101,7 +104,7 @@ core.module @resumptive_op {
               %36 = adt.ref_null {type = !t0} : !t0
               %37 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
               %38 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-              %39 = func.call_indirect %37, %36, %38, %33 : tribute_rt.anyref
+              %39 = func.call_indirect %37, %36, %38, %33 {func.indirect_call_signature = !t1} : tribute_rt.anyref
               scf.yield %39
           } {
               scf.yield %20
@@ -125,7 +128,7 @@ core.module @resumptive_op {
       %6 = arith.const {value = 1} : core.i32
       %7 = arith.addi %5, %6 : core.i32
       %8 = adt.struct_new %5, %4 {type = !"bump::__clam_0::__clam_0::env"} : !"bump::__clam_0::__clam_0::env"
-      %9 = func.constant {func_ref = @"bump::__clam_0::__clam_0"} : !t2
+      %9 = func.constant {func_ref = @"bump::__clam_0::__clam_0"} : !t3
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
       %12 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
@@ -144,14 +147,14 @@ core.module @resumptive_op {
       %7 = arith.cmpi %4, %6 {predicate = @eq} : core.i1
       %8 = scf.if %7 : tribute_rt.anyref {
           %9 = adt.struct_new %3 {type = !"run_state::__clam_1::__clam_0::env"} : !"run_state::__clam_1::__clam_0::env"
-          %10 = func.constant {func_ref = @"run_state::__clam_1::__clam_0"} : !t2
+          %10 = func.constant {func_ref = @"run_state::__clam_1::__clam_0"} : !t3
           %11 = adt.struct_new %10, %9 {type = !_closure} : !_closure
           %12 = arith.const {value = 10} : core.i32
-          %13 = core.unrealized_conversion_cast %2 : !t1
+          %13 = core.unrealized_conversion_cast %2 : !t2
           %14 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
           %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
           %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-          %17 = func.call_indirect %15, %0, %16, %14 : tribute_rt.anyref
+          %17 = func.call_indirect %15, %0, %16, %14 {func.indirect_call_signature = !t1} : tribute_rt.anyref
           %18 = adt.variant_is %17 {tag = @Normal, type = !__tribute_cps_control} : core.i1
           %19 = scf.if %18 : tribute_rt.anyref {
               %20 = adt.variant_cast %17 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -160,7 +163,7 @@ core.module @resumptive_op {
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
               %24 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
               %25 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-              %26 = func.call_indirect %24, %0, %25, %23 : tribute_rt.anyref
+              %26 = func.call_indirect %24, %0, %25, %23 {func.indirect_call_signature = !t1} : tribute_rt.anyref
               %27 = adt.variant_cast %26 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
               %28 = adt.variant_get %27 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
               %29 = adt.variant_get %27 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -180,14 +183,14 @@ core.module @resumptive_op {
           %33 = arith.const {value = 1} : core.i1
           %34 = scf.if %33 : tribute_rt.anyref {
               %35 = adt.struct_new %3 {type = !"run_state::__clam_1::__clam_1::env"} : !"run_state::__clam_1::__clam_1::env"
-              %36 = func.constant {func_ref = @"run_state::__clam_1::__clam_1"} : !t2
+              %36 = func.constant {func_ref = @"run_state::__clam_1::__clam_1"} : !t3
               %37 = adt.struct_new %36, %35 {type = !_closure} : !_closure
               %38 = arith.const {value = unit} : core.nil
-              %39 = core.unrealized_conversion_cast %2 : !t1
+              %39 = core.unrealized_conversion_cast %2 : !t2
               %40 = core.unrealized_conversion_cast %38 : tribute_rt.anyref
               %41 = adt.struct_get %39 {field = 0, type = !_closure} : core.i32
               %42 = adt.struct_get %39 {field = 1, type = !_closure} : tribute_rt.anyref
-              %43 = func.call_indirect %41, %0, %42, %40 : tribute_rt.anyref
+              %43 = func.call_indirect %41, %0, %42, %40 {func.indirect_call_signature = !t1} : tribute_rt.anyref
               %44 = adt.variant_is %43 {tag = @Normal, type = !__tribute_cps_control} : core.i1
               %45 = scf.if %44 : tribute_rt.anyref {
                   %46 = adt.variant_cast %43 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -196,7 +199,7 @@ core.module @resumptive_op {
                   %49 = core.unrealized_conversion_cast %48 : tribute_rt.anyref
                   %50 = adt.struct_get %37 {field = 0, type = !_closure} : core.i32
                   %51 = adt.struct_get %37 {field = 1, type = !_closure} : tribute_rt.anyref
-                  %52 = func.call_indirect %50, %0, %51, %49 : tribute_rt.anyref
+                  %52 = func.call_indirect %50, %0, %51, %49 {func.indirect_call_signature = !t1} : tribute_rt.anyref
                   %53 = adt.variant_cast %52 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
                   %54 = adt.variant_get %53 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
                   %55 = adt.variant_get %53 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -225,11 +228,11 @@ core.module @resumptive_op {
       %4 = adt.struct_get %3 {field = 0, type = !"bump::__clam_0::__clam_0::env"} : core.i32
       %5 = adt.struct_get %3 {field = 1, type = !"bump::__clam_0::__clam_0::env"} : tribute_rt.anyref
       %6 = core.unrealized_conversion_cast %2 : core.nil
-      %7 = core.unrealized_conversion_cast %5 : !t1
+      %7 = core.unrealized_conversion_cast %5 : !t2
       %8 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
       %9 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
       %10 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
-      %11 = func.call_indirect %9, %0, %10, %8 : tribute_rt.anyref
+      %11 = func.call_indirect %9, %0, %10, %8 {func.indirect_call_signature = !t1} : tribute_rt.anyref
       func.return %11
   }
 

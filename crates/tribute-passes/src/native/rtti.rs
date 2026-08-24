@@ -1,8 +1,9 @@
 //! RTTI (Runtime Type Information) pass for the native backend.
 //!
-//! This pass scans the module for struct types used in `adt.struct_new` operations,
-//! assigns each a unique `rtti_idx`, and generates per-type release functions that
-//! recursively release pointer fields before deallocating the struct itself.
+//! This pass consumes the validated typed ownership plan, assigns each planned
+//! allocation type a unique `rtti_idx`, and generates per-type release
+//! functions that recursively release typed managed-reference fields before
+//! deallocating the aggregate itself.
 //!
 //! ## RTTI Index Layout
 //!
@@ -32,18 +33,17 @@ use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::location::Span;
-use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::walk::WalkAction;
 use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
+
+use super::ownership_plan::{ManagedFieldBitmap, RttiTypePlan};
 
 /// Commonly used CLIF primitive types, pre-interned for convenience.
 struct ClifTypes {
@@ -116,16 +116,21 @@ impl RttiMap {
     }
 }
 
-/// Run the RTTI pass: scan for struct types, assign indices, generate release functions.
+/// Consume the typed RTTI plan, assign indices, and generate release functions.
 pub fn generate_rtti(
     ctx: &mut IrContext,
     module: Module,
     type_converter: &TypeConverter,
+    rtti_types: &[RttiTypePlan],
 ) -> RttiMap {
     let mut rtti_map = RttiMap::new();
 
-    // Phase 1: Scan module for adt.struct_new and adt.variant_new operations
-    collect_types(ctx, module, &mut rtti_map);
+    // The allocation order and managed-field classification were validated
+    // while semantic types were intact. RTTI must not rediscover either from
+    // converted pointer shape.
+    for entry in rtti_types {
+        rtti_map.get_or_insert(entry.ty);
+    }
 
     if rtti_map.type_to_idx.is_empty() {
         return rtti_map;
@@ -147,47 +152,22 @@ pub fn generate_rtti(
     entries.sort_by_key(|(_, idx)| *idx);
 
     for (ty, rtti_idx) in entries {
-        let is_enum = get_enum_variants(ctx, ty).is_some();
-        let func_op = if is_enum {
-            generate_release_function_for_enum(ctx, ty, rtti_idx, type_converter, loc)
-        } else {
-            generate_release_function_for_struct(ctx, ty, rtti_idx, type_converter, loc)
+        let field_plan = rtti_types
+            .iter()
+            .find(|entry| entry.ty == ty)
+            .expect("RTTI map was built from ownership plan");
+        let func_op = match &field_plan.fields {
+            ManagedFieldBitmap::Enum(fields) => {
+                generate_release_function_for_enum(ctx, ty, rtti_idx, type_converter, fields, loc)
+            }
+            ManagedFieldBitmap::Struct(fields) => {
+                generate_release_function_for_struct(ctx, ty, rtti_idx, type_converter, fields, loc)
+            }
         };
         ctx.push_op(module_block, func_op);
     }
 
     rtti_map
-}
-
-/// Scan module for adt.struct_new and adt.variant_new operations.
-fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
-    let body = module.body(ctx);
-    use std::ops::ControlFlow;
-    let Some(body) = body else { return };
-    let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
-        let op_data = ctx.op(op);
-        let dialect = op_data.dialect;
-        let name = op_data.name;
-
-        if dialect == Symbol::new("adt") && name == Symbol::new("struct_new") {
-            if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
-                let struct_ty = struct_new.r#type(ctx);
-                if get_struct_fields(ctx, struct_ty).is_some() {
-                    rtti_map.get_or_insert(struct_ty);
-                }
-            }
-        } else if dialect == Symbol::new("adt")
-            && name == Symbol::new("variant_new")
-            && let Ok(variant_new) = adt::VariantNew::from_op(ctx, op)
-        {
-            let enum_ty = variant_new.r#type(ctx);
-            if get_enum_variants(ctx, enum_ty).is_some() {
-                rtti_map.get_or_insert(enum_ty);
-            }
-        }
-
-        ControlFlow::Continue(WalkAction::Advance)
-    });
 }
 
 /// Generate release function for a struct type.
@@ -196,6 +176,7 @@ fn generate_release_function_for_struct(
     struct_ty: TypeRef,
     rtti_idx: u32,
     type_converter: &TypeConverter,
+    managed_fields: &[bool],
     loc: Location,
 ) -> OpRef {
     let fields = get_struct_fields(ctx, struct_ty)
@@ -214,26 +195,11 @@ fn generate_release_function_for_struct(
     // Function type: (core.ptr) -> core.nil
     let func_ty = core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
 
-    // Collect pointer field offsets (skip func_ptr fields)
-    let func_ptr_sym = Symbol::new("func_ptr");
-    let ptr_field_offsets: Vec<i32> = fields
+    assert_eq!(fields.len(), managed_fields.len());
+    let managed_field_offsets: Vec<i32> = fields
         .iter()
         .enumerate()
-        .filter_map(|(i, (name, field_ty))| {
-            if *name == func_ptr_sym {
-                return None;
-            }
-            let native_ty = type_converter
-                .convert_type(ctx, *field_ty)
-                .unwrap_or(*field_ty);
-            let native_data = ctx.types.get(native_ty);
-            if native_data.dialect == Symbol::new("core") && native_data.name == Symbol::new("ptr")
-            {
-                Some(layout.field_offsets[i] as i32)
-            } else {
-                None
-            }
-        })
+        .filter_map(|(i, _)| managed_fields[i].then_some(layout.field_offsets[i] as i32))
         .collect();
 
     // Build entry block with payload_ptr argument
@@ -266,8 +232,8 @@ fn generate_release_function_for_struct(
         i64_ty,
     );
 
-    if ptr_field_offsets.is_empty() {
-        // No pointer fields: entry block IS the dealloc block
+    if managed_field_offsets.is_empty() {
+        // No managed fields: entry block IS the dealloc block
         // Move dealloc ops to entry block
         let dealloc_ops: Vec<OpRef> = ctx.block(dealloc_block).ops.to_vec();
         for op in dealloc_ops {
@@ -289,7 +255,7 @@ fn generate_release_function_for_struct(
     let mut blocks_after_entry: Vec<BlockRef> = vec![dealloc_block];
     let mut next_block = dealloc_block;
 
-    for &offset in ptr_field_offsets.iter().rev() {
+    for &offset in managed_field_offsets.iter().rev() {
         // Release block: load field, release, jump to next
         let release_block = ctx.create_block(BlockData {
             location: loc,
@@ -411,6 +377,7 @@ fn generate_release_function_for_enum(
     enum_ty: TypeRef,
     rtti_idx: u32,
     type_converter: &TypeConverter,
+    managed_variants: &[Vec<bool>],
     loc: Location,
 ) -> OpRef {
     let layout = compute_enum_layout(ctx, enum_ty, type_converter)
@@ -438,37 +405,31 @@ fn generate_release_function_for_enum(
     });
     let payload_ptr = ctx.block_arg(entry_block, 0);
 
-    // Collect variants with pointer fields
+    // Collect variants with managed fields.
     struct VariantRelease {
         tag_value: u32,
-        ptr_field_offsets: Vec<i32>,
+        managed_field_offsets: Vec<i32>,
     }
     let mut variants_with_ptrs: Vec<VariantRelease> = Vec::new();
 
+    assert_eq!(variants.len(), managed_variants.len());
     for (variant_idx, (_variant_name, field_types)) in variants.iter().enumerate() {
         let variant_layout = &layout.variant_layouts[variant_idx];
-        let ptr_field_offsets: Vec<i32> = field_types
+        assert_eq!(field_types.len(), managed_variants[variant_idx].len());
+        let managed_field_offsets: Vec<i32> = field_types
             .iter()
             .enumerate()
-            .filter_map(|(field_idx, field_ty)| {
-                let native_ty = type_converter
-                    .convert_type(ctx, *field_ty)
-                    .unwrap_or(*field_ty);
-                let native_data = ctx.types.get(native_ty);
-                if native_data.dialect == Symbol::new("core")
-                    && native_data.name == Symbol::new("ptr")
-                {
-                    Some((layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32)
-                } else {
-                    None
-                }
+            .filter_map(|(field_idx, _)| {
+                managed_variants[variant_idx][field_idx].then_some(
+                    (layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32,
+                )
             })
             .collect();
 
-        if !ptr_field_offsets.is_empty() {
+        if !managed_field_offsets.is_empty() {
             variants_with_ptrs.push(VariantRelease {
                 tag_value: variant_layout.tag_value,
-                ptr_field_offsets,
+                managed_field_offsets,
             });
         }
     }
@@ -506,7 +467,7 @@ fn generate_release_function_for_enum(
     }
 
     if variants_with_ptrs.is_empty() {
-        // No pointer fields: entry jumps straight to dealloc
+        // No managed fields: entry jumps straight to dealloc
         let jump = clif::jump(ctx, loc, [], dealloc_block);
         ctx.push_op(entry_block, jump.op_ref());
 
@@ -529,7 +490,7 @@ fn generate_release_function_for_enum(
         // Build chain backwards from dealloc_block
         let mut next_block = dealloc_block;
 
-        for &offset in vr.ptr_field_offsets.iter().rev() {
+        for &offset in vr.managed_field_offsets.iter().rev() {
             // Release block: load field, release, jump to next
             let rel_block = ctx.create_block(BlockData {
                 location: loc,
@@ -675,6 +636,13 @@ mod tests {
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::Attribute;
 
+    fn rtti_plan(ctx: &IrContext, module: Module) -> Vec<RttiTypePlan> {
+        let plan = crate::native::ownership_plan::build_native_ownership_plan(ctx, module)
+            .expect("typed ownership plan");
+        plan.remap_rtti_types(ctx, module, &[])
+            .expect("exact RTTI identities")
+    }
+
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("file:///test.trb".to_owned());
@@ -791,7 +759,8 @@ mod tests {
 }"#;
         let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let rtti = generate_rtti(&mut ctx, module, &tc);
+        let plan = rtti_plan(&ctx, module);
+        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
         assert!(rtti.type_to_idx.is_empty());
     }
 
@@ -800,12 +769,13 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = intern_ty(&mut ctx, "core", "i32");
 
-        // Point(x: i32, y: i32) - no pointer fields
+        // Point(x: i32, y: i32) - no managed fields
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let _rtti = generate_rtti(&mut ctx, module, &tc);
+        let plan = rtti_plan(&ctx, module);
+        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
 
         let output = print_module(&ctx, module.op());
         insta::assert_snapshot!(output);
@@ -815,14 +785,15 @@ mod tests {
     fn test_struct_with_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = intern_ty(&mut ctx, "core", "i32");
-        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
 
-        // Node(value: i32, next: ptr) - has pointer field
-        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
-        let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, ptr_ty]);
+        // Node(value: i32, next: anyref) has one typed managed field.
+        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", managed_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let _rtti = generate_rtti(&mut ctx, module, &tc);
+        let plan = rtti_plan(&ctx, module);
+        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
 
         let output = print_module(&ctx, module.op());
         insta::assert_snapshot!(output);
@@ -838,7 +809,7 @@ mod tests {
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
 
         // Build module with two struct_new ops
-        let func_ty = core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty]).as_type_ref();
+        let func_ty = core::func(&mut ctx, node_ty, [i32_ty, i32_ty, ptr_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -915,7 +886,8 @@ mod tests {
         let module = Module::new(&ctx, module_op).expect("valid");
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let rtti = generate_rtti(&mut ctx, module, &tc);
+        let plan = rtti_plan(&ctx, module);
+        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
 
         // Both struct types should be registered
         assert!(rtti.type_to_idx.contains_key(&point_ty));
@@ -933,14 +905,15 @@ mod tests {
     fn test_closure_struct_skips_func_ptr() {
         let (mut ctx, loc) = test_ctx();
         let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+        let managed_ty = intern_ty(&mut ctx, "tribute_rt", "anyref");
 
-        // Closure struct with func_ptr + env fields
-        // func_ptr should be skipped in release (it's a code pointer, not heap)
-        let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", ptr_ty)]);
-        let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, ptr_ty]);
+        // The raw code pointer is unmanaged; the typed environment is managed.
+        let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", managed_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let _rtti = generate_rtti(&mut ctx, module, &tc);
+        let plan = rtti_plan(&ctx, module);
+        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
 
         let output = print_module(&ctx, module.op());
         // The release function should only release the env field (not func_ptr)

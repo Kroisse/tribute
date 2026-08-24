@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
+use tribute_core::set_indirect_call_signature;
 use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
@@ -34,6 +35,20 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
+
+fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
+    let result = ctx
+        .op_result_types(call)
+        .first()
+        .copied()
+        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
+    let parameters = ctx.op_operands(call)[1..]
+        .iter()
+        .map(|&value| ctx.value_ty(value))
+        .collect::<Vec<_>>();
+    let signature = core::func(ctx, result, parameters).as_type_ref();
+    set_indirect_call_signature(ctx, call, signature);
 }
 
 #[derive(Debug)]
@@ -879,6 +894,7 @@ fn transform_shifts_in_block(
                                     .collect::<Vec<_>>(),
                                 ctx.op_result_types(candidate)[0],
                             );
+                            attach_exact_indirect_signature(ctx, new_call.op_ref());
                             let old_result = ctx.op_result(candidate, 0);
                             let new_result = ctx.op_result(new_call.op_ref(), 0);
                             ctx.replace_all_uses(old_result, new_result);
@@ -964,6 +980,7 @@ fn transform_shifts_in_block(
                     new_args.extend(current_operands[2..].iter().copied());
 
                     let new_call = func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
+                    attach_exact_indirect_signature(ctx, new_call.op_ref());
 
                     if !ctx.op_results(op).is_empty() {
                         let old_result = ctx.op_result(op, 0);
