@@ -60,17 +60,18 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 ```rust
 // List(a)는 compiler-owned opaque nominal type이다.
 // Empty/Cons constructor나 backend layout은 이 namespace에 export하지 않는다.
-// M1 source-visible dynamic construction is specified as a sequence operation.
+// Source-visible dynamic construction is specified as a sequence operation.
 pub mod List {
     pub fn prepend(value: a, tail: List(a)) -> List(a) { ... }
 }
 ```
 
-M1 List public surface는 literal, sequence-view pattern,
+현재 List public surface는 literal, sequence-view pattern,
 `List::prepend(value, tail) -> List(a)`로 제한된다. Prelude의 public wrapper는
-private ABI-marked compiler intrinsic을 호출하고, shared pipeline은 그 private
-call만 `list.prepend`로 lower한다. 같은 public qualified name을 가진 일반 source
-function은 intrinsic이 아니다. Private intrinsic ABI는 별도 source API가 아니다.
+registry-verified private compiler intrinsic을 호출하고, shared pipeline은 그
+private call만 `list.prepend`로 lower한다. 같은 public qualified name을 가진 일반
+source function은 intrinsic이 아니다. Private intrinsic declaration은 별도 source
+API가 아니다.
 Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,
 `list.head`, `list.tail`도 shared IR operation이며 source API가 아니다. 이
 operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노출하지
@@ -199,8 +200,9 @@ UFCS와 pipe는 같은 문제(함수 체이닝)를 해결한다. 둘 다 지원�
 
 ### 기존 예제 업데이트
 
-다음 pipe/UFCS 비교는 post-M1 illustrative collection API를 사용한다.
-`List::filter`, `List::map`, `List::fold`는 M1 public API 계약이 아니다.
+다음 pipe/UFCS 비교는 illustrative collection API를 사용한다.
+`List::filter`, `List::map`, `List::fold`는 별도 public API 절에서 확정되기 전까지
+예시에 불과하다.
 
 ```rust
 // Before (pipe 스타일, 더 이상 사용하지 않음)
@@ -227,8 +229,8 @@ fn process(data: List(Int)) -> Int {
 ### Type-Directed Resolution
 
 함수 이름이 여러 모듈에서 use된 경우, 첫 번째 인자의 타입으로 해소한다.
-이 절의 `List::map`은 해소 규칙만 설명하는 post-M1 illustrative API이며 M1에서
-보장되지 않는다.
+이 절의 `List::map`은 해소 규칙만 설명하는 illustrative API이며 별도 public API
+절에서 확정되지 않았다.
 
 ```rust
 use std::collections::List
@@ -331,7 +333,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 ## Complete Example
 
 다음 예제의 `List::of`, `filter`, `map`, `fold`, `sort`, `each`는 전체 module/UFCS
-구성을 보여 주기 위한 post-M1 illustrative API이며 M1에서 보장되지 않는다.
+구성을 보여 주기 위한 illustrative API이며 별도 public API 절에서 확정되지 않았다.
 
 ```rust
 // app/main.trb

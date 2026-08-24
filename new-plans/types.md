@@ -152,9 +152,9 @@ identity is compiler-owned and distinct from every source declaration, including
 a user declaration also spelled `List`. Name-based equality is not sufficient
 for named types: type checking and lowering compare declaration identities.
 
-The representation is not a source contract. In particular, `Empty` and `Cons`
-are not public constructors or patterns. M1 construction uses list literals and
-the canonical persistent prepend operation:
+The concrete RRB-node layout is not a source contract. In particular, `Empty`
+and `Cons` are not public constructors or patterns. Construction uses list
+literals and the canonical persistent prepend operation:
 
 ```rust
 let empty: List(Int) = []
@@ -168,10 +168,10 @@ order. Lists are immutable and persistent: observing a tail never changes the
 original list, and a tail retains the original element order.
 `List::prepend(value, tail)` returns a new canonical `List(a)` whose first
 element is `value` and whose remaining sequence is `tail`; it does not mutate or
-expose the representation of `tail`. This is the only general source-level List
-construction operation required by M1.
+expose the representation of `tail`. This is the minimal general source-level
+List construction operation.
 
-M1 exposes sequence-view patterns:
+List patterns use sequence views:
 
 ```rust
 []                    // exactly empty
@@ -184,10 +184,11 @@ Exact patterns require the stated length. Prefix-rest patterns require at least
 the prefix length and bind the remaining sequence without copying or mutation.
 Element subpatterns are matched left to right.
 
-The initial backend representation may be a simpler persistent linked sequence.
-Full RRB-tree layout, logarithmic concatenation, and transient/uniqueness
-optimization are future work. Those changes must not alter source syntax,
-`List(a)` identity, or shared `list.*` IR contracts.
+Every backend represents `List(a)` as an RRB tree. The branching factor, node
+packing, and allocation layout are target-private, while persistence, logarithmic
+concatenation, and efficient slicing are representation requirements. A
+transient or uniqueness optimization is optional and must not alter source
+syntax, `List(a)` identity, or shared `list.*` IR contracts.
 
 ### Shorthand Syntax
 

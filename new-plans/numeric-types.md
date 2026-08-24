@@ -147,7 +147,7 @@ digits, base prefixes, separators, embedded whitespace, surrounding
 whitespace, and trailing data return `InvalidSyntax`. Whitespace normalization
 belongs to a separate `String` operation; parsing never trims implicitly.
 
-The M1 representation is a signed 32-bit integer with the inclusive range
+The current representation is a signed 32-bit integer with the inclusive range
 `-2147483648` through `2147483647`. A syntactically valid decimal outside that
 range returns `OutOfRange`. The implementation must detect overflow before an
 arithmetic operation would exceed the range; it must not wrap, trap, truncate,

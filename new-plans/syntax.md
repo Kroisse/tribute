@@ -651,7 +651,7 @@ ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine
 List literal은 canonical opaque `List(a)`를 만든다. 각 element expression은 source
 순서대로 왼쪽에서 오른쪽으로 정확히 한 번 평가되며, 내부 persistent representation을
 구성하기 위한 reverse fold가 이 evaluation order를 바꾸거나 재평가해서는 안 된다.
-Runtime value를 기존 tail 앞에 붙이는 M1 public API는
+Runtime value를 기존 tail 앞에 붙이는 최소 public API는
 `List::prepend(value, tail)`이다. 이 함수는 새 canonical List를 반환하며 tail을
 변경하지 않는다. `Empty`와 `Cons`는 List syntax의 constructor가 아니다.
 
@@ -1032,7 +1032,7 @@ let x = 1; let y = 2; x + y
 ## Complete Example
 
 이 예제의 `List::filter`, `List::map`, `List::each`는 complete-program 구성을
-보여 주기 위한 post-M1 illustrative API이며 M1에서 보장되지 않는다.
+보여 주기 위한 illustrative API이며 별도 public API 절에서 확정되지 않았다.
 
 ```rust
 use std::collections::{List, Option}

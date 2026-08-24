@@ -73,13 +73,13 @@ asserted. The current two Wasm ability tests are **compile-only**.
 | Byte-wise `String` equality (`==` and `!=`) | **compile-only** | **native-run** | **wasm-run** | `test_string_equality_operators` verifies frontend resolution and lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_native_string_equality` and `test_execute_string_equality` execute shape-independent leaf-span comparison, mismatched leaf boundaries, empty leaves, shared/repeated subtrees, Unicode, length mismatch, and early/middle/late byte mismatch in [`e2e_native.rs`](../tests/e2e_native.rs) and [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The structural prelude test fixes the direct Leaf/Leaf span path and rejects the former equality-only flatten/index loop. |
 | `Bytes` literals, concatenation, and `String::from_bytes` | **compile-only** | **native-run** | **wasm-run** | Native literal, concat, length, indexing, and slicing tests are in [`e2e_native.rs`](../tests/e2e_native.rs); `test_native_bytes_get_safe` asserts both the in-range `Some` and out-of-range `None` paths. Wasm execution is limited to concatenation/output in `test_execute_dynamic_bytes_write_boundary` and to concatenation plus `String::from_bytes` in `test_execute_string_literals_and_dynamic_bytes`, which asserts the converted `dynamic bytes` and `shared bytes` output. Other Wasm `Bytes` APIs are **not-yet-verified**. |
 | `Nat` and `Int` arithmetic/comparison | **compile-only** | **native-run** | **compile-only** | Native execution is in [`e2e_native.rs`](../tests/e2e_native.rs) and [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_arithmetic_expr` emits Wasm but does not run it. |
-| `Int::parse` and `Int::to_string` decimal text conversion | **compile-only** | **native-run** | **not-yet-verified** | `canonical_int_text_api_resolves_through_prelude` verifies the public signatures and canonical `Int::ParseError` identity in [`int_text.rs`](../crates/tribute-front/tests/int_text.rs). `public_int_text_api_covers_decimal_contract_and_boundaries` uses only public source APIs and executes signs, zero, invalid syntax, whitespace/data rejection, overflow, signed 32-bit boundaries, formatting, and round trips in [`e2e_int_text.rs`](../tests/e2e_int_text.rs). M1 accepts only `-2147483648` through `2147483647`; syntactically valid values outside that range return `OutOfRange` until the Fixnum/BigInt representation is implemented. No focused Wasm evidence was added. |
+| `Int::parse` and `Int::to_string` decimal text conversion | **compile-only** | **native-run** | **not-yet-verified** | `canonical_int_text_api_resolves_through_prelude` verifies the public signatures and canonical `Int::ParseError` identity in [`int_text.rs`](../crates/tribute-front/tests/int_text.rs). `public_int_text_api_covers_decimal_contract_and_boundaries` uses only public source APIs and executes signs, zero, invalid syntax, whitespace/data rejection, overflow, signed 32-bit boundaries, formatting, and round trips in [`e2e_int_text.rs`](../tests/e2e_int_text.rs). The current representation accepts only `-2147483648` through `2147483647`; syntactically valid values outside that range return `OutOfRange` until the Fixnum/BigInt representation is implemented. No focused Wasm evidence was added. |
 | `Float` arithmetic, comparison, and NaN behavior | **compile-only** | **native-run** | **not-yet-verified** | The native suite, including `test_float_comparison_nan_semantics`, is in [`e2e_float.rs`](../tests/e2e_float.rs). No Wasm float execution or focused emission test was found. |
 | Tuple collection-like grouping | **compile-only** | **native-run** | **not-yet-verified** | See tuple construction and pattern evidence above. |
-| General collection APIs beyond M1 list literals/patterns/prepend (`List` algorithms, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | The M1 public surface is intentionally limited to literals, `List::prepend`, and sequence patterns. No broader collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
+| General collection APIs beyond list literals/patterns/prepend (`List` algorithms, map/set APIs) | **unsupported** | **unsupported** | **unsupported** | The current public surface is intentionally limited to literals, `List::prepend`, and sequence patterns. No broader collection implementation is exported by [`prelude.trb`](../lib/std/prelude.trb). |
 | `std::io::print` and `print_line` | **compile-only** | **native-run** | **wasm-run** | Native output behavior is tested in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm output execution is covered by the two execution tests in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). The Wasm lowering implements `tribute_io.write` in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
 | `std::io::read_line` | **compile-only** | **native-run** | **unsupported** | Native line endings, empty/partial input, EOF, invalid UTF-8, and system errors execute in the `test_native_std_io_read_line_*` tests in [`e2e_native.rs`](../tests/e2e_native.rs). Native lowering is in [`native/io.rs`](../crates/tribute-passes/src/native/io.rs). Wasm I/O lowering has only a `WritePattern` and rejects residual `tribute_io` operations in [`wasm/io.rs`](../crates/tribute-passes/src/wasm/io.rs). |
-| Canonical M1 calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). That product test also executes NUL-leading valid UTF-8 malformed input and invalid UTF-8, requiring a clean exit and exactly one input-failure line. The scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
+| Canonical calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). That product test also executes NUL-leading valid UTF-8 malformed input and invalid UTF-8, requiring a clean exit and exactly one input-failure line. The scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
 
 The current **wasm-run** language-level claims in this table are String/Bytes
 output through `std::io::print_line` and byte-wise String equality. That
@@ -100,19 +100,19 @@ These compiler/tooling statuses are independent of a target runtime.
 | Package/project compilation and manifests | **unsupported** | The CLI accepts a source file rather than a package root or manifest in [`cli.rs`](../src/cli.rs). No package graph or manifest loader is present in the active pipeline. |
 | Separate compilation/linking of Tribute modules | **unsupported** | Native linking consumes one object generated from one `SourceCst` in [`main.rs`](../src/main.rs) and [`pipeline.rs`](../src/pipeline.rs); it does not link independently compiled Tribute modules. |
 
-## Canonical M1 Preview and M0 Artifacts
+## Canonical and Retained Artifacts
 
 ### User-Facing Canonical Artifacts
 
-Issue #806 adds the M1 native preview. Issue #797 owns the retained M0
-artifacts and their documentation:
+The repository keeps the following user-facing artifacts and their
+documentation:
 
-1. `lang-examples/native_calculator.trb` is the canonical M1 **native-run**
+1. `lang-examples/native_calculator.trb` is the canonical **native-run**
    example. Its scripted and EOF stdin/stdout contracts are checked in under
    `tests/fixtures/` and `tests/expected/`; the scripted session also has
    AddressSanitizer and LSP protocol evidence. The product test additionally
    covers NUL-leading valid UTF-8 malformed input and invalid UTF-8.
-2. `lang-examples/native_effects.trb` is a retained M0 **native-run** artifact.
+2. `lang-examples/native_effects.trb` is a retained **native-run** artifact.
    Its expected stdout is `Recovered: the failure was handled`.
 3. `lang-examples/wasm_dynamic_output.trb` is the canonical **wasm-run**
    example. Wasmtime execution must assert its expected String/Bytes output.
@@ -125,7 +125,7 @@ these artifacts and their expected results.
 
 ### Internal Regression Selection
 
-The user-facing artifacts above are the canonical examples. Separately, M0 CI
+The user-facing artifacts above are the canonical examples. Separately, CI
 should keep this broader internal regression selection to cross important
 compiler boundaries without treating every compile test as a runtime test:
 

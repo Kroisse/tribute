@@ -11,9 +11,9 @@
 | 의미론 | 동적 (호출 시점 핸들러) | 정적 (생성 시점 캡처) |
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
-| Polymorphic 함수 | Evidence 전달 | Monomorphization, 전면 CPS |
+| Polymorphic 함수 | Monomorphization + 필요한 Evidence/CPS convention | Uniform erasure, dictionary passing |
 | Evidence 구조 | 포인터 전달 + 정렬된 slice | bitmap, HashMap, 연결 리스트 |
-| GC (Cranelift) | Boehm GC (초기) | Custom tracing GC |
+| 메모리 관리 (Cranelift) | Reference counting | Tracing GC |
 | GC (WasmGC) | 런타임 내장 GC | - |
 
 ---
@@ -163,24 +163,23 @@ violates that precondition; they never synthesize a fallback element or tail.
 
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
-and the shared pipeline replaces only that private ABI-marked call with
+and the shared pipeline replaces only that registry-verified private call with
 `list.prepend`. An ordinary source function with the same public qualified name
 is not an intrinsic. User code depends only on the public function signature and
 canonical `List(a)` contract; the private intrinsic, shared operation, and native
 node layout are not separately addressable collection APIs.
 
-Native may lower the operations to private immutable singly linked
-RC-managed nodes with empty represented by a private null sentinel. Each
-non-empty node owns its element when reference-typed and its tail. Existing RTTI,
-RC insertion, deep release, and borrowed-field rules apply after the private
-node operations become native ADT/load/store operations. Returning or binding a
-tail must keep it alive independently of the original list. Mutation based on a
-uniqueness proof is an optional optimization and cannot change semantics.
+Native lowers the operations to private immutable RC-managed RRB nodes. Internal
+nodes own their child references, leaves own their reference-typed elements, and
+the root owns the reachable tree. Existing RTTI, RC insertion, deep release, and
+borrowed-field rules apply after private RRB operations become native
+ADT/load/store operations. Returning a sequence view must keep the referenced
+tree alive independently of the original value.
 
-WasmGC selects its own private GC layout. Native layout choices are not shared
-IR conventions and do not establish Wasm execution parity. Full RRB trees,
-efficient concatenation, slicing, and transients are outside the canonical
-`List` contract.
+WasmGC uses its own private RRB-node layout. Concrete branching factors and node
+packing are target details rather than shared IR conventions. Efficient
+concatenation and slicing are required RRB properties; transient mutation based
+on a uniqueness proof is an optional optimization and cannot change semantics.
 
 ## Canonical Native Calculator
 
@@ -439,7 +438,7 @@ cell을 읽는다. Shared `func.call`에 zero-result 형상을 추가하지 않�
 nested-module `main`은 특별하지 않다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
-Frontend shared lowering은 private intrinsic stub을 `tribute_io.write`와
+Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와
 `tribute_io.read_line` operation으로 바꾼다. 이 boundary는 rope 표현 대신 `Bytes`와
 target-independent `ReadLineResult`를 사용한다. Native와 Wasm pipeline은 이후 각자의
 runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.

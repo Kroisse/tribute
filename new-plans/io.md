@@ -115,8 +115,8 @@ main(ev) -> Nil
 ```
 
 `read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 논리적
-ABI에서 `done_k`와 함수의 control result는 `Never`이며, 현재 compatibility
-lowering만 이를 `anyref` carrier로 표현한다.
+ABI에서 `done_k`와 함수의 control result는 `Never`다. Physical lowering은 이를
+empty-result callable과 proper tail transfer로 바꾸며 control carrier를 만들지 않는다.
 
 ```text
 read_line(ev, done_k: fn(String) -> Never) -> Never
@@ -177,9 +177,9 @@ Embedded `std::io` source는 `String::to_bytes`로 rope를 flatten한 뒤 `write
 `std::io::Error`로 변환하여 `Throw(Error)` operation을 호출한다.
 
 `tribute_io.*`는 shared IR operation이며 public source symbol이 아니다. Embedded source가
-사용하는 private intrinsic stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
-target pipeline 이전에는 제거된다. #770은 이 shared contract까지 구현하고, 실제 native와
-Wasm lowering은 각각 #772와 #771이 담당한다.
+사용하는 private runtime bridge stub은 frontend lowering에서 이 operation으로 즉시 바뀌고,
+target pipeline 이전에는 제거된다. Shared contract는 target ABI를 포함하지 않으며,
+native와 Wasm lowering이 각 target boundary에서 operation을 완전히 소비한다.
 
 - Native lowering은 `tribute-runtime`의 stdin/stdout ABI로 변환한다.
 - Wasm lowering은 현재 backend가 지원하는 WASI 또는 custom host import로 변환한다.

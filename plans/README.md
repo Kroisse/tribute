@@ -29,8 +29,8 @@ See **[../new-plans/](../new-plans/)** directory:
 
 | Plan | Description | Priority |
 | ---- | ----------- | -------- |
-| [02.04-wasm-translation.md](02.04-wasm-translation.md) | Wasm backend (see #38-41 for remaining work) | High |
-| Cranelift backend | Native backend via libmprompt + RC (see [cranelift-backend.md](../new-plans/cranelift-backend.md)) | High |
+| Wasm backend | Shared tail-call CPS to WasmGC (see [wasm-backend.md](../new-plans/wasm-backend.md)) | High |
+| Cranelift backend | Native tail-call CPS backend with RC (see [cranelift-backend.md](../new-plans/cranelift-backend.md)) | High |
 
 ### Future
 
@@ -46,6 +46,7 @@ See **[../new-plans/](../new-plans/)** directory:
 | Document | Description |
 | -------- | ----------- |
 | [02.03-wasm-runtime-research.md](02.03-wasm-runtime-research.md) | WebAssembly runtime research (WasmGC + WASI) |
+| [02.04-wasm-translation.md](02.04-wasm-translation.md) | Superseded Wasm implementation plan |
 
 ---
 
@@ -58,7 +59,7 @@ See **[../new-plans/](../new-plans/)** directory:
 
 ### Future Phases
 
-1. **Ability System**: Algebraic effects via evidence passing (see #23-26)
-2. **Cranelift Backend**: libmprompt + Boehm GC integration
-3. **WasmGC Backend**: Stack Switching support
+1. **Ability System**: Algebraic effects via evidence passing and tail-call CPS
+2. **Cranelift Backend**: Native lowering with reference counting
+3. **Wasm Backend**: Emit the shared tail-call CPS representation
 4. **Developer Tools**: LSP (see #31-37), package manager, documentation
