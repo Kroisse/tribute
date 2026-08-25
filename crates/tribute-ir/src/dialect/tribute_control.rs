@@ -9,6 +9,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use trunk_ir::dialect::{adt, arith, core};
+use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -3024,21 +3025,23 @@ fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> boo
     while let Some(current) = region {
         let owner = ctx.region(current).parent_op;
         if let Some(owner) = owner
-            && ctx.op(owner).dialect == Symbol::new("scf")
-            && ctx.op(owner).name == Symbol::new("if")
-            && let Some(left_index) = ctx
-                .op(owner)
-                .regions
-                .iter()
-                .position(|candidate| *candidate == current)
-            && let Some(right_index) = ctx
-                .op(owner)
-                .regions
-                .iter()
-                .position(|candidate| op_is_within_region(ctx, right, *candidate))
-            && left_index != right_index
+            && let Some(interface) = RegionBranchOps::get(ctx, owner)
+            && let Ok(successors) = interface.successors(ctx, owner, RegionBranchPoint::Parent)
         {
-            return true;
+            let containing_region = |candidate: OpRef| {
+                successors.as_slice().iter().find_map(|successor| {
+                    let RegionSuccessor::Region(region) = successor else {
+                        return None;
+                    };
+                    op_is_within_region(ctx, candidate, *region).then_some(*region)
+                })
+            };
+            if let (Some(left_region), Some(right_region)) =
+                (containing_region(left), containing_region(right))
+                && left_region != right_region
+            {
+                return true;
+            }
         }
         region = owner.and_then(|owner| parent_region(ctx, owner));
     }
