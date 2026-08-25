@@ -2,17 +2,17 @@ use super::*;
 
 pub(super) fn plan_function_actions(
     ctx: &IrContext,
-    body: RegionRef,
+    cfg: &ValidatedFlatCfg,
     entries: &[EntryOwnership],
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
-    let mut managed = collect_managed_values(ctx, body, managed_layouts);
-    let aliases = build_aliases(ctx, body, &mut managed, managed_layouts)?;
-    let borrowed_loads = collect_borrowed_loads(ctx, body, managed_layouts, &aliases)?;
-    let liveness = compute_liveness(ctx, body, &managed, &aliases, &borrowed_loads);
-    let entry_block = ctx.region(body).blocks[0];
+    let mut managed = collect_managed_values(ctx, cfg.blocks(), managed_layouts);
+    let aliases = build_aliases(ctx, cfg.blocks(), &mut managed, managed_layouts)?;
+    let borrowed_loads = collect_borrowed_loads(ctx, cfg.blocks(), managed_layouts, &aliases)?;
+    let liveness = compute_liveness(ctx, cfg, &managed, &aliases, &borrowed_loads);
+    let entry_block = cfg.entry();
     let mut owned = managed.clone();
     for (&value, entry) in ctx.block_args(entry_block).iter().zip(entries) {
         if *entry == EntryOwnership::Borrowed {
@@ -32,12 +32,13 @@ pub(super) fn plan_function_actions(
         }
     }
 
-    for &block in &ctx.region(body).blocks {
+    for &block in cfg.blocks() {
         let ops = ctx.block(block).ops.to_vec();
         let mut transferred = HashSet::new();
         for &op in &ops {
             plan_operation_actions(
                 ctx,
+                cfg,
                 op,
                 entry_contracts,
                 definitions,
@@ -62,6 +63,7 @@ pub(super) fn plan_function_actions(
         }
         plan_final_releases(
             ctx,
+            cfg,
             block,
             &ops,
             &owned,
@@ -77,11 +79,11 @@ pub(super) fn plan_function_actions(
 
 fn collect_managed_values(
     ctx: &IrContext,
-    body: RegionRef,
+    blocks: &[BlockRef],
     managed_layouts: &HashSet<TypeRef>,
 ) -> HashSet<ValueRef> {
     let mut values = HashSet::new();
-    for &block in &ctx.region(body).blocks {
+    for &block in blocks {
         for &value in ctx.block_args(block) {
             if is_managed_value(ctx, value, managed_layouts) {
                 values.insert(value);
@@ -100,12 +102,12 @@ fn collect_managed_values(
 
 fn build_aliases(
     ctx: &IrContext,
-    body: RegionRef,
+    blocks: &[BlockRef],
     managed: &mut HashSet<ValueRef>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
     let mut aliases = HashMap::new();
-    for &block in &ctx.region(body).blocks {
+    for &block in blocks {
         for &op in &ctx.block(block).ops {
             if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
             {
@@ -159,12 +161,12 @@ fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRe
 
 fn collect_borrowed_loads(
     ctx: &IrContext,
-    body: RegionRef,
+    blocks: &[BlockRef],
     managed_layouts: &HashSet<TypeRef>,
     aliases: &HashMap<ValueRef, ValueRef>,
 ) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
     let mut borrowed = HashMap::new();
-    for &block in &ctx.region(body).blocks {
+    for &block in blocks {
         for &op in &ctx.block(block).ops {
             let source = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
                 Some(get.r#ref(ctx))
@@ -239,15 +241,15 @@ struct Liveness {
 
 fn compute_liveness(
     ctx: &IrContext,
-    body: RegionRef,
+    cfg: &ValidatedFlatCfg,
     managed: &HashSet<ValueRef>,
     aliases: &HashMap<ValueRef, ValueRef>,
     borrowed: &HashMap<ValueRef, ValueRef>,
 ) -> Liveness {
-    let blocks = ctx.region(body).blocks.to_vec();
+    let blocks = cfg.blocks();
     let mut uses = HashMap::new();
     let mut defs = HashMap::new();
-    for &block in &blocks {
+    for &block in blocks {
         let mut block_uses = HashSet::new();
         let mut block_defs = HashSet::new();
         for &value in ctx.block_args(block) {
@@ -290,10 +292,8 @@ fn compute_liveness(
         let mut changed = false;
         for &block in blocks.iter().rev() {
             let mut out = HashSet::new();
-            if let Some(&terminator) = ctx.block(block).ops.last() {
-                for successor in &ctx.op(terminator).successors {
-                    out.extend(live_in[successor].iter().copied());
-                }
+            for successor in cfg.successors(block) {
+                out.extend(live_in[successor].iter().copied());
             }
             let mut input = uses[&block].clone();
             input.extend(
@@ -324,6 +324,7 @@ fn compute_liveness(
 #[allow(clippy::too_many_arguments)]
 fn plan_operation_actions(
     ctx: &IrContext,
+    cfg: &ValidatedFlatCfg,
     op: OpRef,
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
@@ -461,22 +462,16 @@ fn plan_operation_actions(
                 });
             }
         }
-    } else if let Ok(branch) = cf::Br::from_op(ctx, op) {
-        let destination = branch.dest(ctx);
+    } else if let Some(transfers) = cfg.branch_transfers(ctx, op) {
         let mut counts = HashMap::<ValueRef, u32>::new();
-        for (index, (&operand, &argument)) in ctx
-            .op_operands(op)
-            .iter()
-            .zip(ctx.block_args(destination))
-            .enumerate()
-        {
-            if is_managed_value(ctx, argument, managed_layouts) {
-                let root = root_value(aliases, operand);
+        for (index, transfer) in transfers.enumerate() {
+            if is_managed_value(ctx, transfer.destination, managed_layouts) {
+                let root = root_value(aliases, transfer.source);
                 let count = counts.entry(root).or_default();
                 if *count > 0 || borrowed.contains_key(&root) {
                     actions.push(OwnershipAction {
                         kind: ActionKind::CopyAcquire,
-                        value: operand,
+                        value: transfer.source,
                         anchor: ActionAnchor::Before(op),
                         destination: index as u32,
                     });
@@ -731,6 +726,7 @@ pub(super) fn validate_result_contract(
 #[allow(clippy::too_many_arguments)]
 fn plan_final_releases(
     ctx: &IrContext,
+    cfg: &ValidatedFlatCfg,
     block: BlockRef,
     ops: &[OpRef],
     owned: &HashSet<ValueRef>,
@@ -781,7 +777,7 @@ fn plan_final_releases(
     for (destination, value) in dying.into_iter().enumerate() {
         let anchor = if let Some(&index) = last_use.get(&value) {
             let op = ops[index];
-            if is_terminator(ctx, op) {
+            if cfg.is_terminator(op) {
                 ActionAnchor::Before(op)
             } else {
                 ActionAnchor::After(op)

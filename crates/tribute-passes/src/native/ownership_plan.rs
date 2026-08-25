@@ -11,7 +11,7 @@ use std::ops::ControlFlow;
 use tribute_core::{CallingConvention, get_calling_convention, get_indirect_call_signature};
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, cf, core, func};
+use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::transforms::call_graph::{build_call_graph, recursive_functions};
@@ -20,7 +20,9 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
 use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 
 mod actions;
+mod cfg;
 use actions::{plan_function_actions, validate_result_contract};
+use cfg::ValidatedFlatCfg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
@@ -285,14 +287,15 @@ pub fn build_native_ownership_plan(
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
         }
-        validate_function_cfg(ctx, op, body, &managed_layouts)?;
+        let cfg = ValidatedFlatCfg::build(ctx, body)?;
+        validate_function_contract(ctx, op, &cfg, &managed_layouts)?;
         let entries = entry_contracts
             .get(&symbol)
             .cloned()
             .ok_or_else(|| OwnershipPlanError::new("defined function has no entry contract"))?;
         let actions = plan_function_actions(
             ctx,
-            body,
+            &cfg,
             &entries,
             &entry_contracts,
             &definitions,
@@ -710,23 +713,19 @@ fn validate_bodyless_signature(
     Ok(())
 }
 
-fn validate_function_cfg(
+fn validate_function_contract(
     ctx: &IrContext,
     function_op: OpRef,
-    body: RegionRef,
+    cfg: &ValidatedFlatCfg,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
-    let blocks = &ctx.region(body).blocks;
-    if blocks.is_empty() {
-        return Err(OwnershipPlanError::new("defined function has no blocks"));
-    }
     let signature = ctx
         .op(function_op)
         .attributes
         .get_type("type")
         .and_then(|ty| core::Func::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("defined function lacks exact signature"))?;
-    let entry_args = ctx.block_args(blocks[0]);
+    let entry_args = ctx.block_args(cfg.entry());
     if entry_args.len() != signature.params(ctx).len()
         || entry_args
             .iter()
@@ -742,33 +741,8 @@ fn validate_function_cfg(
             "function entry arguments differ from its exact signature",
         ));
     }
-    let block_set: HashSet<_> = blocks.iter().copied().collect();
-    if block_set.len() != blocks.len() {
-        return Err(OwnershipPlanError::new(
-            "function contains duplicate blocks",
-        ));
-    }
-    for &block in blocks {
-        let ops = &ctx.block(block).ops;
-        let Some(&terminator) = ops.last() else {
-            return Err(OwnershipPlanError::new("function block is empty"));
-        };
-        for &op in ops {
-            if !ctx.op(op).regions.is_empty() {
-                return Err(OwnershipPlanError::new(
-                    "unsupported structured or nested control-flow region",
-                ));
-            }
-        }
-        let supported = func::Return::matches(ctx, terminator)
-            || func::TailCall::matches(ctx, terminator)
-            || func::TailCallIndirect::matches(ctx, terminator)
-            || func::Unreachable::matches(ctx, terminator)
-            || cf::Br::matches(ctx, terminator)
-            || cf::CondBr::matches(ctx, terminator);
-        if !supported {
-            return Err(OwnershipPlanError::new("unsupported native CFG terminator"));
-        }
+    for &block in cfg.blocks() {
+        let terminator = cfg.terminator(block);
         if func::Return::matches(ctx, terminator) {
             validate_result_contract(
                 ctx,
@@ -778,42 +752,8 @@ fn validate_function_cfg(
                 "function return",
             )?;
         }
-        if ctx
-            .op(terminator)
-            .successors
-            .iter()
-            .any(|successor| !block_set.contains(successor))
-        {
-            return Err(OwnershipPlanError::new(
-                "CFG successor leaves function body",
-            ));
-        }
-        if let Ok(branch) = cf::Br::from_op(ctx, terminator) {
-            let destination = branch.dest(ctx);
-            if ctx.op_operands(terminator).len() != ctx.block_args(destination).len() {
-                return Err(OwnershipPlanError::new(
-                    "branch argument contract is malformed",
-                ));
-            }
-        }
-        if cf::CondBr::matches(ctx, terminator)
-            && (ctx.op_operands(terminator).len() != 1 || ctx.op(terminator).successors.len() != 2)
-        {
-            return Err(OwnershipPlanError::new(
-                "conditional branch contract is malformed",
-            ));
-        }
     }
     Ok(())
-}
-
-fn is_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    func::Return::matches(ctx, op)
-        || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op)
-        || func::Unreachable::matches(ctx, op)
-        || cf::Br::matches(ctx, op)
-        || cf::CondBr::matches(ctx, op)
 }
 
 fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), OwnershipPlanError> {
