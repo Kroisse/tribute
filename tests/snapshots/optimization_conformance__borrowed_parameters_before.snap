@@ -2,6 +2,7 @@
 source: tests/optimization_conformance.rs
 expression: before
 ---
+@read_while_borrowing:
 %1 = tribute_rt.retain %0 : core.ptr
 tribute_rt.release %0 {alloc_size = 0}
 %10 = tribute_rt.retain %9 : core.ptr

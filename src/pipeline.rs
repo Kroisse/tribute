@@ -1063,9 +1063,16 @@ fn prepare_module_to_native(
 
     // Phase 1 - Lower func dialect to clif dialect
     let ownership_summaries;
+    let ownership_plan;
+    let func_lowering;
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
+        ownership_plan =
+            tribute_passes::native::ownership_plan::build_native_ownership_plan(ctx, module)
+                .map_err(|error| {
+                    trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+                })?;
         ownership_summaries = tribute_passes::native::ownership_summary::compute_and_attach(
             ctx,
             module,
@@ -1074,7 +1081,8 @@ fn prepare_module_to_native(
         .map_err(|error| {
             trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
         })?;
-        func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
+        func_lowering =
+            func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
@@ -1088,7 +1096,13 @@ fn prepare_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        let rtti_map = tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter);
+        let rtti_plan = ownership_plan
+            .remap_rtti_types(ctx, module, func_lowering.rtti_layout_rewrites())
+            .map_err(|error| {
+                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+            })?;
+        let rtti_map =
+            tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter, &rtti_plan);
         tribute_passes::native::adt_rc_header::lower(
             ctx,
             module,

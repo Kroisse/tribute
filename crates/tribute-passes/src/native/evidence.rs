@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
+use tribute_core::set_indirect_call_signature;
 use tribute_ir::dialect::ability::{
     self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
 };
@@ -42,6 +43,20 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
+
+fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
+    let result = ctx
+        .op_result_types(call)
+        .first()
+        .copied()
+        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
+    let parameters = ctx.op_operands(call)[1..]
+        .iter()
+        .map(|&value| ctx.value_ty(value))
+        .collect::<Vec<_>>();
+    let signature = core::func(ctx, result, parameters).as_type_ref();
+    set_indirect_call_signature(ctx, call, signature);
+}
 
 /// Lower evidence operations for the native backend.
 ///
@@ -466,6 +481,7 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
             ],
             result_ty,
         );
+        attach_exact_indirect_signature(ctx, call.op_ref());
         let new_result = call.result(ctx);
         rewriter.insert_op(call.op_ref());
         rewriter.erase_op(vec![new_result]);
@@ -547,6 +563,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
             ],
             result_ty,
         );
+        attach_exact_indirect_signature(ctx, call.op_ref());
         let new_result = call.result(ctx);
         rewriter.insert_op(call.op_ref());
         rewriter.erase_op(vec![new_result]);
@@ -811,6 +828,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
 mod tests {
     use super::*;
     use std::ops::ControlFlow;
+    use tribute_core::get_indirect_call_signature;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::parser::parse_test_module;
@@ -1072,6 +1090,17 @@ mod tests {
             inner_calls[0][1],
             entry_arg(&ctx, inner, 0),
             "nested native evidence lowering should pass the nested function's own evidence"
+        );
+        let inner_call = ctx
+            .region(inner.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .find(|&op| func::CallIndirect::matches(&ctx, op))
+            .expect("lowered indirect dispatch");
+        assert!(
+            get_indirect_call_signature(&ctx, inner_call).is_some(),
+            "native-generated indirect calls must carry an exact signature"
         );
     }
 }

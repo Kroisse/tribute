@@ -20,6 +20,7 @@ pub mod evidence;
 pub mod intrinsic_to_native;
 pub mod io;
 pub mod list;
+pub mod ownership_plan;
 pub mod ownership_summary;
 pub mod rc_insertion;
 pub mod rc_lowering;

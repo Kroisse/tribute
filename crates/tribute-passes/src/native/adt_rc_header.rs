@@ -148,8 +148,9 @@ impl RewritePattern for StructNewPattern {
         let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or_else(|| {
             panic!(
                 "adt_rc_header: missing RTTI entry for struct type {:?}; \
-                     ensure generate_rtti runs before this pass",
-                struct_ty
+                     ensure generate_rtti runs before this pass; layout = {:?}",
+                struct_ty,
+                ctx.types.get(struct_ty)
             )
         }) as i64;
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
@@ -367,10 +368,9 @@ mod tests {
         struct_ty: TypeRef,
         field_types: &[TypeRef],
     ) -> String {
-        let ptr_ty = intern_ty(ctx, "core", "ptr");
-
-        // Build function type: (field_types...) -> ptr
-        let func_ty = core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
+        // Keep the test at the typed pre-erasure boundary consumed by the
+        // ownership plan. The ADT lowering later selects `core.ptr`.
+        let func_ty = core::func(ctx, struct_ty, field_types.iter().copied()).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -438,7 +438,20 @@ mod tests {
 
         // Run RTTI pass first (needed for rtti_map)
         let (tc, _) = crate::native::type_converter::native_type_converter(ctx);
-        let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc);
+        let plan = crate::native::ownership_plan::build_native_ownership_plan(ctx, module)
+            .expect("typed ownership plan");
+        // Model the representation-only signature rewrite that occurs after
+        // planning in the production pipeline, keeping the historical ADT
+        // lowering snapshot focused on this pass.
+        let ptr_ty = intern_ty(ctx, "core", "ptr");
+        let erased_func_ty = core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
+        ctx.op_mut(func_op.op_ref())
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(erased_func_ty));
+        let rtti_plan = plan
+            .remap_rtti_types(ctx, module, &[])
+            .expect("exact RTTI identities");
+        let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc, &rtti_plan);
 
         // Run adt_rc_header pass
         lower(ctx, module, tc, &rtti.type_to_idx).unwrap();

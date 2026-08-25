@@ -843,12 +843,15 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 [ 0 bytes] first field (자연 정렬)
 ```
 
-**RC 삽입 pass** (`tribute-passes/src/native/rc.rs`):
+`scf_to_cf` 뒤와 `func_to_clif` 앞에서 typed ownership/RTTI plan을 immutable하게
+만든다. 이 plan은 exact semantic type과 callable contract로 entry, call,
+owning store/copy, borrowed load, final-use, return, proper-tail action과 RTTI
+managed-field bitmap을 함께 결정한다. Plan 생성은 IR을 변경하지 않고 검증 실패는
+전체 input을 그대로 보존한다.
 
-- 함수 파라미터: retain 삽입
-- 함수 반환: 소유권 이전 (retain/release 없음)
-- 로컬 변수: 마지막 사용에서 release
-- 필드 접근: retain/release 쌍
+후속 materialization만 plan을 `tribute_rt.retain`/`release`로 바꾼다.
+`core.ptr`는 항상 unmanaged이며 변환된 pointer shape에서 managedness를 복구하지
+않는다.
 
 **Continuation과 RC:**
 

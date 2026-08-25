@@ -10,6 +10,9 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
+use std::collections::HashSet;
+use std::ops::ControlFlow;
+
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -22,17 +25,37 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::types::Attribute;
+use trunk_ir::walk::{WalkAction, walk_region};
 
 use crate::function::{CPS_CALLING_CONVENTION, TRIBUTE_CALLING_CONVENTION_ATTR};
+
+/// An exact type-identity rewrite performed by `func_to_clif`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeRewrite {
+    pub source: TypeRef,
+    pub target: TypeRef,
+}
+
+/// Stable identities rewritten while lowering function-level representation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoweringResult {
+    rtti_layout_rewrites: Vec<TypeRewrite>,
+}
+
+impl LoweringResult {
+    pub fn rtti_layout_rewrites(&self) -> &[TypeRewrite] {
+        &self.rtti_layout_rewrites
+    }
+}
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
-) -> Result<(), ConversionError> {
+) -> Result<LoweringResult, ConversionError> {
     // Phase 1: Adapt closure structs for native backend
-    adapt_closure_structs(ctx, module);
+    let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
 
     // Phase 2: Lower func dialect to clif dialect
     let applicator = PatternApplicator::new(type_converter)
@@ -47,7 +70,9 @@ pub fn lower(
         .add_pattern(FuncConstantPattern)
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
-    Ok(())
+    Ok(LoweringResult {
+        rtti_layout_rewrites,
+    })
 }
 
 fn func_to_clif_target() -> ConversionTarget {
@@ -56,10 +81,33 @@ fn func_to_clif_target() -> ConversionTarget {
         .illegal_dialect("func")
 }
 
-fn adapt_closure_structs(ctx: &mut IrContext, module: Module) {
+fn adapt_closure_structs(ctx: &mut IrContext, module: Module) -> Vec<TypeRewrite> {
+    let native_ty = native_closure_struct_type(ctx);
+    let mut sources = HashSet::new();
+    if let Some(body) = module.body(ctx) {
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if let Ok(struct_new) = trunk_ir::dialect::adt::StructNew::from_op(ctx, op) {
+                let source = struct_new.r#type(ctx);
+                if source != native_ty && is_closure_struct(ctx, source) {
+                    sources.insert(source);
+                }
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+    }
+    let mut rtti_layout_rewrites = sources
+        .into_iter()
+        .map(|source| TypeRewrite {
+            source,
+            target: native_ty,
+        })
+        .collect::<Vec<_>>();
+    rtti_layout_rewrites.sort_by_key(|rewrite| rewrite.source);
+
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(ClosureStructAdaptPattern);
     applicator.apply_partial(ctx, module);
+    rtti_layout_rewrites
 }
 
 const CLOSURE_STRUCT_NAME_STR: &str = "_closure";

@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::fmt::Write as _;
+
 use common::{
     compile_and_run_native_with_borrowed_parameters,
     compile_and_run_native_with_done_continuation_dedup,
@@ -54,11 +56,67 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
 }
 
 fn focused_rc_ops(ir: &str) -> String {
-    ir.lines()
-        .filter(|line| line.contains("tribute_rt.retain") || line.contains("tribute_rt.release"))
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut function = "<outside function>";
+    let mut emitted_function = None;
+    let mut output = String::new();
+    for line in ir.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("clif.func ") {
+            function = trimmed
+                .split_once("sym_name = ")
+                .and_then(|(_, rest)| rest.split([',', '}']).next())
+                .unwrap_or("<unknown function>");
+            continue;
+        }
+        if function.starts_with("@__tribute_release_")
+            || !(trimmed.contains("tribute_rt.retain") || trimmed.contains("tribute_rt.release"))
+        {
+            continue;
+        }
+        if emitted_function != Some(function) {
+            writeln!(&mut output, "{function}:").expect("writing to a String cannot fail");
+            emitted_function = Some(function);
+        }
+        writeln!(&mut output, "{trimmed}").expect("writing to a String cannot fail");
+    }
+    output.truncate(output.len().saturating_sub(1));
+    output
+}
+
+fn generated_rtti_field_releases(ir: &str) -> String {
+    let mut function = None;
+    let mut count = 0;
+    let mut releases = String::new();
+    for line in ir.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("clif.func ") {
+            if let Some(function) = function.take()
+                && count > 0
+            {
+                if !releases.is_empty() {
+                    releases.push(',');
+                }
+                write!(&mut releases, "{function}={count}")
+                    .expect("writing to a String cannot fail");
+            }
+            count = 0;
+            function = trimmed
+                .split_once("sym_name = ")
+                .and_then(|(_, rest)| rest.split([',', '}']).next())
+                .filter(|symbol| symbol.starts_with("@__tribute_release_"));
+        } else if function.is_some() && trimmed.contains("tribute_rt.release") {
+            count += 1;
+        }
+    }
+    if let Some(function) = function
+        && count > 0
+    {
+        if !releases.is_empty() {
+            releases.push(',');
+        }
+        write!(&mut releases, "{function}={count}").expect("writing to a String cannot fail");
+    }
+    releases
 }
 
 fn identity_done_symbols(ir: &str) -> Vec<&str> {
@@ -298,6 +356,14 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
         ),
     )
     .expect("elided forwarding IR should be available");
+    assert_eq!(
+        generated_rtti_field_releases(&preserved),
+        "@__tribute_release_32=1"
+    );
+    assert_eq!(
+        generated_rtti_field_releases(&elided),
+        "@__tribute_release_32=1"
+    );
     let preserved = focused_rc_ops(&preserved);
     let elided = focused_rc_ops(&elided);
     assert!(
@@ -349,6 +415,15 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
         ),
     )
     .expect("disabled RC optimization IR should be available");
+
+    let expected_rtti = "@__tribute_release_32=2,@__tribute_release_33=1,\
+        @__tribute_release_34=1,@__tribute_release_35=1";
+    assert_eq!(generated_rtti_field_releases(&before), expected_rtti);
+    assert_eq!(generated_rtti_field_releases(&after), expected_rtti);
+    assert_eq!(
+        generated_rtti_field_releases(&disabled_after),
+        expected_rtti
+    );
 
     let before = focused_rc_ops(&before);
     let after = focused_rc_ops(&after);
@@ -402,6 +477,19 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     )
     .expect("preserved parameter RC IR should be available");
 
+    assert_eq!(
+        generated_rtti_field_releases(&before),
+        "@__tribute_release_32=1"
+    );
+    assert_eq!(
+        generated_rtti_field_releases(&after),
+        "@__tribute_release_32=1"
+    );
+    assert_eq!(
+        generated_rtti_field_releases(&preserved_after),
+        "@__tribute_release_32=1"
+    );
+
     let before = focused_rc_ops(&before);
     let after = focused_rc_ops(&after);
     let preserved_after = focused_rc_ops(&preserved_after);
@@ -441,6 +529,18 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
         temporary_borrow_options(TemporaryBorrowPolicy::Preserve),
     )
     .expect("preserved temporary-borrow stage IR should be available");
+    assert_eq!(
+        generated_rtti_field_releases(&before),
+        "@__tribute_release_33=1"
+    );
+    assert_eq!(
+        generated_rtti_field_releases(&after),
+        "@__tribute_release_33=1"
+    );
+    assert_eq!(
+        generated_rtti_field_releases(&preserved_after),
+        "@__tribute_release_33=1"
+    );
     let before = focused_rc_ops(&before);
     let after = focused_rc_ops(&after);
     let preserved_after = focused_rc_ops(&preserved_after);

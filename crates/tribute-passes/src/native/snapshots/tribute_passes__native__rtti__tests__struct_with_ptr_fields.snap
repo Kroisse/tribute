@@ -3,9 +3,9 @@ source: crates/tribute-passes/src/native/rtti.rs
 expression: output
 ---
 core.module @test {
-  !t0 = adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]]}
+  !t0 = adt.struct() {fields = [[@value, core.i32], [@next, tribute_rt.anyref]]}
 
-  func.func @create_struct(%0: core.i32, %1: core.ptr) -> !t0 {
+  func.func @create_struct(%0: core.i32, %1: tribute_rt.anyref) -> !t0 {
       %2 = adt.struct_new %0, %1 {type = !t0} : !t0
       func.return %2
   }
