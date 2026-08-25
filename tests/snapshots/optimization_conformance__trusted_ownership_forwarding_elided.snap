@@ -2,4 +2,4 @@
 source: tests/optimization_conformance.rs
 expression: "if elided.is_empty() { \"<no RC ops>\" } else { &elided }"
 ---
-tribute_rt.release %7 {alloc_size = 0}
+<no RC ops>

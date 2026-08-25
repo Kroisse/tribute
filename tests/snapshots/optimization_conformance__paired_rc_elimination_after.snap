@@ -2,25 +2,31 @@
 source: tests/optimization_conformance.rs
 expression: after
 ---
+@"paired_rc_elimination_snapshot::__lambda_0":
 %3 = tribute_rt.retain %2 : core.ptr
+@"paired_rc_elimination_snapshot::__lambda_1":
 %3 = tribute_rt.retain %2 : core.ptr
 %11 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %2 {alloc_size = 0}
+@_tribute_main:
 %59 = tribute_rt.retain %58 : core.ptr
 tribute_rt.release %53 {alloc_size = 0}
 tribute_rt.release %58 {alloc_size = 0}
 %69 = tribute_rt.retain %68 : core.ptr
 tribute_rt.release %68 {alloc_size = 0}
 tribute_rt.release %80 {alloc_size = 0}
+@"bump::__clam_0":
 %3 = tribute_rt.retain %1 : core.ptr
 %6 = tribute_rt.retain %5 : core.ptr
 tribute_rt.release %1 {alloc_size = 0}
 %16 = tribute_rt.retain %5 : core.ptr
 tribute_rt.release %5 {alloc_size = 0}
 tribute_rt.release %36 {alloc_size = 12}
+@"run_state::__clam_0":
 %3 = tribute_rt.retain %2 : core.ptr
 %11 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %2 {alloc_size = 0}
+@"run_state::__clam_1":
 %6 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %2 {alloc_size = 0}
 tribute_rt.release %38 {alloc_size = 12}
@@ -38,6 +44,7 @@ tribute_rt.release %104 {alloc_size = 0}
 %114 = tribute_rt.retain %113 : core.ptr
 %125 = tribute_rt.retain %113 : core.ptr
 tribute_rt.release %113 {alloc_size = 0}
+@"bump::__clam_0::__clam_0":
 %3 = tribute_rt.retain %1 : core.ptr
 %4 = tribute_rt.retain %2 : core.ptr
 %9 = tribute_rt.retain %8 : core.ptr
@@ -45,18 +52,15 @@ tribute_rt.release %1 {alloc_size = 0}
 tribute_rt.release %2 {alloc_size = 0}
 tribute_rt.release %8 {alloc_size = 0}
 tribute_rt.release %19 {alloc_size = 12}
+@"run_state::__clam_1::__clam_0":
 %3 = tribute_rt.retain %1 : core.ptr
 %4 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %1 {alloc_size = 0}
 %14 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %2 {alloc_size = 0}
+@"run_state::__clam_1::__clam_1":
 %3 = tribute_rt.retain %1 : core.ptr
 %4 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %1 {alloc_size = 0}
 %14 = tribute_rt.retain %2 : core.ptr
 tribute_rt.release %2 {alloc_size = 0}
-tribute_rt.release %12 {alloc_size = 0}
-tribute_rt.release %13 {alloc_size = 0}
-tribute_rt.release %4 {alloc_size = 0}
-tribute_rt.release %4 {alloc_size = 0}
-tribute_rt.release %4 {alloc_size = 0}
