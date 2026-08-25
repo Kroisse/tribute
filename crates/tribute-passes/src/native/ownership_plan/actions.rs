@@ -1,29 +1,94 @@
 use super::*;
 
 pub(super) fn plan_function_actions(
-    ctx: &IrContext,
+    ir: &IrContext,
     cfg: &ValidatedFlatCfg,
     entries: &[EntryOwnership],
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
-    let mut managed = collect_managed_values(ctx, cfg.blocks(), managed_layouts);
-    let aliases = build_aliases(ctx, cfg.blocks(), &mut managed, managed_layouts)?;
-    let borrowed_loads = collect_borrowed_loads(ctx, cfg.blocks(), managed_layouts, &aliases)?;
-    let liveness = compute_liveness(ctx, cfg, &managed, &aliases, &borrowed_loads);
-    let entry_block = cfg.entry();
-    let mut owned = managed.clone();
-    for (&value, entry) in ctx.block_args(entry_block).iter().zip(entries) {
-        if *entry == EntryOwnership::Borrowed {
-            owned.remove(&value);
-        }
-    }
-    let mut actions = Vec::new();
+    ActionPlanner::new(
+        ir,
+        cfg,
+        entries,
+        entry_contracts,
+        definitions,
+        managed_layouts,
+    )?
+    .plan()
+}
 
-    for (index, (&value, entry)) in ctx.block_args(entry_block).iter().zip(entries).enumerate() {
-        if *entry == EntryOwnership::Retained {
-            actions.push(OwnershipAction {
+struct ActionPlanner<'a> {
+    ir: &'a IrContext,
+    cfg: &'a ValidatedFlatCfg,
+    entries: &'a [EntryOwnership],
+    entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
+    definitions: &'a HashMap<Symbol, OpRef>,
+    managed_layouts: &'a HashSet<TypeRef>,
+    aliases: HashMap<ValueRef, ValueRef>,
+    borrowed: HashMap<ValueRef, ValueRef>,
+    owned: HashSet<ValueRef>,
+    liveness: Liveness,
+    actions: Vec<OwnershipAction>,
+}
+
+impl<'a> ActionPlanner<'a> {
+    fn new(
+        ir: &'a IrContext,
+        cfg: &'a ValidatedFlatCfg,
+        entries: &'a [EntryOwnership],
+        entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
+        definitions: &'a HashMap<Symbol, OpRef>,
+        managed_layouts: &'a HashSet<TypeRef>,
+    ) -> Result<Self, OwnershipPlanError> {
+        let mut managed = collect_managed_values(ir, cfg.blocks(), managed_layouts);
+        let aliases = build_aliases(ir, cfg.blocks(), &mut managed, managed_layouts)?;
+        let borrowed = collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+        let liveness = compute_liveness(ir, cfg, &managed, &aliases, &borrowed);
+        let mut owned = managed;
+        for (&value, entry) in ir.block_args(cfg.entry()).iter().zip(entries) {
+            if *entry == EntryOwnership::Borrowed {
+                owned.remove(&value);
+            }
+        }
+        Ok(Self {
+            ir,
+            cfg,
+            entries,
+            entry_contracts,
+            definitions,
+            managed_layouts,
+            aliases,
+            borrowed,
+            owned,
+            liveness,
+            actions: Vec::new(),
+        })
+    }
+
+    fn plan(mut self) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
+        self.plan_entries();
+        let blocks = self.cfg.blocks().to_vec();
+        for block in blocks {
+            self.plan_block(block)?;
+        }
+        Ok(self.actions)
+    }
+
+    fn plan_entries(&mut self) {
+        let entry_block = self.cfg.entry();
+        for (index, (&value, entry)) in self
+            .ir
+            .block_args(entry_block)
+            .iter()
+            .zip(self.entries)
+            .enumerate()
+        {
+            if *entry != EntryOwnership::Retained {
+                continue;
+            }
+            self.actions.push(OwnershipAction {
                 kind: ActionKind::EntryAcquire,
                 value,
                 anchor: ActionAnchor::BlockStart(entry_block),
@@ -32,28 +97,18 @@ pub(super) fn plan_function_actions(
         }
     }
 
-    for &block in cfg.blocks() {
-        let ops = ctx.block(block).ops.to_vec();
+    fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
+        let ops = self.ir.block(block).ops.to_vec();
         let mut transferred = HashSet::new();
         for &op in &ops {
-            plan_operation_actions(
-                ctx,
-                cfg,
-                op,
-                entry_contracts,
-                definitions,
-                managed_layouts,
-                &aliases,
-                &borrowed_loads,
-                &mut transferred,
-                &mut actions,
-            )?;
-            if let Some(&borrowed) = ctx
+            self.plan_operation(op, &mut transferred)?;
+            if let Some(&borrowed) = self
+                .ir
                 .op_results(op)
                 .first()
-                .filter(|result| borrowed_loads.contains_key(result))
+                .filter(|result| self.borrowed.contains_key(result))
             {
-                actions.push(OwnershipAction {
+                self.actions.push(OwnershipAction {
                     kind: ActionKind::BorrowLoad,
                     value: borrowed,
                     anchor: ActionAnchor::After(op),
@@ -61,20 +116,9 @@ pub(super) fn plan_function_actions(
                 });
             }
         }
-        plan_final_releases(
-            ctx,
-            cfg,
-            block,
-            &ops,
-            &owned,
-            &aliases,
-            &borrowed_loads,
-            &liveness,
-            &transferred,
-            &mut actions,
-        );
+        self.plan_final_releases(block, &ops, &transferred);
+        Ok(())
     }
-    Ok(actions)
 }
 
 fn collect_managed_values(
@@ -321,157 +365,298 @@ fn compute_liveness(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn plan_operation_actions(
-    ctx: &IrContext,
-    cfg: &ValidatedFlatCfg,
-    op: OpRef,
-    entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
-    definitions: &HashMap<Symbol, OpRef>,
-    managed_layouts: &HashSet<TypeRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
-    borrowed: &HashMap<ValueRef, ValueRef>,
-    transferred: &mut HashSet<ValueRef>,
-    actions: &mut Vec<OwnershipAction>,
-) -> Result<(), OwnershipPlanError> {
-    if let Ok(null) = adt::RefNull::from_op(ctx, op) {
-        let [result] = ctx.op_results(op) else {
-            return Err(OwnershipPlanError::new(
-                "adt.ref_null has malformed result arity",
-            ));
-        };
-        let ty = null.r#type(ctx);
-        let result_managed = is_managed_value(ctx, *result, managed_layouts);
-        let declared_managed = is_typed_managed_reference(ctx, ty, managed_layouts);
-        if result_managed
-            && (!declared_managed
-                || !types_compatible(ctx, ctx.value_ty(*result), ty, managed_layouts))
-        {
-            return Err(OwnershipPlanError::new(
-                "adt.ref_null must inhabit a compatible managed reference type",
-            ));
-        }
-        return Ok(());
-    }
-    if let Ok(new) = adt::StructNew::from_op(ctx, op) {
-        let fields = get_struct_fields(ctx, new.r#type(ctx)).ok_or_else(|| {
-            OwnershipPlanError::new(format!(
-                "struct_new {op:?} has invalid layout {} ({:?})",
-                new.r#type(ctx),
-                ctx.types.get(new.r#type(ctx))
-            ))
-        })?;
-        validate_allocation_result(ctx, op, new.r#type(ctx), managed_layouts)?;
-        return plan_owning_operands(
-            ctx,
-            op,
-            fields.iter().map(|(_, ty)| *ty),
-            managed_layouts,
-            actions,
-        );
-    }
-    if let Ok(new) = adt::VariantNew::from_op(ctx, op) {
-        let variants = get_enum_variants(ctx, new.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?;
-        let fields = variants
-            .iter()
-            .find(|(tag, _)| *tag == new.tag(ctx))
-            .map(|(_, fields)| fields.as_slice())
-            .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
-        validate_allocation_result(ctx, op, new.r#type(ctx), managed_layouts)?;
-        return plan_owning_operands(ctx, op, fields.iter().copied(), managed_layouts, actions);
-    }
-    if let Ok(set) = adt::StructSet::from_op(ctx, op) {
-        let fields = get_struct_fields(ctx, set.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("struct_set has invalid layout"))?;
-        let index = set.field(ctx) as usize;
-        let (_, field_ty) = fields
-            .get(index)
-            .ok_or_else(|| OwnershipPlanError::new("struct_set field is stale"))?;
-        if !types_compatible(
-            ctx,
-            ctx.value_ty(set.r#ref(ctx)),
-            set.r#type(ctx),
-            managed_layouts,
-        ) {
-            return Err(OwnershipPlanError::new(
-                "struct_set typed contract is malformed",
-            ));
-        }
-        if is_typed_managed_reference(ctx, *field_ty, managed_layouts) {
-            if !types_compatible(
-                ctx,
-                ctx.value_ty(set.value(ctx)),
-                *field_ty,
-                managed_layouts,
-            ) {
+impl ActionPlanner<'_> {
+    fn plan_operation(
+        &mut self,
+        op: OpRef,
+        transferred: &mut HashSet<ValueRef>,
+    ) -> Result<(), OwnershipPlanError> {
+        if let Ok(null) = adt::RefNull::from_op(self.ir, op) {
+            let [result] = self.ir.op_results(op) else {
                 return Err(OwnershipPlanError::new(
-                    "struct_set value type is malformed",
+                    "adt.ref_null has malformed result arity",
+                ));
+            };
+            let ty = null.r#type(self.ir);
+            let result_managed = is_managed_value(self.ir, *result, self.managed_layouts);
+            let declared_managed = is_typed_managed_reference(self.ir, ty, self.managed_layouts);
+            if result_managed
+                && (!declared_managed
+                    || !types_compatible(
+                        self.ir,
+                        self.ir.value_ty(*result),
+                        ty,
+                        self.managed_layouts,
+                    ))
+            {
+                return Err(OwnershipPlanError::new(
+                    "adt.ref_null must inhabit a compatible managed reference type",
                 ));
             }
-            actions.push(OwnershipAction {
-                kind: ActionKind::StoreAcquire,
-                value: set.value(ctx),
-                anchor: ActionAnchor::Before(op),
-                destination: index as u32,
-            });
-            actions.push(OwnershipAction {
-                kind: ActionKind::ReleaseReplacedField,
-                value: set.r#ref(ctx),
-                anchor: ActionAnchor::Before(op),
-                destination: index as u32,
-            });
+            return Ok(());
         }
-        return Ok(());
-    }
-    if func::Call::matches(ctx, op)
-        || func::CallIndirect::matches(ctx, op)
-        || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op)
-    {
-        return plan_call_actions(
-            ctx,
-            op,
-            entry_contracts,
-            definitions,
-            managed_layouts,
-            aliases,
-            borrowed,
-            transferred,
-            actions,
-        );
-    }
-    if func::Return::matches(ctx, op) {
-        for (index, &operand) in ctx.op_operands(op).iter().enumerate() {
-            if is_managed_value(ctx, operand, managed_layouts) {
-                let root = root_value(aliases, operand);
-                if borrowed.contains_key(&root) {
-                    actions.push(OwnershipAction {
-                        kind: ActionKind::CopyAcquire,
+        if let Ok(new) = adt::StructNew::from_op(self.ir, op) {
+            let fields = get_struct_fields(self.ir, new.r#type(self.ir)).ok_or_else(|| {
+                OwnershipPlanError::new(format!(
+                    "struct_new {op:?} has invalid layout {} ({:?})",
+                    new.r#type(self.ir),
+                    self.ir.types.get(new.r#type(self.ir))
+                ))
+            })?;
+            validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
+            return self.plan_owning_operands(op, fields.iter().map(|(_, ty)| *ty));
+        }
+        if let Ok(new) = adt::VariantNew::from_op(self.ir, op) {
+            let variants = get_enum_variants(self.ir, new.r#type(self.ir))
+                .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?;
+            let fields = variants
+                .iter()
+                .find(|(tag, _)| *tag == new.tag(self.ir))
+                .map(|(_, fields)| fields.as_slice())
+                .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
+            validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
+            return self.plan_owning_operands(op, fields.iter().copied());
+        }
+        if let Ok(set) = adt::StructSet::from_op(self.ir, op) {
+            let fields = get_struct_fields(self.ir, set.r#type(self.ir))
+                .ok_or_else(|| OwnershipPlanError::new("struct_set has invalid layout"))?;
+            let index = set.field(self.ir) as usize;
+            let (_, field_ty) = fields
+                .get(index)
+                .ok_or_else(|| OwnershipPlanError::new("struct_set field is stale"))?;
+            if !types_compatible(
+                self.ir,
+                self.ir.value_ty(set.r#ref(self.ir)),
+                set.r#type(self.ir),
+                self.managed_layouts,
+            ) {
+                return Err(OwnershipPlanError::new(
+                    "struct_set typed contract is malformed",
+                ));
+            }
+            if is_typed_managed_reference(self.ir, *field_ty, self.managed_layouts) {
+                if !types_compatible(
+                    self.ir,
+                    self.ir.value_ty(set.value(self.ir)),
+                    *field_ty,
+                    self.managed_layouts,
+                ) {
+                    return Err(OwnershipPlanError::new(
+                        "struct_set value type is malformed",
+                    ));
+                }
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::StoreAcquire,
+                    value: set.value(self.ir),
+                    anchor: ActionAnchor::Before(op),
+                    destination: index as u32,
+                });
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::ReleaseReplacedField,
+                    value: set.r#ref(self.ir),
+                    anchor: ActionAnchor::Before(op),
+                    destination: index as u32,
+                });
+            }
+            return Ok(());
+        }
+        if func::Call::matches(self.ir, op)
+            || func::CallIndirect::matches(self.ir, op)
+            || func::TailCall::matches(self.ir, op)
+            || func::TailCallIndirect::matches(self.ir, op)
+        {
+            return self.plan_call(op, transferred);
+        }
+        if func::Return::matches(self.ir, op) {
+            for (index, &operand) in self.ir.op_operands(op).iter().enumerate() {
+                if is_managed_value(self.ir, operand, self.managed_layouts) {
+                    let root = root_value(&self.aliases, operand);
+                    if self.borrowed.contains_key(&root) {
+                        self.actions.push(OwnershipAction {
+                            kind: ActionKind::CopyAcquire,
+                            value: operand,
+                            anchor: ActionAnchor::Before(op),
+                            destination: index as u32,
+                        });
+                    }
+                    transferred.insert(root);
+                    self.actions.push(OwnershipAction {
+                        kind: ActionKind::ReturnTransfer,
                         value: operand,
                         anchor: ActionAnchor::Before(op),
                         destination: index as u32,
                     });
                 }
-                transferred.insert(root);
-                actions.push(OwnershipAction {
-                    kind: ActionKind::ReturnTransfer,
+            }
+        } else if let Some(transfers) = self.cfg.branch_transfers(self.ir, op) {
+            let mut counts = HashMap::<ValueRef, u32>::new();
+            for (index, transfer) in transfers.enumerate() {
+                if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
+                    let root = root_value(&self.aliases, transfer.source);
+                    let count = counts.entry(root).or_default();
+                    if *count > 0 || self.borrowed.contains_key(&root) {
+                        self.actions.push(OwnershipAction {
+                            kind: ActionKind::CopyAcquire,
+                            value: transfer.source,
+                            anchor: ActionAnchor::Before(op),
+                            destination: index as u32,
+                        });
+                    }
+                    *count += 1;
+                    transferred.insert(root);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn plan_owning_operands(
+        &mut self,
+        op: OpRef,
+        field_types: impl IntoIterator<Item = TypeRef>,
+    ) -> Result<(), OwnershipPlanError> {
+        let field_types = field_types.into_iter().collect::<Vec<_>>();
+        if field_types.len() != self.ir.op_operands(op).len() {
+            return Err(OwnershipPlanError::new(
+                "aggregate constructor arity is malformed",
+            ));
+        }
+        for (index, (&operand, &field_ty)) in
+            self.ir.op_operands(op).iter().zip(&field_types).enumerate()
+        {
+            if is_typed_managed_reference(self.ir, field_ty, self.managed_layouts) {
+                if !types_compatible(
+                    self.ir,
+                    self.ir.value_ty(operand),
+                    field_ty,
+                    self.managed_layouts,
+                ) {
+                    return Err(OwnershipPlanError::new(format!(
+                        "aggregate managed field type is stale at {op:?}: expected {field_ty}, got {}",
+                        self.ir.value_ty(operand)
+                    )));
+                }
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::StoreAcquire,
                     value: operand,
                     anchor: ActionAnchor::Before(op),
                     destination: index as u32,
                 });
             }
         }
-    } else if let Some(transfers) = cfg.branch_transfers(ctx, op) {
-        let mut counts = HashMap::<ValueRef, u32>::new();
-        for (index, transfer) in transfers.enumerate() {
-            if is_managed_value(ctx, transfer.destination, managed_layouts) {
-                let root = root_value(aliases, transfer.source);
-                let count = counts.entry(root).or_default();
-                if *count > 0 || borrowed.contains_key(&root) {
-                    actions.push(OwnershipAction {
+        Ok(())
+    }
+}
+
+impl ActionPlanner<'_> {
+    fn plan_call(
+        &mut self,
+        op: OpRef,
+        transferred: &mut HashSet<ValueRef>,
+    ) -> Result<(), OwnershipPlanError> {
+        let indirect = func::CallIndirect::matches(self.ir, op)
+            || func::TailCallIndirect::matches(self.ir, op);
+        let tail =
+            func::TailCall::matches(self.ir, op) || func::TailCallIndirect::matches(self.ir, op);
+        let operands = self.ir.op_operands(op);
+        let args = operands.get(usize::from(indirect)..).unwrap_or_default();
+        let entries = if indirect {
+            let signature = get_indirect_call_signature(self.ir, op)
+                .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
+                .ok_or_else(|| {
+                    OwnershipPlanError::new(format!(
+                        "indirect call {op:?} lacks exact signature; attrs = {:?}, operand types = {:?}",
+                        self.ir.op(op).attributes,
+                        self.ir
+                            .op_operands(op)
+                            .iter()
+                            .map(|&value| self.ir.value_ty(value))
+                            .collect::<Vec<_>>()
+                    ))
+                })?;
+            if signature.params(self.ir).len() != args.len() {
+                return Err(OwnershipPlanError::new("indirect call arity is malformed"));
+            }
+            validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
+            signature
+                .params(self.ir)
+                .iter()
+                .map(|&ty| {
+                    if is_typed_managed_reference(self.ir, ty, self.managed_layouts) {
+                        if tail {
+                            EntryOwnership::Consumed
+                        } else {
+                            EntryOwnership::Retained
+                        }
+                    } else {
+                        EntryOwnership::Plain
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            let callee = self
+                .ir
+                .op(op)
+                .attributes
+                .get_symbol("callee")
+                .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
+            if !self.definitions.contains_key(&callee) {
+                if args
+                    .iter()
+                    .any(|&value| is_managed_value(self.ir, value, self.managed_layouts))
+                {
+                    return Err(OwnershipPlanError::new(format!(
+                        "unclassified direct call {op:?} to @{callee} carries a managed reference"
+                    )));
+                }
+                return Ok(());
+            }
+            let callee_op = self.definitions[&callee];
+            let signature = self
+                .ir
+                .op(callee_op)
+                .attributes
+                .get_type("type")
+                .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
+                .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
+            validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
+            self.entry_contracts
+                .get(&callee)
+                .cloned()
+                .ok_or_else(|| OwnershipPlanError::new("callee has no trusted entry contract"))?
+        };
+        if entries.len() != args.len() {
+            return Err(OwnershipPlanError::new(
+                "call arity differs from entry contract",
+            ));
+        }
+        let mut transfers = HashMap::<ValueRef, u32>::new();
+        for (index, (&argument, entry)) in args.iter().zip(entries).enumerate() {
+            let managed = is_managed_value(self.ir, argument, self.managed_layouts);
+            if managed != (entry != EntryOwnership::Plain) {
+                return Err(OwnershipPlanError::new(
+                    "call type differs from ownership contract",
+                ));
+            }
+            let kind = match (tail, entry) {
+                (_, EntryOwnership::Plain) => continue,
+                (false, EntryOwnership::Borrowed) => ActionKind::CallBorrow,
+                (false, EntryOwnership::Retained) => ActionKind::CallRetain,
+                (false, EntryOwnership::Consumed) => ActionKind::CallAcquire,
+                (true, EntryOwnership::Consumed) => ActionKind::TailTransfer,
+                (true, EntryOwnership::Borrowed | EntryOwnership::Retained) => {
+                    return Err(OwnershipPlanError::new(
+                        "proper-tail managed parameter is not consumed",
+                    ));
+                }
+            };
+            if kind == ActionKind::TailTransfer {
+                let root = root_value(&self.aliases, argument);
+                let count = transfers.entry(root).or_default();
+                if *count > 0 || self.borrowed.contains_key(&root) {
+                    self.actions.push(OwnershipAction {
                         kind: ActionKind::CopyAcquire,
-                        value: transfer.source,
+                        value: argument,
                         anchor: ActionAnchor::Before(op),
                         destination: index as u32,
                     });
@@ -479,168 +664,15 @@ fn plan_operation_actions(
                 *count += 1;
                 transferred.insert(root);
             }
-        }
-    }
-    Ok(())
-}
-
-fn plan_owning_operands(
-    ctx: &IrContext,
-    op: OpRef,
-    field_types: impl IntoIterator<Item = TypeRef>,
-    managed_layouts: &HashSet<TypeRef>,
-    actions: &mut Vec<OwnershipAction>,
-) -> Result<(), OwnershipPlanError> {
-    let field_types = field_types.into_iter().collect::<Vec<_>>();
-    if field_types.len() != ctx.op_operands(op).len() {
-        return Err(OwnershipPlanError::new(
-            "aggregate constructor arity is malformed",
-        ));
-    }
-    for (index, (&operand, &field_ty)) in ctx.op_operands(op).iter().zip(&field_types).enumerate() {
-        if is_typed_managed_reference(ctx, field_ty, managed_layouts) {
-            if !types_compatible(ctx, ctx.value_ty(operand), field_ty, managed_layouts) {
-                return Err(OwnershipPlanError::new(format!(
-                    "aggregate managed field type is stale at {op:?}: expected {field_ty}, got {}",
-                    ctx.value_ty(operand)
-                )));
-            }
-            actions.push(OwnershipAction {
-                kind: ActionKind::StoreAcquire,
-                value: operand,
+            self.actions.push(OwnershipAction {
+                kind,
+                value: argument,
                 anchor: ActionAnchor::Before(op),
                 destination: index as u32,
             });
         }
+        Ok(())
     }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn plan_call_actions(
-    ctx: &IrContext,
-    op: OpRef,
-    entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
-    definitions: &HashMap<Symbol, OpRef>,
-    managed_layouts: &HashSet<TypeRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
-    borrowed: &HashMap<ValueRef, ValueRef>,
-    transferred: &mut HashSet<ValueRef>,
-    actions: &mut Vec<OwnershipAction>,
-) -> Result<(), OwnershipPlanError> {
-    let indirect = func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
-    let tail = func::TailCall::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
-    let operands = ctx.op_operands(op);
-    let args = operands.get(usize::from(indirect)..).unwrap_or_default();
-    let entries = if indirect {
-        let signature = get_indirect_call_signature(ctx, op)
-            .and_then(|ty| core::Func::from_type_ref(ctx, ty))
-            .ok_or_else(|| {
-                OwnershipPlanError::new(format!(
-                    "indirect call {op:?} lacks exact signature; attrs = {:?}, operand types = {:?}",
-                    ctx.op(op).attributes,
-                    ctx.op_operands(op)
-                        .iter()
-                        .map(|&value| ctx.value_ty(value))
-                        .collect::<Vec<_>>()
-                ))
-            })?;
-        if signature.params(ctx).len() != args.len() {
-            return Err(OwnershipPlanError::new("indirect call arity is malformed"));
-        }
-        validate_call_contract(ctx, op, signature, args, managed_layouts)?;
-        signature
-            .params(ctx)
-            .iter()
-            .map(|&ty| {
-                if is_typed_managed_reference(ctx, ty, managed_layouts) {
-                    if tail {
-                        EntryOwnership::Consumed
-                    } else {
-                        EntryOwnership::Retained
-                    }
-                } else {
-                    EntryOwnership::Plain
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        let callee = ctx
-            .op(op)
-            .attributes
-            .get_symbol("callee")
-            .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
-        if !definitions.contains_key(&callee) {
-            if args
-                .iter()
-                .any(|&value| is_managed_value(ctx, value, managed_layouts))
-            {
-                return Err(OwnershipPlanError::new(format!(
-                    "unclassified direct call {op:?} to @{callee} carries a managed reference"
-                )));
-            }
-            return Ok(());
-        }
-        let callee_op = definitions[&callee];
-        let signature = ctx
-            .op(callee_op)
-            .attributes
-            .get_type("type")
-            .and_then(|ty| core::Func::from_type_ref(ctx, ty))
-            .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
-        validate_call_contract(ctx, op, signature, args, managed_layouts)?;
-        entry_contracts
-            .get(&callee)
-            .cloned()
-            .ok_or_else(|| OwnershipPlanError::new("callee has no trusted entry contract"))?
-    };
-    if entries.len() != args.len() {
-        return Err(OwnershipPlanError::new(
-            "call arity differs from entry contract",
-        ));
-    }
-    let mut transfers = HashMap::<ValueRef, u32>::new();
-    for (index, (&argument, entry)) in args.iter().zip(entries).enumerate() {
-        let managed = is_managed_value(ctx, argument, managed_layouts);
-        if managed != (entry != EntryOwnership::Plain) {
-            return Err(OwnershipPlanError::new(
-                "call type differs from ownership contract",
-            ));
-        }
-        let kind = match (tail, entry) {
-            (_, EntryOwnership::Plain) => continue,
-            (false, EntryOwnership::Borrowed) => ActionKind::CallBorrow,
-            (false, EntryOwnership::Retained) => ActionKind::CallRetain,
-            (false, EntryOwnership::Consumed) => ActionKind::CallAcquire,
-            (true, EntryOwnership::Consumed) => ActionKind::TailTransfer,
-            (true, EntryOwnership::Borrowed | EntryOwnership::Retained) => {
-                return Err(OwnershipPlanError::new(
-                    "proper-tail managed parameter is not consumed",
-                ));
-            }
-        };
-        if kind == ActionKind::TailTransfer {
-            let root = root_value(aliases, argument);
-            let count = transfers.entry(root).or_default();
-            if *count > 0 || borrowed.contains_key(&root) {
-                actions.push(OwnershipAction {
-                    kind: ActionKind::CopyAcquire,
-                    value: argument,
-                    anchor: ActionAnchor::Before(op),
-                    destination: index as u32,
-                });
-            }
-            *count += 1;
-            transferred.insert(root);
-        }
-        actions.push(OwnershipAction {
-            kind,
-            value: argument,
-            anchor: ActionAnchor::Before(op),
-            destination: index as u32,
-        });
-    }
-    Ok(())
 }
 
 fn validate_allocation_result(
@@ -723,77 +755,73 @@ pub(super) fn validate_result_contract(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn plan_final_releases(
-    ctx: &IrContext,
-    cfg: &ValidatedFlatCfg,
-    block: BlockRef,
-    ops: &[OpRef],
-    owned: &HashSet<ValueRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
-    borrowed: &HashMap<ValueRef, ValueRef>,
-    liveness: &Liveness,
-    transferred: &HashSet<ValueRef>,
-    actions: &mut Vec<OwnershipAction>,
-) {
-    let mut last_use = HashMap::new();
-    for (index, &op) in ops.iter().enumerate() {
-        for &operand in ctx.op_operands(op) {
-            let root = root_value(aliases, operand);
-            if owned.contains(&root) {
-                last_use.insert(root, index);
+impl ActionPlanner<'_> {
+    fn plan_final_releases(
+        &mut self,
+        block: BlockRef,
+        ops: &[OpRef],
+        transferred: &HashSet<ValueRef>,
+    ) {
+        let mut last_use = HashMap::new();
+        for (index, &op) in ops.iter().enumerate() {
+            for &operand in self.ir.op_operands(op) {
+                let root = root_value(&self.aliases, operand);
+                if self.owned.contains(&root) {
+                    last_use.insert(root, index);
+                }
+                if let Some(owner) = self
+                    .borrowed
+                    .get(&operand)
+                    .copied()
+                    .map(|v| root_value(&self.aliases, v))
+                    && self.owned.contains(&owner)
+                {
+                    last_use.insert(owner, index);
+                }
             }
-            if let Some(owner) = borrowed
-                .get(&operand)
-                .copied()
-                .map(|v| root_value(aliases, v))
-                && owned.contains(&owner)
+        }
+        let mut dying = HashSet::new();
+        for value in &self.liveness.live_in[&block] {
+            if self.owned.contains(value)
+                && !self.liveness.live_out[&block].contains(value)
+                && !transferred.contains(value)
+                && !self.borrowed.contains_key(value)
             {
-                last_use.insert(owner, index);
+                dying.insert(*value);
             }
         }
-    }
-    let mut dying = HashSet::new();
-    for value in &liveness.live_in[&block] {
-        if owned.contains(value)
-            && !liveness.live_out[&block].contains(value)
-            && !transferred.contains(value)
-            && !borrowed.contains_key(value)
-        {
-            dying.insert(*value);
+        for value in &self.liveness.defs[&block] {
+            if self.owned.contains(value)
+                && !self.liveness.live_out[&block].contains(value)
+                && !transferred.contains(value)
+                && !self.borrowed.contains_key(value)
+            {
+                dying.insert(*value);
+            }
         }
-    }
-    for value in &liveness.defs[&block] {
-        if owned.contains(value)
-            && !liveness.live_out[&block].contains(value)
-            && !transferred.contains(value)
-            && !borrowed.contains_key(value)
-        {
-            dying.insert(*value);
-        }
-    }
-    let mut dying = dying.into_iter().collect::<Vec<_>>();
-    dying.sort_unstable();
-    for (destination, value) in dying.into_iter().enumerate() {
-        let anchor = if let Some(&index) = last_use.get(&value) {
-            let op = ops[index];
-            if cfg.is_terminator(op) {
-                ActionAnchor::Before(op)
-            } else {
+        let mut dying = dying.into_iter().collect::<Vec<_>>();
+        dying.sort_unstable();
+        for (destination, value) in dying.into_iter().enumerate() {
+            let anchor = if let Some(&index) = last_use.get(&value) {
+                let op = ops[index];
+                if self.cfg.is_terminator(op) {
+                    ActionAnchor::Before(op)
+                } else {
+                    ActionAnchor::After(op)
+                }
+            } else if self.liveness.live_in[&block].contains(&value) {
+                ActionAnchor::BlockStart(block)
+            } else if let ValueDef::OpResult(op, _) = self.ir.value_def(value) {
                 ActionAnchor::After(op)
-            }
-        } else if liveness.live_in[&block].contains(&value) {
-            ActionAnchor::BlockStart(block)
-        } else if let ValueDef::OpResult(op, _) = ctx.value_def(value) {
-            ActionAnchor::After(op)
-        } else {
-            ActionAnchor::BlockStart(block)
-        };
-        actions.push(OwnershipAction {
-            kind: ActionKind::FinalRelease,
-            value,
-            anchor,
-            destination: destination as u32,
-        });
+            } else {
+                ActionAnchor::BlockStart(block)
+            };
+            self.actions.push(OwnershipAction {
+                kind: ActionKind::FinalRelease,
+                value,
+                anchor,
+                destination: destination as u32,
+            });
+        }
     }
 }
