@@ -104,6 +104,43 @@ verifiers should remain responsible for graph-wide invariants that require
 walking use-def chains, symbol tables, or nested region relationships. Operation
 interfaces describe behavior, not validation phases.
 
+Control-flow and SSA forwarding queries use three target-independent operation
+interfaces. `Branch` describes raw block successors and the operands forwarded
+to each successor block's arguments. `RegionBranch` describes possible transfers
+from an operation entry or one of its nested-region terminators to a nested
+region or back to the parent operation. `RegionBranchTerminator` describes the
+values a terminator forwards along such a region transfer. Region branch points
+and successors are explicit values: a point is either `Parent` or a concrete
+nested-region terminator, and a successor is either a concrete region or
+`Parent`.
+
+These interfaces are queried through TrunkIR's operation registry and remain
+object-safe. Their dyn-facing methods return named concrete small collections;
+they do not use RPITIT, GATs, caller-visible tuples, or dialect-specific
+downcasts. The collections describe transfers from the existing operand,
+result, block, region, and successor lists rather than storing a second copy of
+those IR facts.
+
+Shared interface verification is fail-closed for every registered mapping. A
+block edge must report every raw successor exactly once, remain in the source
+region, and forward exactly one type-compatible value per successor block
+argument. A region edge must remain within the owning operation's nested region
+tree, use a valid nested terminator branch point, and forward exactly one
+type-compatible value per successor region entry argument or parent operation
+result. A registered region terminator without a complete owning
+`RegionBranch` mapping is invalid. Consumers that require a complete control-flow
+view must likewise reject operations for which the applicable interface is not
+registered; interfaces describe possible transfers and do not materialize a
+flat CFG.
+
+`scf.switch` keeps its existing textual container region of `scf.case` and
+`scf.default` wrapper operations. That container is declarative rather than an
+executable successor. The switch's `RegionBranch` successors are the case and
+default body regions derived from those direct wrappers (or `Parent` for the
+implicit unmatched path when no default exists). The wrappers also expose
+their own parent/body boundary, so generic nested-region walkers never need to
+decode the switch's container shape themselves.
+
 ## Core Invariants
 
 - A `core.module` owns the top-level region for a compilation unit.
