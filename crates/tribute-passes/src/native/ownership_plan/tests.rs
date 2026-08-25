@@ -26,6 +26,18 @@ fn count(function: &FunctionOwnershipPlan, kind: ActionKind) -> usize {
         .count()
 }
 
+fn assert_plan_error_unchanged(ir: &str, expected: &str) {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let before = print_module(&ctx, module.op());
+    let error = build_native_ownership_plan(&ctx, module).expect_err("invalid ownership input");
+    assert!(
+        error.to_string().contains(expected),
+        "unexpected error: {error}"
+    );
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
 #[test]
 fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
     let (_ctx, _module, plan) = build(
@@ -196,6 +208,67 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         assert!(build_native_ownership_plan(&ctx, module).is_err());
         assert_eq!(print_module(&ctx, module.op()), before);
         ctx.op_mut(projection).attributes.insert(key, original);
+    }
+}
+
+#[test]
+fn malformed_projection_arity_fails_before_mutation() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
+  !ChildRef = adt.typeref() {name = @Child}
+  !Box = adt.struct() {name = @Box, fields = [[@child, !ChildRef]]}
+  !BoxRef = adt.typeref() {name = @Box}
+  func.func @load(%owner: !BoxRef) -> !ChildRef {
+    %child, %extra = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef, !ChildRef
+    func.return %child
+  }
+}"#,
+        "ADT projection must have exactly one result",
+    );
+}
+
+#[test]
+fn early_native_terminators_and_successors_fail_before_mutation() {
+    for ir in [
+        r#"core.module @test {
+  func.func @f() -> core.nil {
+    func.return
+    func.return
+  }
+}"#,
+        r#"core.module @test {
+  func.func @f() -> core.nil {
+    ^entry:
+      test.jump [^exit]
+      func.return
+    ^exit:
+      func.return
+  }
+}"#,
+    ] {
+        assert_plan_error_unchanged(
+            ir,
+            "control-flow operation precedes the final block operation",
+        );
+    }
+}
+
+#[test]
+fn physical_empty_results_reject_values_before_mutation() {
+    for result in ["core.nil", "core.never"] {
+        let ir = format!(
+            r#"core.module @test {{
+  func.func @f() -> {result} {{
+    %value = arith.const {{value = 1}} : core.i32
+    func.return %value
+  }}
+}}"#
+        );
+        assert_plan_error_unchanged(
+            &ir,
+            "function return differs from the exact callable signature",
+        );
     }
 }
 
@@ -667,6 +740,35 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let mut stale_value = plan.clone();
     stale_value.functions[0].actions[0].value = ctx.block_args(other_entry)[0];
     assert!(stale_value.validate_against(&ctx, module).is_err());
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
+#[test]
+fn plan_revalidation_requires_the_exact_reachable_function_set() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  func.func @first() -> core.nil { func.return }
+  func.func @second() -> core.nil { func.return }
+}"#,
+    );
+
+    let mut incomplete = plan.clone();
+    incomplete.functions.pop();
+    let before = print_module(&ctx, module.op());
+    let error = incomplete
+        .validate_against(&ctx, module)
+        .expect_err("a plan may not omit a reachable function");
+    assert!(error.to_string().contains("reachable function identities"));
+    assert_eq!(print_module(&ctx, module.op()), before);
+
+    let detached = plan.functions[1].operation;
+    let parent = ctx.op(detached).parent_block.expect("module block");
+    ctx.remove_op_from_block(parent, detached);
+    let before = print_module(&ctx, module.op());
+    let error = plan
+        .validate_against(&ctx, module)
+        .expect_err("a plan may not retain a detached function");
+    assert!(error.to_string().contains("reachable function identities"));
     assert_eq!(print_module(&ctx, module.op()), before);
 }
 

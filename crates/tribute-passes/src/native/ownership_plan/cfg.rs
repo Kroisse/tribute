@@ -42,12 +42,20 @@ impl ValidatedFlatCfg {
         let mut branches = HashMap::new();
         for &block in &blocks {
             let ops = &ctx.block(block).ops;
-            let Some(&terminator) = ops.last() else {
+            let Some((&terminator, preceding)) = ops.split_last() else {
                 return Err(OwnershipPlanError::new("function block is empty"));
             };
             if ops.iter().any(|&op| !ctx.op(op).regions.is_empty()) {
                 return Err(OwnershipPlanError::new(
                     "unsupported structured or nested control-flow region",
+                ));
+            }
+            if preceding
+                .iter()
+                .any(|&op| !ctx.op(op).successors.is_empty() || is_native_terminator(ctx, op))
+            {
+                return Err(OwnershipPlanError::new(
+                    "control-flow operation precedes the final block operation",
                 ));
             }
 
@@ -81,11 +89,7 @@ impl ValidatedFlatCfg {
                         "conditional branch contract is malformed",
                     ));
                 }
-            } else if !(func::Return::matches(ctx, terminator)
-                || func::TailCall::matches(ctx, terminator)
-                || func::TailCallIndirect::matches(ctx, terminator)
-                || func::Unreachable::matches(ctx, terminator))
-            {
+            } else if !is_native_terminator(ctx, terminator) {
                 return Err(OwnershipPlanError::new("unsupported native CFG terminator"));
             }
 
@@ -140,4 +144,13 @@ impl ValidatedFlatCfg {
                 }),
         )
     }
+}
+
+fn is_native_terminator(ctx: &IrContext, op: OpRef) -> bool {
+    cf::Br::matches(ctx, op)
+        || cf::CondBr::matches(ctx, op)
+        || func::Return::matches(ctx, op)
+        || func::TailCall::matches(ctx, op)
+        || func::TailCallIndirect::matches(ctx, op)
+        || func::Unreachable::matches(ctx, op)
 }

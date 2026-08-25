@@ -220,12 +220,14 @@ fn collect_borrowed_loads(
                 None
             };
             let Some(source) = source else { continue };
-            let Some(&result) = ctx.op_results(op).first() else {
-                return Err(OwnershipPlanError::new("ADT projection has no result"));
+            let [result] = ctx.op_results(op) else {
+                return Err(OwnershipPlanError::new(
+                    "ADT projection must have exactly one result",
+                ));
             };
-            validate_projection_contract(ctx, op, source, result, managed_layouts)?;
-            if is_managed_value(ctx, result, managed_layouts) {
-                borrowed.insert(result, root_value(aliases, source));
+            validate_projection_contract(ctx, op, source, *result, managed_layouts)?;
+            if is_managed_value(ctx, *result, managed_layouts) {
+                borrowed.insert(*result, root_value(aliases, source));
             }
         }
     }
@@ -732,6 +734,17 @@ pub(super) fn validate_result_contract(
     managed_layouts: &HashSet<TypeRef>,
     subject: &str,
 ) -> Result<(), OwnershipPlanError> {
+    let expected_data = ctx.types.get(expected);
+    let physically_empty = expected_data.dialect == Symbol::new("core")
+        && (expected_data.name == Symbol::new("nil") || expected_data.name == Symbol::new("never"));
+    if physically_empty {
+        if values.is_empty() || matches!(values, [value] if ctx.value_ty(*value) == expected) {
+            return Ok(());
+        }
+        return Err(OwnershipPlanError::new(format!(
+            "{subject} differs from the exact callable signature"
+        )));
+    }
     if !is_typed_managed_reference(ctx, expected, managed_layouts)
         && !values
             .iter()
@@ -739,14 +752,7 @@ pub(super) fn validate_result_contract(
     {
         return Ok(());
     }
-    let expected_data = ctx.types.get(expected);
-    let physically_empty = expected_data.dialect == Symbol::new("core")
-        && (expected_data.name == Symbol::new("nil") || expected_data.name == Symbol::new("never"));
-    let valid = if physically_empty {
-        values.is_empty()
-    } else {
-        matches!(values, [value] if types_compatible(ctx, ctx.value_ty(*value), expected, managed_layouts))
-    };
+    let valid = matches!(values, [value] if types_compatible(ctx, ctx.value_ty(*value), expected, managed_layouts));
     if !valid {
         return Err(OwnershipPlanError::new(format!(
             "{subject} differs from the exact callable signature"

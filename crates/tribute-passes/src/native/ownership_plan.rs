@@ -222,6 +222,27 @@ impl NativeOwnershipPlan {
         if self.module != module.op() {
             return Err(OwnershipPlanError::new("module identity is stale"));
         }
+        let mut current_functions = HashSet::new();
+        walk_module(ctx, module, |op| {
+            if let Ok(function) = func::Func::from_op(ctx, op)
+                && function
+                    .body_if_present(ctx)
+                    .is_some_and(|body| !ctx.region(body).blocks.is_empty())
+            {
+                current_functions.insert(op);
+            }
+        });
+        let planned_functions = self
+            .functions
+            .iter()
+            .map(|function| function.operation)
+            .collect::<HashSet<_>>();
+        if planned_functions.len() != self.functions.len() || current_functions != planned_functions
+        {
+            return Err(OwnershipPlanError::new(
+                "reachable function identities differ from the ownership plan",
+            ));
+        }
         validate_plan(ctx, self)?;
         self.remap_rtti_types(ctx, module, &[])?;
         Ok(())
@@ -279,7 +300,7 @@ pub fn build_native_ownership_plan(
             continue;
         };
         let symbol = function.sym_name(ctx);
-        let Some(body) = ctx.op(op).regions.first().copied() else {
+        let Some(body) = function.body_if_present(ctx) else {
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
         };
@@ -764,16 +785,13 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 "plan has duplicate function identity",
             ));
         }
-        if !func::Func::matches(ctx, function.operation) {
+        let Ok(function_op) = func::Func::from_op(ctx, function.operation) else {
             return Err(OwnershipPlanError::new(
                 "planned function identity is stale",
             ));
-        }
-        let body = ctx
-            .op(function.operation)
-            .regions
-            .first()
-            .copied()
+        };
+        let body = function_op
+            .body_if_present(ctx)
             .ok_or_else(|| OwnershipPlanError::new("planned function body is stale"))?;
         let entry = ctx
             .region(body)
