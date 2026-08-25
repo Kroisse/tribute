@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::fmt::Write as _;
+
 use common::{
     compile_and_run_native_with_borrowed_parameters,
     compile_and_run_native_with_done_continuation_dedup,
@@ -56,7 +58,7 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
 fn focused_rc_ops(ir: &str) -> String {
     let mut function = "<outside function>";
     let mut emitted_function = None;
-    let mut output = Vec::new();
+    let mut output = String::new();
     for line in ir.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("clif.func ") {
@@ -72,25 +74,30 @@ fn focused_rc_ops(ir: &str) -> String {
             continue;
         }
         if emitted_function != Some(function) {
-            output.push(format!("{function}:"));
+            writeln!(&mut output, "{function}:").expect("writing to a String cannot fail");
             emitted_function = Some(function);
         }
-        output.push(trimmed.to_owned());
+        writeln!(&mut output, "{trimmed}").expect("writing to a String cannot fail");
     }
-    output.join("\n")
+    output.truncate(output.len().saturating_sub(1));
+    output
 }
 
 fn generated_rtti_field_releases(ir: &str) -> String {
     let mut function = None;
     let mut count = 0;
-    let mut releases = Vec::new();
+    let mut releases = String::new();
     for line in ir.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("clif.func ") {
             if let Some(function) = function.take()
                 && count > 0
             {
-                releases.push(format!("{function}={count}"));
+                if !releases.is_empty() {
+                    releases.push(',');
+                }
+                write!(&mut releases, "{function}={count}")
+                    .expect("writing to a String cannot fail");
             }
             count = 0;
             function = trimmed
@@ -104,9 +111,12 @@ fn generated_rtti_field_releases(ir: &str) -> String {
     if let Some(function) = function
         && count > 0
     {
-        releases.push(format!("{function}={count}"));
+        if !releases.is_empty() {
+            releases.push(',');
+        }
+        write!(&mut releases, "{function}={count}").expect("writing to a String cannot fail");
     }
-    releases.join(",")
+    releases
 }
 
 fn identity_done_symbols(ir: &str) -> Vec<&str> {
