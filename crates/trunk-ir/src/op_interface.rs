@@ -7,8 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::LazyLock;
 
+use smallvec::SmallVec;
+
 use crate::Symbol;
-use crate::{IrContext, OpRef, TypeRef};
+use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -234,6 +236,462 @@ macro_rules! register_isolated_op {
 }
 
 // =============================================================================
+// Control-flow interfaces
+// =============================================================================
+
+/// Failure to provide a complete control-flow interface answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlFlowInterfaceError {
+    kind: ControlFlowInterfaceErrorKind,
+    detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlFlowInterfaceErrorKind {
+    Incomplete,
+    NotApplicable,
+}
+
+impl ControlFlowInterfaceError {
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ControlFlowInterfaceErrorKind::Incomplete,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn not_applicable(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ControlFlowInterfaceErrorKind::NotApplicable,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn is_not_applicable(&self) -> bool {
+        self.kind == ControlFlowInterfaceErrorKind::NotApplicable
+    }
+}
+
+impl fmt::Display for ControlFlowInterfaceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for ControlFlowInterfaceError {}
+
+/// Values forwarded along one control-flow edge.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ForwardedValues {
+    values: SmallVec<[ValueRef; 4]>,
+}
+
+impl ForwardedValues {
+    pub fn new(values: impl IntoIterator<Item = ValueRef>) -> Self {
+        Self {
+            values: values.into_iter().collect(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[ValueRef] {
+        &self.values
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+/// One raw block successor and the values forwarded to its block arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchSuccessor {
+    pub block: BlockRef,
+    pub forwarded: ForwardedValues,
+}
+
+impl BranchSuccessor {
+    pub fn new(block: BlockRef, forwarded: impl IntoIterator<Item = ValueRef>) -> Self {
+        Self {
+            block,
+            forwarded: ForwardedValues::new(forwarded),
+        }
+    }
+}
+
+/// Complete block-successor answer for one branch operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchSuccessors {
+    edges: SmallVec<[BranchSuccessor; 2]>,
+}
+
+impl BranchSuccessors {
+    pub fn new(edges: impl IntoIterator<Item = BranchSuccessor>) -> Self {
+        Self {
+            edges: edges.into_iter().collect(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[BranchSuccessor] {
+        &self.edges
+    }
+}
+
+/// Source of a transfer through a region-holding operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RegionBranchPoint {
+    /// First entry into the operation from its parent block.
+    Parent,
+    /// A terminator in one of the operation's semantic nested regions.
+    Terminator(OpRef),
+}
+
+/// Target of a transfer through a region-holding operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RegionSuccessor {
+    /// Enter a nested region.
+    Region(RegionRef),
+    /// Leave the operation and make its results available.
+    Parent,
+}
+
+/// Complete successor answer for one region branch point.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RegionSuccessors {
+    successors: SmallVec<[RegionSuccessor; 4]>,
+}
+
+impl RegionSuccessors {
+    pub fn new(successors: impl IntoIterator<Item = RegionSuccessor>) -> Self {
+        Self {
+            successors: successors.into_iter().collect(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[RegionSuccessor] {
+        &self.successors
+    }
+}
+
+/// Values receiving the forwarded operands of a region transfer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuccessorInputs {
+    values: SmallVec<[ValueRef; 4]>,
+}
+
+impl SuccessorInputs {
+    fn new(values: impl IntoIterator<Item = ValueRef>) -> Self {
+        Self {
+            values: values.into_iter().collect(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[ValueRef] {
+        &self.values
+    }
+}
+
+/// Named operand-to-input transfer for one region edge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionValueTransfer {
+    pub successor: RegionSuccessor,
+    pub forwarded: ForwardedValues,
+    pub inputs: SuccessorInputs,
+}
+
+/// Object-safe block branch semantics.
+pub trait Branch: Sync {
+    fn successors(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+    ) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+}
+
+pub type BranchSuccessorsFn =
+    fn(&IrContext, OpRef) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+
+/// Registry entry for [`Branch`].
+pub struct BranchRegistration {
+    pub dialect: &'static str,
+    pub op_name: &'static str,
+    pub successors: BranchSuccessorsFn,
+}
+
+impl Branch for BranchRegistration {
+    fn successors(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+    ) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        (self.successors)(ctx, op)
+    }
+}
+
+inventory::collect!(BranchRegistration);
+
+static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::new();
+        for registration in inventory::iter::<BranchRegistration> {
+            let key = (
+                Symbol::from_dynamic(registration.dialect),
+                Symbol::from_dynamic(registration.op_name),
+            );
+            assert!(
+                registry.insert(key, registration).is_none(),
+                "duplicate Branch registration for '{}.{}'",
+                registration.dialect,
+                registration.op_name,
+            );
+        }
+        registry
+    });
+
+/// Dyn query and registration entry point for [`Branch`].
+pub struct BranchOps;
+
+impl BranchOps {
+    #[doc(hidden)]
+    pub const fn register(
+        dialect: &'static str,
+        op_name: &'static str,
+        successors: BranchSuccessorsFn,
+    ) -> BranchRegistration {
+        BranchRegistration {
+            dialect,
+            op_name,
+            successors,
+        }
+    }
+
+    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn Branch> {
+        let data = ctx.op(op);
+        BRANCH_REGISTRY
+            .get(&(data.dialect, data.name))
+            .map(|registration| *registration as &dyn Branch)
+    }
+}
+
+/// Object-safe control-flow semantics between an operation and nested regions.
+pub trait RegionBranch: Sync {
+    fn successors(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
+
+    fn entry_successor_operands(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+}
+
+pub type RegionSuccessorsFn =
+    fn(&IrContext, OpRef, RegionBranchPoint) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
+pub type EntrySuccessorOperandsFn =
+    fn(&IrContext, OpRef, RegionSuccessor) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+
+/// Registry entry for [`RegionBranch`].
+pub struct RegionBranchRegistration {
+    pub dialect: &'static str,
+    pub op_name: &'static str,
+    pub successors: RegionSuccessorsFn,
+    pub entry_successor_operands: EntrySuccessorOperandsFn,
+}
+
+impl RegionBranch for RegionBranchRegistration {
+    fn successors(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        (self.successors)(ctx, op, point)
+    }
+
+    fn entry_successor_operands(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        (self.entry_successor_operands)(ctx, op, successor)
+    }
+}
+
+inventory::collect!(RegionBranchRegistration);
+
+static REGION_BRANCH_REGISTRY: LazyLock<
+    HashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
+> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for registration in inventory::iter::<RegionBranchRegistration> {
+        let key = (
+            Symbol::from_dynamic(registration.dialect),
+            Symbol::from_dynamic(registration.op_name),
+        );
+        assert!(
+            registry.insert(key, registration).is_none(),
+            "duplicate RegionBranch registration for '{}.{}'",
+            registration.dialect,
+            registration.op_name,
+        );
+    }
+    registry
+});
+
+/// Dyn query and transfer helpers for [`RegionBranch`].
+pub struct RegionBranchOps;
+
+impl RegionBranchOps {
+    #[doc(hidden)]
+    pub const fn register(
+        dialect: &'static str,
+        op_name: &'static str,
+        successors: RegionSuccessorsFn,
+        entry_successor_operands: EntrySuccessorOperandsFn,
+    ) -> RegionBranchRegistration {
+        RegionBranchRegistration {
+            dialect,
+            op_name,
+            successors,
+            entry_successor_operands,
+        }
+    }
+
+    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranch> {
+        let data = ctx.op(op);
+        REGION_BRANCH_REGISTRY
+            .get(&(data.dialect, data.name))
+            .map(|registration| *registration as &dyn RegionBranch)
+    }
+
+    /// Build the named value transfer for one already-reported successor.
+    pub fn value_transfer(
+        ctx: &IrContext,
+        op: OpRef,
+        point: RegionBranchPoint,
+        successor: RegionSuccessor,
+    ) -> Result<RegionValueTransfer, ControlFlowInterfaceError> {
+        let interface = Self::get(ctx, op).ok_or_else(|| {
+            ControlFlowInterfaceError::new("operation has no RegionBranch registration")
+        })?;
+        let forwarded = match point {
+            RegionBranchPoint::Parent => interface.entry_successor_operands(ctx, op, successor)?,
+            RegionBranchPoint::Terminator(terminator) => {
+                let terminator_interface = RegionBranchTerminatorOps::get(ctx, terminator)
+                    .ok_or_else(|| {
+                        ControlFlowInterfaceError::new(format!(
+                            "terminator {terminator} has no RegionBranchTerminator registration"
+                        ))
+                    })?;
+                terminator_interface.successor_operands(ctx, terminator, successor)?
+            }
+        };
+        let inputs = match successor {
+            RegionSuccessor::Parent => SuccessorInputs::new(ctx.op_results(op).iter().copied()),
+            RegionSuccessor::Region(region) => {
+                let entry = ctx.region(region).blocks.first().copied().ok_or_else(|| {
+                    ControlFlowInterfaceError::new(format!(
+                        "successor region {region} has no entry block"
+                    ))
+                })?;
+                SuccessorInputs::new(ctx.block_args(entry).iter().copied())
+            }
+        };
+        Ok(RegionValueTransfer {
+            successor,
+            forwarded,
+            inputs,
+        })
+    }
+}
+
+/// Object-safe SSA forwarding semantics for a nested-region terminator.
+pub trait RegionBranchTerminator: Sync {
+    fn successor_operands(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+}
+
+pub type RegionSuccessorOperandsFn =
+    fn(&IrContext, OpRef, RegionSuccessor) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+
+/// Registry entry for [`RegionBranchTerminator`].
+pub struct RegionBranchTerminatorRegistration {
+    pub dialect: &'static str,
+    pub op_name: &'static str,
+    pub successor_operands: RegionSuccessorOperandsFn,
+}
+
+impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
+    fn successor_operands(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        (self.successor_operands)(ctx, op, successor)
+    }
+}
+
+inventory::collect!(RegionBranchTerminatorRegistration);
+
+static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
+    HashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
+> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
+        let key = (
+            Symbol::from_dynamic(registration.dialect),
+            Symbol::from_dynamic(registration.op_name),
+        );
+        assert!(
+            registry.insert(key, registration).is_none(),
+            "duplicate RegionBranchTerminator registration for '{}.{}'",
+            registration.dialect,
+            registration.op_name,
+        );
+    }
+    registry
+});
+
+/// Dyn query and registration entry point for [`RegionBranchTerminator`].
+pub struct RegionBranchTerminatorOps;
+
+impl RegionBranchTerminatorOps {
+    #[doc(hidden)]
+    pub const fn register(
+        dialect: &'static str,
+        op_name: &'static str,
+        successor_operands: RegionSuccessorOperandsFn,
+    ) -> RegionBranchTerminatorRegistration {
+        RegionBranchTerminatorRegistration {
+            dialect,
+            op_name,
+            successor_operands,
+        }
+    }
+
+    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranchTerminator> {
+        let data = ctx.op(op);
+        REGION_BRANCH_TERMINATOR_REGISTRY
+            .get(&(data.dialect, data.name))
+            .map(|registration| *registration as &dyn RegionBranchTerminator)
+    }
+}
+
+// =============================================================================
 // TypeAliasHint — dialect-provided alias name suggestions for printer
 // =============================================================================
 
@@ -341,5 +799,16 @@ mod tests {
     fn test_unregistered_ops_are_not_isolated() {
         // This test would need a database and operation, so we just verify the struct exists
         let _ = IsolatedFromAboveOps;
+    }
+
+    #[test]
+    fn control_flow_interfaces_are_object_safe() {
+        fn accepts_branch(_: &dyn Branch) {}
+        fn accepts_region_branch(_: &dyn RegionBranch) {}
+        fn accepts_region_terminator(_: &dyn RegionBranchTerminator) {}
+
+        let _ = accepts_branch;
+        let _ = accepts_region_branch;
+        let _ = accepts_region_terminator;
     }
 }

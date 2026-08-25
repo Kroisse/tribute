@@ -20,6 +20,10 @@ use std::fmt;
 use derive_more::{Display, Error};
 
 use super::context::IrContext;
+use super::op_interface::{
+    BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
+    RegionValueTransfer,
+};
 use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::walk;
@@ -323,11 +327,17 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     };
 
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        let error_count = errors.len();
         validate_arith_cmpf_predicate(ctx, op, &mut errors);
         validate_scf_if_structure(ctx, op, &mut errors);
         validate_scf_loop_result_arity(ctx, op, &mut errors);
         validate_scf_switch_result_arity(ctx, op, &mut errors);
         validate_func_tail_call_indirect(ctx, op, &mut errors);
+        if errors.len() == error_count {
+            validate_branch_interface(ctx, op, &mut errors);
+            validate_region_branch_interface(ctx, op, &mut errors);
+            validate_region_branch_terminator_interface(ctx, op, &mut errors);
+        }
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
 
@@ -468,6 +478,342 @@ fn operation_verifier_error(
     }
 }
 
+fn validate_forwarding_types(
+    ctx: &IrContext,
+    op: OpRef,
+    forwarded: &[ValueRef],
+    inputs: &[ValueRef],
+    edge_name: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if forwarded.len() != inputs.len() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "{edge_name} forwards {} value(s), but its successor expects {} input(s)",
+                forwarded.len(),
+                inputs.len(),
+            ),
+        ));
+        return;
+    }
+    for (index, (&value, &input)) in forwarded.iter().zip(inputs).enumerate() {
+        if ctx.value_ty(value) != ctx.value_ty(input) {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("{edge_name} value #{index} type does not match successor input type"),
+            ));
+        }
+    }
+}
+
+fn forwarding_comes_from_operands(source: &[ValueRef], forwarded: &[ValueRef]) -> bool {
+    let mut available = HashMap::<ValueRef, usize>::new();
+    for &value in source {
+        *available.entry(value).or_default() += 1;
+    }
+    for &value in forwarded {
+        let Some(count) = available.get_mut(&value) else {
+            return false;
+        };
+        if *count == 0 {
+            return false;
+        }
+        *count -= 1;
+    }
+    true
+}
+
+fn validate_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let Some(interface) = BranchOps::get(ctx, op) else {
+        return;
+    };
+    if !ctx.op_results(op).is_empty() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "Branch operation must be resultless",
+        ));
+    }
+    let parent_block = ctx.op(op).parent_block;
+    if parent_block.is_none_or(|block| ctx.block(block).ops.last().copied() != Some(op)) {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "Branch operation must be the final operation in its block",
+        ));
+    }
+    let successors = match interface.successors(ctx, op) {
+        Ok(successors) => successors,
+        Err(error) => {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("Branch interface is incomplete: {error}"),
+            ));
+            return;
+        }
+    };
+    let raw_successors = &ctx.op(op).successors;
+    if successors.as_slice().len() != raw_successors.len() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "Branch interface reports {} successor(s), but the operation stores {}",
+                successors.as_slice().len(),
+                raw_successors.len(),
+            ),
+        ));
+        return;
+    }
+    let source_region = ctx
+        .op(op)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region);
+    for (index, (edge, &raw_successor)) in
+        successors.as_slice().iter().zip(raw_successors).enumerate()
+    {
+        if edge.block != raw_successor {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("Branch interface successor #{index} does not match the stored successor"),
+            ));
+            continue;
+        }
+        if source_region.is_none() || ctx.block(edge.block).parent_region != source_region {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("Branch successor #{index} leaves the source region"),
+            ));
+        }
+        if !forwarding_comes_from_operands(ctx.op_operands(op), edge.forwarded.as_slice()) {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("Branch successor #{index} reports a value that is not a branch operand"),
+            ));
+        }
+        validate_forwarding_types(
+            ctx,
+            op,
+            edge.forwarded.as_slice(),
+            ctx.block_args(edge.block),
+            &format!("Branch successor #{index}"),
+            errors,
+        );
+    }
+}
+
+fn region_is_nested_under_op(ctx: &IrContext, region: RegionRef, owner: OpRef) -> bool {
+    let mut current = Some(region);
+    while let Some(region) = current {
+        let Some(parent_op) = ctx.region(region).parent_op else {
+            return false;
+        };
+        if parent_op == owner {
+            return true;
+        }
+        current = ctx
+            .op(parent_op)
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region);
+    }
+    false
+}
+
+fn validate_region_transfer(
+    ctx: &IrContext,
+    owner: OpRef,
+    point: RegionBranchPoint,
+    successor: RegionSuccessor,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let RegionSuccessor::Region(region) = successor
+        && !region_is_nested_under_op(ctx, region, owner)
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            owner,
+            format!("RegionBranch successor {region} is outside the operation's region tree"),
+        ));
+        return;
+    }
+    let transfer = match RegionBranchOps::value_transfer(ctx, owner, point, successor) {
+        Ok(transfer) => transfer,
+        Err(error) => {
+            errors.push(operation_verifier_error(
+                ctx,
+                owner,
+                format!("RegionBranch value mapping is incomplete: {error}"),
+            ));
+            return;
+        }
+    };
+    let RegionValueTransfer {
+        successor,
+        forwarded,
+        inputs,
+    } = transfer;
+    let source_operands = match point {
+        RegionBranchPoint::Parent => ctx.op_operands(owner),
+        RegionBranchPoint::Terminator(terminator) => ctx.op_operands(terminator),
+    };
+    if !forwarding_comes_from_operands(source_operands, forwarded.as_slice()) {
+        errors.push(operation_verifier_error(
+            ctx,
+            owner,
+            format!(
+                "RegionBranch edge to {successor:?} reports a value that is not a source operand"
+            ),
+        ));
+    }
+    validate_forwarding_types(
+        ctx,
+        owner,
+        forwarded.as_slice(),
+        inputs.as_slice(),
+        &format!("RegionBranch edge to {successor:?}"),
+        errors,
+    );
+}
+
+fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    let Some(interface) = RegionBranchOps::get(ctx, op) else {
+        return;
+    };
+    let successors = match interface.successors(ctx, op, RegionBranchPoint::Parent) {
+        Ok(successors) => successors,
+        Err(error) => {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("RegionBranch entry mapping is incomplete: {error}"),
+            ));
+            return;
+        }
+    };
+    let mut unique = HashSet::new();
+    for &successor in successors.as_slice() {
+        if !unique.insert(successor) {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                format!("RegionBranch entry reports duplicate successor {successor:?}"),
+            ));
+            continue;
+        }
+        validate_region_transfer(ctx, op, RegionBranchPoint::Parent, successor, errors);
+        let RegionSuccessor::Region(region) = successor else {
+            continue;
+        };
+        for &block in &ctx.region(region).blocks {
+            let Some(_) = ctx.block(block).ops.last() else {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    format!("RegionBranch successor region {region} contains an empty block"),
+                ));
+                continue;
+            };
+            // RegionBranch describes the semantic edges exposed by the owning
+            // operation; it does not impose a terminator kind on every
+            // successor region. Some existing resultless structured regions
+            // use implicit fallthrough, while explicit terminators are checked
+            // independently through RegionBranchTerminatorOps below.
+        }
+    }
+}
+
+fn validate_region_branch_terminator_interface(
+    ctx: &IrContext,
+    op: OpRef,
+    errors: &mut Vec<ValidationError>,
+) {
+    if RegionBranchTerminatorOps::get(ctx, op).is_none() {
+        return;
+    }
+    if !ctx.op_results(op).is_empty() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "RegionBranchTerminator must be resultless",
+        ));
+    }
+    if !ctx.op(op).successors.is_empty() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "RegionBranchTerminator must not store raw block successors",
+        ));
+    }
+    let Some(parent_block) = ctx.op(op).parent_block else {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "RegionBranchTerminator is detached from a block",
+        ));
+        return;
+    };
+    if ctx.block(parent_block).ops.last().copied() != Some(op) {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "RegionBranchTerminator must be the final operation in its block",
+        ));
+    }
+
+    let point = RegionBranchPoint::Terminator(op);
+    let mut region = ctx.block(parent_block).parent_region;
+    while let Some(current_region) = region {
+        let Some(owner) = ctx.region(current_region).parent_op else {
+            break;
+        };
+        if let Some(interface) = RegionBranchOps::get(ctx, owner) {
+            match interface.successors(ctx, owner, point) {
+                Ok(successors) => {
+                    if successors.as_slice().is_empty() {
+                        errors.push(operation_verifier_error(
+                            ctx,
+                            op,
+                            "owning RegionBranch reports no successor for this terminator",
+                        ));
+                        return;
+                    }
+                    let mut unique = HashSet::new();
+                    for &successor in successors.as_slice() {
+                        if !unique.insert(successor) {
+                            errors.push(operation_verifier_error(
+                                ctx,
+                                op,
+                                format!("terminator reports duplicate successor {successor:?}"),
+                            ));
+                            continue;
+                        }
+                        validate_region_transfer(ctx, owner, point, successor, errors);
+                    }
+                    return;
+                }
+                Err(error) if error.is_not_applicable() => {}
+                Err(_) => return,
+            }
+        }
+        region = ctx
+            .op(owner)
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region);
+    }
+    errors.push(operation_verifier_error(
+        ctx,
+        op,
+        "has no complete owning RegionBranch mapping",
+    ));
+}
+
 const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
 
 fn supported_cmpf_predicates_text() -> String {
@@ -530,7 +876,6 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         return;
     }
 
-    let result_arity = ctx.op_results(op).len();
     for (region_name, &region) in [
         ("then_region", &data.regions[0]),
         ("else_region", &data.regions[1]),
@@ -572,17 +917,6 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 format!("{region_name} must terminate with scf.yield"),
             ));
             continue;
-        }
-
-        let yield_arity = ctx.op_operands(yield_op).len();
-        if yield_arity != result_arity {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!(
-                    "{region_name} yields {yield_arity} value(s), but scf.if has {result_arity} result(s)"
-                ),
-            ));
         }
     }
 }
@@ -867,6 +1201,21 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
+        let mut operations = Vec::new();
+        let dialect = Symbol::from_dynamic(dialect);
+        let name = Symbol::from_dynamic(name);
+        let body = module.body(ctx).expect("test module must have a body");
+        walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+            let data = ctx.op(op);
+            if data.dialect == dialect && data.name == name {
+                operations.push(op);
+            }
+            std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+        });
+        operations
     }
 
     fn single_block_yield_region(
@@ -1929,8 +2278,296 @@ mod tests {
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("then_region yields 0 value(s)"));
-        assert!(operation_errors[0].contains("scf.if has 1 result(s)"));
+        assert!(operation_errors[0].contains("forwards 0 value(s)"));
+        assert!(operation_errors[0].contains("successor expects 1 input(s)"));
+    }
+
+    #[test]
+    fn cf_branch_interface_reports_textual_value_forwarding() {
+        let input = r#"core.module @test {
+  func.func @main(%x: core.i32) -> core.i32 {
+    ^entry:
+      cf.br %x [^exit]
+    ^exit(%forwarded: core.i32):
+      func.return %forwarded
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let branches = operations_named(&ctx, module, "cf", "br");
+        let [branch] = branches.as_slice() else {
+            panic!("expected one cf.br");
+        };
+        let interface = BranchOps::get(&ctx, *branch).expect("cf.br must implement Branch");
+        let successors = interface.successors(&ctx, *branch).unwrap();
+        let [edge] = successors.as_slice() else {
+            panic!("cf.br must report one edge");
+        };
+        assert_eq!(edge.forwarded.as_slice(), ctx.op_operands(*branch));
+        assert_eq!(ctx.block_args(edge.block).len(), 1);
+    }
+
+    #[test]
+    fn cf_cond_branch_interface_reports_both_textual_successors() {
+        let input = r#"core.module @test {
+  func.func @main(%condition: core.i1, %value: core.i32) -> core.i32 {
+    ^entry:
+      cf.cond_br %condition [^left, ^right]
+    ^left:
+      cf.br %value [^exit]
+    ^right:
+      cf.br %value [^exit]
+    ^exit(%forwarded: core.i32):
+      func.return %forwarded
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let branches = operations_named(&ctx, module, "cf", "cond_br");
+        let [branch] = branches.as_slice() else {
+            panic!("expected one cf.cond_br");
+        };
+        let successors = BranchOps::get(&ctx, *branch)
+            .unwrap()
+            .successors(&ctx, *branch)
+            .unwrap();
+        assert_eq!(successors.as_slice().len(), 2);
+        assert!(
+            successors
+                .as_slice()
+                .iter()
+                .all(|edge| edge.forwarded.is_empty())
+        );
+    }
+
+    #[test]
+    fn cf_branch_interface_rejects_textual_cardinality_and_type_mismatches() {
+        let input = r#"core.module @test {
+  func.func @missing(%x: core.i32) -> core.i32 {
+    ^entry:
+      cf.br [^exit]
+    ^exit(%forwarded: core.i32):
+      func.return %forwarded
+  }
+  func.func @wrong_type(%flag: core.i1) -> core.i32 {
+    ^entry:
+      cf.br %flag [^exit]
+    ^exit(%forwarded: core.i32):
+      func.return %forwarded
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let messages = operation_error_messages(&result);
+        assert_eq!(messages.len(), 2, "{result}");
+        assert!(messages.iter().any(|message| {
+            message.contains("forwards 0 value(s)")
+                && message.contains("successor expects 1 input(s)")
+        }));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("type does not match successor input type"))
+        );
+    }
+
+    #[test]
+    fn region_branch_interfaces_cover_nested_if_forwarding() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
+    %outer = scf.if %cond : core.i32 {
+      %inner = scf.if %cond : core.i32 {
+        scf.yield %x
+      } {
+        scf.yield %x
+      }
+      scf.yield %inner
+    } {
+      scf.yield %x
+    }
+    func.return %outer
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let ifs = operations_named(&ctx, module, "scf", "if");
+        assert_eq!(ifs.len(), 2);
+        for if_op in ifs {
+            let interface = RegionBranchOps::get(&ctx, if_op).unwrap();
+            let successors = interface
+                .successors(&ctx, if_op, RegionBranchPoint::Parent)
+                .unwrap();
+            assert_eq!(successors.as_slice().len(), 2);
+            assert!(
+                successors
+                    .as_slice()
+                    .iter()
+                    .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
+            );
+        }
+    }
+
+    #[test]
+    fn region_branch_interfaces_cover_loop_entry_backedge_and_exit() {
+        let input = r#"core.module @test {
+  func.func @main(%init: core.i32) -> core.i32 {
+    %result = scf.loop %init : core.i32 {
+      ^header(%iter: core.i32):
+        scf.continue %iter
+      ^exit_path(%value: core.i32):
+        scf.break %value
+    }
+    func.return %result
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let loops = operations_named(&ctx, module, "scf", "loop");
+        let [loop_op] = loops.as_slice() else {
+            panic!("expected one scf.loop");
+        };
+        let interface = RegionBranchOps::get(&ctx, *loop_op).unwrap();
+        let entry = interface
+            .successors(&ctx, *loop_op, RegionBranchPoint::Parent)
+            .unwrap();
+        let [RegionSuccessor::Region(body)] = entry.as_slice() else {
+            panic!("loop entry must target its body");
+        };
+        let continues = operations_named(&ctx, module, "scf", "continue");
+        let [continue_op] = continues.as_slice() else {
+            panic!("expected one scf.continue");
+        };
+        let backedge = RegionBranchOps::value_transfer(
+            &ctx,
+            *loop_op,
+            RegionBranchPoint::Terminator(*continue_op),
+            RegionSuccessor::Region(*body),
+        )
+        .unwrap();
+        assert_eq!(backedge.forwarded.as_slice().len(), 1);
+        assert_eq!(backedge.inputs.as_slice().len(), 1);
+
+        let breaks = operations_named(&ctx, module, "scf", "break");
+        let [break_op] = breaks.as_slice() else {
+            panic!("expected one scf.break");
+        };
+        let exit = RegionBranchOps::value_transfer(
+            &ctx,
+            *loop_op,
+            RegionBranchPoint::Terminator(*break_op),
+            RegionSuccessor::Parent,
+        )
+        .unwrap();
+        assert_eq!(exit.forwarded.as_slice().len(), 1);
+        assert_eq!(exit.inputs.as_slice().len(), 1);
+    }
+
+    #[test]
+    fn region_branch_interfaces_cover_switch_case_and_default() {
+        let input = r#"core.module @test {
+  func.func @main(%discriminant: core.i32) -> core.nil {
+    scf.switch %discriminant {
+      scf.case {value = 0} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    %unit = arith.const {value = 0} : core.nil
+    func.return %unit
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let switches = operations_named(&ctx, module, "scf", "switch");
+        let [switch] = switches.as_slice() else {
+            panic!("expected one scf.switch");
+        };
+        let interface = RegionBranchOps::get(&ctx, *switch).unwrap();
+        let successors = interface
+            .successors(&ctx, *switch, RegionBranchPoint::Parent)
+            .unwrap();
+        assert_eq!(successors.as_slice().len(), 2);
+        assert!(
+            successors
+                .as_slice()
+                .iter()
+                .all(|successor| matches!(successor, RegionSuccessor::Region(_)))
+        );
+        for wrapper in operations_named(&ctx, module, "scf", "case")
+            .into_iter()
+            .chain(operations_named(&ctx, module, "scf", "default"))
+        {
+            assert!(RegionBranchOps::get(&ctx, wrapper).is_some());
+        }
+    }
+
+    #[test]
+    fn region_branch_interfaces_reject_incomplete_loop_mappings() {
+        let input = r#"core.module @test {
+  func.func @main(%init: core.i32) -> core.i32 {
+    %result = scf.loop %init : core.i32 {
+      ^header(%iter: core.i32, %extra: core.i32):
+        scf.continue
+      ^exit_path(%value: core.i32):
+        scf.break %value
+    }
+    func.return %result
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let messages = operation_error_messages(&result);
+        assert_eq!(messages.len(), 2, "{result}");
+        assert!(messages.iter().any(|message| {
+            message.contains("forwards 1 value(s)")
+                && message.contains("successor expects 2 input(s)")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.contains("forwards 0 value(s)")
+                && message.contains("successor expects 2 input(s)")
+        }));
+    }
+
+    #[test]
+    fn region_branch_interface_rejects_textual_forwarding_type_mismatch() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
+    %result = scf.if %cond : core.i32 {
+      scf.yield %cond
+    } {
+      scf.yield %x
+    }
+    func.return %result
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_operation_verifiers(&ctx, module);
+        let messages = operation_error_messages(&result);
+        assert_eq!(messages.len(), 1, "{result}");
+        assert!(messages[0].contains("type does not match successor input type"));
     }
 
     #[test]
