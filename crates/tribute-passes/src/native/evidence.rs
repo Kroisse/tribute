@@ -409,26 +409,32 @@ impl RewritePattern for LowerEffectExtendToNative {
             core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
         rewriter.insert_op(handler_dispatch_ptr.op_ref());
 
+        let mut operands = vec![
+            extend_op.evidence(ctx),
+            ability_id_val,
+            extend_op.prompt_tag(ctx),
+        ];
+        // These are zero-based indices in the native call's exact operand
+        // list. The first operand is the prepended evidence value.
+        let tr_dispatch_operand_index = operands.len();
+        operands.push(tr_dispatch_ptr.result(ctx));
+        let handler_dispatch_operand_index = operands.len();
+        operands.push(handler_dispatch_ptr.result(ctx));
+
         let extend_call = func::call(
             ctx,
             loc,
-            [
-                extend_op.evidence(ctx),
-                ability_id_val,
-                extend_op.prompt_tag(ctx),
-                tr_dispatch_ptr.result(ctx),
-                handler_dispatch_ptr.result(ctx),
-            ],
+            operands,
             ptr_ty,
             Symbol::new(evidence_abi::EXTEND),
         );
         ctx.op_mut(extend_call.op_ref()).attributes.insert(
             Symbol::new(NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR),
-            // The native call prepends evidence before the canonical Marker
-            // fields. Both dispatch closures are stored by the runtime.
+            // Both dispatch closures are stored by the runtime. Carry their
+            // exact call-operand positions as compiler-owned provenance.
             Attribute::List(vec![
-                Attribute::Int(i128::from(MarkerField::TrDispatchFn.index()) + 1),
-                Attribute::Int(i128::from(MarkerField::HandlerDispatch.index()) + 1),
+                Attribute::Int(tr_dispatch_operand_index as i128),
+                Attribute::Int(handler_dispatch_operand_index as i128),
             ]),
         );
         let new_result = extend_call.result(ctx);

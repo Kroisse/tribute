@@ -905,13 +905,6 @@ fn validate_function_contract(
 }
 
 fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), OwnershipPlanError> {
-    let mut function_ops = Vec::new();
-    let _ = walk_op::<()>(ctx, plan.module, &mut |op| {
-        if func::Func::matches(ctx, op) {
-            function_ops.push(op);
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
     let mut function_symbols = HashSet::new();
     for function in &plan.functions {
         if !function_symbols.insert(function.symbol) {
