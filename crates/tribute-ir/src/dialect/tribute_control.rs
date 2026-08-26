@@ -4503,6 +4503,72 @@ mod tests {
     }
 
     #[test]
+    fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %choice = arith.const {value = 0} : core.i32
+        scf.switch %choice {
+          scf.case {value = 0} {
+            %left = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+              %left_resumed = tribute_control.resume %token, %argument : core.i32
+              tribute_control.return %left_resumed
+            }
+            %left_called = tribute_control.call_indirect %left : core.i32
+            scf.yield
+          }
+          scf.case {value = 1} {
+            %right = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+              %right_resumed = tribute_control.resume %token, %argument : core.i32
+              tribute_control.return %right_resumed
+            }
+            %right_called = tribute_control.call_indirect %right : core.i32
+            scf.yield
+          }
+        }
+        tribute_control.yield %argument
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let diagnostics = messages(&result);
+        for forbidden in [
+            "resume token is copied into multiple capture paths",
+            "resume token capture does not form a single path to resume",
+            "resume-token carrier branches into multiple lambda captures",
+            "resume-token carrier has multiple static terminal uses",
+        ] {
+            assert!(!diagnostics.contains(forbidden), "{result}");
+        }
+
+        let mut branch_lambda = None;
+        let mut switch = None;
+        walk_region_ops(&ctx, module.body(&ctx).unwrap(), &mut |op| {
+            let data = ctx.op(op);
+            if data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new("lambda")
+            {
+                branch_lambda.get_or_insert(op);
+            } else if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
+                switch = Some(op);
+            }
+        });
+        assert!(!ops_are_mutually_exclusive(
+            &ctx,
+            branch_lambda.unwrap(),
+            switch.unwrap(),
+        ));
+    }
+
+    #[test]
     fn whole_ir_rejects_same_path_lambda_carrier_terminals() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {

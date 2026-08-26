@@ -17,50 +17,42 @@ mod cf {
 
 use crate::IrContext;
 use crate::op_interface::{
-    BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+    BranchModel, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
-use crate::ops::DialectOp;
-use crate::refs::OpRef;
 
-fn br_successors(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    if ctx.op(op).successors.len() != 1 {
-        return Err(ControlFlowInterfaceError::new(
-            "cf.br requires exactly one successor",
-        ));
+impl BranchModel for Br {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        if ctx.op(self.op_ref()).successors.len() != 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "cf.br requires exactly one successor",
+            ));
+        }
+        Ok(BranchSuccessors::new([BranchSuccessor::new(
+            self.dest(ctx),
+            self.args(ctx).iter().copied(),
+        )]))
     }
-    let branch = Br::from_op(ctx, op)
-        .map_err(|error| ControlFlowInterfaceError::new(format!("malformed cf.br: {error:?}")))?;
-    Ok(BranchSuccessors::new([BranchSuccessor::new(
-        branch.dest(ctx),
-        branch.args(ctx).iter().copied(),
-    )]))
 }
 
-fn cond_br_successors(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    if ctx.op_operands(op).len() != 1 || ctx.op(op).successors.len() != 2 {
-        return Err(ControlFlowInterfaceError::new(
-            "cf.cond_br requires one condition and exactly two successors",
-        ));
+impl BranchModel for CondBr {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        let op = self.op_ref();
+        if ctx.op_operands(op).len() != 1 || ctx.op(op).successors.len() != 2 {
+            return Err(ControlFlowInterfaceError::new(
+                "cf.cond_br requires one condition and exactly two successors",
+            ));
+        }
+        Ok(BranchSuccessors::new([
+            BranchSuccessor::new(self.then_dest(ctx), []),
+            BranchSuccessor::new(self.else_dest(ctx), []),
+        ]))
     }
-    let branch = CondBr::from_op(ctx, op).map_err(|error| {
-        ControlFlowInterfaceError::new(format!("malformed cf.cond_br: {error:?}"))
-    })?;
-    Ok(BranchSuccessors::new([
-        BranchSuccessor::new(branch.then_dest(ctx), []),
-        BranchSuccessor::new(branch.else_dest(ctx), []),
-    ]))
 }
 
 inventory::submit! {
-    BranchOps::register("cf", "br", br_successors)
+    BranchOps::register::<Br>()
 }
 
 inventory::submit! {
-    BranchOps::register("cf", "cond_br", cond_br_successors)
+    BranchOps::register::<CondBr>()
 }

@@ -2298,15 +2298,13 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
         let branches = operations_named(&ctx, module, "cf", "br");
-        let [branch] = branches.as_slice() else {
-            panic!("expected one cf.br");
-        };
-        let interface = BranchOps::get(&ctx, *branch).expect("cf.br must implement Branch");
-        let successors = interface.successors(&ctx, *branch).unwrap();
-        let [edge] = successors.as_slice() else {
-            panic!("cf.br must report one edge");
-        };
-        assert_eq!(edge.forwarded.as_slice(), ctx.op_operands(*branch));
+        assert_eq!(branches.len(), 1);
+        let branch = branches[0];
+        let interface = BranchOps::get(&ctx, branch).expect("cf.br must implement Branch");
+        let successors = interface.successors(&ctx, branch).unwrap();
+        assert_eq!(successors.as_slice().len(), 1);
+        let edge = &successors.as_slice()[0];
+        assert_eq!(edge.forwarded.as_slice(), ctx.op_operands(branch));
         assert_eq!(ctx.block_args(edge.block).len(), 1);
     }
 
@@ -2330,12 +2328,11 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
         let branches = operations_named(&ctx, module, "cf", "cond_br");
-        let [branch] = branches.as_slice() else {
-            panic!("expected one cf.cond_br");
-        };
-        let successors = BranchOps::get(&ctx, *branch)
+        assert_eq!(branches.len(), 1);
+        let branch = branches[0];
+        let successors = BranchOps::get(&ctx, branch)
             .unwrap()
-            .successors(&ctx, *branch)
+            .successors(&ctx, branch)
             .unwrap();
         assert_eq!(successors.as_slice().len(), 2);
         assert!(
@@ -2437,38 +2434,36 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
         let loops = operations_named(&ctx, module, "scf", "loop");
-        let [loop_op] = loops.as_slice() else {
-            panic!("expected one scf.loop");
-        };
-        let interface = RegionBranchOps::get(&ctx, *loop_op).unwrap();
+        assert_eq!(loops.len(), 1);
+        let loop_op = loops[0];
+        let interface = RegionBranchOps::get(&ctx, loop_op).unwrap();
         let entry = interface
-            .successors(&ctx, *loop_op, RegionBranchPoint::Parent)
+            .successors(&ctx, loop_op, RegionBranchPoint::Parent)
             .unwrap();
-        let [RegionSuccessor::Region(body)] = entry.as_slice() else {
-            panic!("loop entry must target its body");
+        assert_eq!(entry.as_slice().len(), 1);
+        let RegionSuccessor::Region(body) = entry.as_slice()[0] else {
+            unreachable!()
         };
         let continues = operations_named(&ctx, module, "scf", "continue");
-        let [continue_op] = continues.as_slice() else {
-            panic!("expected one scf.continue");
-        };
+        assert_eq!(continues.len(), 1);
+        let continue_op = continues[0];
         let backedge = RegionBranchOps::value_transfer(
             &ctx,
-            *loop_op,
-            RegionBranchPoint::Terminator(*continue_op),
-            RegionSuccessor::Region(*body),
+            loop_op,
+            RegionBranchPoint::Terminator(continue_op),
+            RegionSuccessor::Region(body),
         )
         .unwrap();
         assert_eq!(backedge.forwarded.as_slice().len(), 1);
         assert_eq!(backedge.inputs.as_slice().len(), 1);
 
         let breaks = operations_named(&ctx, module, "scf", "break");
-        let [break_op] = breaks.as_slice() else {
-            panic!("expected one scf.break");
-        };
+        assert_eq!(breaks.len(), 1);
+        let break_op = breaks[0];
         let exit = RegionBranchOps::value_transfer(
             &ctx,
-            *loop_op,
-            RegionBranchPoint::Terminator(*break_op),
+            loop_op,
+            RegionBranchPoint::Terminator(break_op),
             RegionSuccessor::Parent,
         )
         .unwrap();
@@ -2498,12 +2493,11 @@ mod tests {
         let result = validate_operation_verifiers(&ctx, module);
         assert!(result.is_ok(), "{result}");
         let switches = operations_named(&ctx, module, "scf", "switch");
-        let [switch] = switches.as_slice() else {
-            panic!("expected one scf.switch");
-        };
-        let interface = RegionBranchOps::get(&ctx, *switch).unwrap();
+        assert_eq!(switches.len(), 1);
+        let switch = switches[0];
+        let interface = RegionBranchOps::get(&ctx, switch).unwrap();
         let successors = interface
-            .successors(&ctx, *switch, RegionBranchPoint::Parent)
+            .successors(&ctx, switch, RegionBranchPoint::Parent)
             .unwrap();
         assert_eq!(successors.as_slice().len(), 2);
         assert!(
@@ -2518,6 +2512,393 @@ mod tests {
         {
             assert!(RegionBranchOps::get(&ctx, wrapper).is_some());
         }
+    }
+
+    #[test]
+    fn typed_region_models_fail_closed_for_invalid_semantic_queries() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
+    %selected = scf.if %cond : core.i32 {
+      scf.yield %value
+    } {
+      scf.yield %value
+    }
+    scf.switch %discriminant {
+      scf.case {value = 0} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    %looped = scf.loop %value : core.i32 {
+      ^continue_path(%continue_value: core.i32):
+        scf.continue %continue_value
+      ^break_path(%break_value: core.i32):
+        scf.break %break_value
+    }
+    scf.loop %value {
+      ^resultless_break_path(%resultless_value: core.i32):
+        scf.break %resultless_value
+    }
+    %zero = arith.const {value = 0} : core.i32
+    func.return %selected
+  }
+  func.func @stray(%value: core.i32) {
+    scf.break %value
+  }
+  func.func @stray_continue(%other_value: core.i32) {
+    scf.continue %other_value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let direct_owner = |op: OpRef| {
+            ctx.op(op)
+                .parent_block
+                .and_then(|block| ctx.block(block).parent_region)
+                .and_then(|region| ctx.region(region).parent_op)
+        };
+
+        let if_op = operations_named(&ctx, module, "scf", "if")[0];
+        let switch = operations_named(&ctx, module, "scf", "switch")[0];
+        let case = operations_named(&ctx, module, "scf", "case")[0];
+        let default = operations_named(&ctx, module, "scf", "default")[0];
+        let yields = operations_named(&ctx, module, "scf", "yield");
+        let if_yield = *yields
+            .iter()
+            .find(|&&op| direct_owner(op) == Some(if_op))
+            .unwrap();
+        let case_yield = *yields
+            .iter()
+            .find(|&&op| direct_owner(op) == Some(case))
+            .unwrap();
+
+        let if_interface = RegionBranchOps::get(&ctx, if_op).unwrap();
+        let error = if_interface
+            .successors(&ctx, if_op, RegionBranchPoint::Terminator(case_yield))
+            .unwrap_err();
+        assert!(error.is_not_applicable());
+        assert!(error.to_string().contains("not an scf.if region yield"));
+        assert!(
+            if_interface
+                .entry_successor_operands(&ctx, if_op, RegionSuccessor::Parent)
+                .is_err()
+        );
+
+        let switch_interface = RegionBranchOps::get(&ctx, switch).unwrap();
+        assert_eq!(
+            switch_interface
+                .successors(&ctx, switch, RegionBranchPoint::Terminator(case_yield),)
+                .unwrap()
+                .as_slice(),
+            &[RegionSuccessor::Parent]
+        );
+        assert!(
+            switch_interface
+                .successors(&ctx, switch, RegionBranchPoint::Terminator(if_yield),)
+                .unwrap_err()
+                .is_not_applicable()
+        );
+        assert!(
+            switch_interface
+                .entry_successor_operands(&ctx, switch, RegionSuccessor::Parent)
+                .is_err()
+        );
+
+        for wrapper in [case, default] {
+            let interface = RegionBranchOps::get(&ctx, wrapper).unwrap();
+            assert!(
+                interface
+                    .successors(&ctx, wrapper, RegionBranchPoint::Terminator(if_yield),)
+                    .unwrap_err()
+                    .is_not_applicable()
+            );
+            assert!(
+                interface
+                    .entry_successor_operands(&ctx, wrapper, RegionSuccessor::Parent)
+                    .is_err()
+            );
+        }
+
+        let loops = operations_named(&ctx, module, "scf", "loop");
+        let result_loop = *loops
+            .iter()
+            .find(|&&op| !ctx.op_results(op).is_empty())
+            .unwrap();
+        let result_loop_interface = RegionBranchOps::get(&ctx, result_loop).unwrap();
+        assert!(
+            result_loop_interface
+                .successors(&ctx, result_loop, RegionBranchPoint::Terminator(if_yield),)
+                .unwrap_err()
+                .is_not_applicable()
+        );
+        assert!(
+            result_loop_interface
+                .entry_successor_operands(&ctx, result_loop, RegionSuccessor::Parent)
+                .is_err()
+        );
+        let loop_entry = result_loop_interface
+            .successors(&ctx, result_loop, RegionBranchPoint::Parent)
+            .unwrap();
+        assert_eq!(loop_entry.as_slice().len(), 1);
+        let RegionSuccessor::Region(loop_body) = loop_entry.as_slice()[0] else {
+            unreachable!()
+        };
+
+        let continues = operations_named(&ctx, module, "scf", "continue");
+        let continue_op = *continues
+            .iter()
+            .find(|&&op| direct_owner(op) == Some(result_loop))
+            .unwrap();
+        let stray_continue = *continues
+            .iter()
+            .find(|&&op| {
+                direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == Symbol::new("func"))
+            })
+            .unwrap();
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, continue_op)
+                .unwrap()
+                .successor_operands(&ctx, continue_op, RegionSuccessor::Parent)
+                .is_err()
+        );
+        let unrelated_region = ctx.op(case).regions[0];
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, continue_op)
+                .unwrap()
+                .successor_operands(&ctx, continue_op, RegionSuccessor::Region(unrelated_region),)
+                .is_err()
+        );
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, stray_continue)
+                .unwrap()
+                .successor_operands(&ctx, stray_continue, RegionSuccessor::Region(loop_body),)
+                .unwrap_err()
+                .to_string()
+                .contains("no enclosing scf.loop")
+        );
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, case_yield)
+                .unwrap()
+                .successor_operands(&ctx, case_yield, RegionSuccessor::Region(loop_body))
+                .is_err()
+        );
+
+        let breaks = operations_named(&ctx, module, "scf", "break");
+        let result_break = *breaks
+            .iter()
+            .find(|&&op| direct_owner(op) == Some(result_loop))
+            .unwrap();
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, result_break)
+                .unwrap()
+                .successor_operands(&ctx, result_break, RegionSuccessor::Region(loop_body))
+                .is_err()
+        );
+        let resultless_break = *breaks
+            .iter()
+            .find(|&&op| {
+                direct_owner(op).is_some_and(|owner| {
+                    ctx.op(owner).dialect == Symbol::new("scf")
+                        && ctx.op(owner).name == Symbol::new("loop")
+                        && ctx.op_results(owner).is_empty()
+                })
+            })
+            .unwrap();
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, resultless_break)
+                .unwrap()
+                .successor_operands(&ctx, resultless_break, RegionSuccessor::Parent)
+                .unwrap()
+                .is_empty()
+        );
+        let stray_break = *breaks
+            .iter()
+            .find(|&&op| {
+                direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == Symbol::new("func"))
+            })
+            .unwrap();
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, stray_break)
+                .unwrap()
+                .successor_operands(&ctx, stray_break, RegionSuccessor::Parent)
+                .unwrap_err()
+                .to_string()
+                .contains("no enclosing scf.loop")
+        );
+
+        let constant = operations_named(&ctx, module, "arith", "const")[0];
+        assert!(
+            RegionBranchOps::value_transfer(
+                &ctx,
+                constant,
+                RegionBranchPoint::Parent,
+                RegionSuccessor::Parent,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("no RegionBranch registration")
+        );
+        assert!(
+            RegionBranchOps::value_transfer(
+                &ctx,
+                if_op,
+                RegionBranchPoint::Terminator(constant),
+                RegionSuccessor::Parent,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("no RegionBranchTerminator registration")
+        );
+    }
+
+    #[test]
+    fn typed_models_reject_malformed_wrappers_shapes_and_region_structure() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %discriminant: core.i32, %value: core.i32) -> core.i32 {
+    ^entry:
+      cf.cond_br %cond [^left, ^right]
+    ^left:
+      cf.br %value [^merge]
+      %after_branch = arith.const {value = 0} : core.i32
+    ^right:
+      cf.br %value [^merge]
+    ^merge(%forwarded: core.i32):
+      %selected = scf.if %cond : core.i32 {
+        scf.yield %forwarded
+      } {
+        scf.yield %forwarded
+      }
+      scf.switch %discriminant {
+        scf.case {value = 0} { scf.yield }
+      }
+      scf.switch %discriminant {
+        scf.case {value = 1} {
+          ^empty_case:
+        }
+      }
+      scf.switch %discriminant {
+        %unsupported = arith.const {value = 2} : core.i32
+      }
+      scf.switch %discriminant {
+        scf.default { scf.yield }
+        scf.default { scf.yield }
+      }
+      %looped = scf.loop %forwarded : core.i32 {
+        ^loop_exit(%loop_value: core.i32):
+          scf.break %loop_value
+      }
+      func.return %selected
+  }
+  func.func @stray(%stray_value: core.i32) {
+    scf.break %stray_value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let validation = validate_operation_verifiers(&ctx, module);
+        let messages = operation_error_messages(&validation).join("\n");
+        for expected in [
+            "Branch operation must be the final operation in its block",
+            "contains an empty block",
+            "body contains unsupported operation",
+            "contains multiple default regions",
+            "has no complete owning RegionBranch mapping",
+        ] {
+            assert!(
+                messages.contains(expected),
+                "missing {expected}: {validation}"
+            );
+        }
+
+        let branch = operations_named(&ctx, module, "cf", "br")[0];
+        let cond_branch = operations_named(&ctx, module, "cf", "cond_br")[0];
+        let if_op = operations_named(&ctx, module, "scf", "if")[0];
+        let switches = operations_named(&ctx, module, "scf", "switch");
+        let loop_op = operations_named(&ctx, module, "scf", "loop")[0];
+        let case = operations_named(&ctx, module, "scf", "case")[0];
+        let yield_op = operations_named(&ctx, module, "scf", "yield")[0];
+        let break_op = operations_named(&ctx, module, "scf", "break")[0];
+        let wrong_op = operations_named(&ctx, module, "func", "return")[0];
+
+        assert!(
+            BranchOps::get(&ctx, branch)
+                .unwrap()
+                .successors(&ctx, wrong_op)
+                .unwrap_err()
+                .to_string()
+                .contains("malformed cf.br")
+        );
+        let region_interface = RegionBranchOps::get(&ctx, if_op).unwrap();
+        assert!(
+            region_interface
+                .successors(&ctx, wrong_op, RegionBranchPoint::Parent)
+                .is_err()
+        );
+        assert!(
+            region_interface
+                .entry_successor_operands(&ctx, wrong_op, RegionSuccessor::Parent)
+                .is_err()
+        );
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, yield_op)
+                .unwrap()
+                .successor_operands(&ctx, wrong_op, RegionSuccessor::Parent)
+                .is_err()
+        );
+
+        ctx.op_mut(branch).successors.clear();
+        assert!(
+            BranchOps::get(&ctx, branch)
+                .unwrap()
+                .successors(&ctx, branch)
+                .is_err()
+        );
+        ctx.op_mut(cond_branch).successors.pop();
+        assert!(
+            BranchOps::get(&ctx, cond_branch)
+                .unwrap()
+                .successors(&ctx, cond_branch)
+                .is_err()
+        );
+        ctx.op_mut(loop_op).regions.clear();
+        assert!(
+            RegionBranchOps::get(&ctx, loop_op)
+                .unwrap()
+                .successors(&ctx, loop_op, RegionBranchPoint::Parent)
+                .is_err()
+        );
+        ctx.remove_op_operand(switches[0], 0);
+        assert!(
+            RegionBranchOps::get(&ctx, switches[0])
+                .unwrap()
+                .successors(&ctx, switches[0], RegionBranchPoint::Parent)
+                .is_err()
+        );
+        let second_switch_body = ctx.op(switches[1]).regions[0];
+        ctx.region_mut(second_switch_body).blocks.clear();
+        assert!(
+            RegionBranchOps::get(&ctx, switches[1])
+                .unwrap()
+                .successors(&ctx, switches[1], RegionBranchPoint::Parent)
+                .is_err()
+        );
+        ctx.op_mut(case).regions.clear();
+        assert!(
+            RegionBranchOps::get(&ctx, case)
+                .unwrap()
+                .successors(&ctx, case, RegionBranchPoint::Parent)
+                .is_err()
+        );
+        ctx.remove_op_operand(break_op, 0);
+        assert!(
+            RegionBranchTerminatorOps::get(&ctx, break_op)
+                .unwrap()
+                .successor_operands(&ctx, break_op, RegionSuccessor::Parent)
+                .is_err()
+        );
     }
 
     #[test]

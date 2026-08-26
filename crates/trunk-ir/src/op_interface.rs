@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 use smallvec::SmallVec;
 
 use crate::Symbol;
+use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
@@ -297,10 +298,6 @@ impl ForwardedValues {
         &self.values
     }
 
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -411,6 +408,25 @@ pub trait Branch: Sync {
     ) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 }
 
+/// Typed block-branch semantics supplied by a generated dialect operation wrapper.
+pub trait BranchModel: DialectOp {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
+}
+
+fn branch_model_successors<T: BranchModel>(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    let model = T::from_op(ctx, op).map_err(|error| {
+        ControlFlowInterfaceError::new(format!(
+            "malformed {}.{}: {error:?}",
+            T::DIALECT_NAME,
+            T::OP_NAME
+        ))
+    })?;
+    model.successors(ctx)
+}
+
 pub type BranchSuccessorsFn =
     fn(&IrContext, OpRef) -> Result<BranchSuccessors, ControlFlowInterfaceError>;
 
@@ -456,15 +472,11 @@ pub struct BranchOps;
 
 impl BranchOps {
     #[doc(hidden)]
-    pub const fn register(
-        dialect: &'static str,
-        op_name: &'static str,
-        successors: BranchSuccessorsFn,
-    ) -> BranchRegistration {
+    pub const fn register<T: BranchModel>() -> BranchRegistration {
         BranchRegistration {
-            dialect,
-            op_name,
-            successors,
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            successors: branch_model_successors::<T>,
         }
     }
 
@@ -491,6 +503,51 @@ pub trait RegionBranch: Sync {
         op: OpRef,
         successor: RegionSuccessor,
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+}
+
+/// Typed structured-region semantics supplied by a generated dialect operation wrapper.
+pub trait RegionBranchModel: DialectOp {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError>;
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+}
+
+fn region_branch_model_successors<T: RegionBranchModel>(
+    ctx: &IrContext,
+    op: OpRef,
+    point: RegionBranchPoint,
+) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+    let model = T::from_op(ctx, op).map_err(|error| {
+        ControlFlowInterfaceError::new(format!(
+            "malformed {}.{}: {error:?}",
+            T::DIALECT_NAME,
+            T::OP_NAME
+        ))
+    })?;
+    model.successors(ctx, point)
+}
+
+fn region_branch_model_entry_operands<T: RegionBranchModel>(
+    ctx: &IrContext,
+    op: OpRef,
+    successor: RegionSuccessor,
+) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+    let model = T::from_op(ctx, op).map_err(|error| {
+        ControlFlowInterfaceError::new(format!(
+            "malformed {}.{}: {error:?}",
+            T::DIALECT_NAME,
+            T::OP_NAME
+        ))
+    })?;
+    model.entry_successor_operands(ctx, successor)
 }
 
 pub type RegionSuccessorsFn =
@@ -552,17 +609,12 @@ pub struct RegionBranchOps;
 
 impl RegionBranchOps {
     #[doc(hidden)]
-    pub const fn register(
-        dialect: &'static str,
-        op_name: &'static str,
-        successors: RegionSuccessorsFn,
-        entry_successor_operands: EntrySuccessorOperandsFn,
-    ) -> RegionBranchRegistration {
+    pub const fn register<T: RegionBranchModel>() -> RegionBranchRegistration {
         RegionBranchRegistration {
-            dialect,
-            op_name,
-            successors,
-            entry_successor_operands,
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            successors: region_branch_model_successors::<T>,
+            entry_successor_operands: region_branch_model_entry_operands::<T>,
         }
     }
 
@@ -624,6 +676,30 @@ pub trait RegionBranchTerminator: Sync {
     ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 }
 
+/// Typed region-exit forwarding supplied by a generated dialect operation wrapper.
+pub trait RegionBranchTerminatorModel: DialectOp {
+    fn successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError>;
+}
+
+fn region_terminator_model_operands<T: RegionBranchTerminatorModel>(
+    ctx: &IrContext,
+    op: OpRef,
+    successor: RegionSuccessor,
+) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+    let model = T::from_op(ctx, op).map_err(|error| {
+        ControlFlowInterfaceError::new(format!(
+            "malformed {}.{}: {error:?}",
+            T::DIALECT_NAME,
+            T::OP_NAME
+        ))
+    })?;
+    model.successor_operands(ctx, successor)
+}
+
 pub type RegionSuccessorOperandsFn =
     fn(&IrContext, OpRef, RegionSuccessor) -> Result<ForwardedValues, ControlFlowInterfaceError>;
 
@@ -671,15 +747,11 @@ pub struct RegionBranchTerminatorOps;
 
 impl RegionBranchTerminatorOps {
     #[doc(hidden)]
-    pub const fn register(
-        dialect: &'static str,
-        op_name: &'static str,
-        successor_operands: RegionSuccessorOperandsFn,
-    ) -> RegionBranchTerminatorRegistration {
+    pub const fn register<T: RegionBranchTerminatorModel>() -> RegionBranchTerminatorRegistration {
         RegionBranchTerminatorRegistration {
-            dialect,
-            op_name,
-            successor_operands,
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            successor_operands: region_terminator_model_operands::<T>,
         }
     }
 
@@ -799,16 +871,5 @@ mod tests {
     fn test_unregistered_ops_are_not_isolated() {
         // This test would need a database and operation, so we just verify the struct exists
         let _ = IsolatedFromAboveOps;
-    }
-
-    #[test]
-    fn control_flow_interfaces_are_object_safe() {
-        fn accepts_branch(_: &dyn Branch) {}
-        fn accepts_region_branch(_: &dyn RegionBranch) {}
-        fn accepts_region_terminator(_: &dyn RegionBranchTerminator) {}
-
-        let _ = accepts_branch;
-        let _ = accepts_region_branch;
-        let _ = accepts_region_terminator;
     }
 }
