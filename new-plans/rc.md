@@ -104,17 +104,17 @@ and are not visible as source constructors or shared-IR field indices.
 
 ## RC Operations
 
-The `tribute_rt` dialect provides two RC operations:
+`tribute_rt` dialect는 두 RC operation을 제공한다.
 
 ```text
 tribute_rt.retain(ptr) -> ptr    // refcount++, return same pointer
 tribute_rt.release(ptr)          // refcount--, free if zero
 ```
 
-These are dialect-level operations that will be:
+이 연산은 dialect 수준에서 다음 순서로 처리된다.
 
-1. **Inserted** by the RC insertion pass (SSA-based liveness analysis)
-2. **Lowered** to inline code by the RC lowering pass
+1. 검증된 type-erasure 전 ownership plan만으로 **materialize**한다.
+2. RC lowering pass가 inline code로 **lower**한다.
 
 Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
 managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
@@ -234,7 +234,7 @@ exact source-target identity mapping을 반환한다. RTTI bitmap은 이 mapping
 
 ### 2. Explicit RC materialization
 
-**Location:** `tribute-passes/src/native/rc_insertion.rs`
+**Location:** `tribute-passes/src/native/rc_materialization.rs`
 
 Typed plan의 action을 `tribute_rt.retain`과 `tribute_rt.release`로 materialize한
 뒤 managed type을 physical type으로 바꾼다. Materializer는 type이나 pointer
@@ -242,6 +242,19 @@ provenance에서 action을 새로 발견하지 않는다. Duplicate owning desti
 별도 unit을 확보하고 proper-tail operand는 선택된 unit을 이전한다. 이전되지 않고
 죽는 값은 terminator 앞에서 release하며 proper-tail terminator 뒤에는 RC operation을
 둘 수 없다.
+
+각 materialize된 release는 plan action이 가리키는 type-erasure 전 nominal layout에서
+계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
+exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
+static nominal layout이 없는 opaque dynamic reference의 `alloc_size = 0`은
+deallocation size가 아니라 RTTI dispatch 전용 신호다. backend는 header RTTI로 이를
+exact release function으로 해소한 뒤에만 deallocate하며, entry가 없으면 zero-size
+deallocation 대신 fail-closed한다. physical def-chain에서 size를 추론하지 않는다.
+
+Materialization은 먼저 plan, module identity, 모든 action anchor, exact
+replacement-field layout/index, insertion schedule을 검증한다. 이 검증이 실패하면
+module을 변경하지 않는다. Legacy post-erasure liveness/alias/pointer discovery는
+native production path에 존재하지 않는다.
 
 ### 3. RC Optimization Pass
 
@@ -425,6 +438,19 @@ No later pass may reconstruct managedness from a raw pointer, symbol spelling,
 ABI marker, operand position, or erased provenance. A shallow release may be
 used only as an explicitly documented intermediate implementation stage; the
 semantic contract requires type-specific release of owned managed fields.
+
+Native evidence ABI에는 명시적인 typed ownership handoff가 있다. semantic
+`effect.extend`의 native lowering은 새 native call에 compiler-owned provenance로
+runtime이 저장하는 closure destination 집합(`tr_dispatch`, `handler_dispatch`)을
+기록한다. compiler가 만든 내부 `_closure` layout은 이 provenance를 통해서만
+`core.ptr`로 변환될 수 있다. Ownership plan은 exact layout, conversion, marker,
+destination 집합을 검증한 뒤 각 closure의 기존 ownership unit에 대한 opaque
+escape-transfer marker를 기록한다. Runtime symbol spelling, C ABI 문자열,
+signature shape, operand position, pointer provenance로 handoff를 허용하지 않는다.
+Raw pointer는 계속 unmanaged이며 generic pointer alias나 retain/release operation을
+만들지 않는다. 이 transfer는 evidence marker의 이후 dispatch 동안 closure를 살려
+두며, lookalike helper 또는 그 밖의 `_closure`-to-`core.ptr` handoff는 typed
+planning 경계에서 fail-closed한다.
 
 ### Type-specific release
 

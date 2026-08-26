@@ -75,7 +75,7 @@ core.module @mixed_nested_native {
       %20 = arith.const {value = 1361557906} : core.i32
       %21 = core.unrealized_conversion_cast %18 : core.ptr
       %22 = core.unrealized_conversion_cast %15 : core.ptr
-      %23 = func.call %0, %20, %19, %21, %22 {callee = @__tribute_evidence_extend} : core.ptr
+      %23 = func.call %0, %20, %19, %21, %22 {callee = @__tribute_evidence_extend, tribute.native_evidence_closure_transfer_destinations_v1 = [3, 4]} : core.ptr
       %24 = func.call_indirect %11, %23, %12, %9 {func.indirect_call_signature = !t4} : tribute_rt.anyref
       %25 = adt.variant_is %24 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %26 = scf.if %25 : tribute_rt.anyref {
@@ -245,7 +245,7 @@ core.module @mixed_nested_native {
       %20 = arith.const {value = 3214451656} : core.i32
       %21 = core.unrealized_conversion_cast %18 : core.ptr
       %22 = core.unrealized_conversion_cast %17 : core.ptr
-      %23 = func.call %0, %20, %19, %21, %22 {callee = @__tribute_evidence_extend} : core.ptr
+      %23 = func.call %0, %20, %19, %21, %22 {callee = @__tribute_evidence_extend, tribute.native_evidence_closure_transfer_destinations_v1 = [3, 4]} : core.ptr
       %24 = func.call_indirect %13, %23, %14, %12 {func.indirect_call_signature = !t4} : tribute_rt.anyref
       %25 = adt.variant_is %24 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %26 = scf.if %25 : tribute_rt.anyref {

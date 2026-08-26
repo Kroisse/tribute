@@ -1062,25 +1062,48 @@ fn prepare_module_to_native(
     }
 
     // Phase 1 - Lower func dialect to clif dialect
-    let ownership_summaries;
     let ownership_plan;
     let func_lowering;
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
+        let plan_options = tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+            elide_proven_borrowed_parameters: !matches!(
+                if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
+                    BorrowedParameterPolicy::Preserve
+                } else {
+                    optimizations.borrowed_parameters
+                },
+                BorrowedParameterPolicy::Preserve
+            ),
+            elide_proven_field_borrows: !matches!(
+                if matches!(
+                    stop_after,
+                    Some(
+                        NativePipelineStage::AfterRcInsertion
+                            | NativePipelineStage::AfterBorrowedParameterOptimization
+                    )
+                ) {
+                    TemporaryBorrowPolicy::Preserve
+                } else {
+                    optimizations.temporary_borrows
+                },
+                TemporaryBorrowPolicy::Preserve
+            ),
+        };
         ownership_plan =
-            tribute_passes::native::ownership_plan::build_native_ownership_plan(ctx, module)
-                .map_err(|error| {
-                    trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-                })?;
-        ownership_summaries = tribute_passes::native::ownership_summary::compute_and_attach(
-            ctx,
-            module,
-            &type_converter,
-        )
-        .map_err(|error| {
-            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-        })?;
+            tribute_passes::native::ownership_plan::build_native_ownership_plan_with_options(
+                ctx,
+                module,
+                plan_options,
+            )
+            .map_err(|error| {
+                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+            })?;
+        tribute_passes::native::rc_materialization::materialize(ctx, module, &ownership_plan)
+            .map_err(|error| {
+                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+            })?;
         func_lowering =
             func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
@@ -1133,54 +1156,14 @@ fn prepare_module_to_native(
         mem_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
-    // Phase 2.7-2.8 - tribute_rt_to_clif + RC insertion
+    // Phase 2.7 - Lower non-RC tribute runtime operations. The explicit RC
+    // operations were materialized from typed ownership actions before erasure.
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter)
             .map_err(native_conversion_failure)?;
-        let borrowed_parameters = if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
-            BorrowedParameterPolicy::Preserve
-        } else {
-            optimizations.borrowed_parameters
-        };
-        let borrowed_parameters = match borrowed_parameters {
-            BorrowedParameterPolicy::Preserve => {
-                tribute_passes::native::rc_insertion::BorrowedParameterPolicy::Preserve
-            }
-            BorrowedParameterPolicy::ElideProvenBorrowed => {
-                tribute_passes::native::rc_insertion::BorrowedParameterPolicy::ElideProvenBorrowed
-            }
-        };
-        let temporary_borrows = if matches!(
-            stop_after,
-            Some(
-                NativePipelineStage::AfterRcInsertion
-                    | NativePipelineStage::AfterBorrowedParameterOptimization
-            )
-        ) {
-            TemporaryBorrowPolicy::Preserve
-        } else {
-            optimizations.temporary_borrows
-        };
-        let temporary_borrows = match temporary_borrows {
-            TemporaryBorrowPolicy::Preserve => {
-                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::Preserve
-            }
-            TemporaryBorrowPolicy::ElideProvenFieldBorrows => {
-                tribute_passes::native::rc_insertion::TemporaryBorrowPolicy::ElideProvenFieldBorrows
-            }
-        };
-        tribute_passes::native::rc_insertion::insert_rc_with_policies_and_trusted_summaries(
-            ctx,
-            module,
-            borrowed_parameters,
-            temporary_borrows,
-            &ownership_summaries,
-        )
-        .map_err(|error| {
-            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-        })?;
+        tribute_passes::native::rc_materialization::lower_anyref_to_ptr(ctx, module);
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcInsertion) {

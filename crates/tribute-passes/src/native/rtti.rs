@@ -10,10 +10,10 @@
 //! | Index | Type | Release |
 //! |-------|------|---------|
 //! | 0 | Nil | shallow |
-//! | 1 | Bool | shallow |
-//! | 2 | Nat | shallow |
-//! | 3 | Int | shallow |
-//! | 4 | Float | shallow |
+//! | 1 | Bool | fixed 12-byte release |
+//! | 2 | Nat | fixed 12-byte release |
+//! | 3 | Int | fixed 12-byte release |
+//! | 4 | Float | fixed 16-byte release |
 //! | 5 | Rune | shallow |
 //! | 6 | Bytes | shallow |
 //! | 7 | Array | generic (future) |
@@ -36,10 +36,11 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::location::Span;
+use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
@@ -79,6 +80,9 @@ pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
 pub const RTTI_INT: u32 = 3;
 pub const RTTI_FLOAT: u32 = 4;
+
+const PRIMITIVE_I32_ALLOC_SIZE: u64 = 12;
+const PRIMITIVE_F64_ALLOC_SIZE: u64 = 16;
 
 /// Name prefix for per-type release functions.
 pub const RELEASE_FN_PREFIX: &str = "__tribute_release_";
@@ -124,6 +128,7 @@ pub fn generate_rtti(
     rtti_types: &[RttiTypePlan],
 ) -> RttiMap {
     let mut rtti_map = RttiMap::new();
+    let primitive_releases = primitive_release_entries(ctx, module);
 
     // The allocation order and managed-field classification were validated
     // while semantic types were intact. RTTI must not rediscover either from
@@ -132,7 +137,7 @@ pub fn generate_rtti(
         rtti_map.get_or_insert(entry.ty);
     }
 
-    if rtti_map.type_to_idx.is_empty() {
+    if rtti_map.type_to_idx.is_empty() && primitive_releases.is_empty() {
         return rtti_map;
     }
 
@@ -142,6 +147,15 @@ pub fn generate_rtti(
     };
 
     let loc = Location::new(ctx.paths.intern("<rtti>".to_string()), Span::new(0, 0));
+
+    // `anyref` and `intref` have no static nominal allocation layout. Their
+    // release action carries a dynamic-size signal, resolved by the header
+    // RTTI index before deallocation. Used primitive slots must therefore own
+    // exact release functions instead of falling through with zero.
+    for (rtti_idx, alloc_size) in primitive_releases {
+        let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
+        ctx.push_op(module_block, func_op);
+    }
 
     // Sort by rtti_idx for deterministic output
     let mut entries: Vec<_> = rtti_map
@@ -168,6 +182,92 @@ pub fn generate_rtti(
     }
 
     rtti_map
+}
+
+/// Find primitive boxing operations while their semantic operation identity is
+/// still present. This selects only fixed reserved RTTI entries; it neither
+/// discovers ownership nor follows physical pointer definitions.
+fn primitive_release_entries(ctx: &IrContext, module: Module) -> Vec<(u32, u64)> {
+    let mut used = [false; 4];
+    if let Some(body) = module.body(ctx) {
+        collect_primitive_boxes(ctx, body, &mut used);
+    }
+
+    [
+        (RTTI_BOOL, PRIMITIVE_I32_ALLOC_SIZE, 0),
+        (RTTI_NAT, PRIMITIVE_I32_ALLOC_SIZE, 1),
+        (RTTI_INT, PRIMITIVE_I32_ALLOC_SIZE, 2),
+        (RTTI_FLOAT, PRIMITIVE_F64_ALLOC_SIZE, 3),
+    ]
+    .into_iter()
+    .filter_map(|(rtti_idx, alloc_size, used_index)| {
+        used[used_index].then_some((rtti_idx, alloc_size))
+    })
+    .collect()
+}
+
+fn collect_primitive_boxes(ctx: &IrContext, region: RegionRef, used: &mut [bool; 4]) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if tribute_rt::BoxBool::from_op(ctx, op).is_ok() {
+                used[0] = true;
+            } else if tribute_rt::BoxNat::from_op(ctx, op).is_ok() {
+                used[1] = true;
+            } else if tribute_rt::BoxInt::from_op(ctx, op).is_ok() {
+                used[2] = true;
+            } else if tribute_rt::BoxFloat::from_op(ctx, op).is_ok() {
+                used[3] = true;
+            }
+            for &nested in &ctx.op(op).regions {
+                collect_primitive_boxes(ctx, nested, used);
+            }
+        }
+    }
+}
+
+/// Generate a reserved primitive release function with an exact total
+/// allocation size, including the RC header.
+fn generate_fixed_release_function(
+    ctx: &mut IrContext,
+    rtti_idx: u32,
+    alloc_size: u64,
+    loc: Location,
+) -> OpRef {
+    let tys = ClifTypes::intern(ctx);
+    let func_ty = core::func(ctx, tys.nil, [tys.ptr]).as_type_ref();
+    let entry_block = ctx.create_block(BlockData {
+        location: loc,
+        args: vec![BlockArgData {
+            ty: tys.ptr,
+            attrs: Default::default(),
+        }],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    let payload_ptr = ctx.block_arg(entry_block, 0);
+    gen_dealloc_and_return_with_size(
+        ctx,
+        loc,
+        entry_block,
+        payload_ptr,
+        alloc_size,
+        tys.ptr,
+        tys.nil,
+        tys.i64,
+    );
+    let body = ctx.create_region(RegionData {
+        location: loc,
+        blocks: smallvec![entry_block],
+        parent_op: None,
+    });
+    clif::func(
+        ctx,
+        loc,
+        Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{rtti_idx}")),
+        func_ty,
+        body,
+    )
+    .op_ref()
 }
 
 /// Generate release function for a struct type.
@@ -334,12 +434,36 @@ fn gen_dealloc_and_return(
 ) {
     use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
+    gen_dealloc_and_return_with_size(
+        ctx,
+        loc,
+        block,
+        payload_ptr,
+        layout.total_size as u64 + RC_HEADER_SIZE,
+        ptr_ty,
+        nil_ty,
+        i64_ty,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn gen_dealloc_and_return_with_size(
+    ctx: &mut IrContext,
+    loc: Location,
+    block: BlockRef,
+    payload_ptr: ValueRef,
+    alloc_size: u64,
+    ptr_ty: TypeRef,
+    nil_ty: TypeRef,
+    i64_ty: TypeRef,
+) {
+    use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
+
     let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
     ctx.push_op(block, hdr_sz.op_ref());
     let raw_ptr = clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
     ctx.push_op(block, raw_ptr.op_ref());
 
-    let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
     let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
     ctx.push_op(block, size_op.op_ref());
 
@@ -762,6 +886,37 @@ mod tests {
         let plan = rtti_plan(&ctx, module);
         let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
         assert!(rtti.type_to_idx.is_empty());
+    }
+
+    #[test]
+    fn boxed_primitives_receive_exact_reserved_release_functions() {
+        let mut ctx = IrContext::new();
+        let ir = r#"core.module @test {
+  func.func @f(%0: core.i32, %1: core.f64) -> core.nil {
+    %2 = tribute_rt.box_int %0 : tribute_rt.anyref
+    %3 = tribute_rt.box_float %1 : tribute_rt.anyref
+    func.return
+  }
+}"#;
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        let plan = rtti_plan(&ctx, module);
+        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
+        assert!(rtti.type_to_idx.is_empty());
+
+        let output = print_module(&ctx, module.op());
+        let int_release = output
+            .split("clif.func {sym_name = @__tribute_release_3")
+            .nth(1)
+            .expect("boxed Int must have a reserved RTTI release entry");
+        assert!(int_release.contains("value = 12"));
+        assert!(int_release.contains("callee = @__tribute_dealloc"));
+        let float_release = output
+            .split("clif.func {sym_name = @__tribute_release_4")
+            .nth(1)
+            .expect("boxed Float must have a reserved RTTI release entry");
+        assert!(float_release.contains("value = 16"));
+        assert!(float_release.contains("callee = @__tribute_dealloc"));
     }
 
     #[test]

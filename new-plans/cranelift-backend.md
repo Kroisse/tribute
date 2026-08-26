@@ -178,6 +178,11 @@ type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
+Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan을 즉시
+소비한다. IR을 바꾸기 전에 전체 insertion schedule을 검증하며, `func_to_clif`
+뒤에는 ownership, liveness, pointer provenance를 다시 발견하는 pass를 실행하지
+않는다.
+
 ### ADT 메모리 레이아웃
 
 ```text

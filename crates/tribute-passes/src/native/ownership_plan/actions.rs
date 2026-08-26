@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::evidence::NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR;
 
 pub(super) fn plan_function_actions(
     ir: &IrContext,
@@ -7,6 +8,7 @@ pub(super) fn plan_function_actions(
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
+    elide_proven_field_borrows: bool,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
     ActionPlanner::new(
         ir,
@@ -15,6 +17,7 @@ pub(super) fn plan_function_actions(
         entry_contracts,
         definitions,
         managed_layouts,
+        elide_proven_field_borrows,
     )?
     .plan()
 }
@@ -28,6 +31,7 @@ struct ActionPlanner<'a> {
     managed_layouts: &'a HashSet<TypeRef>,
     aliases: HashMap<ValueRef, ValueRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
+    field_borrow_values: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     liveness: Liveness,
     actions: Vec<OwnershipAction>,
@@ -41,10 +45,17 @@ impl<'a> ActionPlanner<'a> {
         entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
         definitions: &'a HashMap<Symbol, OpRef>,
         managed_layouts: &'a HashSet<TypeRef>,
+        elide_proven_field_borrows: bool,
     ) -> Result<Self, OwnershipPlanError> {
         let mut managed = collect_managed_values(ir, cfg.blocks(), managed_layouts);
         let aliases = build_aliases(ir, cfg.blocks(), &mut managed, managed_layouts)?;
-        let borrowed = collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+        let field_borrow_values =
+            collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+        let borrowed = if elide_proven_field_borrows {
+            field_borrow_values.clone()
+        } else {
+            HashMap::new()
+        };
         let liveness = compute_liveness(ir, cfg, &managed, &aliases, &borrowed);
         let mut owned = managed;
         for (&value, entry) in ir.block_args(cfg.entry()).iter().zip(entries) {
@@ -61,6 +72,7 @@ impl<'a> ActionPlanner<'a> {
             managed_layouts,
             aliases,
             borrowed,
+            field_borrow_values,
             owned,
             liveness,
             actions: Vec::new(),
@@ -102,15 +114,24 @@ impl<'a> ActionPlanner<'a> {
         let mut transferred = HashSet::new();
         for &op in &ops {
             self.plan_operation(op, &mut transferred)?;
-            if let Some(&borrowed) = self
-                .ir
-                .op_results(op)
-                .first()
-                .filter(|result| self.borrowed.contains_key(result))
+            if let Some(&result) = self.ir.op_results(op).first()
+                && self.borrowed.contains_key(&result)
             {
                 self.actions.push(OwnershipAction {
                     kind: ActionKind::BorrowLoad,
-                    value: borrowed,
+                    value: result,
+                    anchor: ActionAnchor::After(op),
+                    destination: 0,
+                });
+            } else if let Some(&result) = self.ir.op_results(op).first()
+                && self.field_borrow_values.contains_key(&result)
+            {
+                // Preserving the temporary-borrow policy gives the projected
+                // semantic value its own unit at the exact typed projection.
+                // The normal final-release planner balances this acquire.
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::CopyAcquire,
+                    value: result,
                     anchor: ActionAnchor::After(op),
                     destination: 0,
                 });
@@ -153,7 +174,9 @@ fn build_aliases(
     let mut aliases = HashMap::new();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
-            if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
+            if !(adt::RefCast::matches(ctx, op)
+                || adt::VariantCast::matches(ctx, op)
+                || core::UnrealizedConversionCast::matches(ctx, op))
             {
                 continue;
             }
@@ -189,14 +212,136 @@ fn build_aliases(
                     ));
                 }
             }
-            if input_managed && output_managed {
+            // A compiler-generated conversion of a managed closure value to
+            // its exact callable representation keeps the source ownership
+            // unit live through the callable use. This is a typed pre-erasure
+            // handoff, not a `core.ptr` provenance rule.
+            let callable_handoff = core::UnrealizedConversionCast::matches(ctx, op)
+                && core::Func::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
+            let evidence_closure_handoff =
+                native_evidence_closure_handoff(ctx, op, managed_layouts)?;
+            if input_managed && (output_managed || callable_handoff || evidence_closure_handoff) {
                 let root = aliases.get(input).copied().unwrap_or(*input);
                 aliases.insert(*output, root);
-                managed.remove(output);
+                if output_managed {
+                    managed.remove(output);
+                }
             }
         }
     }
     Ok(aliases)
+}
+
+/// The native evidence runtime stores the explicitly marked dispatcher
+/// closures for later indirect calls. These are the sole typed `_closure` to
+/// `core.ptr` handoffs: the pointers stay unmanaged while their source
+/// ownership units transfer through the exact compiler-marked ABI call.
+pub(super) fn native_evidence_closure_handoff(
+    ctx: &IrContext,
+    cast: OpRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> Result<bool, OwnershipPlanError> {
+    if !core::UnrealizedConversionCast::matches(ctx, cast) {
+        return Ok(false);
+    }
+    let ([input], [output]) = (ctx.op_operands(cast), ctx.op_results(cast)) else {
+        return Err(OwnershipPlanError::new(
+            "native evidence handler handoff has malformed cast arity",
+        ));
+    };
+    if !is_internal_closure_layout(ctx, ctx.value_ty(*input), managed_layouts)
+        || !is_core_ptr_type(ctx, ctx.value_ty(*output))
+    {
+        return Ok(false);
+    }
+
+    let uses = ctx.uses(*output);
+    if uses.is_empty() {
+        return Ok(false);
+    }
+    for use_ in uses {
+        if !is_compiler_owned_native_evidence_closure_transfer(
+            ctx,
+            use_.user,
+            use_.operand_index as usize,
+        ) {
+            return Err(OwnershipPlanError::new(format!(
+                "internal _closure to core.ptr handoff lacks compiler-owned native evidence provenance at {}",
+                trunk_ir::printer::print_op(ctx, use_.user)
+            )));
+        }
+    }
+    Ok(true)
+}
+
+fn is_internal_closure_layout(
+    ctx: &IrContext,
+    ty: TypeRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> bool {
+    if !managed_layouts.contains(&ty)
+        || ctx.types.get(ty).attrs.get_symbol("name") != Some(Symbol::new("_closure"))
+    {
+        return false;
+    }
+    let Some(fields) = get_struct_fields(ctx, ty) else {
+        return false;
+    };
+    matches!(
+        fields.as_slice(),
+        [(code_name, code_ty), (environment_name, environment_ty)]
+            if *code_name == Symbol::new("func_ptr")
+                && *environment_name == Symbol::new("env")
+                && is_core_i32_type(ctx, *code_ty)
+                && is_anyref_type(ctx, *environment_ty)
+    )
+}
+
+fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+}
+
+fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
+}
+
+fn native_evidence_closure_transfer_destinations(ctx: &IrContext, op: OpRef) -> Option<Vec<usize>> {
+    let Ok(_call) = func::Call::from_op(ctx, op) else {
+        return None;
+    };
+    let trunk_ir::Attribute::List(destinations) = ctx
+        .op(op)
+        .attributes
+        .get(NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR)?
+    else {
+        return None;
+    };
+    let mut exact = Vec::with_capacity(destinations.len());
+    for destination in destinations {
+        let trunk_ir::Attribute::Int(destination) = destination else {
+            return None;
+        };
+        let destination = usize::try_from(*destination).ok()?;
+        if destination >= ctx.op_operands(op).len() || exact.contains(&destination) {
+            return None;
+        }
+        exact.push(destination);
+    }
+    (!exact.is_empty()).then_some(exact)
+}
+
+pub(super) fn is_compiler_owned_native_evidence_closure_transfer(
+    ctx: &IrContext,
+    op: OpRef,
+    operand_index: usize,
+) -> bool {
+    // The compiler-owned lowering marker, not a physical call signature,
+    // authorizes this handoff. Planning intentionally runs before all native
+    // signature conversions have completed.
+    native_evidence_closure_transfer_destinations(ctx, op)
+        .is_some_and(|destinations| destinations.contains(&operand_index))
 }
 
 fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
@@ -562,6 +707,18 @@ impl ActionPlanner<'_> {
             func::TailCall::matches(self.ir, op) || func::TailCallIndirect::matches(self.ir, op);
         let operands = self.ir.op_operands(op);
         let args = operands.get(usize::from(indirect)..).unwrap_or_default();
+        let compiler_owned_closure_transfers = (!indirect)
+            .then(|| native_evidence_closure_transfer_destinations(self.ir, op))
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|destination| {
+                args.get(destination)
+                    .and_then(|closure| self.aliases.get(closure))
+                    .copied()
+                    .map(|root| (root, destination))
+            })
+            .collect::<Vec<_>>();
         let entries = if indirect {
             let signature = get_indirect_call_signature(self.ir, op)
                 .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
@@ -611,6 +768,15 @@ impl ActionPlanner<'_> {
                         "unclassified direct call {op:?} to @{callee} carries a managed reference"
                     )));
                 }
+                for (root, destination) in compiler_owned_closure_transfers {
+                    transferred.insert(root);
+                    self.actions.push(OwnershipAction {
+                        kind: ActionKind::EvidenceClosureTransfer,
+                        value: root,
+                        anchor: ActionAnchor::Before(op),
+                        destination: destination as u32,
+                    });
+                }
                 return Ok(());
             }
             let callee_op = self.definitions[&callee];
@@ -631,6 +797,15 @@ impl ActionPlanner<'_> {
             return Err(OwnershipPlanError::new(
                 "call arity differs from entry contract",
             ));
+        }
+        for (root, destination) in compiler_owned_closure_transfers {
+            transferred.insert(root);
+            self.actions.push(OwnershipAction {
+                kind: ActionKind::EvidenceClosureTransfer,
+                value: root,
+                anchor: ActionAnchor::Before(op),
+                destination: destination as u32,
+            });
         }
         let mut transfers = HashMap::<ValueRef, u32>::new();
         for (index, (&argument, entry)) in args.iter().zip(entries).enumerate() {

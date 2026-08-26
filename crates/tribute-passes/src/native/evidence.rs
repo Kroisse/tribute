@@ -44,6 +44,13 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
+/// Compiler-owned provenance on the native call created from `effect.extend`.
+/// Its payload is the exact set of runtime-stored closure operands in the
+/// native ABI. Consumers must not reconstruct this fact from a symbol name,
+/// ABI spelling, or pointer shape.
+pub const NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR: &str =
+    "tribute.native_evidence_closure_transfer_destinations_v1";
+
 fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
     let result = ctx
         .op_result_types(call)
@@ -414,6 +421,15 @@ impl RewritePattern for LowerEffectExtendToNative {
             ],
             ptr_ty,
             Symbol::new(evidence_abi::EXTEND),
+        );
+        ctx.op_mut(extend_call.op_ref()).attributes.insert(
+            Symbol::new(NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR),
+            // The native call prepends evidence before the canonical Marker
+            // fields. Both dispatch closures are stored by the runtime.
+            Attribute::List(vec![
+                Attribute::Int(i128::from(MarkerField::TrDispatchFn.index()) + 1),
+                Attribute::Int(i128::from(MarkerField::HandlerDispatch.index()) + 1),
+            ]),
         );
         let new_result = extend_call.result(ctx);
         rewriter.insert_op(extend_call.op_ref());

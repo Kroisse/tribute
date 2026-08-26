@@ -69,7 +69,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// Check if a TypeRef is an adt.struct with name "_closure".
-fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
+pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;

@@ -225,12 +225,16 @@ fn define_rtti_infrastructure(
 /// Build `__tribute_deep_release` body when there are no release functions.
 ///
 /// Simply computes raw_ptr and calls `__tribute_dealloc(raw_ptr, alloc_size)`.
+/// A zero size is a dynamic RTTI signal and is invalid without a dispatch table,
+/// so it traps rather than silently leaking the allocation.
 fn build_shallow_only_deep_release(
     builder: &mut FunctionBuilder,
     ptr_ty: cl_types::Type,
     dealloc_fref: cl_ir::FuncRef,
 ) {
     let entry = builder.create_block();
+    let dealloc_block = builder.create_block();
+    let unresolved_dynamic_block = builder.create_block();
     builder.append_block_params_for_function_params(entry);
     builder.switch_to_block(entry);
 
@@ -241,10 +245,24 @@ fn build_shallow_only_deep_release(
     let neg8 = builder.ins().iconst(ptr_ty, -8);
     let raw_ptr = builder.ins().iadd(payload_ptr, neg8);
 
-    // __tribute_dealloc(raw_ptr, alloc_size)
-    builder.ins().call(dealloc_fref, &[raw_ptr, alloc_size]);
+    let zero = builder.ins().iconst(cl_types::I64, 0);
+    let is_dynamic = builder
+        .ins()
+        .icmp(cl_ir::condcodes::IntCC::Equal, alloc_size, zero);
+    builder.ins().brif(
+        is_dynamic,
+        unresolved_dynamic_block,
+        &[],
+        dealloc_block,
+        &[],
+    );
 
+    builder.switch_to_block(dealloc_block);
+    builder.ins().call(dealloc_fref, &[raw_ptr, alloc_size]);
     builder.ins().return_(&[]);
+
+    builder.switch_to_block(unresolved_dynamic_block);
+    builder.ins().trap(cl_ir::TrapCode::unwrap_user(2));
 }
 
 /// Build `__tribute_deep_release` body with RTTI table dispatch.
@@ -259,7 +277,7 @@ fn build_shallow_only_deep_release(
 ///   else: goto deep
 ///
 /// shallow:
-///   __tribute_dealloc(raw_ptr, alloc_size)
+///   alloc_size == 0 ? trap : __tribute_dealloc(raw_ptr, alloc_size)
 ///   return
 ///
 /// deep:
@@ -275,6 +293,8 @@ fn build_dispatching_deep_release(
 ) {
     let entry = builder.create_block();
     let shallow_block = builder.create_block();
+    let shallow_dealloc_block = builder.create_block();
+    let unresolved_dynamic_block = builder.create_block();
     let deep_block = builder.create_block();
 
     builder.append_block_params_for_function_params(entry);
@@ -318,10 +338,28 @@ fn build_dispatching_deep_release(
         .ins()
         .brif(is_null, shallow_block, &[], deep_block, &[]);
 
-    // shallow_block: __tribute_dealloc(raw_ptr, alloc_size); return
+    // A zero size must be resolved by a non-null RTTI entry. An unpopulated
+    // entry with a dynamic-size signal is invalid and must not become a
+    // silent no-op in the runtime allocator.
     builder.switch_to_block(shallow_block);
+    let zero = builder.ins().iconst(cl_types::I64, 0);
+    let is_dynamic = builder
+        .ins()
+        .icmp(cl_ir::condcodes::IntCC::Equal, alloc_size, zero);
+    builder.ins().brif(
+        is_dynamic,
+        unresolved_dynamic_block,
+        &[],
+        shallow_dealloc_block,
+        &[],
+    );
+
+    builder.switch_to_block(shallow_dealloc_block);
     builder.ins().call(dealloc_fref, &[raw_ptr, alloc_size]);
     builder.ins().return_(&[]);
+
+    builder.switch_to_block(unresolved_dynamic_block);
+    builder.ins().trap(cl_ir::TrapCode::unwrap_user(2));
 
     // deep_block: call_indirect release_fn(payload_ptr); return
     builder.switch_to_block(deep_block);
