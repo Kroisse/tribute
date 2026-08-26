@@ -1,5 +1,0 @@
----
-source: tests/optimization_conformance.rs
-expression: "if elided.is_empty() { \"<no RC ops>\" } else { &elided }"
----
-<no RC ops>

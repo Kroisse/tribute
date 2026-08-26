@@ -1012,6 +1012,46 @@ pub fn compile_to_wasm_binary(
 // Native Pipeline (Cranelift)
 // =============================================================================
 
+/// Select ownership-plan policy for each observable native pipeline boundary.
+///
+/// The staged dump boundaries deliberately suppress later elisions so their
+/// output remains comparable with the corresponding optimization policy.
+fn native_ownership_plan_options(
+    stop_after: Option<NativePipelineStage>,
+    optimizations: NativeOptimizationOptions,
+) -> tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+    let configured = tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+        elide_proven_borrowed_parameters: matches!(
+            optimizations.borrowed_parameters,
+            BorrowedParameterPolicy::ElideProvenBorrowed
+        ),
+        elide_proven_field_borrows: matches!(
+            optimizations.temporary_borrows,
+            TemporaryBorrowPolicy::ElideProvenFieldBorrows
+        ),
+    };
+
+    match stop_after {
+        Some(NativePipelineStage::AfterRcInsertion) => {
+            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+                elide_proven_borrowed_parameters: false,
+                elide_proven_field_borrows: false,
+            }
+        }
+        Some(NativePipelineStage::AfterBorrowedParameterOptimization) => {
+            tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+                elide_proven_borrowed_parameters: configured.elide_proven_borrowed_parameters,
+                elide_proven_field_borrows: false,
+            }
+        }
+        Some(
+            NativePipelineStage::AfterTemporaryBorrowOptimization
+            | NativePipelineStage::AfterRcOptimization,
+        )
+        | None => configured,
+    }
+}
+
 /// Compile a TrunkIR module to a native object file (arena-based).
 ///
 /// This function runs all backend passes in a single arena session:
@@ -1067,30 +1107,7 @@ fn prepare_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        let plan_options = tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
-            elide_proven_borrowed_parameters: !matches!(
-                if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
-                    BorrowedParameterPolicy::Preserve
-                } else {
-                    optimizations.borrowed_parameters
-                },
-                BorrowedParameterPolicy::Preserve
-            ),
-            elide_proven_field_borrows: !matches!(
-                if matches!(
-                    stop_after,
-                    Some(
-                        NativePipelineStage::AfterRcInsertion
-                            | NativePipelineStage::AfterBorrowedParameterOptimization
-                    )
-                ) {
-                    TemporaryBorrowPolicy::Preserve
-                } else {
-                    optimizations.temporary_borrows
-                },
-                TemporaryBorrowPolicy::Preserve
-            ),
-        };
+        let plan_options = native_ownership_plan_options(stop_after, optimizations);
         ownership_plan =
             tribute_passes::native::ownership_plan::build_native_ownership_plan_with_options(
                 ctx,
@@ -1658,6 +1675,66 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+
+    #[test]
+    fn native_ownership_plan_options_follow_stage_policy_table() {
+        let parameter_elision_only = NativeOptimizationOptions {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
+            temporary_borrows: TemporaryBorrowPolicy::Preserve,
+        };
+        let field_elision_only = NativeOptimizationOptions {
+            paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
+            borrowed_parameters: BorrowedParameterPolicy::Preserve,
+            temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
+        };
+        let both_elisions = NativeOptimizationOptions::production();
+
+        let cases = [
+            (
+                Some(NativePipelineStage::AfterRcInsertion),
+                both_elisions,
+                false,
+                false,
+            ),
+            (
+                Some(NativePipelineStage::AfterBorrowedParameterOptimization),
+                both_elisions,
+                true,
+                false,
+            ),
+            (
+                Some(NativePipelineStage::AfterBorrowedParameterOptimization),
+                field_elision_only,
+                false,
+                false,
+            ),
+            (
+                Some(NativePipelineStage::AfterTemporaryBorrowOptimization),
+                parameter_elision_only,
+                true,
+                false,
+            ),
+            (
+                Some(NativePipelineStage::AfterRcOptimization),
+                field_elision_only,
+                false,
+                true,
+            ),
+            (None, both_elisions, true, true),
+        ];
+
+        for (stage, optimizations, borrowed_parameters, field_borrows) in cases {
+            assert_eq!(
+                native_ownership_plan_options(stage, optimizations),
+                tribute_passes::native::ownership_plan::NativeOwnershipPlanOptions {
+                    elide_proven_borrowed_parameters: borrowed_parameters,
+                    elide_proven_field_borrows: field_borrows,
+                },
+                "unexpected ownership plan options at {stage:?}",
+            );
+        }
+    }
 
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))

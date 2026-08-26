@@ -261,7 +261,7 @@ fn build_schedule(
                 | ActionKind::BorrowLoad
                 | ActionKind::ReturnTransfer
                 | ActionKind::TailTransfer
-                | ActionKind::EvidenceClosureTransfer => {}
+                | ActionKind::IntoRawTransfer => {}
             }
         }
     }

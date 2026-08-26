@@ -761,7 +761,8 @@ Important stage invariants:
 | Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
-| Backend lowering | Backend-ready 검증이 성공하고 `effect.*`, CPS control carrier, trampoline이 남지 않음 |
+| Native ownership | Typed managed value의 native raw handoff는 `tribute_rt.into_raw`가 one ownership unit을 소비할 때만 허용되며 `core.ptr`는 항상 unmanaged |
+| Backend lowering | Backend-ready 검증이 성공하고 `effect.*`, `tribute_rt.into_raw`, CPS control carrier, trampoline이 남지 않음 |
 
 ## Type Model
 

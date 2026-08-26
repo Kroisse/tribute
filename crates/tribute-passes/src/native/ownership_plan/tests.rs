@@ -202,7 +202,7 @@ fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes()
 }
 
 #[test]
-fn compiler_owned_evidence_closure_handoffs_keep_internal_layouts_owned() {
+fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -221,19 +221,33 @@ fn compiler_owned_evidence_closure_handoffs_keep_internal_layouts_owned() {
     lower_evidence_to_native(&mut ctx, module);
     let mut plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(Symbol::new("install")).unwrap();
-    let mut handoff = None;
-    walk_module(&ctx, module, |op| {
-        if core::UnrealizedConversionCast::matches(&ctx, op) {
-            handoff = Some(op);
-        }
-    });
-    let handoff = handoff.expect("native evidence handler handoff");
-    assert_eq!(count(install, ActionKind::EvidenceClosureTransfer), 1);
+    let transfer = install
+        .actions()
+        .iter()
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer");
+    let ActionAnchor::Before(into_raw) = transfer.anchor else {
+        panic!("into_raw transfer must anchor the into_raw operation");
+    };
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
+    let lowered = print_module(&ctx, module.op());
+    assert!(!lowered.contains("native_evidence_closure_transfer_destinations"));
+    assert_eq!(
+        lowered.matches("tribute_rt.into_raw").count(),
+        1,
+        "{lowered}"
+    );
+    assert_eq!(
+        lowered.matches("core.unrealized_conversion_cast").count(),
+        1,
+        "the existing raw dispatcher remains unmanaged: {lowered}"
+    );
     assert!(
         !install.actions().iter().any(|action| {
-            action.kind == ActionKind::FinalRelease && action.anchor == ActionAnchor::After(handoff)
+            action.kind == ActionKind::FinalRelease
+                && action.anchor == ActionAnchor::After(into_raw)
         }),
-        "the compiler-marked runtime handoff retains this exact closure pointer beyond the raw ABI call"
+        "into_raw consumes this exact closure ownership unit"
     );
 
     let transfer = plan
@@ -243,16 +257,16 @@ fn compiler_owned_evidence_closure_handoffs_keep_internal_layouts_owned() {
         .expect("install ownership plan")
         .actions
         .iter_mut()
-        .find(|action| action.kind == ActionKind::EvidenceClosureTransfer)
-        .expect("evidence closure transfer");
-    transfer.destination = 3;
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer");
+    transfer.destination = 1;
     let before = print_module(&ctx, module.op());
     assert!(materialize(&mut ctx, module, &plan).is_err());
     assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
-fn compiler_owned_evidence_closure_transfers_cover_both_runtime_destinations() {
+fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -271,13 +285,13 @@ fn compiler_owned_evidence_closure_transfers_cover_both_runtime_destinations() {
     lower_evidence_to_native(&mut ctx, module);
     let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(Symbol::new("install")).unwrap();
-    let transfers = install
-        .actions()
-        .iter()
-        .filter(|action| action.kind == ActionKind::EvidenceClosureTransfer)
-        .map(|action| action.destination)
-        .collect::<Vec<_>>();
-    assert_eq!(transfers, [3, 4]);
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 2);
+    let lowered = print_module(&ctx, module.op());
+    assert_eq!(
+        lowered.matches("tribute_rt.into_raw").count(),
+        2,
+        "{lowered}"
+    );
 }
 
 #[test]
@@ -297,7 +311,178 @@ fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
     func.return
   }
 }"#,
-        "internal _closure to core.ptr handoff lacks compiler-owned native evidence provenance",
+        "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
+    );
+}
+
+#[test]
+fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @install() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %raw = tribute_rt.into_raw %closure : core.ptr
+    func.return
+  }
+}"#,
+    );
+    let install = plan.function(Symbol::new("install")).unwrap();
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
+    let transferred = install
+        .actions()
+        .iter()
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer")
+        .value;
+    assert!(
+        !install.actions().iter().any(|action| {
+            action.kind == ActionKind::FinalRelease && action.value == transferred
+        })
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    assert!(
+        materialized.contains("tribute_rt.into_raw"),
+        "{materialized}"
+    );
+}
+
+fn into_raw_fixture(transfers: &str) -> String {
+    [
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @transfers() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+"#,
+        transfers,
+        r#"
+    func.return
+  }
+}"#,
+    ]
+    .concat()
+}
+
+#[test]
+fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfer() {
+    for (count, transfers) in [
+        (
+            2,
+            "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr",
+        ),
+        (
+            3,
+            "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr\n    %third = tribute_rt.into_raw %closure : core.ptr",
+        ),
+    ] {
+        let (mut ctx, module, plan) = build(&into_raw_fixture(transfers));
+        let function = plan.function(Symbol::new("transfers")).unwrap();
+        let transfer_actions = function
+            .actions()
+            .iter()
+            .filter(|action| action.kind == ActionKind::IntoRawTransfer)
+            .collect::<Vec<_>>();
+        let source = transfer_actions[0].value;
+        let ActionAnchor::Before(first) = transfer_actions[0].anchor else {
+            panic!("first transfer must have a before anchor");
+        };
+        assert_eq!(transfer_actions.len(), count);
+        assert!(transfer_actions.iter().all(|action| action.value == source));
+        let copies = function
+            .actions()
+            .iter()
+            .filter(|action| action.kind == ActionKind::CopyAcquire && action.value == source)
+            .collect::<Vec<_>>();
+        assert_eq!(copies.len(), count - 1);
+        assert!(copies.iter().enumerate().all(|(index, action)| {
+            action.anchor == ActionAnchor::Before(first) && action.destination == (index + 1) as u32
+        }));
+        assert!(
+            !function.actions().iter().any(|action| {
+                action.kind == ActionKind::FinalRelease && action.value == source
+            })
+        );
+
+        materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+        let materialized = print_module(&ctx, module.op());
+        assert!(
+            materialized.find("tribute_rt.retain") < materialized.find("tribute_rt.into_raw"),
+            "{materialized}"
+        );
+    }
+}
+
+#[test]
+fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @later_use() -> !_closure {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %raw = tribute_rt.into_raw %closure : core.ptr
+    func.return %closure
+  }
+}"#,
+        "all direct closure uses to be exact same-block transfers",
+    );
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @cross_block() -> core.nil {
+    ^entry:
+      %code = arith.const {value = 0} : core.i32
+      %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+      %first = tribute_rt.into_raw %closure : core.ptr
+      cf.br [^next]
+    ^next:
+      %second = tribute_rt.into_raw %closure : core.ptr
+      func.return
+  }
+}"#,
+        "all direct closure uses to be exact same-block transfers",
+    );
+}
+
+#[test]
+fn stale_grouped_into_raw_plan_fails_before_materialization() {
+    let (mut ctx, module, mut plan) = build(&into_raw_fixture(
+        "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr",
+    ));
+    let actions = &mut plan
+        .functions
+        .iter_mut()
+        .find(|function| function.symbol == Symbol::new("transfers"))
+        .unwrap()
+        .actions;
+    let second = actions
+        .iter()
+        .rposition(|action| action.kind == ActionKind::IntoRawTransfer)
+        .unwrap();
+    actions.remove(second);
+    let before = print_module(&ctx, module.op());
+    assert!(materialize(&mut ctx, module, &plan).is_err());
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
+#[test]
+fn into_raw_rejects_non_closure_input_before_mutation() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @invalid(%raw: core.ptr) -> core.nil {
+    %again = tribute_rt.into_raw %raw : core.ptr
+    func.return
+  }
+}"#,
+        "requires the exact managed closure layout and a core.ptr result",
     );
 }
 

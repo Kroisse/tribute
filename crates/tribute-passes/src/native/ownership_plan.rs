@@ -22,7 +22,7 @@ use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 
 mod actions;
 mod cfg;
-use actions::{plan_function_actions, validate_result_contract};
+use actions::{exact_into_raw_transfers, plan_function_actions, validate_result_contract};
 use cfg::ValidatedFlatCfg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub enum ActionKind {
     FinalRelease,
     ReturnTransfer,
     TailTransfer,
-    EvidenceClosureTransfer,
+    IntoRawTransfer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -964,12 +964,15 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                     ctx.value_ty(action.value)
                 )));
             }
-            if action.kind == ActionKind::EvidenceClosureTransfer
-                && !validate_evidence_closure_transfer_action(ctx, action, &plan.managed_layouts)?
+            if action.kind == ActionKind::IntoRawTransfer
+                && !validate_into_raw_transfer_action(
+                    ctx,
+                    action,
+                    plan.closure_layout,
+                    &plan.managed_layouts,
+                )
             {
-                return Err(OwnershipPlanError::new(
-                    "native evidence closure transfer action is stale",
-                ));
+                return Err(OwnershipPlanError::new("into_raw transfer action is stale"));
             }
             let valid_anchor = match action.anchor {
                 ActionAnchor::BlockStart(block) => ctx.block(block).parent_region == Some(body),
@@ -991,6 +994,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 ));
             }
         }
+        validate_into_raw_transfer_groups(ctx, function, body, plan)?;
     }
     let mut rtti_types = HashSet::new();
     for entry in &plan.rtti_types {
@@ -1008,33 +1012,117 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
     Ok(())
 }
 
-fn validate_evidence_closure_transfer_action(
+fn validate_into_raw_transfer_action(
     ctx: &IrContext,
     action: &OwnershipAction,
+    closure_layout: Option<TypeRef>,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<bool, OwnershipPlanError> {
-    let ActionAnchor::Before(call) = action.anchor else {
-        return Ok(false);
+) -> bool {
+    let ActionAnchor::Before(into_raw) = action.anchor else {
+        return false;
     };
-    if !actions::is_compiler_owned_native_evidence_closure_transfer(
-        ctx,
-        call,
-        action.destination as usize,
-    ) {
-        return Ok(false);
+    if action.destination != 0 || !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, into_raw)
+    {
+        return false;
     }
-    let Some(&handoff) = ctx.op_operands(call).get(action.destination as usize) else {
-        return Ok(false);
+    let ([source], [result]) = (ctx.op_operands(into_raw), ctx.op_results(into_raw)) else {
+        return false;
     };
-    let ValueDef::OpResult(cast, _) = ctx.value_def(handoff) else {
-        return Ok(false);
+    let Some(closure_layout) = closure_layout else {
+        return false;
     };
-    let ([source], [result]) = (ctx.op_operands(cast), ctx.op_results(cast)) else {
-        return Ok(false);
-    };
-    Ok(*source == action.value
-        && *result == handoff
-        && actions::native_evidence_closure_handoff(ctx, cast, managed_layouts)?)
+    let result_ty = ctx.types.get(ctx.value_ty(*result));
+    *source == action.value
+        && ctx.value_ty(*source) == closure_layout
+        && is_managed_value(ctx, *source, managed_layouts)
+        && result_ty.dialect == Symbol::new("core")
+        && result_ty.name == Symbol::new("ptr")
+}
+
+fn validate_into_raw_transfer_groups(
+    ctx: &IrContext,
+    function: &FunctionOwnershipPlan,
+    body: RegionRef,
+    plan: &NativeOwnershipPlan,
+) -> Result<(), OwnershipPlanError> {
+    let mut sources = HashSet::new();
+    for &block in &ctx.region(body).blocks {
+        for &op in &ctx.block(block).ops {
+            if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, op) {
+                continue;
+            }
+            let [source] = ctx.op_operands(op) else {
+                return Err(OwnershipPlanError::new(
+                    "tribute_rt.into_raw has malformed arity",
+                ));
+            };
+            sources.insert(*source);
+        }
+    }
+
+    for source in &sources {
+        let (_, operations) = exact_into_raw_transfers(
+            ctx,
+            *source,
+            plan.closure_layout.ok_or_else(|| {
+                OwnershipPlanError::new(
+                    "tribute_rt.into_raw requires the current compiler closure layout",
+                )
+            })?,
+            &plan.managed_layouts,
+        )?;
+        let transfer_actions = function
+            .actions
+            .iter()
+            .enumerate()
+            .filter(|(_, action)| {
+                action.kind == ActionKind::IntoRawTransfer && action.value == *source
+            })
+            .collect::<Vec<_>>();
+        if transfer_actions.len() != operations.len()
+            || transfer_actions
+                .iter()
+                .zip(&operations)
+                .any(|((_, action), &op)| action.anchor != ActionAnchor::Before(op))
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw transfer actions do not cover the exact grouped transfers",
+            ));
+        }
+
+        let copy_actions = function
+            .actions
+            .iter()
+            .enumerate()
+            .filter(|(_, action)| action.kind == ActionKind::CopyAcquire && action.value == *source)
+            .collect::<Vec<_>>();
+        if copy_actions.len() != operations.len().saturating_sub(1)
+            || copy_actions.iter().enumerate().any(|(index, (_, action))| {
+                action.anchor != ActionAnchor::Before(operations[0])
+                    || action.destination != (index + 1) as u32
+            })
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw grouped transfers have stale copy-acquire actions",
+            ));
+        }
+        let first_transfer = transfer_actions[0].0;
+        if copy_actions
+            .iter()
+            .any(|(index, _)| *index >= first_transfer)
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw copy-acquire actions must precede the first transfer",
+            ));
+        }
+    }
+
+    if function.actions.iter().any(|action| {
+        action.kind == ActionKind::IntoRawTransfer && !sources.contains(&action.value)
+    }) {
+        return Err(OwnershipPlanError::new("into_raw transfer action is stale"));
+    }
+    Ok(())
 }
 
 fn value_region(ctx: &IrContext, value: ValueRef) -> Option<RegionRef> {

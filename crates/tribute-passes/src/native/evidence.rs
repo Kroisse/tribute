@@ -44,13 +44,6 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-/// Compiler-owned provenance on the native call created from `effect.extend`.
-/// Its payload is the exact set of runtime-stored closure operands in the
-/// native ABI. Consumers must not reconstruct this fact from a symbol name,
-/// ABI spelling, or pointer shape.
-pub const NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR: &str =
-    "tribute.native_evidence_closure_transfer_destinations_v1";
-
 fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
     let result = ctx
         .op_result_types(call)
@@ -380,6 +373,19 @@ fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
+fn lower_evidence_dispatch_operand(
+    ctx: &mut IrContext,
+    loc: Location,
+    value: ValueRef,
+    ptr_ty: TypeRef,
+) -> OpRef {
+    if crate::closure_lower::is_closure_struct_type_ref(ctx, ctx.value_ty(value)) {
+        tribute_rt::into_raw(ctx, loc, value, ptr_ty).op_ref()
+    } else {
+        core::unrealized_conversion_cast(ctx, loc, value, ptr_ty).op_ref()
+    }
+}
+
 struct LowerEffectExtendToNative;
 
 impl RewritePattern for LowerEffectExtendToNative {
@@ -402,24 +408,22 @@ impl RewritePattern for LowerEffectExtendToNative {
         rewriter.insert_op(ability_id_op.op_ref());
 
         let tr_dispatch_ptr =
-            core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
-        rewriter.insert_op(tr_dispatch_ptr.op_ref());
+            lower_evidence_dispatch_operand(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
+        let tr_dispatch = ctx.op_result(tr_dispatch_ptr, 0);
+        rewriter.insert_op(tr_dispatch_ptr);
 
         let handler_dispatch_ptr =
-            core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
-        rewriter.insert_op(handler_dispatch_ptr.op_ref());
+            lower_evidence_dispatch_operand(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
+        let handler_dispatch = ctx.op_result(handler_dispatch_ptr, 0);
+        rewriter.insert_op(handler_dispatch_ptr);
 
         let mut operands = vec![
             extend_op.evidence(ctx),
             ability_id_val,
             extend_op.prompt_tag(ctx),
         ];
-        // These are zero-based indices in the native call's exact operand
-        // list. The first operand is the prepended evidence value.
-        let tr_dispatch_operand_index = operands.len();
-        operands.push(tr_dispatch_ptr.result(ctx));
-        let handler_dispatch_operand_index = operands.len();
-        operands.push(handler_dispatch_ptr.result(ctx));
+        operands.push(tr_dispatch);
+        operands.push(handler_dispatch);
 
         let extend_call = func::call(
             ctx,
@@ -427,15 +431,6 @@ impl RewritePattern for LowerEffectExtendToNative {
             operands,
             ptr_ty,
             Symbol::new(evidence_abi::EXTEND),
-        );
-        ctx.op_mut(extend_call.op_ref()).attributes.insert(
-            Symbol::new(NATIVE_EVIDENCE_CLOSURE_TRANSFER_DESTINATIONS_ATTR),
-            // Both dispatch closures are stored by the runtime. Carry their
-            // exact call-operand positions as compiler-owned provenance.
-            Attribute::List(vec![
-                Attribute::Int(tr_dispatch_operand_index as i128),
-                Attribute::Int(handler_dispatch_operand_index as i128),
-            ]),
         );
         let new_result = extend_call.result(ctx);
         rewriter.insert_op(extend_call.op_ref());

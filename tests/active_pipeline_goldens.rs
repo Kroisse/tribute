@@ -9,7 +9,10 @@ use insta::assert_snapshot;
 use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
-use tribute::pipeline::{compile_with_diagnostics, dump_ir};
+use tribute::pipeline::{
+    NativePipelineStage, OptimizationOptions, compile_with_diagnostics, dump_ir,
+    dump_native_ir_at_stage,
+};
 use tribute_front::SourceCst;
 use trunk_ir::printer::print_module;
 
@@ -269,4 +272,21 @@ fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
 fn native_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = snapshot_native_pipeline_ir(db, "mixed_nested_native.trb", MIXED_NESTED_SOURCE);
     assert_snapshot!(ir_text);
+}
+
+#[salsa_test]
+fn native_pre_backend_lowering_consumes_into_raw_without_call_provenance(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "into_raw_boundary.trb", DIRECT_FN_SOURCE);
+    let ir = dump_native_ir_at_stage(
+        db,
+        source,
+        NativePipelineStage::AfterRcInsertion,
+        OptimizationOptions::production(),
+    )
+    .expect("native pre-backend IR should be available");
+    assert!(!ir.contains("tribute_rt.into_raw"), "{ir}");
+    assert!(
+        !ir.contains("native_evidence_closure_transfer_destinations"),
+        "{ir}"
+    );
 }

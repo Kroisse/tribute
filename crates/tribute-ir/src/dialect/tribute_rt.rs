@@ -23,6 +23,10 @@ mod tribute_rt {
 
     #[attr(alloc_size: u64)]
     fn release(ptr: ()) {}
+
+    /// Consume one managed ownership unit while crossing a native raw-pointer
+    /// representation boundary. This is deliberately not a pure operation.
+    fn into_raw(value: ()) -> result {}
 }
 
 // === RC Header Layout ===
@@ -181,6 +185,30 @@ mod tests {
 
         assert_eq!(super::Release::DIALECT_NAME, "tribute_rt");
         assert_eq!(super::Release::OP_NAME, "release");
+    }
+
+    #[test]
+    fn test_into_raw_round_trip() {
+        let mut ctx = IrContext::new();
+        let loc = dummy_location();
+        let managed_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+                .attr("name", Attribute::Symbol(Symbol::new("Box")))
+                .build(),
+        );
+        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let value = trunk_ir::dialect::arith::r#const(&mut ctx, loc, managed_ty, Attribute::Int(0))
+            .result(&ctx);
+
+        let op = super::into_raw(&mut ctx, loc, value, ptr_ty);
+        let round_trip =
+            super::IntoRaw::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.into_raw");
+
+        assert_eq!(round_trip.op_ref(), op.op_ref());
+        assert_eq!(op.value(&ctx), value);
+        assert_eq!(ctx.value_ty(op.result(&ctx)), ptr_ty);
+        assert_eq!(super::IntoRaw::DIALECT_NAME, "tribute_rt");
+        assert_eq!(super::IntoRaw::OP_NAME, "into_raw");
     }
 
     #[test]
