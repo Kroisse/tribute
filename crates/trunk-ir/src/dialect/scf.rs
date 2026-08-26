@@ -38,6 +38,456 @@ mod scf {
 }
 
 // =========================================================================
+// Control-flow interfaces
+// =========================================================================
+
+use crate::op_interface::{
+    ControlFlowInterfaceError, ForwardedValues, RegionBranchModel, RegionBranchOps,
+    RegionBranchPoint, RegionBranchTerminatorModel, RegionBranchTerminatorOps, RegionSuccessor,
+    RegionSuccessors,
+};
+
+fn op_parent_region(ctx: &IrContext, op: OpRef) -> Option<crate::refs::RegionRef> {
+    ctx.op(op)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region)
+}
+
+impl Loop {
+    fn enclosing(ctx: &IrContext, op: OpRef) -> Option<Self> {
+        let mut region = op_parent_region(ctx, op);
+        while let Some(current) = region {
+            let owner = ctx.region(current).parent_op?;
+            if let Ok(loop_op) = Self::from_op(ctx, owner) {
+                return Some(loop_op);
+            }
+            region = op_parent_region(ctx, owner);
+        }
+        None
+    }
+}
+
+fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    op_parent_region(ctx, op).and_then(|region| ctx.region(region).parent_op)
+}
+
+impl If {
+    fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
+        let op = self.op_ref();
+        if ctx.op_operands(op).len() != 1 || ctx.op(op).regions.len() != 2 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.if requires one condition and exactly two regions",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl RegionBranchModel for If {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        self.validate_region_shape(ctx)?;
+        match point {
+            RegionBranchPoint::Parent => Ok(RegionSuccessors::new([
+                RegionSuccessor::Region(self.then_region(ctx)),
+                RegionSuccessor::Region(self.else_region(ctx)),
+            ])),
+            RegionBranchPoint::Terminator(terminator)
+                if Yield::matches(ctx, terminator)
+                    && immediate_region_owner(ctx, terminator) == Some(self.op_ref()) =>
+            {
+                Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
+            }
+            RegionBranchPoint::Terminator(terminator) => {
+                Err(ControlFlowInterfaceError::not_applicable(format!(
+                    "{terminator} is not an scf.if region yield"
+                )))
+            }
+        }
+    }
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        self.validate_region_shape(ctx)?;
+        match successor {
+            RegionSuccessor::Region(region)
+                if region == self.then_region(ctx) || region == self.else_region(ctx) =>
+            {
+                Ok(ForwardedValues::default())
+            }
+            _ => Err(ControlFlowInterfaceError::new(
+                "successor is not an scf.if entry region",
+            )),
+        }
+    }
+}
+
+impl Loop {
+    fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
+        if ctx.op(self.op_ref()).regions.len() != 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.loop requires exactly one body region",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl RegionBranchModel for Loop {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        self.validate_region_shape(ctx)?;
+        match point {
+            RegionBranchPoint::Parent => Ok(RegionSuccessors::new([RegionSuccessor::Region(
+                self.body(ctx),
+            )])),
+            RegionBranchPoint::Terminator(terminator)
+                if Self::enclosing(ctx, terminator) == Some(self)
+                    && Continue::matches(ctx, terminator) =>
+            {
+                Ok(RegionSuccessors::new([RegionSuccessor::Region(
+                    self.body(ctx),
+                )]))
+            }
+            RegionBranchPoint::Terminator(terminator)
+                if Self::enclosing(ctx, terminator) == Some(self)
+                    && Break::matches(ctx, terminator) =>
+            {
+                Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
+            }
+            RegionBranchPoint::Terminator(terminator) => {
+                Err(ControlFlowInterfaceError::not_applicable(format!(
+                    "{terminator} is not a continue or break for this scf.loop"
+                )))
+            }
+        }
+    }
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        self.validate_region_shape(ctx)?;
+        match successor {
+            RegionSuccessor::Region(region) if region == self.body(ctx) => {
+                Ok(ForwardedValues::new(self.init(ctx).iter().copied()))
+            }
+            _ => Err(ControlFlowInterfaceError::new(
+                "successor is not the scf.loop body",
+            )),
+        }
+    }
+}
+
+impl Switch {
+    fn successor_regions(
+        self,
+        ctx: &IrContext,
+    ) -> Result<Vec<crate::refs::RegionRef>, ControlFlowInterfaceError> {
+        let op = self.op_ref();
+        if ctx.op_operands(op).len() != 1 || ctx.op(op).regions.len() != 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.switch requires one discriminant and exactly one body region",
+            ));
+        }
+        let body = ctx.region(self.body(ctx));
+        let [block] = body.blocks.as_slice() else {
+            return Err(ControlFlowInterfaceError::new(format!(
+                "scf.switch body must contain one block, found {}",
+                body.blocks.len()
+            )));
+        };
+        let mut regions = Vec::new();
+        let mut default_count = 0usize;
+        for &child in &ctx.block(*block).ops {
+            if let Ok(case) = Case::from_op(ctx, child) {
+                regions.push(case.body(ctx));
+            } else if let Ok(default) = Default::from_op(ctx, child) {
+                default_count += 1;
+                regions.push(default.body(ctx));
+            } else {
+                return Err(ControlFlowInterfaceError::new(format!(
+                    "scf.switch body contains unsupported operation {child}"
+                )));
+            }
+        }
+        if default_count > 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.switch contains multiple default regions",
+            ));
+        }
+        Ok(regions)
+    }
+
+    fn has_default(ctx: &IrContext, regions: &[crate::refs::RegionRef]) -> bool {
+        regions.iter().any(|region| {
+            ctx.region(*region)
+                .parent_op
+                .is_some_and(|parent| Default::matches(ctx, parent))
+        })
+    }
+}
+
+impl RegionBranchModel for Switch {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        let regions = self.successor_regions(ctx)?;
+        match point {
+            RegionBranchPoint::Parent => {
+                let mut successors: Vec<_> = regions
+                    .iter()
+                    .copied()
+                    .map(RegionSuccessor::Region)
+                    .collect();
+                if !Self::has_default(ctx, &regions) {
+                    successors.push(RegionSuccessor::Parent);
+                }
+                Ok(RegionSuccessors::new(successors))
+            }
+            RegionBranchPoint::Terminator(terminator)
+                if Yield::matches(ctx, terminator)
+                    && op_parent_region(ctx, terminator)
+                        .is_some_and(|region| regions.contains(&region)) =>
+            {
+                Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
+            }
+            RegionBranchPoint::Terminator(terminator) => {
+                Err(ControlFlowInterfaceError::not_applicable(format!(
+                    "{terminator} is not a yield from this scf.switch"
+                )))
+            }
+        }
+    }
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        let regions = self.successor_regions(ctx)?;
+        match successor {
+            RegionSuccessor::Region(region) if regions.contains(&region) => {
+                Ok(ForwardedValues::default())
+            }
+            RegionSuccessor::Parent if !Self::has_default(ctx, &regions) => {
+                Ok(ForwardedValues::default())
+            }
+            _ => Err(ControlFlowInterfaceError::new(
+                "successor is not an scf.switch entry target",
+            )),
+        }
+    }
+}
+
+trait SwitchArmModel: DialectOp {
+    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef;
+
+    fn checked_body(
+        self,
+        ctx: &IrContext,
+    ) -> Result<crate::refs::RegionRef, ControlFlowInterfaceError> {
+        if ctx.op(self.op_ref()).regions.len() != 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.case/default requires exactly one body region",
+            ));
+        }
+        Ok(self.body_region(ctx))
+    }
+
+    fn arm_successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        let body = self.checked_body(ctx)?;
+        match point {
+            RegionBranchPoint::Parent => Ok(RegionSuccessors::new([RegionSuccessor::Region(body)])),
+            RegionBranchPoint::Terminator(terminator)
+                if Yield::matches(ctx, terminator)
+                    && immediate_region_owner(ctx, terminator) == Some(self.op_ref()) =>
+            {
+                Ok(RegionSuccessors::new([RegionSuccessor::Parent]))
+            }
+            RegionBranchPoint::Terminator(terminator) => {
+                Err(ControlFlowInterfaceError::not_applicable(format!(
+                    "{terminator} is not a yield from this switch arm"
+                )))
+            }
+        }
+    }
+
+    fn arm_entry_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        let body = self.checked_body(ctx)?;
+        match successor {
+            RegionSuccessor::Region(region) if region == body => Ok(ForwardedValues::default()),
+            _ => Err(ControlFlowInterfaceError::new(
+                "successor is not this switch arm's body",
+            )),
+        }
+    }
+}
+
+impl SwitchArmModel for Case {
+    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef {
+        self.body(ctx)
+    }
+}
+
+impl SwitchArmModel for Default {
+    fn body_region(self, ctx: &IrContext) -> crate::refs::RegionRef {
+        self.body(ctx)
+    }
+}
+
+impl RegionBranchModel for Case {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        self.arm_successors(ctx, point)
+    }
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        self.arm_entry_operands(ctx, successor)
+    }
+}
+
+impl RegionBranchModel for Default {
+    fn successors(
+        self,
+        ctx: &IrContext,
+        point: RegionBranchPoint,
+    ) -> Result<RegionSuccessors, ControlFlowInterfaceError> {
+        self.arm_successors(ctx, point)
+    }
+
+    fn entry_successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        self.arm_entry_operands(ctx, successor)
+    }
+}
+
+impl RegionBranchTerminatorModel for Yield {
+    fn successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        match successor {
+            RegionSuccessor::Parent => Ok(ForwardedValues::new(self.values(ctx).iter().copied())),
+            RegionSuccessor::Region(_) => Err(ControlFlowInterfaceError::new(
+                "scf.yield can only return to a parent",
+            )),
+        }
+    }
+}
+
+impl RegionBranchTerminatorModel for Continue {
+    fn successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        match successor {
+            RegionSuccessor::Region(region) => {
+                let owner = Loop::enclosing(ctx, self.op_ref()).ok_or_else(|| {
+                    ControlFlowInterfaceError::new("scf.continue has no enclosing scf.loop")
+                })?;
+                if region != owner.body(ctx) {
+                    return Err(ControlFlowInterfaceError::new(
+                        "successor is not the enclosing scf.loop body",
+                    ));
+                }
+                Ok(ForwardedValues::new(self.values(ctx).iter().copied()))
+            }
+            RegionSuccessor::Parent => Err(ControlFlowInterfaceError::new(
+                "scf.continue cannot exit its loop",
+            )),
+        }
+    }
+}
+
+impl RegionBranchTerminatorModel for Break {
+    fn successor_operands(
+        self,
+        ctx: &IrContext,
+        successor: RegionSuccessor,
+    ) -> Result<ForwardedValues, ControlFlowInterfaceError> {
+        let op = self.op_ref();
+        if ctx.op_operands(op).len() != 1 {
+            return Err(ControlFlowInterfaceError::new(
+                "scf.break requires exactly one value",
+            ));
+        }
+        match successor {
+            RegionSuccessor::Parent => {
+                let owner = Loop::enclosing(ctx, op).ok_or_else(|| {
+                    ControlFlowInterfaceError::new("scf.break has no enclosing scf.loop")
+                })?;
+                if ctx.op_results(owner.op_ref()).is_empty() {
+                    Ok(ForwardedValues::default())
+                } else {
+                    Ok(ForwardedValues::new([self.value(ctx)]))
+                }
+            }
+            RegionSuccessor::Region(_) => Err(ControlFlowInterfaceError::new(
+                "scf.break cannot enter a region",
+            )),
+        }
+    }
+}
+
+inventory::submit! {
+    RegionBranchOps::register::<If>()
+}
+inventory::submit! {
+    RegionBranchOps::register::<Switch>()
+}
+inventory::submit! {
+    RegionBranchOps::register::<Case>()
+}
+inventory::submit! {
+    RegionBranchOps::register::<Default>()
+}
+inventory::submit! {
+    RegionBranchOps::register::<Loop>()
+}
+inventory::submit! {
+    RegionBranchTerminatorOps::register::<Yield>()
+}
+inventory::submit! {
+    RegionBranchTerminatorOps::register::<Continue>()
+}
+inventory::submit! {
+    RegionBranchTerminatorOps::register::<Break>()
+}
+
+// =========================================================================
 // Canonicalization folds
 // =========================================================================
 

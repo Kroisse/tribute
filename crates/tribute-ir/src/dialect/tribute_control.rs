@@ -9,6 +9,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use trunk_ir::dialect::{adt, arith, core};
+use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -3024,21 +3025,23 @@ fn ops_are_mutually_exclusive(ctx: &IrContext, left: OpRef, right: OpRef) -> boo
     while let Some(current) = region {
         let owner = ctx.region(current).parent_op;
         if let Some(owner) = owner
-            && ctx.op(owner).dialect == Symbol::new("scf")
-            && ctx.op(owner).name == Symbol::new("if")
-            && let Some(left_index) = ctx
-                .op(owner)
-                .regions
-                .iter()
-                .position(|candidate| *candidate == current)
-            && let Some(right_index) = ctx
-                .op(owner)
-                .regions
-                .iter()
-                .position(|candidate| op_is_within_region(ctx, right, *candidate))
-            && left_index != right_index
+            && let Some(interface) = RegionBranchOps::get(ctx, owner)
+            && let Ok(successors) = interface.successors(ctx, owner, RegionBranchPoint::Parent)
         {
-            return true;
+            let containing_region = |candidate: OpRef| {
+                successors.as_slice().iter().find_map(|successor| {
+                    let RegionSuccessor::Region(region) = successor else {
+                        return None;
+                    };
+                    op_is_within_region(ctx, candidate, *region).then_some(*region)
+                })
+            };
+            if let (Some(left_region), Some(right_region)) =
+                (containing_region(left), containing_region(right))
+                && left_region != right_region
+            {
+                return true;
+            }
         }
         region = owner.and_then(|owner| parent_region(ctx, owner));
     }
@@ -4497,6 +4500,72 @@ mod tests {
         ] {
             assert!(!diagnostics.contains(forbidden), "{result}");
         }
+    }
+
+    #[test]
+    fn whole_ir_allows_mutually_exclusive_switch_capture_paths_without_default() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @test {
+  %handled = tribute_control.handle : core.i32 {
+    %body = arith.const {value = 0} : core.i32
+    tribute_control.yield %body
+  } {
+    ^completion(%value: core.i32):
+      tribute_control.yield %value
+  } {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        %choice = arith.const {value = 0} : core.i32
+        scf.switch %choice {
+          scf.case {value = 0} {
+            %left = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+              %left_resumed = tribute_control.resume %token, %argument : core.i32
+              tribute_control.return %left_resumed
+            }
+            %left_called = tribute_control.call_indirect %left : core.i32
+            scf.yield
+          }
+          scf.case {value = 1} {
+            %right = tribute_control.lambda() -> core.i32 convention(direct) captures [%token, %argument] {
+              %right_resumed = tribute_control.resume %token, %argument : core.i32
+              tribute_control.return %right_resumed
+            }
+            %right_called = tribute_control.call_indirect %right : core.i32
+            scf.yield
+          }
+        }
+        tribute_control.yield %argument
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        let diagnostics = messages(&result);
+        for forbidden in [
+            "resume token is copied into multiple capture paths",
+            "resume token capture does not form a single path to resume",
+            "resume-token carrier branches into multiple lambda captures",
+            "resume-token carrier has multiple static terminal uses",
+        ] {
+            assert!(!diagnostics.contains(forbidden), "{result}");
+        }
+
+        let mut branch_lambda = None;
+        let mut switch = None;
+        walk_region_ops(&ctx, module.body(&ctx).unwrap(), &mut |op| {
+            let data = ctx.op(op);
+            if data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new("lambda")
+            {
+                branch_lambda.get_or_insert(op);
+            } else if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
+                switch = Some(op);
+            }
+        });
+        assert!(!ops_are_mutually_exclusive(
+            &ctx,
+            branch_lambda.unwrap(),
+            switch.unwrap(),
+        ));
     }
 
     #[test]
