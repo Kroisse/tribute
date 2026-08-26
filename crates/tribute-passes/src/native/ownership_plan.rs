@@ -1094,7 +1094,11 @@ fn validate_into_raw_transfer_groups(
             .actions
             .iter()
             .enumerate()
-            .filter(|(_, action)| action.kind == ActionKind::CopyAcquire && action.value == *source)
+            .filter(|(_, action)| {
+                action.kind == ActionKind::CopyAcquire
+                    && action.value == *source
+                    && action.anchor == ActionAnchor::Before(operations[0])
+            })
             .collect::<Vec<_>>();
         if copy_actions.len() != operations.len().saturating_sub(1)
             || copy_actions.iter().enumerate().any(|(index, (_, action))| {

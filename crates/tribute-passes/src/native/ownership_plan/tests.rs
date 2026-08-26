@@ -411,11 +411,58 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
 
         materialize(&mut ctx, module, &plan).expect("typed RC materialization");
         let materialized = print_module(&ctx, module.op());
-        assert!(
-            materialized.find("tribute_rt.retain") < materialized.find("tribute_rt.into_raw"),
-            "{materialized}"
-        );
+        let retain = materialized
+            .find("tribute_rt.retain")
+            .expect("grouped transfers require a retain");
+        let transfer = materialized
+            .find("tribute_rt.into_raw")
+            .expect("fixture contains an into_raw transfer");
+        assert!(retain < transfer, "{materialized}");
     }
+}
+
+#[test]
+fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
+    let ir = r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  !Owner = adt.struct() {name = @Owner, fields = [[@closure, !_closure]]}
+  func.func @transfers() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %stored = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %owner = adt.struct_new %stored {type = !Owner} : !Owner
+    %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
+    %first = tribute_rt.into_raw %closure : core.ptr
+    %second = tribute_rt.into_raw %closure : core.ptr
+    func.return
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let plan = build_native_ownership_plan_with_options(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            elide_proven_borrowed_parameters: true,
+            elide_proven_field_borrows: false,
+        },
+    )
+    .expect("typed ownership plan with preserved field borrows");
+    let function = plan.function(Symbol::new("transfers")).unwrap();
+    let transfers = function
+        .actions()
+        .iter()
+        .filter(|action| action.kind == ActionKind::IntoRawTransfer)
+        .collect::<Vec<_>>();
+    let source = transfers[0].value;
+    assert!(function.actions().iter().any(|action| {
+        action.kind == ActionKind::CopyAcquire
+            && action.value == source
+            && matches!(action.anchor, ActionAnchor::After(_))
+    }));
+
+    materialize(&mut ctx, module, &plan)
+        .expect("field-borrow acquisition is not a grouped-transfer acquisition");
 }
 
 #[test]
