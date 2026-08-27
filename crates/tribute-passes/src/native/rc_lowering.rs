@@ -454,8 +454,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_retain() {
-        // retain result is unused (matches real pipeline behavior:
-        // insert_rc adds retain for side-effect only)
+        // The materializer adds retains for their side effect; their result is unused.
         let result = run_pass(
             r#"core.module @test {
   clif.func @f(%0: core.ptr) -> core.ptr {
