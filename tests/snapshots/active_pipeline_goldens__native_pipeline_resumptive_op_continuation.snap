@@ -69,7 +69,7 @@ core.module @resumptive_op_native {
       %17 = func.call {callee = @__tribute_next_tag} : core.i32
       %18 = arith.const {value = 3214451656} : core.i32
       %19 = core.unrealized_conversion_cast %16 : core.ptr
-      %20 = core.unrealized_conversion_cast %15 : core.ptr
+      %20 = tribute_rt.into_raw %15 : core.ptr
       %21 = func.call %0, %18, %17, %19, %20 {callee = @__tribute_evidence_extend} : core.ptr
       %22 = func.call_indirect %11, %21, %12, %9 {func.indirect_call_signature = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
       %23 = adt.variant_is %22 {tag = @Normal, type = !__tribute_cps_control} : core.i1

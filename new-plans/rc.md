@@ -104,17 +104,21 @@ and are not visible as source constructors or shared-IR field indices.
 
 ## RC Operations
 
-The `tribute_rt` dialect provides two RC operations:
+`tribute_rt` dialect는 두 RC operation과 한 ownership 경계 operation을 제공한다.
 
 ```text
 tribute_rt.retain(ptr) -> ptr    // refcount++, return same pointer
 tribute_rt.release(ptr)          // refcount--, free if zero
+tribute_rt.into_raw(value) -> core.ptr // typed ownership unit 하나를 소비
 ```
 
-These are dialect-level operations that will be:
+이 연산은 dialect 수준에서 다음 순서로 처리된다.
 
-1. **Inserted** by the RC insertion pass (SSA-based liveness analysis)
-2. **Lowered** to inline code by the RC lowering pass
+1. 네이티브 evidence lowering이 필요한 `into_raw`를 먼저 만든다.
+2. 검증된 type-erasure 전 ownership plan은 `retain`/`release`만 **materialize**하고
+   검증한 `into_raw`를 보존한다.
+3. `into_raw`를 explicit native representation conversion으로 **lower**한다.
+4. RC lowering pass가 retain/release를 inline code로 **lower**한다.
 
 Type erasure 전 RC planning은 검증된 모든 `adt.typeref`를 semantic type에 따라
 managed로 취급한다. `core.ptr`는 항상 unmanaged이며 cast, symbol, ABI spelling,
@@ -123,10 +127,13 @@ operand position 또는 pointer provenance로 managed 성질을 얻을 수 없�
 release는 이 값에 대해 no-op이어야 한다. Callable과 managed-reference validation은
 ownership plan 또는 IR mutation이 이 분류를 사용하기 전에 완료된다.
 
-Type erasure가 managed reference를 `core.ptr`로 바꾼 뒤에는 pointer type 자체가
-ownership을 증명하지 않는다. Pre-erasure ownership plan이 물리 IR에 명시적으로
-materialize한 `tribute_rt.retain`과 `tribute_rt.release`만 RC 의미를 보존한다. 따라서
-이 operation의 `core.ptr` operand가 RC allocation을 가리킬 수 있다는 사실과
+`tribute_rt.into_raw`는 typed managed value의 정확히 하나인 ownership unit을 소비하고
+항상 unmanaged `core.ptr`를 만든다. 이 operation은 generic call metadata, symbol,
+ABI, operand 위치 또는 pointer provenance를 사용하지 않는다. Type erasure가 managed
+reference를 `core.ptr`로 바꾼 뒤에는 pointer type 자체가 ownership을 증명하지 않는다.
+Pre-erasure ownership plan이 물리 IR에 명시적으로 materialize한
+`tribute_rt.retain`/`tribute_rt.release`와 검증한 `tribute_rt.into_raw`만 RC 의미를
+보존한다. 따라서 이 operation의 `core.ptr` operand가 RC allocation을 가리킬 수 있다는 사실과
 `core.ptr` 자체가 unmanaged라는 규칙은 모순되지 않는다.
 
 ### Inline Lowering
@@ -234,14 +241,28 @@ exact source-target identity mapping을 반환한다. RTTI bitmap은 이 mapping
 
 ### 2. Explicit RC materialization
 
-**Location:** `tribute-passes/src/native/rc_insertion.rs`
+**Location:** `tribute-passes/src/native/rc_materialization.rs`
 
-Typed plan의 action을 `tribute_rt.retain`과 `tribute_rt.release`로 materialize한
-뒤 managed type을 physical type으로 바꾼다. Materializer는 type이나 pointer
+Typed plan의 action을 `tribute_rt.retain`과 `tribute_rt.release`로 materialize하고
+검증된 `tribute_rt.into_raw`를 보존한 뒤 managed type을 physical type으로 바꾼다.
+Materializer는 type이나 pointer
 provenance에서 action을 새로 발견하지 않는다. Duplicate owning destination마다
 별도 unit을 확보하고 proper-tail operand는 선택된 unit을 이전한다. 이전되지 않고
 죽는 값은 terminator 앞에서 release하며 proper-tail terminator 뒤에는 RC operation을
 둘 수 없다.
+
+각 materialize된 release는 plan action이 가리키는 type-erasure 전 nominal layout에서
+계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
+exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
+static nominal layout이 없는 opaque dynamic reference의 `alloc_size = 0`은
+deallocation size가 아니라 RTTI dispatch 전용 신호다. backend는 header RTTI로 이를
+exact release function으로 해소한 뒤에만 deallocate하며, entry가 없으면 zero-size
+deallocation 대신 fail-closed한다. physical def-chain에서 size를 추론하지 않는다.
+
+Materialization은 먼저 plan, module identity, 모든 action anchor, exact
+replacement-field layout/index, insertion schedule을 검증한다. 이 검증이 실패하면
+module을 변경하지 않는다. Legacy post-erasure liveness/alias/pointer discovery는
+native production path에 존재하지 않는다.
 
 ### 3. RC Optimization Pass
 
@@ -417,7 +438,8 @@ RC lowering follows a semantic-to-physical order:
 1. Validate callable origins and managed-reference boundaries on typed IR.
 2. Compute ownership actions and RTTI field information while `adt.typeref`
    identity is still available.
-3. Materialize explicit `tribute_rt.retain` and `tribute_rt.release` operations.
+3. Evidence lowering이 이미 만든 `tribute_rt.into_raw` consuming transfer를 plan이
+   검증·기록하고, `tribute_rt.retain`과 `tribute_rt.release`만 materialize한다.
 4. Erase managed references to `core.ptr` and lower the explicit RC operations
    to physical refcount updates and type-specific destruction.
 
@@ -425,6 +447,15 @@ No later pass may reconstruct managedness from a raw pointer, symbol spelling,
 ABI marker, operand position, or erased provenance. A shallow release may be
 used only as an explicitly documented intermediate implementation stage; the
 semantic contract requires type-specific release of owned managed fields.
+
+네이티브 evidence ABI에는 명시적인 typed ownership handoff가 있다. 네이티브 lowering은
+runtime 경계를 넘는 compiler-generated managed `_closure`마다 `tribute_rt.into_raw`를
+만든다. Ownership plan은 현재의 정확한 closure layout, managed input, result 하나의
+`core.ptr` 형상과 action anchor를 검증하고, 그 unit을 소비된 transfer로 기록한다.
+이미 raw/null인 dispatch operand는 `into_raw`를 만들지 않으며 계속 unmanaged다.
+같은 exact closure root의 same-block `into_raw`가 N개이면 plan은 첫 transfer 앞에
+N-1 copy-acquire를 둔다. 그 밖의 live use, alias, cross-block group과
+malformed/stale `into_raw`는 typed planning 경계에서 fail-closed한다.
 
 ### Type-specific release
 

@@ -9,6 +9,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 
 use tribute_core::{CallingConvention, get_calling_convention, get_indirect_call_signature};
+use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
@@ -21,14 +22,14 @@ use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 
 mod actions;
 mod cfg;
-use actions::{plan_function_actions, validate_result_contract};
+use actions::{exact_into_raw_transfers, plan_function_actions, validate_result_contract};
 use cfg::ValidatedFlatCfg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
 
 impl OwnershipPlanError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
@@ -49,6 +50,24 @@ pub enum EntryOwnership {
     Consumed,
 }
 
+/// Policy choices captured by the typed native ownership plan.  These are
+/// deliberately decisions made while semantic managed types still exist; the
+/// materializer never re-discovers either class of borrow after erasure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NativeOwnershipPlanOptions {
+    pub elide_proven_borrowed_parameters: bool,
+    pub elide_proven_field_borrows: bool,
+}
+
+impl NativeOwnershipPlanOptions {
+    pub const fn production() -> Self {
+        Self {
+            elide_proven_borrowed_parameters: true,
+            elide_proven_field_borrows: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionKind {
     EntryAcquire,
@@ -62,6 +81,7 @@ pub enum ActionKind {
     FinalRelease,
     ReturnTransfer,
     TailTransfer,
+    IntoRawTransfer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,6 +142,10 @@ pub struct RttiTypePlan {
 pub struct NativeOwnershipPlan {
     module: OpRef,
     managed_layouts: HashSet<TypeRef>,
+    /// The compiler-generated native layout for semantic closure values. This
+    /// exact `TypeRef` is collected before type erasure, never inferred from a
+    /// physical pointer.
+    closure_layout: Option<TypeRef>,
     functions: Vec<FunctionOwnershipPlan>,
     rtti_types: Vec<RttiTypePlan>,
 }
@@ -143,6 +167,49 @@ impl NativeOwnershipPlan {
 
     pub fn is_managed_type(&self, ctx: &IrContext, ty: TypeRef) -> bool {
         is_typed_managed_reference(ctx, ty, &self.managed_layouts)
+    }
+
+    /// Resolve an exact semantic managed reference to the unique aggregate
+    /// layout that owns its native allocation.  This is intentionally a
+    /// plan-owned nominal lookup: physical pointers never participate.
+    pub(crate) fn allocation_layout_for_type(
+        &self,
+        ctx: &IrContext,
+        ty: TypeRef,
+    ) -> Result<TypeRef, OwnershipPlanError> {
+        if self.managed_layouts.contains(&ty) {
+            return Ok(ty);
+        }
+        if closure::Closure::matches(ctx, ty) {
+            return self.closure_layout.ok_or_else(|| {
+                OwnershipPlanError::new(
+                    "semantic closure release has no compiler-generated allocation layout",
+                )
+            });
+        }
+        let data = ctx.types.get(ty);
+        if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
+            return Err(OwnershipPlanError::new(format!(
+                "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
+            )));
+        }
+        let name = data.attrs.get_symbol("name").ok_or_else(|| {
+            OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
+        })?;
+        let mut layouts = self
+            .managed_layouts
+            .iter()
+            .copied()
+            .filter(|layout| ctx.types.get(*layout).attrs.get_symbol("name") == Some(name));
+        let layout = layouts.next().ok_or_else(|| {
+            OwnershipPlanError::new("managed release typeref has no planned allocation layout")
+        })?;
+        if layouts.next().is_some() {
+            return Err(OwnershipPlanError::new(
+                "managed release typeref has ambiguous planned allocation layouts",
+            ));
+        }
+        Ok(layout)
     }
 
     /// Carry the typed RTTI bitmap through exact compiler-reported type
@@ -244,6 +311,12 @@ impl NativeOwnershipPlan {
             ));
         }
         validate_plan(ctx, self)?;
+        let current_closure_layout = collect_closure_layout(ctx, module, &self.managed_layouts)?;
+        if current_closure_layout != self.closure_layout {
+            return Err(OwnershipPlanError::new(
+                "semantic closure allocation layouts differ from the ownership plan",
+            ));
+        }
         self.remap_rtti_types(ctx, module, &[])?;
         Ok(())
     }
@@ -280,6 +353,14 @@ pub fn build_native_ownership_plan(
     ctx: &IrContext,
     module: Module,
 ) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
+    build_native_ownership_plan_with_options(ctx, module, NativeOwnershipPlanOptions::production())
+}
+
+pub fn build_native_ownership_plan_with_options(
+    ctx: &IrContext,
+    module: Module,
+    options: NativeOwnershipPlanOptions,
+) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
     let _module_block = module
         .first_block(ctx)
         .ok_or_else(|| OwnershipPlanError::new("module has no body block"))?;
@@ -289,10 +370,17 @@ pub fn build_native_ownership_plan(
             function_ops.push(op);
         }
     });
-    let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
-    let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
     let definitions = collect_function_definitions(ctx, &function_ops)?;
-    let entry_contracts = compute_entry_contracts(ctx, module, &definitions, &managed_layouts)?;
+    let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
+    let closure_layout = collect_closure_layout(ctx, module, &managed_layouts)?;
+    let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
+    let entry_contracts = compute_entry_contracts(
+        ctx,
+        module,
+        &definitions,
+        &managed_layouts,
+        options.elide_proven_borrowed_parameters,
+    )?;
 
     let mut functions = Vec::new();
     for &op in &function_ops {
@@ -321,6 +409,7 @@ pub fn build_native_ownership_plan(
             &entry_contracts,
             &definitions,
             &managed_layouts,
+            options.elide_proven_field_borrows,
         )?;
         functions.push(FunctionOwnershipPlan {
             symbol,
@@ -333,11 +422,48 @@ pub fn build_native_ownership_plan(
     let plan = NativeOwnershipPlan {
         module: module.op(),
         managed_layouts,
+        closure_layout,
         functions,
         rtti_types,
     };
     validate_plan(ctx, &plan)?;
     Ok(plan)
+}
+
+fn collect_closure_layout(
+    ctx: &IrContext,
+    module: Module,
+    managed_layouts: &HashSet<TypeRef>,
+) -> Result<Option<TypeRef>, OwnershipPlanError> {
+    let mut closure_layout = None;
+    let mut ambiguous = false;
+    walk_module(ctx, module, |op| {
+        let Ok(new) = adt::StructNew::from_op(ctx, op) else {
+            return;
+        };
+        let layout = new.r#type(ctx);
+        if !crate::closure_lower::is_closure_struct_type_ref(ctx, layout) {
+            return;
+        }
+        if !managed_layouts.contains(&layout) {
+            return;
+        }
+        match closure_layout {
+            Some(existing) if existing != layout => {
+                // The generated closure layout is an exact compiler ABI
+                // identity; more than one identity is stale plan input.
+                ambiguous = true;
+            }
+            None => closure_layout = Some(layout),
+            Some(_) => {}
+        }
+    });
+    if ambiguous {
+        return Err(OwnershipPlanError::new(
+            "semantic closure has ambiguous compiler-owned allocation layouts",
+        ));
+    }
+    Ok(closure_layout)
 }
 
 fn collect_function_definitions(
@@ -585,6 +711,7 @@ fn compute_entry_contracts(
     module: Module,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
+    elide_proven_borrowed_parameters: bool,
 ) -> Result<HashMap<Symbol, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(&build_call_graph(ctx, module));
     let mut summaries = HashMap::new();
@@ -603,7 +730,7 @@ fn compute_entry_contracts(
                 .map(|&parameter| {
                     if !is_managed_value(ctx, parameter, managed_layouts) {
                         EntryOwnership::Plain
-                    } else if ineligible {
+                    } else if ineligible || !elide_proven_borrowed_parameters {
                         EntryOwnership::Retained
                     } else {
                         EntryOwnership::Borrowed
@@ -837,6 +964,16 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                     ctx.value_ty(action.value)
                 )));
             }
+            if action.kind == ActionKind::IntoRawTransfer
+                && !validate_into_raw_transfer_action(
+                    ctx,
+                    action,
+                    plan.closure_layout,
+                    &plan.managed_layouts,
+                )
+            {
+                return Err(OwnershipPlanError::new("into_raw transfer action is stale"));
+            }
             let valid_anchor = match action.anchor {
                 ActionAnchor::BlockStart(block) => ctx.block(block).parent_region == Some(body),
                 ActionAnchor::Before(op) | ActionAnchor::After(op) => ctx
@@ -857,6 +994,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 ));
             }
         }
+        validate_into_raw_transfer_groups(ctx, function, body, plan)?;
     }
     let mut rtti_types = HashSet::new();
     for entry in &plan.rtti_types {
@@ -870,6 +1008,123 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 "RTTI managed-field bitmap is stale",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_into_raw_transfer_action(
+    ctx: &IrContext,
+    action: &OwnershipAction,
+    closure_layout: Option<TypeRef>,
+    managed_layouts: &HashSet<TypeRef>,
+) -> bool {
+    let ActionAnchor::Before(into_raw) = action.anchor else {
+        return false;
+    };
+    if action.destination != 0 || !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, into_raw)
+    {
+        return false;
+    }
+    let ([source], [result]) = (ctx.op_operands(into_raw), ctx.op_results(into_raw)) else {
+        return false;
+    };
+    let Some(closure_layout) = closure_layout else {
+        return false;
+    };
+    let result_ty = ctx.types.get(ctx.value_ty(*result));
+    *source == action.value
+        && ctx.value_ty(*source) == closure_layout
+        && is_managed_value(ctx, *source, managed_layouts)
+        && result_ty.dialect == Symbol::new("core")
+        && result_ty.name == Symbol::new("ptr")
+}
+
+fn validate_into_raw_transfer_groups(
+    ctx: &IrContext,
+    function: &FunctionOwnershipPlan,
+    body: RegionRef,
+    plan: &NativeOwnershipPlan,
+) -> Result<(), OwnershipPlanError> {
+    let mut sources = HashSet::new();
+    for &block in &ctx.region(body).blocks {
+        for &op in &ctx.block(block).ops {
+            if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, op) {
+                continue;
+            }
+            let [source] = ctx.op_operands(op) else {
+                return Err(OwnershipPlanError::new(
+                    "tribute_rt.into_raw has malformed arity",
+                ));
+            };
+            sources.insert(*source);
+        }
+    }
+
+    for source in &sources {
+        let (_, operations) = exact_into_raw_transfers(
+            ctx,
+            *source,
+            plan.closure_layout.ok_or_else(|| {
+                OwnershipPlanError::new(
+                    "tribute_rt.into_raw requires the current compiler closure layout",
+                )
+            })?,
+            &plan.managed_layouts,
+        )?;
+        let transfer_actions = function
+            .actions
+            .iter()
+            .enumerate()
+            .filter(|(_, action)| {
+                action.kind == ActionKind::IntoRawTransfer && action.value == *source
+            })
+            .collect::<Vec<_>>();
+        if transfer_actions.len() != operations.len()
+            || transfer_actions
+                .iter()
+                .zip(&operations)
+                .any(|((_, action), &op)| action.anchor != ActionAnchor::Before(op))
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw transfer actions do not cover the exact grouped transfers",
+            ));
+        }
+
+        let copy_actions = function
+            .actions
+            .iter()
+            .enumerate()
+            .filter(|(_, action)| {
+                action.kind == ActionKind::CopyAcquire
+                    && action.value == *source
+                    && action.anchor == ActionAnchor::Before(operations[0])
+            })
+            .collect::<Vec<_>>();
+        if copy_actions.len() != operations.len().saturating_sub(1)
+            || copy_actions.iter().enumerate().any(|(index, (_, action))| {
+                action.anchor != ActionAnchor::Before(operations[0])
+                    || action.destination != (index + 1) as u32
+            })
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw grouped transfers have stale copy-acquire actions",
+            ));
+        }
+        let first_transfer = transfer_actions[0].0;
+        if copy_actions
+            .iter()
+            .any(|(index, _)| *index >= first_transfer)
+        {
+            return Err(OwnershipPlanError::new(
+                "into_raw copy-acquire actions must precede the first transfer",
+            ));
+        }
+    }
+
+    if function.actions.iter().any(|action| {
+        action.kind == ActionKind::IntoRawTransfer && !sources.contains(&action.value)
+    }) {
+        return Err(OwnershipPlanError::new("into_raw transfer action is stale"));
     }
     Ok(())
 }

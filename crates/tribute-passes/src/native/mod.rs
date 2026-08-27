@@ -24,6 +24,7 @@ pub mod ownership_plan;
 pub mod ownership_summary;
 pub mod rc_insertion;
 pub mod rc_lowering;
+pub mod rc_materialization;
 pub mod rc_optimization;
 pub mod rtti;
 pub mod tribute_rt_to_clif;

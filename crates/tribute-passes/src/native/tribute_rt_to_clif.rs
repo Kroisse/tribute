@@ -9,6 +9,7 @@
 //! - `tribute_rt.unbox_float` → `clif.load`
 //! - `tribute_rt.box_bool` → `clif.call @__tribute_alloc` + `clif.store`
 //! - `tribute_rt.unbox_bool` → `clif.load`
+//! - `tribute_rt.into_raw` → `core.unrealized_conversion_cast`
 //!
 //! ## Allocation Strategy
 //!
@@ -153,7 +154,8 @@ pub fn lower(
             i32_ty,
             anyref_ty,
         })
-        .add_pattern(UnboxBoolPattern { i32_ty });
+        .add_pattern(UnboxBoolPattern { i32_ty })
+        .add_pattern(IntoRawPattern { ptr_ty });
 
     let target = tribute_rt_to_clif_target();
     applicator
@@ -167,6 +169,38 @@ fn tribute_rt_to_clif_target() -> ConversionTarget {
         .illegal_dialect("tribute_rt")
         .legal_op("tribute_rt", "retain")
         .legal_op("tribute_rt", "release")
+}
+
+// =============================================================================
+// Ownership-boundary conversion
+// =============================================================================
+
+/// `into_raw` has already consumed and validated a typed ownership unit. Its
+/// remaining work is only the native representation conversion; later native
+/// cast lowering resolves the explicit `core.ptr` identity.
+struct IntoRawPattern {
+    ptr_ty: TypeRef,
+}
+
+impl RewritePattern for IntoRawPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(into_raw) = tribute_rt::IntoRaw::from_op(ctx, op) else {
+            return false;
+        };
+        let cast = core::unrealized_conversion_cast(
+            ctx,
+            ctx.op(op).location,
+            into_raw.value(ctx),
+            self.ptr_ty,
+        );
+        rewriter.replace_op(cast.op_ref());
+        true
+    }
 }
 
 // =============================================================================
@@ -587,6 +621,24 @@ mod tests {
         assert!(
             output.contains("tribute_rt.release"),
             "release should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_into_raw_lowers_to_the_explicit_native_conversion() {
+        let output = run_pass(
+            r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @f(%closure: !_closure) -> core.ptr {
+    %raw = tribute_rt.into_raw %closure : core.ptr
+    func.return %raw
+  }
+}"#,
+        );
+        assert!(!output.contains("tribute_rt.into_raw"), "{output}");
+        assert!(
+            output.contains("core.unrealized_conversion_cast"),
+            "{output}"
         );
     }
 }

@@ -373,6 +373,19 @@ fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
+fn lower_evidence_dispatch_operand(
+    ctx: &mut IrContext,
+    loc: Location,
+    value: ValueRef,
+    ptr_ty: TypeRef,
+) -> OpRef {
+    if crate::closure_lower::is_closure_struct_type_ref(ctx, ctx.value_ty(value)) {
+        tribute_rt::into_raw(ctx, loc, value, ptr_ty).op_ref()
+    } else {
+        core::unrealized_conversion_cast(ctx, loc, value, ptr_ty).op_ref()
+    }
+}
+
 struct LowerEffectExtendToNative;
 
 impl RewritePattern for LowerEffectExtendToNative {
@@ -395,23 +408,27 @@ impl RewritePattern for LowerEffectExtendToNative {
         rewriter.insert_op(ability_id_op.op_ref());
 
         let tr_dispatch_ptr =
-            core::unrealized_conversion_cast(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
-        rewriter.insert_op(tr_dispatch_ptr.op_ref());
+            lower_evidence_dispatch_operand(ctx, loc, extend_op.tr_dispatch_fn(ctx), ptr_ty);
+        let tr_dispatch = ctx.op_result(tr_dispatch_ptr, 0);
+        rewriter.insert_op(tr_dispatch_ptr);
 
         let handler_dispatch_ptr =
-            core::unrealized_conversion_cast(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
-        rewriter.insert_op(handler_dispatch_ptr.op_ref());
+            lower_evidence_dispatch_operand(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
+        let handler_dispatch = ctx.op_result(handler_dispatch_ptr, 0);
+        rewriter.insert_op(handler_dispatch_ptr);
+
+        let mut operands = vec![
+            extend_op.evidence(ctx),
+            ability_id_val,
+            extend_op.prompt_tag(ctx),
+        ];
+        operands.push(tr_dispatch);
+        operands.push(handler_dispatch);
 
         let extend_call = func::call(
             ctx,
             loc,
-            [
-                extend_op.evidence(ctx),
-                ability_id_val,
-                extend_op.prompt_tag(ctx),
-                tr_dispatch_ptr.result(ctx),
-                handler_dispatch_ptr.result(ctx),
-            ],
+            operands,
             ptr_ty,
             Symbol::new(evidence_abi::EXTEND),
         );

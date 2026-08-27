@@ -1,8 +1,6 @@
 use super::*;
-use crate::native::ownership_summary;
-use crate::native::rc_insertion::{
-    BorrowedParameterPolicy, TemporaryBorrowPolicy, insert_rc_with_policies_and_trusted_summaries,
-};
+use crate::native::evidence::lower_evidence_to_native;
+use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
@@ -39,6 +37,83 @@ fn assert_plan_error_unchanged(ir: &str, expected: &str) {
 }
 
 #[test]
+fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows() {
+    let ir = r#"core.module @test {
+  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
+  !ChildRef = adt.typeref() {name = @Child}
+  !Box = adt.struct() {name = @Box, fields = [[@child, !ChildRef]]}
+  !BoxRef = adt.typeref() {name = @Box}
+  func.func @observe(%child: !ChildRef) -> core.i32 {
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @forward(%child: !ChildRef) -> core.i32 {
+    %value = func.call %child {callee = @observe} : core.i32
+    func.return %value
+  }
+  func.func @load(%owner: !BoxRef) -> core.i32 {
+    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    %value = func.call %child {callee = @observe} : core.i32
+    func.return %value
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let preserved = build_native_ownership_plan_with_options(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            elide_proven_borrowed_parameters: false,
+            elide_proven_field_borrows: false,
+        },
+    )
+    .expect("preserved typed plan");
+    let elided = build_native_ownership_plan_with_options(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+    )
+    .expect("elided typed plan");
+
+    let preserved_forward = preserved.function(Symbol::new("forward")).unwrap();
+    let elided_forward = elided.function(Symbol::new("forward")).unwrap();
+    assert_eq!(preserved_forward.entries(), [EntryOwnership::Retained]);
+    assert_eq!(elided_forward.entries(), [EntryOwnership::Borrowed]);
+    assert_eq!(count(preserved_forward, ActionKind::EntryAcquire), 1);
+    assert_eq!(count(elided_forward, ActionKind::EntryAcquire), 0);
+
+    let load_op = ctx
+        .op(elided.function(Symbol::new("load")).unwrap().operation())
+        .regions[0];
+    let load = ctx.op_result(ctx.block(ctx.region(load_op).blocks[0]).ops[0], 0);
+    let projection = ctx.block(ctx.region(load_op).blocks[0]).ops[0];
+    let preserved_load = preserved.function(Symbol::new("load")).unwrap();
+    let elided_load = elided.function(Symbol::new("load")).unwrap();
+    assert!(preserved_load.actions().iter().any(|action| {
+        action.kind == ActionKind::CopyAcquire
+            && action.value == load
+            && action.anchor == ActionAnchor::After(projection)
+    }));
+    assert!(
+        preserved_load
+            .actions()
+            .iter()
+            .any(|action| action.kind == ActionKind::FinalRelease && action.value == load)
+    );
+    assert!(elided_load.actions().iter().any(|action| {
+        action.kind == ActionKind::BorrowLoad
+            && action.value == load
+            && action.anchor == ActionAnchor::After(projection)
+    }));
+    assert!(
+        !elided_load
+            .actions()
+            .iter()
+            .any(|action| action.kind == ActionKind::FinalRelease && action.value == load)
+    );
+}
+
+#[test]
 fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
@@ -66,7 +141,7 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
 }
 
 #[test]
-fn continuation_frame_exposes_the_old_post_erasure_zero_retain_failure() {
+fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     let ir = r#"core.module @test {
   !Frame = adt.struct() {name = @ContinuationFrame, fields = [[@value, core.i32]]}
   !FrameRef = adt.typeref() {name = @ContinuationFrame}
@@ -85,25 +160,422 @@ fn continuation_frame_exposes_the_old_post_erasure_zero_retain_failure() {
         2
     );
 
-    let (type_converter, _) = native_type_converter(&mut ctx);
-    let trusted = ownership_summary::compute_and_attach(&mut ctx, module, &type_converter)
-        .expect("legacy ownership summaries");
-    let lowering = func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
-    assert!(
-        plan.remap_rtti_types(&ctx, module, lowering.rtti_layout_rewrites())
-            .is_ok(),
-        "func_to_clif must report every exact ADT allocation layout rewrite"
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    assert_eq!(
+        materialized.matches("tribute_rt.retain").count(),
+        2,
+        "{materialized}"
     );
-    insert_rc_with_policies_and_trusted_summaries(
+    assert!(materialized.contains("adt.struct_new"), "{materialized}");
+    assert_eq!(
+        materialized.matches("tribute_rt.release").count(),
+        2,
+        "{materialized}"
+    );
+    // Frame payload is i32 (4 bytes) and the environment payload is two
+    // native pointers (16 bytes); each release carries the 8-byte RC header.
+    assert!(materialized.contains("alloc_size = 12"), "{materialized}");
+    assert!(materialized.contains("alloc_size = 24"), "{materialized}");
+}
+
+#[test]
+fn nested_continuation_frame_closure_releases_use_exact_header_inclusive_sizes() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Frame = adt.struct() {name = @ContinuationFrame, fields = [[@value, core.i32]]}
+  !FrameRef = adt.typeref() {name = @ContinuationFrame}
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, !FrameRef]]}
+  func.func @capture(%frame: !FrameRef) -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %closure = adt.struct_new %code, %frame {type = !_closure} : !_closure
+    func.return
+  }
+}"#,
+    );
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    // Frame: i32 payload (4) + header (8). Closure: i32 plus aligned frame
+    // pointer payload (16) + header (8).
+    assert!(materialized.contains("alloc_size = 12"), "{materialized}");
+    assert!(materialized.contains("alloc_size = 24"), "{materialized}");
+}
+
+#[test]
+fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
         &mut ctx,
-        module,
-        BorrowedParameterPolicy::ElideProvenBorrowed,
-        TemporaryBorrowPolicy::Preserve,
-        &trusted,
-    )
-    .expect("legacy RC insertion");
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @install(%evidence: core.ptr, %prompt: core.i32) -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %tr = arith.const {value = 0} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr, %closure {ability_ref = core.ability_ref() {name = @State}} : core.ptr
+    func.return
+  }
+}"#,
+    );
+    lower_evidence_to_native(&mut ctx, module);
+    let mut plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let install = plan.function(Symbol::new("install")).unwrap();
+    let transfer = install
+        .actions()
+        .iter()
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer");
+    let ActionAnchor::Before(into_raw) = transfer.anchor else {
+        panic!("into_raw transfer must anchor the into_raw operation");
+    };
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let lowered = print_module(&ctx, module.op());
-    assert_eq!(lowered.matches("tribute_rt.retain").count(), 0, "{lowered}");
+    assert!(!lowered.contains("native_evidence_closure_transfer_destinations"));
+    assert_eq!(
+        lowered.matches("tribute_rt.into_raw").count(),
+        1,
+        "{lowered}"
+    );
+    assert_eq!(
+        lowered.matches("core.unrealized_conversion_cast").count(),
+        1,
+        "the existing raw dispatcher remains unmanaged: {lowered}"
+    );
+    assert!(
+        !install.actions().iter().any(|action| {
+            action.kind == ActionKind::FinalRelease
+                && action.anchor == ActionAnchor::After(into_raw)
+        }),
+        "into_raw consumes this exact closure ownership unit"
+    );
+
+    let transfer = plan
+        .functions
+        .iter_mut()
+        .find(|function| function.symbol == Symbol::new("install"))
+        .expect("install ownership plan")
+        .actions
+        .iter_mut()
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer");
+    transfer.destination = 1;
+    let before = print_module(&ctx, module.op());
+    assert!(materialize(&mut ctx, module, &plan).is_err());
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
+#[test]
+fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @install(%evidence: core.ptr, %prompt: core.i32) -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %handler = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %extended = effect.extend %evidence, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : core.ptr
+    func.return
+  }
+}"#,
+    );
+    lower_evidence_to_native(&mut ctx, module);
+    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let install = plan.function(Symbol::new("install")).unwrap();
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 2);
+    let lowered = print_module(&ctx, module.op());
+    assert_eq!(
+        lowered.matches("tribute_rt.into_raw").count(),
+        2,
+        "{lowered}"
+    );
+}
+
+#[test]
+fn internal_closure_raw_pointer_handoff_outside_native_evidence_fails_closed() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @escape(%value: core.ptr) -> core.nil attributes {abi = "C"} {
+    func.unreachable
+  }
+  func.func @install() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %raw = core.unrealized_conversion_cast %closure : core.ptr
+    %result = func.call %raw {callee = @escape} : core.nil
+    func.return
+  }
+}"#,
+        "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
+    );
+}
+
+#[test]
+fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @install() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %raw = tribute_rt.into_raw %closure : core.ptr
+    func.return
+  }
+}"#,
+    );
+    let install = plan.function(Symbol::new("install")).unwrap();
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
+    let transferred = install
+        .actions()
+        .iter()
+        .find(|action| action.kind == ActionKind::IntoRawTransfer)
+        .expect("into_raw transfer")
+        .value;
+    assert!(
+        !install.actions().iter().any(|action| {
+            action.kind == ActionKind::FinalRelease && action.value == transferred
+        })
+    );
+
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    assert!(
+        materialized.contains("tribute_rt.into_raw"),
+        "{materialized}"
+    );
+}
+
+fn into_raw_fixture(transfers: &str) -> String {
+    [
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @transfers() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+"#,
+        transfers,
+        r#"
+    func.return
+  }
+}"#,
+    ]
+    .concat()
+}
+
+#[test]
+fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfer() {
+    for (count, transfers) in [
+        (
+            2,
+            "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr",
+        ),
+        (
+            3,
+            "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr\n    %third = tribute_rt.into_raw %closure : core.ptr",
+        ),
+    ] {
+        let (mut ctx, module, plan) = build(&into_raw_fixture(transfers));
+        let function = plan.function(Symbol::new("transfers")).unwrap();
+        let transfer_actions = function
+            .actions()
+            .iter()
+            .filter(|action| action.kind == ActionKind::IntoRawTransfer)
+            .collect::<Vec<_>>();
+        let source = transfer_actions[0].value;
+        let ActionAnchor::Before(first) = transfer_actions[0].anchor else {
+            panic!("first transfer must have a before anchor");
+        };
+        assert_eq!(transfer_actions.len(), count);
+        assert!(transfer_actions.iter().all(|action| action.value == source));
+        let copies = function
+            .actions()
+            .iter()
+            .filter(|action| action.kind == ActionKind::CopyAcquire && action.value == source)
+            .collect::<Vec<_>>();
+        assert_eq!(copies.len(), count - 1);
+        assert!(copies.iter().enumerate().all(|(index, action)| {
+            action.anchor == ActionAnchor::Before(first) && action.destination == (index + 1) as u32
+        }));
+        assert!(
+            !function.actions().iter().any(|action| {
+                action.kind == ActionKind::FinalRelease && action.value == source
+            })
+        );
+
+        materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+        let materialized = print_module(&ctx, module.op());
+        let retain = materialized
+            .find("tribute_rt.retain")
+            .expect("grouped transfers require a retain");
+        let transfer = materialized
+            .find("tribute_rt.into_raw")
+            .expect("fixture contains an into_raw transfer");
+        assert!(retain < transfer, "{materialized}");
+    }
+}
+
+#[test]
+fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
+    let ir = r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  !Owner = adt.struct() {name = @Owner, fields = [[@closure, !_closure]]}
+  func.func @transfers() -> core.nil {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %stored = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %owner = adt.struct_new %stored {type = !Owner} : !Owner
+    %closure = adt.struct_get %owner {field = 0, type = !Owner} : !_closure
+    %first = tribute_rt.into_raw %closure : core.ptr
+    %second = tribute_rt.into_raw %closure : core.ptr
+    func.return
+  }
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    let plan = build_native_ownership_plan_with_options(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions {
+            elide_proven_borrowed_parameters: true,
+            elide_proven_field_borrows: false,
+        },
+    )
+    .expect("typed ownership plan with preserved field borrows");
+    let function = plan.function(Symbol::new("transfers")).unwrap();
+    let transfers = function
+        .actions()
+        .iter()
+        .filter(|action| action.kind == ActionKind::IntoRawTransfer)
+        .collect::<Vec<_>>();
+    let source = transfers[0].value;
+    assert!(function.actions().iter().any(|action| {
+        action.kind == ActionKind::CopyAcquire
+            && action.value == source
+            && matches!(action.anchor, ActionAnchor::After(_))
+    }));
+
+    materialize(&mut ctx, module, &plan)
+        .expect("field-borrow acquisition is not a grouped-transfer acquisition");
+}
+
+#[test]
+fn into_raw_rejects_non_transfer_and_cross_block_uses_before_mutation() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @later_use() -> !_closure {
+    %code = arith.const {value = 0} : core.i32
+    %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+    %raw = tribute_rt.into_raw %closure : core.ptr
+    func.return %closure
+  }
+}"#,
+        "all direct closure uses to be exact same-block transfers",
+    );
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  func.func @cross_block() -> core.nil {
+    ^entry:
+      %code = arith.const {value = 0} : core.i32
+      %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
+      %first = tribute_rt.into_raw %closure : core.ptr
+      cf.br [^next]
+    ^next:
+      %second = tribute_rt.into_raw %closure : core.ptr
+      func.return
+  }
+}"#,
+        "all direct closure uses to be exact same-block transfers",
+    );
+}
+
+#[test]
+fn stale_grouped_into_raw_plan_fails_before_materialization() {
+    let (mut ctx, module, mut plan) = build(&into_raw_fixture(
+        "    %first = tribute_rt.into_raw %closure : core.ptr\n    %second = tribute_rt.into_raw %closure : core.ptr",
+    ));
+    let actions = &mut plan
+        .functions
+        .iter_mut()
+        .find(|function| function.symbol == Symbol::new("transfers"))
+        .unwrap()
+        .actions;
+    let second = actions
+        .iter()
+        .rposition(|action| action.kind == ActionKind::IntoRawTransfer)
+        .unwrap();
+    actions.remove(second);
+    let before = print_module(&ctx, module.op());
+    assert!(materialize(&mut ctx, module, &plan).is_err());
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
+#[test]
+fn into_raw_rejects_non_closure_input_before_mutation() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  func.func @invalid(%raw: core.ptr) -> core.nil {
+    %again = tribute_rt.into_raw %raw : core.ptr
+    func.return
+  }
+}"#,
+        "requires the exact managed closure layout and a core.ptr result",
+    );
+}
+
+#[test]
+fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !NodeRef = adt.typeref() {name = @Node}
+  !Node = adt.struct() {name = @Node, fields = [[@next, !NodeRef]]}
+  func.func @replace(%node: !Node, %old: !NodeRef, %new: !NodeRef) -> core.nil {
+    adt.struct_set %node, %new {field = 0, type = !Node}
+    func.return
+  }
+}"#,
+    );
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    let retain = materialized.rfind("tribute_rt.retain").unwrap();
+    let get = materialized.find("adt.struct_get").unwrap();
+    let release = materialized.find("tribute_rt.release %").unwrap();
+    let set = materialized.find("adt.struct_set").unwrap();
+    assert!(
+        retain < get && get < release && release < set,
+        "{materialized}"
+    );
+    assert!(materialized.contains("alloc_size = 16"), "{materialized}");
+
+    let (mut ctx, module, mut stale) = build(
+        r#"core.module @test {
+  !NodeRef = adt.typeref() {name = @Node}
+  !Node = adt.struct() {name = @Node, fields = [[@next, !NodeRef]]}
+  func.func @replace(%node: !Node, %new: !NodeRef) -> core.nil {
+    adt.struct_set %node, %new {field = 0, type = !Node}
+    func.return
+  }
+}"#,
+    );
+    let action = stale.functions[0]
+        .actions
+        .iter_mut()
+        .find(|action| action.kind == ActionKind::ReleaseReplacedField)
+        .unwrap();
+    action.destination = 1;
+    let before = print_module(&ctx, module.op());
+    assert!(materialize(&mut ctx, module, &stale).is_err());
+    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -442,6 +914,38 @@ fn semantic_closure_values_are_managed_by_the_typed_contract() {
     assert_eq!(function.entries(), [EntryOwnership::Retained]);
     assert_eq!(count(function, ActionKind::EntryAcquire), 1);
     assert_eq!(count(function, ActionKind::ReturnTransfer), 1);
+}
+
+#[test]
+fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Closure = closure.closure(core.func(core.nil, tribute_rt.anyref))
+  func.func @target(%environment: tribute_rt.anyref) -> core.nil {
+    func.return
+  }
+  func.func @consume(%closure: !Closure) -> core.nil {
+    func.return
+  }
+  func.func @main() -> core.nil {
+    %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %closure = closure.new %environment {func_ref = @target} : !Closure
+    func.call %closure {callee = @consume} : core.nil
+    func.return
+  }
+}"#,
+    );
+    crate::closure_lower::lower_closures(&mut ctx, module);
+
+    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+
+    // The generated closure pair has an i32 function slot and an anyref
+    // environment slot: 16-byte payload plus the 8-byte RC header.
+    assert!(materialized.contains("alloc_size = 24"), "{materialized}");
 }
 
 #[test]

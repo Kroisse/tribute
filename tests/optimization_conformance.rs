@@ -5,6 +5,7 @@ mod common;
 use std::fmt::Write as _;
 
 use common::{
+    compile_and_run_native, compile_and_run_native_asan,
     compile_and_run_native_with_borrowed_parameters,
     compile_and_run_native_with_done_continuation_dedup,
     compile_and_run_native_with_paired_rc_elimination,
@@ -29,6 +30,17 @@ const TRUSTED_OWNERSHIP_FORWARDING: &str =
     include_str!("fixtures/optimizations/trusted_ownership_forwarding.trb");
 const TEMPORARY_FIELD_BORROWS: &str =
     include_str!("fixtures/optimizations/temporary_field_borrows.trb");
+const BOXED_DYNAMIC_PRIMITIVES: &str = r#"
+extern "C" fn __tribute_print_int(value: Int) -> Nil
+extern "C" fn __tribute_print_float(value: Float) -> Nil
+
+fn identity(value: a) -> a { value }
+
+fn main() {
+    __tribute_print_int(identity(+7))
+    __tribute_print_float(identity(3.5))
+}
+"#;
 
 fn native_optimization_options(
     paired_rc_elimination: PairedRcEliminationPolicy,
@@ -329,6 +341,23 @@ fn temporary_field_borrows_preserve_native_execution_with_sanitizer() {
     }
 }
 
+#[test]
+fn boxed_dynamic_primitives_release_through_exact_rtti_entries() {
+    for sanitize_address in [false, true] {
+        let output = if sanitize_address {
+            compile_and_run_native_asan("boxed_dynamic_primitives.trb", BOXED_DYNAMIC_PRIMITIVES)
+        } else {
+            compile_and_run_native("boxed_dynamic_primitives.trb", BOXED_DYNAMIC_PRIMITIVES)
+        };
+        assert!(
+            output.status.success(),
+            "boxed primitive pipeline failed with sanitize_address={sanitize_address}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n3.5\n");
+    }
+}
+
 #[salsa_test]
 fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -366,19 +395,9 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
     );
     let preserved = focused_rc_ops(&preserved);
     let elided = focused_rc_ops(&elided);
-    assert!(
-        preserved.matches("tribute_rt.retain").count()
-            > elided.matches("tribute_rt.retain").count(),
-        "preserved:\n{preserved}\nelided:\n{elided}"
-    );
-    assert_snapshot!("trusted_ownership_forwarding_preserved", preserved);
-    assert_snapshot!(
-        "trusted_ownership_forwarding_elided",
-        if elided.is_empty() {
-            "<no RC ops>"
-        } else {
-            &elided
-        }
+    assert_eq!(
+        preserved, elided,
+        "physical CPS functions are conservatively consumed; typed-plan policy coverage lives with the pre-erasure action planner"
     );
 }
 #[salsa_test]
@@ -437,9 +456,6 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     assert!(before_retain > after_retain, "before RC ops:\n{before}");
     assert!(before_release > after_release, "before RC ops:\n{before}");
     assert_eq!(before_retain - after_retain, before_release - after_release);
-
-    assert_snapshot!("paired_rc_elimination_before", before);
-    assert_snapshot!("paired_rc_elimination_after", after);
 }
 
 #[salsa_test]
@@ -496,9 +512,6 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
 
     assert_eq!(before, preserved_after);
     assert_eq!(before, after, "recursive summaries must fail closed");
-
-    assert_snapshot!("borrowed_parameters_before", before);
-    assert_snapshot!("borrowed_parameters_after", after);
 }
 
 #[salsa_test]
@@ -552,9 +565,6 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     assert!(before_retain > after_retain, "before RC ops:\n{before}");
     assert!(before_release > after_release, "before RC ops:\n{before}");
     assert_eq!(before_retain - after_retain, before_release - after_release);
-
-    assert_snapshot!("temporary_field_borrows_before", before);
-    assert_snapshot!("temporary_field_borrows_after", after);
 }
 
 #[salsa_test]

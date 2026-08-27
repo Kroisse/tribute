@@ -856,7 +856,8 @@ managed-field bitmap을 함께 결정한다. Plan 생성은 IR을 변경하지 �
 **Continuation과 RC:**
 
 - Continuation closure는 live value를 environment field로 캡처한다.
-- RC insertion은 해당 environment와 캡처한 reference의 ownership을 관리한다.
+- Typed RC materialization은 검증된 capture action만 소비하여 environment와
+  captured reference의 ownership을 관리한다.
 - Resume은 environment에서 live value를 복원하고 continuation을 한 번 소비한다.
 
 ---

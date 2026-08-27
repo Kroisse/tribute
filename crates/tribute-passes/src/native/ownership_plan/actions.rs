@@ -1,5 +1,4 @@
 use super::*;
-
 pub(super) fn plan_function_actions(
     ir: &IrContext,
     cfg: &ValidatedFlatCfg,
@@ -7,6 +6,7 @@ pub(super) fn plan_function_actions(
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
+    elide_proven_field_borrows: bool,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
     ActionPlanner::new(
         ir,
@@ -15,6 +15,7 @@ pub(super) fn plan_function_actions(
         entry_contracts,
         definitions,
         managed_layouts,
+        elide_proven_field_borrows,
     )?
     .plan()
 }
@@ -28,6 +29,7 @@ struct ActionPlanner<'a> {
     managed_layouts: &'a HashSet<TypeRef>,
     aliases: HashMap<ValueRef, ValueRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
+    field_borrow_values: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     liveness: Liveness,
     actions: Vec<OwnershipAction>,
@@ -41,10 +43,17 @@ impl<'a> ActionPlanner<'a> {
         entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
         definitions: &'a HashMap<Symbol, OpRef>,
         managed_layouts: &'a HashSet<TypeRef>,
+        elide_proven_field_borrows: bool,
     ) -> Result<Self, OwnershipPlanError> {
         let mut managed = collect_managed_values(ir, cfg.blocks(), managed_layouts);
         let aliases = build_aliases(ir, cfg.blocks(), &mut managed, managed_layouts)?;
-        let borrowed = collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+        let field_borrow_values =
+            collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+        let borrowed = if elide_proven_field_borrows {
+            field_borrow_values.clone()
+        } else {
+            HashMap::new()
+        };
         let liveness = compute_liveness(ir, cfg, &managed, &aliases, &borrowed);
         let mut owned = managed;
         for (&value, entry) in ir.block_args(cfg.entry()).iter().zip(entries) {
@@ -61,6 +70,7 @@ impl<'a> ActionPlanner<'a> {
             managed_layouts,
             aliases,
             borrowed,
+            field_borrow_values,
             owned,
             liveness,
             actions: Vec::new(),
@@ -102,15 +112,24 @@ impl<'a> ActionPlanner<'a> {
         let mut transferred = HashSet::new();
         for &op in &ops {
             self.plan_operation(op, &mut transferred)?;
-            if let Some(&borrowed) = self
-                .ir
-                .op_results(op)
-                .first()
-                .filter(|result| self.borrowed.contains_key(result))
+            if let Some(&result) = self.ir.op_results(op).first()
+                && self.borrowed.contains_key(&result)
             {
                 self.actions.push(OwnershipAction {
                     kind: ActionKind::BorrowLoad,
-                    value: borrowed,
+                    value: result,
+                    anchor: ActionAnchor::After(op),
+                    destination: 0,
+                });
+            } else if let Some(&result) = self.ir.op_results(op).first()
+                && self.field_borrow_values.contains_key(&result)
+            {
+                // Preserving the temporary-borrow policy gives the projected
+                // semantic value its own unit at the exact typed projection.
+                // The normal final-release planner balances this acquire.
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::CopyAcquire,
+                    value: result,
                     anchor: ActionAnchor::After(op),
                     destination: 0,
                 });
@@ -153,7 +172,9 @@ fn build_aliases(
     let mut aliases = HashMap::new();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
-            if !(adt::RefCast::matches(ctx, op) || core::UnrealizedConversionCast::matches(ctx, op))
+            if !(adt::RefCast::matches(ctx, op)
+                || adt::VariantCast::matches(ctx, op)
+                || core::UnrealizedConversionCast::matches(ctx, op))
             {
                 continue;
             }
@@ -189,14 +210,62 @@ fn build_aliases(
                     ));
                 }
             }
-            if input_managed && output_managed {
+            // A compiler-generated conversion of a managed closure value to
+            // its exact callable representation keeps the source ownership
+            // unit live through the callable use. This is a typed pre-erasure
+            // handoff, not a `core.ptr` provenance rule.
+            let callable_handoff = core::UnrealizedConversionCast::matches(ctx, op)
+                && core::Func::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
+            if input_managed
+                && is_internal_closure_layout(ctx, ctx.value_ty(*input), managed_layouts)
+                && is_core_ptr_type(ctx, ctx.value_ty(*output))
+            {
+                return Err(OwnershipPlanError::new(
+                    "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
+                ));
+            }
+            if input_managed && (output_managed || callable_handoff) {
                 let root = aliases.get(input).copied().unwrap_or(*input);
                 aliases.insert(*output, root);
-                managed.remove(output);
+                if output_managed {
+                    managed.remove(output);
+                }
             }
         }
     }
     Ok(aliases)
+}
+
+fn is_internal_closure_layout(
+    ctx: &IrContext,
+    ty: TypeRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> bool {
+    if !managed_layouts.contains(&ty) || !crate::closure_lower::is_closure_struct_type_ref(ctx, ty)
+    {
+        return false;
+    }
+    let Some(fields) = get_struct_fields(ctx, ty) else {
+        return false;
+    };
+    matches!(
+        fields.as_slice(),
+        [(code_name, code_ty), (environment_name, environment_ty)]
+            if *code_name == Symbol::new("func_ptr")
+                && *environment_name == Symbol::new("env")
+                && is_core_i32_type(ctx, *code_ty)
+                && is_anyref_type(ctx, *environment_ty)
+    )
+}
+
+fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+}
+
+fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
 }
 
 fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
@@ -373,6 +442,9 @@ impl ActionPlanner<'_> {
         op: OpRef,
         transferred: &mut HashSet<ValueRef>,
     ) -> Result<(), OwnershipPlanError> {
+        if tribute_ir::dialect::tribute_rt::IntoRaw::matches(self.ir, op) {
+            return self.plan_into_raw(op, transferred);
+        }
         if let Ok(null) = adt::RefNull::from_op(self.ir, op) {
             let [result] = self.ir.op_results(op) else {
                 return Err(OwnershipPlanError::new(
@@ -512,6 +584,63 @@ impl ActionPlanner<'_> {
         Ok(())
     }
 
+    fn plan_into_raw(
+        &mut self,
+        op: OpRef,
+        transferred: &mut HashSet<ValueRef>,
+    ) -> Result<(), OwnershipPlanError> {
+        let ([input], [result]) = (self.ir.op_operands(op), self.ir.op_results(op)) else {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw has malformed arity",
+            ));
+        };
+        if !is_internal_closure_layout(self.ir, self.ir.value_ty(*input), self.managed_layouts)
+            || !is_core_ptr_type(self.ir, self.ir.value_ty(*result))
+        {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw requires the exact managed closure layout and a core.ptr result",
+            ));
+        }
+        let root = root_value(&self.aliases, *input);
+        if root != *input {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw requires an exact closure ownership value",
+            ));
+        }
+        let (_, transfers) = exact_into_raw_transfers(
+            self.ir,
+            *input,
+            self.ir.value_ty(*input),
+            self.managed_layouts,
+        )?;
+        if op == transfers[0] {
+            if !transferred.insert(root) {
+                return Err(OwnershipPlanError::new(
+                    "tribute_rt.into_raw consumes a non-final closure ownership unit",
+                ));
+            }
+            for destination in 1..transfers.len() {
+                self.actions.push(OwnershipAction {
+                    kind: ActionKind::CopyAcquire,
+                    value: *input,
+                    anchor: ActionAnchor::Before(op),
+                    destination: destination as u32,
+                });
+            }
+        } else if !transferred.contains(&root) {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw consumes a non-final closure ownership unit",
+            ));
+        }
+        self.actions.push(OwnershipAction {
+            kind: ActionKind::IntoRawTransfer,
+            value: *input,
+            anchor: ActionAnchor::Before(op),
+            destination: 0,
+        });
+        Ok(())
+    }
+
     fn plan_owning_operands(
         &mut self,
         op: OpRef,
@@ -548,6 +677,69 @@ impl ActionPlanner<'_> {
         }
         Ok(())
     }
+}
+
+pub(super) fn exact_into_raw_transfers(
+    ctx: &IrContext,
+    source: ValueRef,
+    closure_layout: TypeRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> Result<(BlockRef, Vec<OpRef>), OwnershipPlanError> {
+    if ctx.value_ty(source) != closure_layout
+        || !is_internal_closure_layout(ctx, closure_layout, managed_layouts)
+        || is_closure_alias(ctx, source)
+    {
+        return Err(OwnershipPlanError::new(
+            "tribute_rt.into_raw requires an exact closure ownership value",
+        ));
+    }
+    let mut block = None;
+    let mut users = HashSet::new();
+    for use_ in ctx.uses(source) {
+        let user = use_.user;
+        if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, user) {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw requires all direct closure uses to be exact same-block transfers",
+            ));
+        }
+        let ([input], [result]) = (ctx.op_operands(user), ctx.op_results(user)) else {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw has malformed arity",
+            ));
+        };
+        let user_block = ctx
+            .op(user)
+            .parent_block
+            .ok_or_else(|| OwnershipPlanError::new("tribute_rt.into_raw has a stale anchor"))?;
+        if *input != source
+            || !is_core_ptr_type(ctx, ctx.value_ty(*result))
+            || block.is_some_and(|current| user_block != current)
+        {
+            return Err(OwnershipPlanError::new(
+                "tribute_rt.into_raw requires all direct closure uses to be exact same-block transfers",
+            ));
+        }
+        block = Some(user_block);
+        users.insert(user);
+    }
+    let block = block.ok_or_else(|| OwnershipPlanError::new("into_raw transfer group is empty"))?;
+    let transfers = ctx
+        .block(block)
+        .ops
+        .iter()
+        .copied()
+        .filter(|op| users.contains(op))
+        .collect();
+    Ok((block, transfers))
+}
+
+fn is_closure_alias(ctx: &IrContext, value: ValueRef) -> bool {
+    let ValueDef::OpResult(op, _) = ctx.value_def(value) else {
+        return false;
+    };
+    adt::RefCast::matches(ctx, op)
+        || adt::VariantCast::matches(ctx, op)
+        || core::UnrealizedConversionCast::matches(ctx, op)
 }
 
 impl ActionPlanner<'_> {
