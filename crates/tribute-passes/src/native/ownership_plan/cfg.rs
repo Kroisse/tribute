@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{cf, func};
+use trunk_ir::dialect::func;
+use trunk_ir::op_interface::BranchOps;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
 
@@ -9,16 +10,17 @@ use super::OwnershipPlanError;
 
 /// The flat control-flow facts accepted by typed ownership planning.
 ///
-/// Construction validates the concrete `cf` representation once. Consumers
-/// can then use stable block order, successors, and branch argument transfers
+/// Construction validates registered `Branch` semantics once. Consumers can
+/// then use stable block order, successors, and branch argument transfers
 /// without decoding operation layouts independently.
 pub(super) struct ValidatedFlatCfg {
     blocks: Vec<BlockRef>,
     terminators: HashMap<BlockRef, OpRef>,
     successors: HashMap<BlockRef, Vec<BlockRef>>,
-    branches: HashMap<OpRef, BlockRef>,
+    branches: HashMap<OpRef, Vec<ValueTransfer>>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ValueTransfer {
     pub(super) source: ValueRef,
     pub(super) destination: ValueRef,
@@ -60,35 +62,46 @@ impl ValidatedFlatCfg {
             }
 
             let block_successors = ctx.op(terminator).successors.to_vec();
-            if block_successors
-                .iter()
-                .any(|successor| !block_set.contains(successor))
-            {
-                return Err(OwnershipPlanError::new(
-                    "CFG successor leaves function body",
-                ));
-            }
-
-            if cf::Br::matches(ctx, terminator) {
-                let [destination] = block_successors.as_slice() else {
+            if let Some(interface) = BranchOps::get(ctx, terminator) {
+                let edges = interface.successors(ctx, terminator).map_err(|error| {
+                    OwnershipPlanError::new(format!("Branch interface is incomplete: {error}"))
+                })?;
+                if edges.as_slice().len() != block_successors.len() {
                     return Err(OwnershipPlanError::new(
-                        "branch argument contract is malformed",
-                    ));
-                };
-                let operands = ctx.op_operands(terminator);
-                let arguments = ctx.block_args(*destination);
-                if operands.len() != arguments.len() {
-                    return Err(OwnershipPlanError::new(
-                        "branch argument contract is malformed",
+                        "Branch successors leave the function or are incomplete",
                     ));
                 }
-                branches.insert(terminator, *destination);
-            } else if cf::CondBr::matches(ctx, terminator) {
-                if ctx.op_operands(terminator).len() != 1 || block_successors.len() != 2 {
-                    return Err(OwnershipPlanError::new(
-                        "conditional branch contract is malformed",
+                let mut transfers = Vec::new();
+                for (edge, &successor) in edges.as_slice().iter().zip(&block_successors) {
+                    if edge.block != successor || !block_set.contains(&successor) {
+                        return Err(OwnershipPlanError::new(
+                            "Branch successors leave the function or are incomplete",
+                        ));
+                    }
+                    let inputs = ctx.block_args(edge.block);
+                    let forwarded = edge.forwarded.as_slice();
+                    if forwarded.len() != inputs.len()
+                        || forwarded.iter().zip(inputs).any(|(&source, &destination)| {
+                            ctx.value_ty(source) != ctx.value_ty(destination)
+                        })
+                    {
+                        return Err(OwnershipPlanError::new(
+                            "branch argument contract is malformed",
+                        ));
+                    }
+                    if edges.as_slice().len() != 1 && !forwarded.is_empty() {
+                        return Err(OwnershipPlanError::new(
+                            "multi-successor Branch forwarding is unsupported",
+                        ));
+                    }
+                    transfers.extend(forwarded.iter().copied().zip(inputs.iter().copied()).map(
+                        |(source, destination)| ValueTransfer {
+                            source,
+                            destination,
+                        },
                     ));
                 }
+                branches.insert(terminator, transfers);
             } else if !is_native_terminator(ctx, terminator) {
                 return Err(OwnershipPlanError::new("unsupported native CFG terminator"));
             }
@@ -127,28 +140,18 @@ impl ValidatedFlatCfg {
         &self.successors[&block]
     }
 
-    pub(super) fn branch_transfers<'a>(
-        &'a self,
-        ctx: &'a IrContext,
+    pub(super) fn branch_transfers(
+        &self,
         op: OpRef,
-    ) -> Option<impl Iterator<Item = ValueTransfer> + 'a> {
-        let destination = *self.branches.get(&op)?;
-        Some(
-            ctx.op_operands(op)
-                .iter()
-                .copied()
-                .zip(ctx.block_args(destination).iter().copied())
-                .map(|(source, destination)| ValueTransfer {
-                    source,
-                    destination,
-                }),
-        )
+    ) -> Option<impl Iterator<Item = ValueTransfer> + '_> {
+        self.branches
+            .get(&op)
+            .map(|transfers| transfers.iter().copied())
     }
 }
 
 fn is_native_terminator(ctx: &IrContext, op: OpRef) -> bool {
-    cf::Br::matches(ctx, op)
-        || cf::CondBr::matches(ctx, op)
+    BranchOps::get(ctx, op).is_some()
         || func::Return::matches(ctx, op)
         || func::TailCall::matches(ctx, op)
         || func::TailCallIndirect::matches(ctx, op)
