@@ -796,7 +796,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
 
 #[test]
 fn cfg_copy_and_tail_dying_value_actions_are_complete() {
-    let (ctx, module, plan) = build(
+    let (mut ctx, module, plan) = build(
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
@@ -842,6 +842,38 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
     let mut after_tail = plan.clone();
     after_tail.functions[tail_index].actions[action_index].anchor = ActionAnchor::After(tail_op);
     assert!(after_tail.validate_against(&ctx, module).is_err());
+
+    materialize(&mut ctx, module, &plan).expect("branch ownership plan materializes");
+    let materialized = print_module(&ctx, module.op());
+    assert_eq!(materialized.matches("tribute_rt.retain").count(), 1);
+    assert_eq!(materialized.matches("tribute_rt.release").count(), 4);
+}
+
+#[test]
+fn cfg_accepts_conditional_branch_with_duplicate_successors() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @duplicate_successor(%condition: core.i1, %value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+    ^entry:
+      cf.cond_br %condition [^exit, ^exit]
+    ^exit:
+      func.unreachable
+  }
+}"#,
+    );
+    let function = plan.function(Symbol::new("duplicate_successor")).unwrap();
+    assert_eq!(count(function, ActionKind::EntryAcquire), 0);
+    assert_eq!(count(function, ActionKind::FinalRelease), 1);
+
+    materialize(&mut ctx, module, &plan).expect("duplicate-successor plan materializes");
+    assert_eq!(
+        print_module(&ctx, module.op())
+            .matches("cf.cond_br")
+            .count(),
+        1
+    );
 }
 
 #[test]

@@ -562,7 +562,7 @@ impl ActionPlanner<'_> {
                     });
                 }
             }
-        } else if let Some(transfers) = self.cfg.branch_transfers(self.ir, op) {
+        } else if let Some(transfers) = self.cfg.branch_transfers(op) {
             let mut counts = HashMap::<ValueRef, u32>::new();
             for (index, transfer) in transfers.enumerate() {
                 if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
