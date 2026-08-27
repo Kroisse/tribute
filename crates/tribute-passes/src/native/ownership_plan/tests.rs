@@ -2,10 +2,85 @@ use super::*;
 use crate::native::evidence::lower_evidence_to_native;
 use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
+use trunk_ir::OpRef;
+use trunk_ir::op_interface::{
+    BranchRegistration, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+};
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
+
+fn incomplete_test_branch(
+    _ctx: &IrContext,
+    _op: OpRef,
+) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    Err(ControlFlowInterfaceError::new(
+        "test branch interface is incomplete",
+    ))
+}
+
+fn missing_edge_test_branch(
+    _ctx: &IrContext,
+    _op: OpRef,
+) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    Ok(BranchSuccessors::default())
+}
+
+fn reversed_test_branch(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    let successors = &ctx.op(op).successors;
+    Ok(BranchSuccessors::new([
+        BranchSuccessor::new(successors[1], []),
+        BranchSuccessor::new(successors[0], []),
+    ]))
+}
+
+fn multi_forwarding_test_branch(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+    let successors = &ctx.op(op).successors;
+    let forwarded = ctx.op_operands(op)[0];
+    Ok(BranchSuccessors::new([
+        BranchSuccessor::new(successors[0], [forwarded]),
+        BranchSuccessor::new(successors[1], [forwarded]),
+    ]))
+}
+
+trunk_ir::inventory::submit! {
+    BranchRegistration {
+        dialect: "test",
+        op_name: "incomplete_branch",
+        successors: incomplete_test_branch,
+    }
+}
+
+trunk_ir::inventory::submit! {
+    BranchRegistration {
+        dialect: "test",
+        op_name: "missing_edge_branch",
+        successors: missing_edge_test_branch,
+    }
+}
+
+trunk_ir::inventory::submit! {
+    BranchRegistration {
+        dialect: "test",
+        op_name: "reversed_branch",
+        successors: reversed_test_branch,
+    }
+}
+
+trunk_ir::inventory::submit! {
+    BranchRegistration {
+        dialect: "test",
+        op_name: "multi_forwarding_branch",
+        successors: multi_forwarding_test_branch,
+    }
+}
 
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();
@@ -723,6 +798,75 @@ fn early_native_terminators_and_successors_fail_before_mutation() {
             ir,
             "control-flow operation precedes the final block operation",
         );
+    }
+}
+
+#[test]
+fn branch_interfaces_fail_closed_before_mutation() {
+    for (ir, expected) in [
+        (
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    ^entry:
+      test.incomplete_branch [^exit]
+    ^exit:
+      func.return
+  }
+}"#,
+            "Branch interface is incomplete",
+        ),
+        (
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    ^entry:
+      test.unregistered_branch [^exit]
+    ^exit:
+      func.return
+  }
+}"#,
+            "unsupported native CFG terminator",
+        ),
+        (
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    ^entry:
+      test.missing_edge_branch [^exit]
+    ^exit:
+      func.return
+  }
+}"#,
+            "Branch successors leave the function or are incomplete",
+        ),
+        (
+            r#"core.module @test {
+  func.func @f() -> core.nil {
+    ^entry:
+      test.reversed_branch [^left, ^right]
+    ^left:
+      func.return
+    ^right:
+      func.return
+  }
+}"#,
+            "Branch successors leave the function or are incomplete",
+        ),
+        (
+            r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @f(%value: !R) -> core.nil {
+    ^entry:
+      test.multi_forwarding_branch %value [^left, ^right]
+    ^left(%left: !R):
+      func.return
+    ^right(%right: !R):
+      func.return
+  }
+}"#,
+            "multi-successor Branch forwarding is unsupported",
+        ),
+    ] {
+        assert_plan_error_unchanged(ir, expected);
     }
 }
 

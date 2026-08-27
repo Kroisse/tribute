@@ -79,33 +79,27 @@ impl ValidatedFlatCfg {
                         ));
                     }
                     let inputs = ctx.block_args(edge.block);
-                    if edge.forwarded.as_slice().len() != inputs.len()
-                        || edge.forwarded.as_slice().iter().zip(inputs).any(
-                            |(&source, &destination)| {
-                                ctx.value_ty(source) != ctx.value_ty(destination)
-                            },
-                        )
+                    let forwarded = edge.forwarded.as_slice();
+                    if forwarded.len() != inputs.len()
+                        || forwarded.iter().zip(inputs).any(|(&source, &destination)| {
+                            ctx.value_ty(source) != ctx.value_ty(destination)
+                        })
                     {
                         return Err(OwnershipPlanError::new(
                             "branch argument contract is malformed",
                         ));
                     }
-                    if edges.as_slice().len() != 1 && !edge.forwarded.is_empty() {
+                    if edges.as_slice().len() != 1 && !forwarded.is_empty() {
                         return Err(OwnershipPlanError::new(
                             "multi-successor Branch forwarding is unsupported",
                         ));
                     }
-                    transfers.extend(
-                        edge.forwarded
-                            .as_slice()
-                            .iter()
-                            .copied()
-                            .zip(inputs.iter().copied())
-                            .map(|(source, destination)| ValueTransfer {
-                                source,
-                                destination,
-                            }),
-                    );
+                    transfers.extend(forwarded.iter().copied().zip(inputs.iter().copied()).map(
+                        |(source, destination)| ValueTransfer {
+                            source,
+                            destination,
+                        },
+                    ));
                 }
                 branches.insert(terminator, transfers);
             } else if !is_native_terminator(ctx, terminator) {
