@@ -2269,6 +2269,11 @@ fn main() {
 "#,
             );
             let typed = parse_and_lower_ast(db, source).expect("frontend output");
+            let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+            assert!(
+                diagnostics.is_empty(),
+                "recursive handler fixture must type-check without diagnostics: {diagnostics:#?}"
+            );
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
             let specialized = trunk_ir::Symbol::new("run_state$Nat$Nat");
