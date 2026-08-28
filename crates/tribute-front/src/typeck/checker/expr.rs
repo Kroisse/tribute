@@ -2184,14 +2184,14 @@ impl<'db> TypeChecker<'db> {
         arm: HandlerArm<ResolvedRef<'db>>,
         handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
-        let kind = match arm.kind {
+        let (kind, body_mode) = match arm.kind {
             HandlerKind::Do { binding } => {
                 let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
                 ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
                 self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
                 let binding =
                     self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty);
-                HandlerKind::Do { binding }
+                (HandlerKind::Do { binding }, Mode::Infer)
             }
             HandlerKind::Fn {
                 ability,
@@ -2209,15 +2209,21 @@ impl<'db> TypeChecker<'db> {
                         handle_ctx,
                     },
                 );
-                ctx.record_handler_operation(arm.id, operation);
-                HandlerKind::Fn {
-                    ability: self.convert_ref_with_ctx(ctx, None, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                }
+                ctx.record_handler_operation(arm.id, operation.clone());
+                (
+                    HandlerKind::Fn {
+                        ability: self.convert_ref_with_ctx(ctx, None, ability),
+                        op,
+                        params: params
+                            .into_iter()
+                            .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                            .collect(),
+                    },
+                    // A tail-resumptive arm returns the operation's resume
+                    // value; the continuation carries that value to the
+                    // enclosing handler result.
+                    Mode::Check(operation.result),
+                )
             }
             HandlerKind::Op {
                 ability,
@@ -2262,21 +2268,26 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
 
-                HandlerKind::Op {
-                    ability: self.convert_ref_with_ctx(ctx, None, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                    resume_local_id,
-                }
+                (
+                    HandlerKind::Op {
+                        ability: self.convert_ref_with_ctx(ctx, None, ability),
+                        op,
+                        params: params
+                            .into_iter()
+                            .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                            .collect(),
+                        resume_local_id,
+                    },
+                    // An explicit operation arm either resumes (whose result
+                    // is the handler answer) or aborts with that same answer.
+                    Mode::Check(handle_ctx.answer_ty),
+                )
             }
         };
         HandlerArm {
             id: arm.id,
             kind,
-            body: self.check_expr_with_ctx(ctx, arm.body, Mode::Infer),
+            body: self.check_expr_with_ctx(ctx, arm.body, body_mode),
         }
     }
 
