@@ -58,15 +58,95 @@ fn format_box(value: Int) -> String {
         .split("tribute_control.func @format_box")
         .nth(1)
         .expect("format_box function must be lowered");
+    let layout_cast = format_box
+        .find("core.unrealized_conversion_cast")
+        .expect("generic constructor field must be converted to its erased layout type");
     let construct = format_box
         .find("adt.variant_new")
         .expect("generic constructor must construct Box");
-    let cast = format_box
-        .find("core.unrealized_conversion_cast")
-        .expect("erased generic field must be recovered for Int::to_string");
+    let int_to_string = format_box
+        .find("callee = @\"Int::to_string\"")
+        .expect("Box payload must be passed to Int::to_string");
+    let payload_recovery = format_box[..int_to_string]
+        .rfind("core.unrealized_conversion_cast")
+        .expect("erased Box payload must be recovered before Int::to_string");
     assert!(
-        construct < cast,
-        "logical generic construction must not use a cast as a control carrier before Box is built:\n{format_box}"
+        format_box[layout_cast..construct].contains(": tribute_rt.anyref"),
+        "generic Box field must be converted to its erased layout type before construction:\n{format_box}"
+    );
+    assert!(
+        format_box[payload_recovery..int_to_string].contains(": core.i32"),
+        "pattern use must recover the erased Box payload as Int before Int::to_string:\n{format_box}"
+    );
+    assert!(
+        layout_cast < construct && construct < payload_recovery && payload_recovery < int_to_string,
+        "generic Box construction and pattern use must cross distinct layout and recovery boundaries:\n{format_box}"
+    );
+}
+
+#[salsa_test]
+fn generic_result_constructor_boxes_int_for_its_specialized_layout(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_result_constructor_int.trb",
+        r#"
+enum Result(a, e) {
+    Ok(a),
+    Error(e),
+}
+
+fn ok_int(value: Int) -> Result(Int, String) {
+    Ok(value)
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let ok_int = ir
+        .split("tribute_control.func @ok_int")
+        .nth(1)
+        .expect("ok_int function must be lowered");
+    let construct = ok_int
+        .find("adt.variant_new")
+        .expect("generic Result constructor must construct Ok");
+    let cast = ok_int
+        .find("core.unrealized_conversion_cast")
+        .expect("generic Result field must be explicitly converted to its erased layout type");
+    assert!(
+        ok_int[cast..construct].contains(": tribute_rt.anyref"),
+        "generic Result field must be converted to the resolved erased layout type:\n{ok_int}"
+    );
+    assert!(
+        cast < construct,
+        "logical generic construction must convert its Int field before adt.variant_new:\n{ok_int}"
+    );
+}
+
+#[salsa_test]
+fn concrete_constructor_does_not_insert_a_redundant_cast(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "concrete_constructor_int.trb",
+        r#"
+enum IntBox {
+    IntBox(Int),
+}
+
+fn box_int(value: Int) -> IntBox {
+    IntBox(value)
+}
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let box_int = ir
+        .split("tribute_control.func @box_int")
+        .nth(1)
+        .expect("box_int function must be lowered");
+    assert!(box_int.contains("adt.variant_new"), "{box_int}");
+    assert!(
+        !box_int.contains("core.unrealized_conversion_cast"),
+        "already-matching concrete constructor fields must not be converted:\n{box_int}"
     );
 }
 

@@ -33,7 +33,7 @@ use crate::ast::CallingConvention;
 /// Coerce constructor arguments to the representation recorded in the enum
 /// layout. Generic enum fields are erased to `anyref`, so primitive payloads
 /// must cross an explicit conversion boundary before `adt.variant_new`.
-fn cast_variant_args<'db>(
+pub(super) fn cast_variant_args<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     args: Vec<ValueRef>,
