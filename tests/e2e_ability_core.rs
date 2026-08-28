@@ -155,8 +155,8 @@ fn get_state() ->{State(Int)} Int {
 fn run() -> Int {
     handle get_state() {
         do result { result }
-        op State::get() { 42 }
-        op State::set(v) { 0 }
+        op State::get() { +42 }
+        op State::set(v) { +0 }
     }
 }
 

@@ -2242,6 +2242,65 @@ fn main() {
         });
     }
 
+    #[test]
+    fn recursive_generic_handler_collects_a_concrete_specialization() {
+        salsa::Database::attach(&salsa::DatabaseImpl::default(), |db| {
+            let source = source_from_str(
+                "recursive_generic_handler.trb",
+                r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(value) { run_state(fn() { resume Nil }, value) }
+    }
+}
+
+fn consume(value: Nat) { Nil }
+
+fn main() {
+    consume(run_state(fn() { State::get() }, 0))
+}
+"#,
+            );
+            let typed = parse_and_lower_ast(db, source).expect("frontend output");
+            let (_, monomorphized) =
+                merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
+            let specialized = trunk_ir::Symbol::new("run_state$Nat$Nat");
+            let scheme = monomorphized
+                .function_types
+                .get(&specialized)
+                .expect("recursive handler call must collect a concrete run_state specialization");
+
+            assert!(
+                scheme.type_params(db).is_empty(),
+                "specialized run_state must not retain generic binders: {scheme:?}"
+            );
+            let specialized_body = monomorphized
+                .ast
+                .decls
+                .iter()
+                .find_map(|decl| match decl {
+                    tribute_front::ast::Decl::Function(function)
+                        if function.name == specialized =>
+                    {
+                        Some(function)
+                    }
+                    _ => None,
+                })
+                .expect("monomorphization must materialize the concrete run_state body");
+            assert!(
+                !format!("{specialized_body:#?}").contains("BoundVar"),
+                "specialized handler body must not retain BoundVar metadata"
+            );
+        });
+    }
+
     #[salsa_test]
     fn frontend_registers_only_compiler_owned_intrinsic_origins(db: &salsa::DatabaseImpl) {
         let source = source_from_str(

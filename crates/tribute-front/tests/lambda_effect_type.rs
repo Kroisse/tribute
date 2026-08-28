@@ -8,7 +8,7 @@
 
 mod common;
 
-use self::common::run_ast_pipeline_with_ir;
+use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
@@ -169,6 +169,37 @@ fn main() -> Int {
 // ========================================================================
 // Handler Arm Lambda Tests - Core Ability Pattern
 // ========================================================================
+
+/// An `op` arm that drops its continuation supplies the enclosing handler's
+/// answer, not the operation result. Keep that equality in inference so an
+/// aborting arm cannot silently choose an unrelated type.
+#[salsa_test]
+fn op_handler_abort_must_return_handler_answer(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "op_handler_answer.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn result() {
+    handle State::get() {
+        do value { Nil }
+        op State::get() { 0 }
+    }
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Nil`")),
+        "an aborting op arm must be checked against the handler answer"
+    );
+}
 
 /// Test handler arm lambdas that call continuations.
 ///
