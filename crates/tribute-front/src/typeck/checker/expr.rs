@@ -1354,11 +1354,6 @@ impl<'db> TypeChecker<'db> {
                     })
                     .collect();
 
-                // Check exhaustiveness
-                if self.check_exhaustiveness(scrutinee_ty, &converted_arms, scrutinee_expr.id) {
-                    ctx.record_exhaustive_case(expr_id);
-                }
-
                 ExprKind::Case {
                     scrutinee: scrutinee_expr,
                     arms: converted_arms,
@@ -2563,7 +2558,7 @@ impl<'db> TypeChecker<'db> {
     /// - If the last arm has a wildcard or bind pattern, it's exhaustive
     /// - If matching an enum, all variants must be covered
     /// - Otherwise, emit a warning for patterns we can't fully analyze
-    fn check_exhaustiveness(
+    pub(super) fn check_exhaustiveness(
         &self,
         scrutinee_ty: Type<'db>,
         arms: &[Arm<TypedRef<'db>>],
