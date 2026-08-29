@@ -2,7 +2,8 @@
 
 mod common;
 
-use common::compile_and_run_native_asan;
+use common::{compile_and_run_native_asan, compile_and_run_native_with_paired_rc_elimination};
+use tribute::pipeline::PairedRcEliminationPolicy;
 
 #[test]
 fn public_int_to_string_formats_zero() {
@@ -47,6 +48,34 @@ fn main() ->{Io} Nil {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n");
+}
+
+#[test]
+fn paired_rc_elimination_preserves_nested_parsed_integers() {
+    let output = compile_and_run_native_with_paired_rc_elimination(
+        "nested_parsed_integers.trb",
+        r##"
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    case Int::parse("2") {
+        Ok(left) -> case Int::parse("3") {
+            Ok(right) -> print_line(Int::to_string(left + right))
+            Error(_) -> print_line("error")
+        }
+        Error(_) -> print_line("error")
+    }
+}
+"##,
+        PairedRcEliminationPolicy::Enabled,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "5\n");
 }
 
 #[test]

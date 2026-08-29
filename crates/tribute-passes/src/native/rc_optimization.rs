@@ -56,6 +56,11 @@ fn eliminate_one_pair(ctx: &mut IrContext, block: BlockRef) -> bool {
                     erase_op(ctx, retain_ref);
                     return true;
                 }
+
+                // A release of another pointer may recursively release `ptr`
+                // through an owning field. Without alias information, do not
+                // move this retain/release pair across it.
+                break;
             }
 
             if is_barrier_for(ctx, op, ptr, retained) {
@@ -217,6 +222,24 @@ mod tests {
         );
         assert!(output.contains("tribute_rt.retain"));
         assert!(output.contains("tribute_rt.release"));
+    }
+
+    #[test]
+    fn release_of_potential_owner_is_an_alias_barrier() {
+        let output = printed_after_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.ptr
+    %2 = tribute_rt.retain %1 : core.ptr
+    tribute_rt.release %0 {alloc_size = 16}
+    %3 = clif.load %2 {offset = 0} : core.i32
+    tribute_rt.release %2 {alloc_size = 12}
+    clif.return %3
+  }
+}"#,
+        );
+        assert_eq!(output.matches("tribute_rt.retain").count(), 1, "{output}");
+        assert_eq!(output.matches("tribute_rt.release").count(), 2, "{output}");
     }
 
     #[test]
