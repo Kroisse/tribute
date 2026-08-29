@@ -133,7 +133,6 @@ impl<'db> TypeChecker<'db> {
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
         let local_generalizations = ctx.take_local_generalizations();
-        let func_exhaustive_cases = ctx.take_exhaustive_cases();
         // Save the accumulated effect row from the body before dropping ctx
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
@@ -364,7 +363,14 @@ impl<'db> TypeChecker<'db> {
         // Update the function's type scheme with the generalized version
         self.env.register_function(func_id, new_scheme);
 
-        // 6. Apply substitution and generalization to all TypedRef types in the body
+        // 6. Materialize the solved node types before rebuilding the body.
+        // Post-solve case coverage consults these entries during body substitution.
+        for (node_id, ty) in func_node_types {
+            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
+            self.node_types.insert(node_id, substituted);
+        }
+
+        // 7. Apply substitution and generalization to all TypedRef types in the body.
         let body = self.apply_subst_to_body(
             body,
             type_subst,
@@ -373,13 +379,6 @@ impl<'db> TypeChecker<'db> {
             &deferred_resolutions,
         );
 
-        // 7. Collect node types from this function's context and apply substitution.
-        // These entries describe concrete expression storage for lowering; the
-        // source-logical operation metadata is carried separately on TypedRef.
-        for (node_id, ty) in func_node_types {
-            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
-            self.node_types.insert(node_id, substituted);
-        }
         for (callee_id, ty) in func_call_callee_types {
             let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
             self.call_callee_types.insert(callee_id, substituted);
@@ -468,8 +467,6 @@ impl<'db> TypeChecker<'db> {
                 },
             );
         }
-        self.exhaustive_cases.extend(func_exhaustive_cases);
-
         FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
@@ -652,7 +649,7 @@ impl<'db> TypeChecker<'db> {
     /// 1. Their resolved concrete type (from substitution), or
     /// 2. The corresponding BoundVar (from generalization mapping)
     fn apply_subst_to_body(
-        &self,
+        &mut self,
         body: Expr<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
@@ -672,7 +669,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Apply substitution to an expression kind.
     fn apply_subst_to_expr_kind(
-        &self,
+        &mut self,
         node_id: crate::ast::NodeId,
         kind: ExprKind<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
@@ -856,15 +853,15 @@ impl<'db> TypeChecker<'db> {
                     deferred_resolutions,
                 ),
             },
-            ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-                scrutinee: self.apply_subst_to_body(
+            ExprKind::Case { scrutinee, arms } => {
+                let scrutinee = self.apply_subst_to_body(
                     scrutinee,
                     type_subst,
                     row_subst,
                     var_to_index,
                     deferred_resolutions,
-                ),
-                arms: arms
+                );
+                let arms = arms
                     .into_iter()
                     .map(|arm| {
                         self.apply_subst_to_arm(
@@ -875,8 +872,17 @@ impl<'db> TypeChecker<'db> {
                             deferred_resolutions,
                         )
                     })
-                    .collect(),
-            },
+                    .collect::<Vec<_>>();
+
+                if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
+                    && self.check_exhaustiveness(scrutinee_ty, &arms, scrutinee.id)
+                    && !self.exhaustive_cases.contains(&node_id)
+                {
+                    self.exhaustive_cases.push(node_id);
+                }
+
+                ExprKind::Case { scrutinee, arms }
+            }
             ExprKind::Lambda { params, body } => ExprKind::Lambda {
                 params,
                 body: self.apply_subst_to_body(
@@ -986,7 +992,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Apply substitution to a statement.
     fn apply_subst_to_stmt(
-        &self,
+        &mut self,
         stmt: Stmt<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
@@ -1026,7 +1032,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Apply substitution to a case arm.
     fn apply_subst_to_arm(
-        &self,
+        &mut self,
         arm: Arm<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
@@ -1057,7 +1063,7 @@ impl<'db> TypeChecker<'db> {
 
     /// Apply substitution to a handler arm.
     fn apply_subst_to_handler_arm(
-        &self,
+        &mut self,
         arm: HandlerArm<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,

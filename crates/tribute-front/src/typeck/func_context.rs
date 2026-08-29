@@ -105,9 +105,6 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Source-logical callable signatures for lambda nodes.
     lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
 
-    /// Case expressions whose typechecking coverage analysis proved exhaustive.
-    exhaustive_cases: Vec<NodeId>,
-
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
 
@@ -180,7 +177,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             ability_op_callee_types: HashMap::new(),
             inferred_lambda_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
-            exhaustive_cases: Vec::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
@@ -491,16 +487,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub fn take_lambda_signatures(&mut self) -> HashMap<NodeId, LambdaSignature<'db>> {
         std::mem::take(&mut self.lambda_signatures)
-    }
-
-    pub fn record_exhaustive_case(&mut self, case: NodeId) {
-        if !self.exhaustive_cases.contains(&case) {
-            self.exhaustive_cases.push(case);
-        }
-    }
-
-    pub fn take_exhaustive_cases(&mut self) -> Vec<NodeId> {
-        std::mem::take(&mut self.exhaustive_cases)
     }
 
     // =========================================================================
