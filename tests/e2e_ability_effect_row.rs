@@ -19,7 +19,7 @@ use common::assert_native_output;
 /// a `State` handler, `e` is instantiated to `{State(Nat)}`, so the callback
 /// can perform State operations.
 #[test]
-fn test_effect_row_poly_higher_order_function() {
+fn test_effect_row_poly_higher_order_function_slow() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
@@ -126,7 +126,7 @@ fn main() {
 /// `apply` is called twice: once where `e = {State(Nat)}` and once where
 /// `e = {Reader(Nat)}`. Each call site independently instantiates the row variable.
 #[test]
-fn test_effect_row_poly_unification_across_call_sites() {
+fn test_effect_row_poly_unification_across_call_sites_slow() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
