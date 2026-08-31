@@ -445,6 +445,54 @@ fn into_raw_fixture(transfers: &str) -> String {
 }
 
 #[test]
+fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
+  !ChildRef = adt.typeref() {name = @Child}
+  !Inner = adt.struct() {name = @Inner, fields = [[@child, !ChildRef]]}
+  !InnerRef = adt.typeref() {name = @Inner}
+  !Box = adt.struct() {name = @Box, fields = [[@inner, !InnerRef]]}
+  func.func @observe(%child: !ChildRef) -> core.i32 {
+    %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
+    func.return %value
+  }
+  func.func @load(%child: !ChildRef) -> core.nil {
+    %inner = adt.struct_new %child {type = !Inner} : !InnerRef
+    %owner = adt.struct_new %inner {type = !Box} : !Box
+    %loaded = adt.struct_get %owner {field = 0, type = !Box} : !InnerRef
+    %erased = adt.ref_cast %loaded {type = tribute_rt.anyref} : tribute_rt.anyref
+    %restored = adt.ref_cast %erased {type = !InnerRef} : !InnerRef
+    %nested = adt.struct_get %restored {field = 0, type = !Inner} : !ChildRef
+    %value = func.call %nested {callee = @observe} : core.i32
+    func.return
+  }
+}"#,
+    );
+    let function = plan.function(Symbol::new("load")).unwrap();
+    let body = ctx.op(function.operation()).regions[0];
+    let block = ctx.region(body).blocks[0];
+    let box_layout = ctx.type_alias_by_name(Symbol::new("Box")).unwrap();
+    let mut owner = None;
+    let mut call = None;
+    for &op in &ctx.block(block).ops {
+        if adt::StructNew::from_op(&ctx, op).is_ok_and(|new| new.r#type(&ctx) == box_layout) {
+            owner = Some(ctx.op_result(op, 0));
+        }
+        if func::Call::matches(&ctx, op) {
+            call = Some(op);
+        }
+    }
+    let owner = owner.expect("outer owner");
+    let call = call.expect("nested borrowed field use");
+    assert!(function.actions().iter().any(|action| {
+        action.kind == ActionKind::FinalRelease
+            && action.value == owner
+            && action.anchor == ActionAnchor::After(call)
+    }));
+}
+
+#[test]
 fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfer() {
     for (count, transfers) in [
         (
