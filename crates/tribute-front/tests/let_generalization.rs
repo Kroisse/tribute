@@ -428,6 +428,88 @@ fn pair() -> Nil {
 }
 
 #[salsa_test]
+fn resume_lambda_metadata_uses_the_enclosing_handler_effect(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "resume_lambda_effect.trb",
+        r#"
+ability Writer(w) {
+    op tell(value: w) -> Nil
+}
+
+ability Audit {
+    fn mark() -> Nil
+}
+
+fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Writer::tell(v) { run_writer(fn() {
+            Audit::mark()
+            resume Nil
+        }) }
+    }
+}
+"#,
+    );
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+
+    let output = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output");
+    let run_writer = output
+        .function_types(db)
+        .iter()
+        .find_map(|(name, scheme)| (*name == Symbol::new("run_writer")).then_some(*scheme))
+        .expect("run_writer scheme should be present");
+    let TypeKind::Func { params, .. } = run_writer.body(db).kind(db) else {
+        panic!("run_writer scheme must be callable");
+    };
+    let TypeKind::Func {
+        effect: computation_effect,
+        ..
+    } = params[0].kind(db)
+    else {
+        panic!("run_writer computation parameter must be callable");
+    };
+
+    let signatures: Vec<_> = output
+        .lambda_signatures(db)
+        .iter()
+        .map(|(_, signature)| signature.clone())
+        .collect();
+    assert_eq!(signatures.len(), 1, "fixture has one resume lambda");
+    let TypeKind::Func {
+        effect: lambda_effect,
+        ..
+    } = signatures[0].function_type.kind(db)
+    else {
+        panic!("resume lambda metadata must be callable");
+    };
+    let continuation_writer = computation_effect
+        .effects(db)
+        .iter()
+        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .expect("the enclosing computation must retain Writer(w)");
+    let lambda_writer = lambda_effect
+        .effects(db)
+        .iter()
+        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .expect("the resume lambda must retain Writer(w)");
+    assert_eq!(
+        lambda_writer.args, continuation_writer.args,
+        "the resume lambda must preserve the enclosing Writer ability argument"
+    );
+    assert!(
+        lambda_effect
+            .effects(db)
+            .iter()
+            .any(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Audit"))),
+        "the resume lambda must retain its independently performed Audit effect"
+    );
+}
+
+#[salsa_test]
 fn variant_destructuring_preserves_polymorphism(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

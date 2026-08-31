@@ -117,6 +117,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
 
+    /// Continuation effect rows captured while checking active lambdas.
+    lambda_resume_effects: Vec<Option<EffectRow<'db>>>,
+
     /// Stack of handle expression contexts.
     ///
     /// Pushed during the infer phase of a handle expression and
@@ -183,6 +186,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             current_effect: EffectRow::pure(db),
+            lambda_resume_effects: Vec::new(),
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::new(),
             deferred_methods: Vec::new(),
@@ -639,6 +643,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Set the current effect row.
     pub fn set_current_effect(&mut self, effect: EffectRow<'db>) {
         self.current_effect = effect;
+    }
+
+    pub(crate) fn enter_lambda(&mut self) {
+        self.lambda_resume_effects.push(None);
+    }
+
+    pub(crate) fn exit_lambda(&mut self) -> Option<EffectRow<'db>> {
+        self.lambda_resume_effects
+            .pop()
+            .expect("lambda resume effect stack must be balanced")
+    }
+
+    /// Record the continuation row selected by a resume in the active lambda.
+    pub(crate) fn record_lambda_resume_effect(&mut self, effect: EffectRow<'db>) {
+        if let Some(slot) = self.lambda_resume_effects.last_mut() {
+            *slot = Some(effect);
+        }
     }
 
     /// Push a handle context onto the stack.
