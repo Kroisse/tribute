@@ -78,6 +78,7 @@ impl Error for ResolveEvidenceError {}
 
 struct FinalHandleDispatchShape {
     evidence: ValueRef,
+    prompt_tag: ValueRef,
     dispatcher_pairs: Vec<(TypeRef, ValueRef, ValueRef)>,
     body: RegionRef,
     body_evidence: ValueRef,
@@ -104,11 +105,22 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch must be resultless".into(),
         ));
     }
-    let Some((&evidence, dispatchers)) = operands.split_first() else {
+    let Some((&evidence, rest)) = operands.split_first() else {
         return Err(error(
             "final ability.handle_dispatch requires an evidence operand".into(),
         ));
     };
+    let Some((&prompt_tag, dispatchers)) = rest.split_first() else {
+        return Err(error(
+            "final ability.handle_dispatch requires a prompt-tag operand".into(),
+        ));
+    };
+    let prompt_ty = ctx.types.get(ctx.value_ty(prompt_tag));
+    if prompt_ty.dialect != Symbol::new("core") || prompt_ty.name != Symbol::new("i32") {
+        return Err(error(
+            "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
+        ));
+    }
     if !dispatchers.len().is_multiple_of(2) {
         return Err(error(
             "final ability.handle_dispatch dispatcher operands must form exact pairs".into(),
@@ -174,6 +186,7 @@ fn final_handle_dispatch_shape(
     }
     Ok(FinalHandleDispatchShape {
         evidence,
+        prompt_tag,
         dispatcher_pairs,
         body: *body,
         body_evidence: *body_evidence,
@@ -763,16 +776,24 @@ fn transform_shifts_in_block(
             let location = ctx.op(op).location;
             let shape = final_handle_dispatch_shape(ctx, op)?;
             let mut current_ev = shape.evidence;
-            let i32_ty = i32_type_ref(ctx);
-            let prompt = func::call(
-                ctx,
-                location,
-                std::iter::empty::<ValueRef>(),
-                i32_ty,
-                Symbol::new("__tribute_next_tag"),
-            );
-            let prompt_tag = prompt.result(ctx);
-            ctx.insert_op_before(block, op, prompt.op_ref());
+            let mut prompt_tag = shape.prompt_tag;
+            if let ValueDef::OpResult(prompt_op, _) = ctx.value_def(prompt_tag)
+                && effect::FreshPromptTag::from_op(ctx, prompt_op).is_ok()
+            {
+                let i32_ty = i32_type_ref(ctx);
+                let prompt = func::call(
+                    ctx,
+                    location,
+                    std::iter::empty::<ValueRef>(),
+                    i32_ty,
+                    Symbol::new("__tribute_next_tag"),
+                );
+                let resolved = prompt.result(ctx);
+                ctx.insert_op_before(block, op, prompt.op_ref());
+                ctx.replace_all_uses(prompt_tag, resolved);
+                erase_op(ctx, prompt_op);
+                prompt_tag = resolved;
+            }
             let evidence_ty = ability::evidence_adt_type_ref(ctx);
             for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
                 let extend = effect::extend(
@@ -1210,7 +1231,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref() {name = @State}, core.ability_ref() {name = @Console}]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref() {name = @State}, core.ability_ref() {name = @Console}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -1220,7 +1241,7 @@ mod tests {
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
-        assert_eq!(resolved.matches("func.call").count(), 1);
+        assert_eq!(resolved.matches("func.call").count(), 0);
         assert!(resolved.contains("__tribute_next_tag"));
         assert!(resolved.contains("ability.handle_dispatch"));
         let mut extensions = Vec::new();
@@ -1250,7 +1271,7 @@ mod tests {
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
             (
-                r#"%result = ability.handle_dispatch %ev {ability_refs = []} : core.i32 {
+                r#"%result = ability.handle_dispatch %ev, %prompt {ability_refs = []} : core.i32 {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -1264,7 +1285,7 @@ mod tests {
                 "requires an evidence operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -1275,43 +1296,57 @@ mod tests {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
+                "requires a prompt-tag operand",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %handler {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+                "prompt-tag operand must have type core.i32",
+            ),
+            (
+                r#"ability.handle_dispatch %ev, %prompt {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
                 "requires an ability_refs list",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = [1]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [1]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "entry must be a type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %tr, %handler {ability_refs = [core.i32]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [core.i32]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "core.ability_ref type",
             ),
             (
-                r#"ability.handle_dispatch %prompt {ability_refs = []} {
+                r#"ability.handle_dispatch %prompt, %prompt {ability_refs = []} {
       ^body(%inner: core.i32):
         func.unreachable
     }"#,
                 "must have the evidence type",
             ),
             (
-                r#"ability.handle_dispatch %ev {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
     }"#,
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^first(%inner: !evidence):
         func.unreachable
       ^second:
@@ -1320,20 +1355,20 @@ mod tests {
                 "exactly one block",
             ),
             (
-                r#"ability.handle_dispatch %ev {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body:
         func.unreachable
     }"#,
                 "one evidence argument",
             ),
             (
-                r#"ability.handle_dispatch %ev {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
     }"#,
                 "must end in a proper tail transfer",
             ),
             (
-                r#"ability.handle_dispatch %ev {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
         func.return
     }"#,
@@ -1355,7 +1390,7 @@ mod tests {
     #[test]
     fn structured_final_delimiter_is_a_valid_proper_tail_body() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev {ability_refs = []} {
+            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
         %choice = arith.const {value = 0} : core.i32
         scf.switch %choice {
@@ -1363,6 +1398,19 @@ mod tests {
             func.unreachable
           }
         }
+    }"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+        validate_final_handle_dispatches(&ctx, module).unwrap();
+    }
+
+    #[test]
+    fn final_delimiter_accepts_resultless_effect_cps_dispatch() {
+        let input = final_dispatch_fixture(
+            r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+      ^body(%inner: !evidence):
+        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
     }"#,
         );
         let mut ctx = IrContext::new();

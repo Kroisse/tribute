@@ -20,19 +20,20 @@ mod ability {
         {}
     }
 
-    /// Perform an ability operation with an explicit continuation closure.
+    /// Perform an ability operation with explicit evidence and a
+    /// ContinuationFrame-carrying continuation closure.
     ///
     /// The continuation closure captures the rest of the computation
     /// after the effect point.
     ///
     /// ```text
-    /// %yr = ability.perform %continuation, [%args...]
+    /// ability.perform %evidence, %dispatch, %resume, [%args...]
     ///   { ability_ref: @State, op_name: @get }
     /// ```
     ///
-    /// Lowered to: evidence lookup → ShiftInfo construction → YieldResult::Shift.
+    /// This final form is resultless and lowers to `effect.dispatch_cps`.
     #[attr(ability_ref: Type, op_name: Symbol)]
-    fn perform(continuation: (), #[rest] values: ()) -> result {}
+    fn perform(evidence: (), dispatch: (), resume: (), #[rest] values: ()) {}
 
     /// Legacy frontend form using the carrier pipeline's null-or-single-value
     /// payload convention until the frontend/pipeline migration is complete.
@@ -90,7 +91,7 @@ mod ability {
     /// evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     #[attr(ability_refs: any)]
-    fn handle_dispatch(evidence: (), #[rest] dispatchers: ()) {
+    fn handle_dispatch(evidence: (), prompt_tag: (), #[rest] dispatchers: ()) {
         #[region(body)]
         {}
     }

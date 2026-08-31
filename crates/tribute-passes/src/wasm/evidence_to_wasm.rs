@@ -20,10 +20,12 @@
 //! binary search (O(log n)) since the evidence array is maintained in sorted order
 //! by ability_id.
 
+use tribute_core::{CallingConvention, set_calling_convention, set_indirect_call_signature};
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
@@ -84,6 +86,7 @@ fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S)
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(EffectExtendPattern)
         .add_pattern(EffectDispatchTailPattern)
+        .add_pattern(LegacyEffectDispatchCpsPattern)
         .add_pattern(EffectDispatchCpsPattern)
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
@@ -139,6 +142,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool)
             for &op in &ctx.block(block).ops {
                 *lookup |= ability::EvidenceLookup::from_op(ctx, op).is_ok()
                     || effect::DispatchTail::from_op(ctx, op).is_ok()
+                    || effect::LegacyDispatchCps::from_op(ctx, op).is_ok()
                     || effect::DispatchCps::from_op(ctx, op).is_ok();
                 *extend |= ability::EvidenceExtend::from_op(ctx, op).is_ok()
                     || effect::Extend::from_op(ctx, op).is_ok();
@@ -155,6 +159,100 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool)
         visit(ctx, body, &mut lookup, &mut extend);
     }
     (lookup, extend)
+}
+
+/// Lower only the explicit carrier ABI to its historical ordinary call.
+struct LegacyEffectDispatchCpsPattern;
+
+impl RewritePattern for LegacyEffectDispatchCpsPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(dispatch_op) = effect::LegacyDispatchCps::from_op(ctx, op) else {
+            return false;
+        };
+        let result_types = ctx.op_result_types(op).to_vec();
+        let [result_ty] = result_types.as_slice() else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let ability_ref = dispatch_op.ability_ref(ctx);
+        let (dispatch, prompt) = insert_legacy_dispatch_closure_and_prompt(
+            ctx,
+            loc,
+            dispatch_op.evidence(ctx),
+            ability_ref,
+            rewriter,
+        );
+        let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch, rewriter);
+        let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
+        let call = wasm_dialect::call_indirect(
+            ctx,
+            loc,
+            [
+                table_idx,
+                dispatch_op.evidence(ctx),
+                env,
+                dispatch_op.continuation(ctx),
+                prompt,
+                op_idx,
+                dispatch_op.payload(ctx),
+            ],
+            [*result_ty],
+            0,
+            0,
+        );
+        let result = call.results(ctx)[0];
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![result]);
+        true
+    }
+}
+
+fn insert_legacy_dispatch_closure_and_prompt(
+    ctx: &mut IrContext,
+    loc: Location,
+    evidence: ValueRef,
+    ability_ref_ty: TypeRef,
+    rewriter: &mut PatternRewriter<'_>,
+) -> (ValueRef, ValueRef) {
+    let i32_ty = intern_i32(ctx);
+    let marker_ty = ability::marker_adt_type_ref(ctx);
+    let closure_ty = crate::wasm::type_converter::closure_adt_type(ctx);
+    let ability_id =
+        wasm_dialect::i32_const(ctx, loc, i32_ty, compute_ability_id(ctx, ability_ref_ty));
+    let lookup = wasm_dialect::call(
+        ctx,
+        loc,
+        [evidence, ability_id.result(ctx)],
+        [marker_ty],
+        Symbol::new(evidence_abi::LOOKUP),
+    );
+    let marker = lookup.results(ctx)[0];
+    let dispatch = wasm_dialect::struct_get(
+        ctx,
+        loc,
+        marker,
+        closure_ty,
+        MARKER_IDX,
+        MarkerField::HandlerDispatch.index(),
+    );
+    let prompt = wasm_dialect::struct_get(
+        ctx,
+        loc,
+        marker,
+        i32_ty,
+        MARKER_IDX,
+        MarkerField::PromptTag.index(),
+    );
+    rewriter.insert_op(ability_id.op_ref());
+    rewriter.insert_op(lookup.op_ref());
+    rewriter.insert_op(dispatch.op_ref());
+    rewriter.insert_op(prompt.op_ref());
+    (dispatch.result(ctx), prompt.result(ctx))
 }
 
 /// Replace a top-level module operation with a new one.
@@ -348,37 +446,56 @@ impl RewritePattern for EffectDispatchCpsPattern {
         };
 
         let loc = ctx.op(op).location;
-        let result_ty = ctx.op_result_types(op)[0];
+        if !ctx.op_result_types(op).is_empty() {
+            return false;
+        }
         let ability_ref = dispatch_op.ability_ref(ctx);
-        let (dispatch_closure, owner_tag) = insert_dispatch_closure_and_owner(
+        let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
+        let i32_ty = intern_i32(ctx);
+        let ability_id =
+            wasm_dialect::i32_const(ctx, loc, i32_ty, compute_ability_id(ctx, ability_ref));
+        let ability_id_value = ability_id.result(ctx);
+        rewriter.insert_op(ability_id.op_ref());
+        let marker_ty = ability::marker_adt_type_ref(ctx);
+        let marker = wasm_dialect::call(
             ctx,
             loc,
-            dispatch_op.evidence(ctx),
-            ability_ref,
-            rewriter,
+            [dispatch_op.evidence(ctx), ability_id_value],
+            [marker_ty],
+            Symbol::new(evidence_abi::LOOKUP),
         );
-        let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
+        let prompt = wasm_dialect::struct_get(
+            ctx,
+            loc,
+            marker.results(ctx)[0],
+            i32_ty,
+            MARKER_IDX,
+            MarkerField::PromptTag.index(),
+        );
+        let prompt_value = prompt.result(ctx);
+        rewriter.insert_op(marker.op_ref());
+        rewriter.insert_op(prompt.op_ref());
         let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
 
-        let call = wasm_dialect::call_indirect(
+        let tail = wasm_dialect::return_call_indirect(
             ctx,
             loc,
             [
                 table_idx,
                 dispatch_op.evidence(ctx),
                 env,
-                dispatch_op.continuation(ctx),
-                owner_tag,
+                dispatch_op.resume(ctx),
+                prompt_value,
+                ability_id_value,
                 op_idx,
                 dispatch_op.payload(ctx),
             ],
-            [result_ty],
             0,
             0,
         );
-        let call_result = call.results(ctx)[0];
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![call_result]);
+        attach_exact_indirect_signature(ctx, tail.op_ref());
+        set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
+        rewriter.replace_op(tail.op_ref());
         true
     }
 
@@ -387,51 +504,14 @@ impl RewritePattern for EffectDispatchCpsPattern {
     }
 }
 
-/// Extract the general handler closure and its dynamic owner from one selected
-/// Marker. WasmGC keeps both fields in the same immutable Marker struct.
-fn insert_dispatch_closure_and_owner(
-    ctx: &mut IrContext,
-    loc: Location,
-    evidence: ValueRef,
-    ability_ref_ty: TypeRef,
-    rewriter: &mut PatternRewriter<'_>,
-) -> (ValueRef, ValueRef) {
-    let ability_id = compute_ability_id(ctx, ability_ref_ty);
-    let i32_ty = intern_i32(ctx);
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-    let closure_ty = crate::wasm::type_converter::closure_adt_type(ctx);
-
-    let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
-    let lookup = wasm_dialect::call(
-        ctx,
-        loc,
-        [evidence, ability_id_const.result(ctx)],
-        [marker_ty],
-        Symbol::new(evidence_abi::LOOKUP),
-    );
-    let marker = lookup.results(ctx)[0];
-    let closure_get = wasm_dialect::struct_get(
-        ctx,
-        loc,
-        marker,
-        closure_ty,
-        MARKER_IDX,
-        MarkerField::HandlerDispatch.index(),
-    );
-    let owner_get = wasm_dialect::struct_get(
-        ctx,
-        loc,
-        marker,
-        i32_ty,
-        MARKER_IDX,
-        MarkerField::PromptTag.index(),
-    );
-
-    rewriter.insert_op(ability_id_const.op_ref());
-    rewriter.insert_op(lookup.op_ref());
-    rewriter.insert_op(closure_get.op_ref());
-    rewriter.insert_op(owner_get.op_ref());
-    (closure_get.result(ctx), owner_get.result(ctx))
+fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
+    let parameters = ctx.op_operands(call)[1..]
+        .iter()
+        .map(|&value| ctx.value_ty(value))
+        .collect::<Vec<_>>();
+    let result = core::nil(ctx).as_type_ref();
+    let signature = core::func(ctx, result, parameters).as_type_ref();
+    set_indirect_call_signature(ctx, call, signature);
 }
 
 /// Pattern that matches `ability.evidence_extend` and replaces it with
@@ -1371,78 +1451,63 @@ mod tests {
     fn textual_dispatch_cps_lowers_to_wasm_indirect_call() {
         let output = lower_text(
             r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %k: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_cps %ev, %k, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref
-    func.return %result
+  func.func @run(%ev: wasm.arrayref, %dispatch: wasm.anyref, %resume: wasm.anyref, %payload: wasm.anyref) -> core.never {
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
   }
 }"#,
         );
 
         assert!(!output.contains("effect.dispatch_cps"), "{output}");
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
+        assert!(
+            output.contains("wasm.struct_get %1"),
+            "the Wasm tail must decompose the explicit dispatch operand: {output}"
+        );
+        assert!(
+            !output.contains("core.unrealized_conversion_cast"),
+            "the Wasm tail must not cast the explicit dispatch operand: {output}"
+        );
 
-        fn result_name(line: &str) -> &str {
-            line.split_whitespace()
-                .next()
-                .expect("lowered operation must have an SSA result")
-        }
-        fn struct_operand(line: &str) -> &str {
-            line.split("wasm.struct_get ")
-                .nth(1)
-                .expect("expected wasm.struct_get")
-                .split_whitespace()
-                .next()
-                .expect("wasm.struct_get must have a struct operand")
-        }
-        let handler_field = format!("field_idx = {}", MarkerField::HandlerDispatch.index());
-        let prompt_field = format!("field_idx = {}", MarkerField::PromptTag.index());
-        let handler_get = output
-            .lines()
-            .find(|line| line.contains("wasm.struct_get") && line.contains(&handler_field))
-            .expect("CPS dispatch must extract MarkerField::HandlerDispatch");
-        let marker = struct_operand(handler_get);
-        let handler = result_name(handler_get);
-        let owner_get = output
-            .lines()
-            .find(|line| {
-                line.contains("wasm.struct_get")
-                    && line.contains(&prompt_field)
-                    && struct_operand(line) == marker
-            })
-            .expect("CPS dispatch must extract MarkerField::PromptTag from the same Marker");
-        let owner = result_name(owner_get);
-        let table_get = output
-            .lines()
-            .find(|line| {
-                line.contains("wasm.struct_get")
-                    && struct_operand(line) == handler
-                    && line.contains("field_idx = 0")
-            })
-            .expect("CPS dispatch must unpack the handler closure table index");
-        let table = result_name(table_get);
-        let env_get = output
-            .lines()
-            .find(|line| {
-                line.contains("wasm.struct_get")
-                    && struct_operand(line) == handler
-                    && line.contains("field_idx = 1")
-            })
-            .expect("CPS dispatch must unpack the handler closure environment");
-        let env = result_name(env_get);
-        let indirect = output
-            .lines()
-            .find(|line| line.contains("wasm.call_indirect"))
-            .expect("CPS dispatch must lower to wasm.call_indirect");
+        assert!(output.contains("wasm.return_call_indirect"), "{output}");
         assert!(
-            indirect.contains(&format!(
-                "wasm.call_indirect {table}, %0, {env}, %1, {owner},"
-            )),
-            "CPS indirect call must pass the extracted owner after k:\n{output}"
+            output.contains("tribute.calling_convention = 2"),
+            "{output}"
         );
-        assert!(
-            indirect.contains(", %2 {table ="),
-            "CPS indirect call must retain the source payload as its final argument:\n{output}"
+        assert!(output.contains("func.indirect_call_signature"), "{output}");
+    }
+
+    #[test]
+    fn textual_legacy_dispatch_lowers_to_wasm_indirect_call() {
+        let output = lower_text(
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %continuation: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.legacy_dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref
+    func.return %result
+  }
+}"#,
         );
+        assert!(!output.contains("effect.legacy_dispatch_cps"), "{output}");
+        assert!(output.contains("wasm.call_indirect"), "{output}");
+        assert!(!output.contains("wasm.return_call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn result_bearing_final_dispatch_remains_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %continuation: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
+    %result = effect.dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref
+    func.return %result
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        rewrite_evidence_ops_in_scope(&mut ctx, module);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
