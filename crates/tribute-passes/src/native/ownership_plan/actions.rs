@@ -272,6 +272,24 @@ fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRe
     aliases.get(&value).copied().unwrap_or(value)
 }
 
+fn borrowed_owner(
+    borrowed: &HashMap<ValueRef, ValueRef>,
+    aliases: &HashMap<ValueRef, ValueRef>,
+    value: ValueRef,
+) -> Option<ValueRef> {
+    let mut owner = root_value(aliases, value);
+    let mut found = false;
+    while let Some(next) = borrowed.get(&owner) {
+        let next = root_value(aliases, *next);
+        if next == owner {
+            break;
+        }
+        owner = next;
+        found = true;
+    }
+    found.then_some(owner)
+}
+
 fn collect_borrowed_loads(
     ctx: &IrContext,
     blocks: &[BlockRef],
@@ -378,10 +396,7 @@ fn compute_liveness(
                 if managed.contains(&root) && !block_defs.contains(&root) {
                     block_uses.insert(root);
                 }
-                if let Some(owner) = borrowed
-                    .get(&operand)
-                    .copied()
-                    .map(|v| root_value(aliases, v))
+                if let Some(owner) = borrowed_owner(borrowed, aliases, root)
                     && managed.contains(&owner)
                     && !block_defs.contains(&owner)
                 {
@@ -967,11 +982,7 @@ impl ActionPlanner<'_> {
                 if self.owned.contains(&root) {
                     last_use.insert(root, index);
                 }
-                if let Some(owner) = self
-                    .borrowed
-                    .get(&operand)
-                    .copied()
-                    .map(|v| root_value(&self.aliases, v))
+                if let Some(owner) = borrowed_owner(&self.borrowed, &self.aliases, root)
                     && self.owned.contains(&owner)
                 {
                     last_use.insert(owner, index);
