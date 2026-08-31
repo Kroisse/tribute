@@ -87,7 +87,7 @@ fn main() {
 }
 
 #[test]
-fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume() {
+fn test_cps_control_carrier_preserves_read_outcome_and_nested_zero_resume_slow() {
     let source = cps_control_read_outcome_program();
     let profiles = [
         (
@@ -178,7 +178,7 @@ fn main() {
 /// A non-resumptive outer handler must cross an inner, non-matching handler
 /// boundary without invoking either `do` arm.
 #[test]
-fn test_cps_control_outer_nonresumptive_bypasses_nested_do_arms() {
+fn test_cps_control_outer_nonresumptive_bypasses_nested_do_arms_slow() {
     let source = cps_control_outer_nonresumptive_crosses_inner_handle_program();
     let profiles = [
         (

@@ -144,7 +144,7 @@ fn main() {
 /// Handlers: Reader provides 5, Writer is no-op, State starts at 0.
 /// Expected: 5.
 #[test]
-fn test_three_abilities_nested_handlers() {
+fn test_three_abilities_nested_handlers_slow() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
