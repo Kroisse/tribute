@@ -655,6 +655,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .expect("lambda resume effect stack must be balanced")
     }
 
+    /// Record the continuation row selected by a resume in the active lambda.
     pub(crate) fn record_lambda_resume_effect(&mut self, effect: EffectRow<'db>) {
         if let Some(slot) = self.lambda_resume_effects.last_mut() {
             *slot = Some(effect);

@@ -363,7 +363,20 @@ impl<'db> TypeChecker<'db> {
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
 
-                let lambda_effect = resume_effect.unwrap_or(inferred_effect);
+                // A `resume` selects the effect row of the captured continuation,
+                // but ordinary calls in this lambda have already accumulated in
+                // `inferred_effect`. Keep that latent row as the lambda's
+                // signature and constrain it to the continuation row so solving
+                // retains both the continuation identity and local effects.
+                if let Some(resume_effect) = resume_effect {
+                    ctx.constrain_row_eq_at(
+                        inferred_effect,
+                        resume_effect,
+                        expr.id,
+                        ConstraintOriginKind::Lambda,
+                    );
+                }
+                let lambda_effect = inferred_effect;
                 if let Some(expected) = expected_effect {
                     // This resolves generic ability arguments selected by the body.
                     ctx.constrain_row_eq_at(
@@ -771,11 +784,15 @@ impl<'db> TypeChecker<'db> {
                 let resume_effect = ctx.exit_lambda();
                 ctx.set_current_effect(outer_effect);
 
-                let lambda_type = ctx.func_type(
-                    param_types,
-                    body_ty,
-                    resume_effect.unwrap_or(inferred_effect),
-                );
+                if let Some(resume_effect) = resume_effect {
+                    ctx.constrain_row_eq_at(
+                        inferred_effect,
+                        resume_effect,
+                        expr.id,
+                        ConstraintOriginKind::Lambda,
+                    );
+                }
+                let lambda_type = ctx.func_type(param_types, body_ty, inferred_effect);
                 ctx.record_inferred_lambda_type(expr.id, lambda_type);
                 lambda_type
             }

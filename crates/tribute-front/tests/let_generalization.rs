@@ -437,14 +437,23 @@ ability Writer(w) {
     op tell(value: w) -> Nil
 }
 
+ability Audit {
+    fn mark() -> Nil
+}
+
 fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     handle comp() {
         do result { result }
-        op Writer::tell(v) { run_writer(fn() { resume Nil }) }
+        op Writer::tell(v) { run_writer(fn() {
+            Audit::mark()
+            resume Nil
+        }) }
     }
 }
 "#,
     );
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
 
     let output = tribute_front::query::type_check_output(db, source)
         .expect("type checking should produce output");
@@ -477,9 +486,26 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     else {
         panic!("resume lambda metadata must be callable");
     };
+    let continuation_writer = computation_effect
+        .effects(db)
+        .iter()
+        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .expect("the enclosing computation must retain Writer(w)");
+    let lambda_writer = lambda_effect
+        .effects(db)
+        .iter()
+        .find(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Writer")))
+        .expect("the resume lambda must retain Writer(w)");
     assert_eq!(
-        lambda_effect, computation_effect,
-        "the resume lambda must preserve the enclosing handler computation effect"
+        lambda_writer.args, continuation_writer.args,
+        "the resume lambda must preserve the enclosing Writer ability argument"
+    );
+    assert!(
+        lambda_effect
+            .effects(db)
+            .iter()
+            .any(|effect| effect.ability_id == AbilityId::source(db, Symbol::new("Audit"))),
+        "the resume lambda must retain its independently performed Audit effect"
     );
 }
 
