@@ -342,6 +342,7 @@ impl<'db> TypeChecker<'db> {
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
+                ctx.enter_lambda();
 
                 // Bind lambda parameters in the new scope
                 for (param, ty) in params.iter().zip(param_types.iter()) {
@@ -357,28 +358,21 @@ impl<'db> TypeChecker<'db> {
                 let inferred_effect = ctx.current_effect();
 
                 ctx.pop_scope();
+                let resume_effect = ctx.exit_lambda();
 
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
 
-                // Use the expected effect if provided, otherwise use the inferred effect.
-                // When expected effect is given, it means the lambda is being checked against
-                // a known function type. We must constrain the inferred effect to match the
-                // expected effect so that any UniVars created during body checking get resolved.
-                let lambda_effect = if let Some(expected) = expected_effect {
-                    // Constrain the inferred effect (fresh_effect after body checking)
-                    // to match the expected effect. This ensures UniVars in the body's
-                    // types that reference fresh_effect get properly resolved.
+                let lambda_effect = resume_effect.unwrap_or(inferred_effect);
+                if let Some(expected) = expected_effect {
+                    // This resolves generic ability arguments selected by the body.
                     ctx.constrain_row_eq_at(
-                        inferred_effect,
+                        lambda_effect,
                         expected,
                         expr.id,
                         ConstraintOriginKind::Lambda,
                     );
-                    expected
-                } else {
-                    inferred_effect
-                };
+                }
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
@@ -518,10 +512,11 @@ impl<'db> TypeChecker<'db> {
                     && let TypeKind::Continuation {
                         arg: cont_arg,
                         result: cont_result,
-                        ..
+                        effect,
                     } = cont_ty.kind(self.db())
                 {
                     ctx.constrain_eq(arg_ty, *cont_arg);
+                    ctx.record_lambda_resume_effect(*effect);
                     *cont_result
                 } else {
                     ctx.fresh_type_var()
@@ -761,6 +756,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(fresh_effect);
 
                 ctx.push_scope();
+                ctx.enter_lambda();
                 for (param, ty) in params.iter().zip(param_types.iter()) {
                     if let Some(local_id) = param.local_id {
                         ctx.bind_local(local_id, *ty);
@@ -772,11 +768,33 @@ impl<'db> TypeChecker<'db> {
                 let inferred_effect = ctx.current_effect();
 
                 ctx.pop_scope();
+                let resume_effect = ctx.exit_lambda();
                 ctx.set_current_effect(outer_effect);
 
-                let lambda_type = ctx.func_type(param_types, body_ty, inferred_effect);
+                let lambda_type = ctx.func_type(
+                    param_types,
+                    body_ty,
+                    resume_effect.unwrap_or(inferred_effect),
+                );
                 ctx.record_inferred_lambda_type(expr.id, lambda_type);
                 lambda_type
+            }
+            ExprKind::Resume { arg, local_id } => {
+                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+                if let Some(local_id) = local_id
+                    && let Some(cont_ty) = ctx.lookup_local(*local_id)
+                    && let TypeKind::Continuation {
+                        arg: cont_arg,
+                        result: cont_result,
+                        effect,
+                    } = cont_ty.kind(self.db())
+                {
+                    ctx.constrain_eq(arg_ty, *cont_arg);
+                    ctx.record_lambda_resume_effect(*effect);
+                    *cont_result
+                } else {
+                    ctx.fresh_type_var()
+                }
             }
             ExprKind::Tuple(elems) => {
                 let elem_tys = elems
