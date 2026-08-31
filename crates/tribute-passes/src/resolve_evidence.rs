@@ -1268,6 +1268,32 @@ mod tests {
     }
 
     #[test]
+    fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
+        let input = final_dispatch_fixture(
+            r#"%fresh = effect.fresh_prompt_tag : core.i32
+    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref() {name = @State}]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let resolved = print_module(&ctx, module.op());
+        assert!(!resolved.contains("effect.fresh_prompt_tag"), "{resolved}");
+        assert_eq!(
+            resolved
+                .matches("func.call {callee = @__tribute_next_tag}")
+                .count(),
+            1,
+            "{resolved}"
+        );
+        assert_eq!(resolved.matches("func.call").count(), 1, "{resolved}");
+    }
+
+    #[test]
     fn malformed_final_handle_dispatches_fail_before_mutation() {
         let malformed = [
             (

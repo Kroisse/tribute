@@ -1273,4 +1273,29 @@ mod tests {
         assert!(output.contains("func.call_indirect"), "{output}");
         assert!(!output.contains("func.tail_call_indirect"), "{output}");
     }
+
+    #[test]
+    fn multi_result_legacy_dispatch_fails_before_native_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%ev: core.ptr, %continuation: tribute_rt.anyref, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
+    %first, %second = effect.legacy_dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref, tribute_rt.anyref
+    func.return %first
+  }
+}"#,
+        );
+        let run = func_by_name_recursive(&ctx, module, "run");
+        let before = print_module(&ctx, module.op());
+
+        let error = try_lower_evidence_to_native_func(&mut ctx, run)
+            .expect_err("legacy dispatch must have exactly one result");
+
+        assert!(
+            error.to_string().contains("effect.legacy_dispatch_cps"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
 }

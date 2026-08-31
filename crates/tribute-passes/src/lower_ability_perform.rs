@@ -566,6 +566,42 @@ mod tests {
     }
 
     #[test]
+    fn malformed_legacy_performs_remain_unlowered() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @missing_evidence() -> tribute_rt.anyref {{
+    %k = arith.const {{value = 0}} : tribute_rt.anyref
+    %result = ability.legacy_perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
+    func.return %result
+  }}
+  func.func @multiple_payloads(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %k = arith.const {{value = 0}} : tribute_rt.anyref
+    %left = arith.const {{value = 1}} : core.i32
+    %right = arith.const {{value = 2}} : core.i32
+    %result = ability.legacy_perform %k, %left, %right {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
+    func.return %result
+  }}
+}}"#
+            ),
+        );
+
+        lower_ability_perform(&mut ctx, module);
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(
+            output.matches("ability.legacy_perform").count(),
+            2,
+            "{output}"
+        );
+        assert!(!output.contains("effect.legacy_dispatch_cps"), "{output}");
+    }
+
+    #[test]
     fn test_lower_perform_no_evidence_skips_gracefully() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);

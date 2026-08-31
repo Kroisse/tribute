@@ -1492,6 +1492,25 @@ mod tests {
     }
 
     #[test]
+    fn multi_result_legacy_dispatch_remains_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%ev: wasm.arrayref, %continuation: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
+    %first, %second = effect.legacy_dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref, wasm.anyref
+    func.return %first
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        rewrite_evidence_ops_in_scope(&mut ctx, module);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
     fn result_bearing_final_dispatch_remains_unchanged() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
