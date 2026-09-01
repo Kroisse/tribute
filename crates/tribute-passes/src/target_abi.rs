@@ -715,10 +715,15 @@ fn validate_root_dispatch_type(
     };
     if callable.r#return(ctx) != physical_result
         || *actual_evidence != evidence
-        || !is_core_i32(ctx, *prompt)
-        || !is_core_i32(ctx, *ability)
-        || !is_core_i32(ctx, *operation)
-        || !is_tribute_anyref(ctx, *payload)
+        || !is_parameterless_dialect_type(ctx, *prompt, Symbol::new("core"), Symbol::new("i32"))
+        || !is_parameterless_dialect_type(ctx, *ability, Symbol::new("core"), Symbol::new("i32"))
+        || !is_parameterless_dialect_type(ctx, *operation, Symbol::new("core"), Symbol::new("i32"))
+        || !is_parameterless_dialect_type(
+            ctx,
+            *payload,
+            Symbol::new("tribute_rt"),
+            Symbol::new("anyref"),
+        )
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
@@ -741,7 +746,12 @@ fn validate_root_dispatch_type(
         || resume.params(ctx).len() != 3
         || resume.params(ctx)[0] != evidence
         || resume.params(ctx)[1] != frame
-        || !is_tribute_anyref(ctx, resume.params(ctx)[2])
+        || !is_parameterless_dialect_type(
+            ctx,
+            resume.params(ctx)[2],
+            Symbol::new("tribute_rt"),
+            Symbol::new("anyref"),
+        )
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch resume differs from the exact frame ABI",
@@ -773,16 +783,13 @@ fn dispatch_entry_function_type(
     Ok(core::func(ctx, callable.r#return(ctx), params).as_type_ref())
 }
 
-fn is_core_i32(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32") && data.params.is_empty()
-}
-
-fn is_tribute_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("tribute_rt")
-        && data.name == Symbol::new("anyref")
-        && data.params.is_empty()
+fn is_parameterless_dialect_type(
+    ctx: &IrContext,
+    ty: TypeRef,
+    dialect: Symbol,
+    name: Symbol,
+) -> bool {
+    ctx.types.is_dialect(ty, dialect, name) && ctx.types.get(ty).params.is_empty()
 }
 
 fn root_export_convention(
