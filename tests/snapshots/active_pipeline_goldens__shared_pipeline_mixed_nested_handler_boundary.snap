@@ -54,7 +54,7 @@ core.module @mixed_nested {
       %7 = adt.struct_new %6, %5 {type = !_closure} : !_closure
       %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %9 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
-      %10 = effect.dispatch_cps %0, %9, %8 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %10 = effect.legacy_dispatch_cps %0, %9, %8 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       func.return %10
   }
 
@@ -187,7 +187,7 @@ core.module @mixed_nested {
       %10 = adt.struct_new %9, %8 {type = !_closure} : !_closure
       %11 = core.unrealized_conversion_cast %7 : tribute_rt.anyref
       %12 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
-      %13 = effect.dispatch_cps %0, %12, %11 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+      %13 = effect.legacy_dispatch_cps %0, %12, %11 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
       func.return %13
   }
 

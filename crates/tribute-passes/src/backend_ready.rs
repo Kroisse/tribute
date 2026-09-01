@@ -442,6 +442,7 @@ mod tests {
             "tribute_control.perform",
             "ability.perform",
             "effect.dispatch_cps",
+            "effect.legacy_dispatch_cps",
             "closure.new",
             "list.empty",
             "tribute_io.write",

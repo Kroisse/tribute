@@ -8,12 +8,16 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
-use tribute_core::calling_convention::physical_closure_type_with_environment_index;
+use tribute_core::calling_convention::{
+    cps_closure_function_type, cps_completion_type, cps_continuation_frame_layout_type,
+    cps_continuation_frame_ref_type, cps_done_type, cps_resume_exact_type,
+    physical_closure_type_with_environment_index,
+};
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
-    set_calling_convention,
+    set_calling_convention, set_indirect_call_signature,
 };
-use tribute_ir::dialect::{ability, closure, tribute_control, tribute_rt};
+use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -298,7 +302,9 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
         if ability::HandleDispatch::matches(ctx, op) {
             let operands = ctx.op_operands(op);
-            if let Some((evidence, dispatchers)) = operands.split_first() {
+            if let Some((evidence, rest)) = operands.split_first()
+                && let Some((_, dispatchers)) = rest.split_first()
+            {
                 let evidence_ty = ctx.value_ty(*evidence);
                 for pair in dispatchers.as_chunks::<2>().0 {
                     check_dispatcher(ctx, op, pair[0], evidence_ty, false, failures);
@@ -744,7 +750,23 @@ struct Converter<'a> {
     funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
     current_module: OpRef,
     converted_types: HashMap<TypeRef, TypeRef>,
+    frames: HashMap<TypeRef, FrameTypes>,
+    frame_layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
+}
+
+#[derive(Clone, Copy)]
+struct FrameTypes {
+    reference: TypeRef,
+    layout: TypeRef,
+    done: TypeRef,
+    dispatch: TypeRef,
+}
+
+#[derive(Clone, Copy)]
+struct DispatchFactoryArgs<'a> {
+    prefix: &'a [ValueRef],
+    suffix: &'a [ValueRef],
 }
 
 #[derive(Clone)]
@@ -753,6 +775,12 @@ struct Flow {
     evidence: Option<ValueRef>,
     exit_k: Option<ValueRef>,
     root_exit_k: Option<ValueRef>,
+    /// The exact lexical dispatcher installed by the nearest handle. General
+    /// operations carry it through the effect ABI without erasing it.
+    dispatch: Option<ValueRef>,
+    /// Zero-result structured control uses a private suffix closure whose
+    /// arguments are `(Evidence, ContinuationFrame<R>)` rather than `Done<R>`.
+    void_exit_k: Option<ValueRef>,
     answer_type: TypeRef,
     preserve_scf_yield: bool,
 }
@@ -770,6 +798,8 @@ impl<'a> Converter<'a> {
             funcs_by_module,
             current_module,
             converted_types: HashMap::new(),
+            frames: HashMap::new(),
+            frame_layout_aliases: Vec::new(),
             helper_index: 0,
         }
     }
@@ -798,6 +828,57 @@ impl<'a> Converter<'a> {
         core::never(self.ctx).as_type_ref()
     }
 
+    /// Emit a final CPS tail transfer from the callee's exact typed closure
+    /// contract. This must not reconstruct a signature from physical operands:
+    /// closure extraction interposes an environment later and preserves this
+    /// contract on the resulting indirect transfer.
+    fn emit_cps_tail_call_indirect(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        callee: ValueRef,
+        args: impl IntoIterator<Item = ValueRef>,
+    ) -> Result<OpRef, TributeControlToCpsError> {
+        let args = args.into_iter().collect::<Vec<_>>();
+        let closure_type = self.ctx.value_ty(callee);
+        let signature = cps_closure_function_type(self.ctx, closure_type).ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS indirect tail callee has no exact provenance-bearing closure contract",
+            )
+        })?;
+        let callable = core::Func::from_type_ref(self.ctx, signature).ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS indirect tail callee contract is not core.func",
+            )
+        })?;
+        if callable.r#return(self.ctx) != self.never_type()
+            || callable.params(self.ctx).len() != args.len()
+            || callable
+                .params(self.ctx)
+                .iter()
+                .zip(&args)
+                .any(|(expected, actual)| *expected != self.ctx.value_ty(*actual))
+        {
+            return Err(TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS indirect tail operands differ from the exact closure contract",
+            ));
+        }
+        let tail = func::tail_call_indirect(self.ctx, location, callee, args);
+        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+        set_indirect_call_signature(self.ctx, tail.op_ref(), signature);
+        self.ctx.push_op(block, tail.op_ref());
+        Ok(tail.op_ref())
+    }
+
     fn evidence_type(&mut self) -> TypeRef {
         ability::evidence_adt_type_ref(self.ctx)
     }
@@ -807,16 +888,312 @@ impl<'a> Converter<'a> {
     }
 
     fn done_k_type(&mut self, answer: TypeRef) -> TypeRef {
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [answer]).as_type_ref();
-        self.generated_continuation_type(function)
+        cps_done_type(self.ctx, answer)
     }
 
     fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
-        let never = self.never_type();
-        let done_k = self.done_k_type(answer);
-        let function = core::func(self.ctx, never, [done_k, input]).as_type_ref();
-        self.generated_continuation_type(function)
+        let evidence = self.evidence_type();
+        let frame = self.frame_types(answer).reference;
+        cps_resume_exact_type(self.ctx, evidence, input, frame)
+    }
+
+    fn completion_type(&mut self, value: TypeRef, answer: TypeRef) -> TypeRef {
+        let evidence = self.evidence_type();
+        let frame = self.frame_types(answer).reference;
+        cps_completion_type(self.ctx, evidence, value, frame)
+    }
+
+    fn i32_type(&mut self) -> TypeRef {
+        self.ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    }
+
+    fn frame_types(&mut self, answer: TypeRef) -> FrameTypes {
+        if let Some(frame) = self.frames.get(&answer).copied() {
+            return frame;
+        }
+        let name = Symbol::from_dynamic(&format!("__tribute_continuation_frame_{answer:?}"));
+        let reference = cps_continuation_frame_ref_type(self.ctx, name, answer);
+        let done = self.done_k_type(answer);
+        let evidence = self.evidence_type();
+        let anyref = self.anyref_type();
+        let i32 = self.i32_type();
+        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+            self.ctx, evidence, reference, anyref, i32,
+        );
+        let layout = cps_continuation_frame_layout_type(self.ctx, name, answer, done, dispatch);
+        let frame = FrameTypes {
+            reference,
+            layout,
+            done,
+            dispatch,
+        };
+        self.frames.insert(answer, frame);
+        self.frame_layout_aliases.push((name, layout));
+        frame
+    }
+
+    fn unpack_frame(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        answer: TypeRef,
+        frame_value: ValueRef,
+    ) -> (ValueRef, ValueRef) {
+        let frame = self.frame_types(answer);
+        let done = adt::struct_get(self.ctx, location, frame_value, frame.done, frame.layout, 0);
+        self.ctx.push_op(block, done.op_ref());
+        let dispatch = adt::struct_get(
+            self.ctx,
+            location,
+            frame_value,
+            frame.dispatch,
+            frame.layout,
+            1,
+        );
+        self.ctx.push_op(block, dispatch.op_ref());
+        (done.result(self.ctx), dispatch.result(self.ctx))
+    }
+
+    fn pack_frame(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        answer: TypeRef,
+        done: ValueRef,
+        dispatch: ValueRef,
+    ) -> ValueRef {
+        let frame = self.frame_types(answer);
+        let packed = adt::struct_new(
+            self.ctx,
+            location,
+            [done, dispatch],
+            frame.reference,
+            frame.layout,
+        );
+        self.ctx.push_op(block, packed.op_ref());
+        packed.result(self.ctx)
+    }
+
+    fn build_done_adapter(
+        &mut self,
+        value_type: TypeRef,
+        completion: ValueRef,
+        evidence: ValueRef,
+        outer_frame: ValueRef,
+        location: Location,
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let done_block = self.make_block(location, &[value_type]);
+        let value = self.ctx.block_args(done_block)[0];
+        self.emit_cps_tail_call_indirect(
+            done_block,
+            location,
+            completion,
+            [evidence, outer_frame, value],
+        )?;
+        let region = self.single_block_region(location, done_block);
+        let done_type = self.done_k_type(value_type);
+        let done = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            done_type,
+            region,
+        );
+        set_calling_convention(self.ctx, done.op_ref(), CallingConvention::Cps);
+        Ok((done.op_ref(), done.result(self.ctx)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_rebound_resume(
+        &mut self,
+        location: Location,
+        value_type: TypeRef,
+        boundary: TypeRef,
+        resume_body: ValueRef,
+        completion: ValueRef,
+        dispatch_factory: Symbol,
+        dispatch_factory_args: DispatchFactoryArgs<'_>,
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let boundary_frame = self.frame_types(boundary).reference;
+        let block = self.make_block(location, &[evidence_type, boundary_frame, anyref]);
+        let args = self.ctx.block_args(block).to_vec();
+        let (done_op, done) =
+            self.build_done_adapter(value_type, completion, args[0], args[1], location)?;
+        self.ctx.push_op(block, done_op);
+        let (_, outer_dispatch) = self.unpack_frame(block, location, boundary, args[1]);
+        let dispatch_type = self.frame_types(value_type).dispatch;
+        let mut factory_args = dispatch_factory_args.prefix.to_vec();
+        factory_args.extend([completion, outer_dispatch]);
+        factory_args.extend_from_slice(dispatch_factory_args.suffix);
+        let dispatch = func::call(
+            self.ctx,
+            location,
+            factory_args,
+            dispatch_type,
+            dispatch_factory,
+        );
+        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(block, dispatch.op_ref());
+        let frame = self.pack_frame(block, location, value_type, done, dispatch.result(self.ctx));
+        self.emit_cps_tail_call_indirect(block, location, resume_body, [args[0], frame, args[2]])?;
+        let region = self.single_block_region(location, block);
+        let resume_type = tribute_core::calling_convention::cps_resume_type(
+            self.ctx,
+            evidence_type,
+            boundary_frame,
+            anyref,
+        );
+        let resume = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            resume_type,
+            region,
+        );
+        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Cps);
+        Ok((resume.op_ref(), resume.result(self.ctx)))
+    }
+
+    fn build_dispatch_adapter_factory(
+        &mut self,
+        location: Location,
+        value_type: TypeRef,
+        boundary: TypeRef,
+    ) -> Result<Symbol, TributeControlToCpsError> {
+        let symbol = self.fresh_helper("make_dispatch_adapter");
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let i32_type = self.i32_type();
+        let completion_type = self.completion_type(value_type, boundary);
+        let outer_dispatch_type = self.frame_types(boundary).dispatch;
+        let dispatch_type = self.frame_types(value_type).dispatch;
+        let factory_type = core::func(
+            self.ctx,
+            dispatch_type,
+            [completion_type, outer_dispatch_type],
+        )
+        .as_type_ref();
+        let factory_block = self.make_block(location, &[completion_type, outer_dispatch_type]);
+        let factory_args = self.ctx.block_args(factory_block).to_vec();
+        let value_frame = self.frame_types(value_type).reference;
+        let resume_type = tribute_core::calling_convention::cps_resume_type(
+            self.ctx,
+            evidence_type,
+            value_frame,
+            anyref,
+        );
+        let dispatch_block = self.make_block(
+            location,
+            &[
+                evidence_type,
+                resume_type,
+                i32_type,
+                i32_type,
+                i32_type,
+                anyref,
+            ],
+        );
+        let dispatch_args = self.ctx.block_args(dispatch_block).to_vec();
+        let (resume_op, rebound_resume) = self.build_rebound_resume(
+            location,
+            value_type,
+            boundary,
+            dispatch_args[1],
+            factory_args[0],
+            symbol,
+            DispatchFactoryArgs {
+                prefix: &[],
+                suffix: &[],
+            },
+        )?;
+        self.ctx.push_op(dispatch_block, resume_op);
+        self.emit_cps_tail_call_indirect(
+            dispatch_block,
+            location,
+            factory_args[1],
+            [
+                dispatch_args[0],
+                rebound_resume,
+                dispatch_args[2],
+                dispatch_args[3],
+                dispatch_args[4],
+                dispatch_args[5],
+            ],
+        )?;
+        let dispatch_region = self.single_block_region(location, dispatch_block);
+        let dispatch = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, dispatch_region),
+            dispatch_type,
+            dispatch_region,
+        );
+        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Cps);
+        self.ctx.push_op(factory_block, dispatch.op_ref());
+        let ret = func::r#return(self.ctx, location, [dispatch.result(self.ctx)]);
+        self.ctx.push_op(factory_block, ret.op_ref());
+        let factory_region = self.single_block_region(location, factory_block);
+        let factory = func::func(self.ctx, location, symbol, factory_type, factory_region);
+        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(self.module_block, factory.op_ref());
+        Ok(symbol)
+    }
+
+    fn frame_for_suffix(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        value_type: TypeRef,
+        flow: &Flow,
+        suffix: ValueRef,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        let outer = flow.exit_k.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS transfer has no verified ContinuationFrame",
+            )
+        })?;
+        let evidence = flow.evidence.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                None,
+                Some(location),
+                "CPS transfer has no verified evidence",
+            )
+        })?;
+        let (done_op, done) =
+            self.build_done_adapter(value_type, suffix, evidence, outer, location)?;
+        self.ctx.push_op(block, done_op);
+        let outer_dispatch = match flow.dispatch {
+            Some(dispatch) => dispatch,
+            None => {
+                self.unpack_frame(block, location, flow.answer_type, outer)
+                    .1
+            }
+        };
+        let dispatch_factory =
+            self.build_dispatch_adapter_factory(location, value_type, flow.answer_type)?;
+        let completion_type = self.completion_type(value_type, flow.answer_type);
+        let typed_completion =
+            core::unrealized_conversion_cast(self.ctx, location, suffix, completion_type);
+        self.ctx.push_op(block, typed_completion.op_ref());
+        let dispatch_type = self.frame_types(value_type).dispatch;
+        let dispatch = func::call(
+            self.ctx,
+            location,
+            [typed_completion.result(self.ctx), outer_dispatch],
+            dispatch_type,
+            dispatch_factory,
+        );
+        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(block, dispatch.op_ref());
+        Ok(self.pack_frame(block, location, value_type, done, dispatch.result(self.ctx)))
     }
 
     fn generated_continuation_type(&mut self, function: TypeRef) -> TypeRef {
@@ -860,8 +1237,8 @@ impl<'a> Converter<'a> {
                 .collect();
             let abi = CallableAbi::new(convention, params, result);
             let evidence = self.evidence_type();
-            let done_k = self.done_k_type(result);
-            let lowered_params = abi.lowered_params(evidence, done_k);
+            let frame = self.frame_types(result).reference;
+            let lowered_params = abi.lowered_params(evidence, frame);
             let lowered_result = if convention == CallingConvention::Cps {
                 self.never_type()
             } else {
@@ -926,9 +1303,9 @@ impl<'a> Converter<'a> {
             .map(|param| self.convert_type(param))
             .collect();
         let evidence = self.evidence_type();
-        let done_k = self.done_k_type(result);
+        let frame = self.frame_types(result).reference;
         let abi = CallableAbi::new(convention, params, result);
-        let params = abi.lowered_params(evidence, done_k);
+        let params = abi.lowered_params(evidence, frame);
         let result = if convention == CallingConvention::Cps {
             self.never_type()
         } else {
@@ -1250,10 +1627,24 @@ impl<'a> Converter<'a> {
                 branch_mapping.insert(old, new);
             }
             let branch_flow = match continuation {
-                Some(continuation) => Flow {
-                    exit_k: Some(continuation),
+                Some(continuation) if result_types.is_empty() => Flow {
+                    void_exit_k: Some(continuation),
                     ..flow.clone()
                 },
+                Some(continuation) => {
+                    let [source_result_type] = result_types.as_slice() else {
+                        unreachable!("non-void CPS branch has one result")
+                    };
+                    let result_type = self.convert_type(*source_result_type);
+                    let frame =
+                        self.frame_for_suffix(block, location, result_type, flow, continuation)?;
+                    Flow {
+                        exit_k: Some(frame),
+                        root_exit_k: Some(frame),
+                        answer_type: result_type,
+                        ..flow.clone()
+                    }
+                }
                 None => Flow {
                     preserve_scf_yield: true,
                     ..flow.clone()
@@ -1403,7 +1794,7 @@ impl<'a> Converter<'a> {
             let converted_block = self.make_block(case_location, &[]);
             let mut case_mapping = mapping.clone();
             let case_flow = Flow {
-                exit_k: Some(continuation),
+                void_exit_k: Some(continuation),
                 ..flow.clone()
             };
             self.convert_sequence(
@@ -1449,9 +1840,8 @@ impl<'a> Converter<'a> {
                     "CPS region has no verified exit continuation",
                 )
             })?;
-            let tail = func::tail_call_indirect(self.ctx, location, exit_k, [value]);
-            set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-            self.ctx.push_op(block, tail.op_ref());
+            let (done, _) = self.unpack_frame(block, location, flow.answer_type, exit_k);
+            self.emit_cps_tail_call_indirect(block, location, done, [value])?;
         } else {
             let ret = func::r#return(self.ctx, location, [value]);
             self.ctx.push_op(block, ret.op_ref());
@@ -1465,6 +1855,26 @@ impl<'a> Converter<'a> {
         location: Location,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
+        if let Some(void_exit) = flow.void_exit_k {
+            let evidence = flow.evidence.ok_or_else(|| {
+                TributeControlToCpsError::one(
+                    POST_CPS_BOUNDARY,
+                    None,
+                    Some(location),
+                    "zero-result suffix has no verified evidence",
+                )
+            })?;
+            let frame = flow.exit_k.ok_or_else(|| {
+                TributeControlToCpsError::one(
+                    POST_CPS_BOUNDARY,
+                    None,
+                    Some(location),
+                    "zero-result suffix has no verified ContinuationFrame",
+                )
+            })?;
+            self.emit_cps_tail_call_indirect(block, location, void_exit, [evidence, frame])?;
+            return Ok(());
+        }
         let exit_k = flow.exit_k.ok_or_else(|| {
             TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
@@ -1473,10 +1883,8 @@ impl<'a> Converter<'a> {
                 "structured region has no verified exit continuation",
             )
         })?;
-        let tail =
-            func::tail_call_indirect(self.ctx, location, exit_k, std::iter::empty::<ValueRef>());
-        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-        self.ctx.push_op(block, tail.op_ref());
+        let (done, _) = self.unpack_frame(block, location, flow.answer_type, exit_k);
+        self.emit_cps_tail_call_indirect(block, location, done, std::iter::empty::<ValueRef>())?;
         Ok(())
     }
 
@@ -1488,13 +1896,28 @@ impl<'a> Converter<'a> {
         flow: &Flow,
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
-        let block = self.make_block(location, &[]);
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(flow.answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type]);
         let mut suffix_mapping = mapping.clone();
-        self.convert_sequence(source_ops.to_vec(), start, block, &mut suffix_mapping, flow)?;
+        let suffix_flow = Flow {
+            evidence: Some(self.ctx.block_args(block)[0]),
+            exit_k: Some(self.ctx.block_args(block)[1]),
+            root_exit_k: Some(self.ctx.block_args(block)[1]),
+            void_exit_k: None,
+            ..flow.clone()
+        };
+        self.convert_sequence(
+            source_ops.to_vec(),
+            start,
+            block,
+            &mut suffix_mapping,
+            &suffix_flow,
+        )?;
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
-        let function = core::func(self.ctx, never, std::iter::empty::<TypeRef>()).as_type_ref();
+        let function = core::func(self.ctx, never, [evidence_type, frame_type]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
@@ -1520,9 +1943,9 @@ impl<'a> Converter<'a> {
             .map(|ty| self.convert_type(ty))
             .collect();
         let evidence = self.evidence_type();
-        let done_k = self.done_k_type(result);
+        let frame = self.frame_types(result).reference;
         let abi = CallableAbi::new(convention, source_param_types.clone(), result);
-        let params = abi.lowered_params(evidence, done_k);
+        let params = abi.lowered_params(evidence, frame);
         let body_source = self.ctx.op(source).regions[0];
         let entry_source = self.ctx.region(body_source).blocks[0];
         let block = self.make_block(location, &params);
@@ -1548,6 +1971,8 @@ impl<'a> Converter<'a> {
             evidence: evidence_value,
             exit_k,
             root_exit_k: exit_k,
+            void_exit_k: None,
+            dispatch: None,
             answer_type: result,
             preserve_scf_yield: false,
         };
@@ -1623,15 +2048,27 @@ impl<'a> Converter<'a> {
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let result_type = self.convert_type(result_type);
-        let block = self.make_block(location, &[result_type]);
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(flow.answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type, result_type]);
         let mut body_mapping = mapping.clone();
-        body_mapping.insert(source_result, self.ctx.block_args(block)[0]);
-        self.convert_sequence(source_ops.to_vec(), start, block, &mut body_mapping, flow)?;
+        body_mapping.insert(source_result, self.ctx.block_args(block)[2]);
+        let suffix_flow = Flow {
+            evidence: Some(self.ctx.block_args(block)[0]),
+            exit_k: Some(self.ctx.block_args(block)[1]),
+            root_exit_k: Some(self.ctx.block_args(block)[1]),
+            ..flow.clone()
+        };
+        self.convert_sequence(
+            source_ops.to_vec(),
+            start,
+            block,
+            &mut body_mapping,
+            &suffix_flow,
+        )?;
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [result_type]).as_type_ref();
-        let closure_ty = self.generated_continuation_type(function);
+        let closure_ty = self.completion_type(result_type, flow.answer_type);
         let lambda = closure::lambda(self.ctx, location, captures, closure_ty, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
@@ -1669,9 +2106,9 @@ impl<'a> Converter<'a> {
             .map(|ty| self.convert_type(ty))
             .collect();
         let evidence_ty = self.evidence_type();
-        let done_k_ty = self.done_k_type(result);
+        let frame_ty = self.frame_types(result).reference;
         let abi = CallableAbi::new(result_convention, source_params.clone(), result);
-        let logical_params = abi.lowered_params(evidence_ty, done_k_ty);
+        let logical_params = abi.lowered_params(evidence_ty, frame_ty);
         let env_ty = self.anyref_type();
         let physical_params = abi.interpose_environment(&logical_params, env_ty);
         let physical_result = if result_convention == CallingConvention::Cps {
@@ -1685,8 +2122,8 @@ impl<'a> Converter<'a> {
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
         // The environment is interposed immediately after optional evidence,
-        // so a present done continuation is the following slot.
-        let done_offset = evidence_offset + 1;
+        // so a present ContinuationFrame is the following slot.
+        let frame_offset = evidence_offset + 1;
         let source_offset = usize::from(result_convention.needs_evidence())
             + 1
             + usize::from(result_convention.needs_done_k());
@@ -1695,7 +2132,7 @@ impl<'a> Converter<'a> {
             target_args.push(args[0]);
         }
         if target.convention.needs_done_k() {
-            target_args.push(args[done_offset]);
+            target_args.push(args[frame_offset]);
         }
         target_args.extend_from_slice(&args[source_offset..]);
         if target.convention == CallingConvention::Cps {
@@ -1714,11 +2151,9 @@ impl<'a> Converter<'a> {
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
             self.ctx.push_op(block, call.op_ref());
             if result_convention == CallingConvention::Cps {
-                let done_k = args[done_offset];
-                let tail =
-                    func::tail_call_indirect(self.ctx, location, done_k, [call.result(self.ctx)]);
-                set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-                self.ctx.push_op(block, tail.op_ref());
+                let frame = args[frame_offset];
+                let (done_k, _) = self.unpack_frame(block, location, result, frame);
+                self.emit_cps_tail_call_indirect(block, location, done_k, [call.result(self.ctx)])?;
             } else {
                 let ret = func::r#return(self.ctx, location, [call.result(self.ctx)]);
                 self.ctx.push_op(block, ret.op_ref());
@@ -1764,7 +2199,6 @@ impl<'a> Converter<'a> {
     fn build_completion_continuation(
         &mut self,
         source_region: RegionRef,
-        final_k: ValueRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
@@ -1772,14 +2206,18 @@ impl<'a> Converter<'a> {
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
-        let block = self.make_block(location, &[arg_type]);
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(flow.answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type, arg_type]);
         let mut body_mapping = mapping.clone();
-        body_mapping.insert(source_arg, self.ctx.block_args(block)[0]);
+        body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
         let completion_flow = Flow {
             convention: CallingConvention::Cps,
-            evidence: flow.evidence,
-            exit_k: Some(final_k),
-            root_exit_k: Some(final_k),
+            evidence: Some(self.ctx.block_args(block)[0]),
+            exit_k: Some(self.ctx.block_args(block)[1]),
+            root_exit_k: Some(self.ctx.block_args(block)[1]),
+            void_exit_k: None,
+            dispatch: None,
             answer_type: flow.answer_type,
             preserve_scf_yield: false,
         };
@@ -1792,50 +2230,10 @@ impl<'a> Converter<'a> {
         )?;
         let body = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, body);
-        let never = self.never_type();
-        let function = core::func(self.ctx, never, [arg_type]).as_type_ref();
-        let closure_type = self.generated_continuation_type(function);
+        let closure_type = self.completion_type(arg_type, flow.answer_type);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, body);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    fn rebind_generated_continuation(
-        &mut self,
-        value: ValueRef,
-        old_root: ValueRef,
-        new_root: ValueRef,
-        destination: BlockRef,
-        cache: &mut HashMap<ValueRef, ValueRef>,
-    ) -> Result<ValueRef, TributeControlToCpsError> {
-        if value == old_root {
-            return Ok(new_root);
-        }
-        if let Some(rebound) = cache.get(&value) {
-            return Ok(*rebound);
-        }
-        let trunk_ir::ValueDef::OpResult(def, _) = self.ctx.value_def(value) else {
-            return Ok(value);
-        };
-        if !closure::Lambda::matches(self.ctx, def) {
-            return Ok(value);
-        }
-        let mut mapping = HashMap::from([(old_root, new_root)]);
-        for capture in self.ctx.op_operands(def).to_vec() {
-            let rebound = self.rebind_generated_continuation(
-                capture,
-                old_root,
-                new_root,
-                destination,
-                cache,
-            )?;
-            mapping.insert(capture, rebound);
-        }
-        let rebound_op = self.clone_plain_op(def, &mut mapping)?;
-        self.ctx.push_op(destination, rebound_op);
-        let rebound = self.ctx.op_result(rebound_op, 0);
-        cache.insert(value, rebound);
-        Ok(rebound)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1850,38 +2248,21 @@ impl<'a> Converter<'a> {
         location: Location,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
-        let done_k_type = self.done_k_type(flow.answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
-        let resume_done = self.ctx.block_args(block)[0];
-        let resume_input = self.ctx.block_args(block)[1];
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(flow.answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
+        let resume_evidence = self.ctx.block_args(block)[0];
+        let resume_frame = self.ctx.block_args(block)[1];
+        let resume_input = self.ctx.block_args(block)[2];
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_result, resume_input);
         let mut suffix_flow = flow.clone();
-        let old_root = flow.root_exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
-                "resumptive computation has no root continuation",
-            )
-        })?;
-        let current_exit = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
-                "resumptive computation has no current continuation",
-            )
-        })?;
-        let rebound_exit = self.rebind_generated_continuation(
-            current_exit,
-            old_root,
-            resume_done,
-            block,
-            &mut HashMap::new(),
-        )?;
-        suffix_flow.exit_k = Some(rebound_exit);
-        suffix_flow.root_exit_k = Some(resume_done);
+        // A resumed suffix receives the dynamic frame directly. It carries
+        // both the completion and lexical-dispatch provenance, so no closure
+        // graph cloning or ambient-evidence reconstruction is permitted.
+        suffix_flow.evidence = Some(resume_evidence);
+        suffix_flow.exit_k = Some(resume_frame);
+        suffix_flow.root_exit_k = Some(resume_frame);
         self.convert_sequence(
             source_ops.to_vec(),
             start,
@@ -1897,13 +2278,331 @@ impl<'a> Converter<'a> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn build_exact_handler_token(
+        &mut self,
+        location: Location,
+        raw_resume: ValueRef,
+        input_type: TypeRef,
+        body_type: TypeRef,
+        answer_type: TypeRef,
+        completion: ValueRef,
+        dispatch_factory: Symbol,
+        dispatch_factory_args: DispatchFactoryArgs<'_>,
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
+        let args = self.ctx.block_args(block).to_vec();
+        let anyref = self.anyref_type();
+        let erased_input = core::unrealized_conversion_cast(self.ctx, location, args[2], anyref);
+        self.ctx.push_op(block, erased_input.op_ref());
+        let (rebound_op, rebound) = self.build_rebound_resume(
+            location,
+            body_type,
+            answer_type,
+            raw_resume,
+            completion,
+            dispatch_factory,
+            dispatch_factory_args,
+        )?;
+        self.ctx.push_op(block, rebound_op);
+        self.emit_cps_tail_call_indirect(
+            block,
+            location,
+            rebound,
+            [args[0], args[1], erased_input.result(self.ctx)],
+        )?;
+        let region = self.single_block_region(location, block);
+        let token_type = self.resumption_type(input_type, answer_type);
+        let lambda = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            token_type,
+            region,
+        );
+        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        Ok((lambda.op_ref(), lambda.result(self.ctx)))
+    }
+
+    /// Build an immutable factory for one lexical handle dispatcher. Each
+    /// resumption calls this factory again with its current outer dispatcher,
+    /// so the resumed body retains this handle's arm-selection boundary.
+    fn build_local_dispatcher_factory(
+        &mut self,
+        location: Location,
+        arms: &[HandlerArmInfo],
+        body_type: TypeRef,
+        answer_type: TypeRef,
+    ) -> Result<Symbol, TributeControlToCpsError> {
+        let symbol = self.fresh_helper("make_local_dispatch");
+        let completion_type = self.completion_type(body_type, answer_type);
+        let i32_type = self.i32_type();
+        let parent_dispatch_type = self.frame_types(answer_type).dispatch;
+        let dispatch_type = self.frame_types(body_type).dispatch;
+        let mut params = vec![completion_type, parent_dispatch_type, i32_type];
+        params.extend(arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
+        let factory_type = core::func(self.ctx, dispatch_type, params.clone()).as_type_ref();
+        let factory_block = self.make_block(location, &params);
+        let factory_args = self.ctx.block_args(factory_block).to_vec();
+        let mut factory_arms = arms.to_vec();
+        for (arm, value) in factory_arms
+            .iter_mut()
+            .zip(factory_args[3..].iter().copied())
+        {
+            arm.value = value;
+        }
+        let (dispatcher_op, dispatcher) = self.build_local_dispatcher_instance(
+            location,
+            &factory_arms,
+            body_type,
+            answer_type,
+            factory_args[0],
+            factory_args[1],
+            symbol,
+            factory_args[2],
+            factory_args[3..].to_vec(),
+        )?;
+        self.ctx.push_op(factory_block, dispatcher_op);
+        let ret = func::r#return(self.ctx, location, [dispatcher]);
+        self.ctx.push_op(factory_block, ret.op_ref());
+        let region = self.single_block_region(location, factory_block);
+        let factory = func::func(self.ctx, location, symbol, factory_type, region);
+        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(self.module_block, factory.op_ref());
+        Ok(symbol)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_local_foreign_dispatch(
+        &mut self,
+        location: Location,
+        body_type: TypeRef,
+        answer_type: TypeRef,
+        completion: ValueRef,
+        parent_dispatch: ValueRef,
+        factory: Symbol,
+        factory_prefix_args: &[ValueRef],
+        factory_suffix_args: &[ValueRef],
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let i32_type = self.i32_type();
+        let body_frame = self.frame_types(body_type).reference;
+        let resume_type = tribute_core::calling_convention::cps_resume_type(
+            self.ctx,
+            evidence_type,
+            body_frame,
+            anyref,
+        );
+        let block = self.make_block(
+            location,
+            &[
+                evidence_type,
+                resume_type,
+                i32_type,
+                i32_type,
+                i32_type,
+                anyref,
+            ],
+        );
+        let args = self.ctx.block_args(block).to_vec();
+        let (rebound_op, rebound) = self.build_rebound_resume(
+            location,
+            body_type,
+            answer_type,
+            args[1],
+            completion,
+            factory,
+            DispatchFactoryArgs {
+                prefix: factory_prefix_args,
+                suffix: factory_suffix_args,
+            },
+        )?;
+        self.ctx.push_op(block, rebound_op);
+        self.emit_cps_tail_call_indirect(
+            block,
+            location,
+            parent_dispatch,
+            [args[0], rebound, args[2], args[3], args[4], args[5]],
+        )?;
+        let region = self.single_block_region(location, block);
+        let dispatch_type = self.frame_types(body_type).dispatch;
+        let lambda = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            dispatch_type,
+            region,
+        );
+        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        Ok((lambda.op_ref(), lambda.result(self.ctx)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_local_dispatcher_instance(
+        &mut self,
+        location: Location,
+        arms: &[HandlerArmInfo],
+        body_type: TypeRef,
+        answer_type: TypeRef,
+        completion: ValueRef,
+        parent_dispatch: ValueRef,
+        factory: Symbol,
+        local_prompt: ValueRef,
+        factory_args: Vec<ValueRef>,
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let i32_type = self.i32_type();
+        let body_frame = self.frame_types(body_type).reference;
+        let resume_type = tribute_core::calling_convention::cps_resume_type(
+            self.ctx,
+            evidence_type,
+            body_frame,
+            anyref,
+        );
+        let block = self.make_block(
+            location,
+            &[
+                evidence_type,
+                resume_type,
+                i32_type,
+                i32_type,
+                i32_type,
+                anyref,
+            ],
+        );
+        let args = self.ctx.block_args(block).to_vec();
+        let mut factory_suffix_args = vec![local_prompt];
+        factory_suffix_args.extend(factory_args.iter().copied());
+        let (foreign_op, foreign_dispatch) = self.build_local_foreign_dispatch(
+            location,
+            body_type,
+            answer_type,
+            completion,
+            parent_dispatch,
+            factory,
+            &[],
+            &factory_suffix_args,
+        )?;
+        self.ctx.push_op(block, foreign_op);
+        let switch_block = self.make_block(location, &[]);
+        let i1_type = self
+            .ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
+            let case_block = self.make_block(location, &[]);
+            let same_prompt = arith::cmpi(
+                self.ctx,
+                location,
+                args[2],
+                local_prompt,
+                i1_type,
+                Symbol::new("eq"),
+            );
+            self.ctx.push_op(case_block, same_prompt.op_ref());
+
+            let local_block = self.make_block(location, &[]);
+            let mut call_args = vec![args[0]];
+            call_args.extend(self.unpack_handler_payload(local_block, location, args[5], arm));
+            if arm.has_resume_token {
+                let input_type = *arm.params.last().expect("resumptive arm has a token");
+                let token_input = cps_closure_function_type(self.ctx, input_type)
+                    .and_then(|function| core::Func::from_type_ref(self.ctx, function))
+                    .and_then(|function| function.params(self.ctx).get(2).copied())
+                    .ok_or_else(|| {
+                        TributeControlToCpsError::one(
+                            POST_CPS_BOUNDARY,
+                            None,
+                            Some(location),
+                            "handler resume token lacks an exact callable input",
+                        )
+                    })?;
+                let (token_op, token) = self.build_exact_handler_token(
+                    location,
+                    args[1],
+                    token_input,
+                    body_type,
+                    answer_type,
+                    completion,
+                    factory,
+                    DispatchFactoryArgs {
+                        prefix: &[],
+                        suffix: &factory_suffix_args,
+                    },
+                )?;
+                self.ctx.push_op(local_block, token_op);
+                call_args.push(token);
+            }
+            self.emit_cps_tail_call_indirect(local_block, location, arm.value, call_args)?;
+            let local_region = self.single_block_region(location, local_block);
+            let fallback_block = self.make_block(location, &[]);
+            self.emit_cps_tail_call_indirect(
+                fallback_block,
+                location,
+                foreign_dispatch,
+                [args[0], args[1], args[2], args[3], args[4], args[5]],
+            )?;
+            let fallback_region = self.single_block_region(location, fallback_block);
+            let never = self.never_type();
+            let choose = scf::r#if(
+                self.ctx,
+                location,
+                same_prompt.result(self.ctx),
+                never,
+                local_region,
+                fallback_region,
+            );
+            self.ctx.push_op(case_block, choose.op_ref());
+            let case_region = self.single_block_region(location, case_block);
+            let op_index = ability::compute_op_idx(
+                self.ctx.types.get(arm.ability_ref).attrs.get_symbol("name"),
+                Some(arm.op_name),
+            );
+            let case = scf::case(
+                self.ctx,
+                location,
+                Attribute::Int(op_index as i128),
+                case_region,
+            );
+            self.ctx.push_op(switch_block, case.op_ref());
+        }
+        let default_block = self.make_block(location, &[]);
+        self.emit_cps_tail_call_indirect(
+            default_block,
+            location,
+            foreign_dispatch,
+            [args[0], args[1], args[2], args[3], args[4], args[5]],
+        )?;
+        let foreign_region = self.single_block_region(location, default_block);
+        let default = scf::default(self.ctx, location, foreign_region);
+        self.ctx.push_op(switch_block, default.op_ref());
+        let switch_region = self.single_block_region(location, switch_block);
+        let switch = scf::switch(self.ctx, location, args[4], switch_region);
+        self.ctx.push_op(block, switch.op_ref());
+        let region = self.single_block_region(location, block);
+        let dispatch_type = self.frame_types(body_type).dispatch;
+        let lambda = closure::lambda(
+            self.ctx,
+            location,
+            ordered_external_values(self.ctx, region),
+            dispatch_type,
+            region,
+        );
+        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        Ok((lambda.op_ref(), lambda.result(self.ctx)))
+    }
+
     fn build_one_shot_wrapper(
         &mut self,
         raw_continuation: ValueRef,
         input_type: TypeRef,
         answer_type: TypeRef,
         location: Location,
-    ) -> (Vec<OpRef>, ValueRef) {
+    ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         let i1_type = self
             .ctx
             .types
@@ -1930,9 +2629,32 @@ impl<'a> Converter<'a> {
             state_type,
         );
 
-        let done_k_type = self.done_k_type(answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(answer_type).reference;
+        let anyref = self.anyref_type();
+        // The dispatcher ABI is existential only at this boundary. Keep the
+        // captured continuation exact, recover this operation's declared input,
+        // then transfer in proper tail position.
+        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
         let args = self.ctx.block_args(block).to_vec();
+        let input = if type_is(self.ctx, input_type, "core", "nil") {
+            // Nil has no physical payload: its exact resumption receives the
+            // canonical unit instead of an erased runtime value.
+            let unit = arith::r#const(self.ctx, location, input_type, Attribute::Unit);
+            self.ctx.push_op(block, unit.op_ref());
+            unit.result(self.ctx)
+        } else if type_is(self.ctx, input_type, "adt", "typeref") {
+            // Dynamic effect values recover nominal references only through
+            // their declared type, preserving the typed ownership boundary.
+            let recovered = adt::ref_cast(self.ctx, location, args[2], input_type, input_type);
+            self.ctx.push_op(block, recovered.op_ref());
+            recovered.result(self.ctx)
+        } else {
+            let recovered =
+                core::unrealized_conversion_cast(self.ctx, location, args[2], input_type);
+            self.ctx.push_op(block, recovered.op_ref());
+            recovered.result(self.ctx)
+        };
         let consumed = adt::struct_get(
             self.ctx,
             location,
@@ -1960,10 +2682,12 @@ impl<'a> Converter<'a> {
             0,
         );
         self.ctx.push_op(enter_block, mark.op_ref());
-        let tail =
-            func::tail_call_indirect(self.ctx, location, raw_continuation, args.iter().copied());
-        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-        self.ctx.push_op(enter_block, tail.op_ref());
+        self.emit_cps_tail_call_indirect(
+            enter_block,
+            location,
+            raw_continuation,
+            [args[0], args[1], input],
+        )?;
         let enter_region = self.single_block_region(location, enter_block);
 
         let never = self.never_type();
@@ -1978,13 +2702,18 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, guard.op_ref());
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
-        let closure_type = self.resumption_type(input_type, answer_type);
+        let closure_type = tribute_core::calling_convention::cps_resume_type(
+            self.ctx,
+            evidence_type,
+            frame_type,
+            anyref,
+        );
         let wrapper = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, wrapper.op_ref(), CallingConvention::Cps);
-        (
+        Ok((
             vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
             wrapper.result(self.ctx),
-        )
+        ))
     }
 
     fn build_reject_continuation(
@@ -1994,8 +2723,9 @@ impl<'a> Converter<'a> {
         location: Location,
     ) -> (OpRef, ValueRef) {
         let input_type = self.convert_type(input_type);
-        let done_k_type = self.done_k_type(answer_type);
-        let block = self.make_block(location, &[done_k_type, input_type]);
+        let evidence_type = self.evidence_type();
+        let frame_type = self.frame_types(answer_type).reference;
+        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
         let unreachable = func::unreachable(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
@@ -2049,7 +2779,7 @@ impl<'a> Converter<'a> {
             self.ctx.push_op(block, raw_op);
             let converted_input = self.convert_type(input_type);
             let (ops, one_shot) =
-                self.build_one_shot_wrapper(raw, converted_input, flow.answer_type, location);
+                self.build_one_shot_wrapper(raw, converted_input, flow.answer_type, location)?;
             for op in ops {
                 self.ctx.push_op(block, op);
             }
@@ -2061,7 +2791,6 @@ impl<'a> Converter<'a> {
             .iter()
             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
             .collect();
-        let never = self.never_type();
         let ability_ref = self
             .ctx
             .op(source)
@@ -2074,12 +2803,29 @@ impl<'a> Converter<'a> {
             .attributes
             .get_symbol("op_name")
             .expect("pre-CPS validation checked perform operation");
+        let evidence = self.current_evidence(source, flow)?;
+        let frame = flow.exit_k.ok_or_else(|| {
+            TributeControlToCpsError::one(
+                POST_CPS_BOUNDARY,
+                Some(source),
+                Some(location),
+                "general operation has no verified Dispatch boundary",
+            )
+        })?;
+        let dispatch = match flow.dispatch {
+            Some(dispatch) => dispatch,
+            None => {
+                self.unpack_frame(block, location, flow.answer_type, frame)
+                    .1
+            }
+        };
         let perform = ability::perform(
             self.ctx,
             location,
+            evidence,
+            dispatch,
             continuation,
             args,
-            never,
             ability_ref,
             op_name,
         );
@@ -2125,9 +2871,14 @@ impl<'a> Converter<'a> {
             _ => unreachable!("suffix is produced by closure.lambda"),
         };
         self.ctx.push_op(block, suffix_op);
-        let tail = func::tail_call_indirect(self.ctx, location, token, [suffix, value]);
-        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-        self.ctx.push_op(block, tail.op_ref());
+        let resume_result = self.convert_type(result_type);
+        let resume_frame = self.frame_for_suffix(block, location, resume_result, flow, suffix)?;
+        self.emit_cps_tail_call_indirect(
+            block,
+            location,
+            token,
+            [self.current_evidence(source, flow)?, resume_frame, value],
+        )?;
         Ok(())
     }
 
@@ -2195,6 +2946,8 @@ impl<'a> Converter<'a> {
             evidence: Some(evidence),
             exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
             root_exit_k: (convention == CallingConvention::Cps).then_some(handle_exit),
+            void_exit_k: None,
+            dispatch: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
         };
@@ -2240,11 +2993,12 @@ impl<'a> Converter<'a> {
         } else {
             arm.params.as_slice()
         };
+        let anyref = self.anyref_type();
         let payload_type = ability::operation_payload_type_ref(
             self.ctx,
             arm.ability_ref,
             arm.op_name,
-            value_params.iter().copied(),
+            value_params.iter().map(|_| anyref),
         );
         let cast = core::unrealized_conversion_cast(self.ctx, location, payload, payload_type);
         self.ctx.push_op(block, cast.op_ref());
@@ -2257,12 +3011,15 @@ impl<'a> Converter<'a> {
                     self.ctx,
                     location,
                     cast.result(self.ctx),
-                    ty,
+                    anyref,
                     payload_type,
                     index as u32,
                 );
                 self.ctx.push_op(block, get.op_ref());
-                get.result(self.ctx)
+                let recovered =
+                    core::unrealized_conversion_cast(self.ctx, location, get.result(self.ctx), ty);
+                self.ctx.push_op(block, recovered.op_ref());
+                recovered.result(self.ctx)
             })
             .collect()
     }
@@ -2272,7 +3029,7 @@ impl<'a> Converter<'a> {
         location: Location,
         arms: &[HandlerArmInfo],
         general: bool,
-    ) -> (OpRef, ValueRef) {
+    ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let i32_type = self
@@ -2315,9 +3072,7 @@ impl<'a> Converter<'a> {
                 call_args.push(token.result(self.ctx));
             }
             if general {
-                let tail = func::tail_call_indirect(self.ctx, location, arm.value, call_args);
-                set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-                self.ctx.push_op(case_block, tail.op_ref());
+                self.emit_cps_tail_call_indirect(case_block, location, arm.value, call_args)?;
             } else {
                 let call = func::call_indirect(
                     self.ctx,
@@ -2372,7 +3127,7 @@ impl<'a> Converter<'a> {
         let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
-        (lambda.op_ref(), lambda.result(self.ctx))
+        Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
     fn lower_handle(
@@ -2410,6 +3165,8 @@ impl<'a> Converter<'a> {
             _ => unreachable!("handle continuation is produced by closure.lambda"),
         };
         self.ctx.push_op(block, after_handle_op);
+        let handle_frame =
+            self.frame_for_suffix(block, location, handle_answer, flow, after_handle)?;
 
         let regions = self.ctx.op(source).regions.to_vec();
         let [body_source, completion_source, handlers_region] = regions.as_slice() else {
@@ -2421,7 +3178,7 @@ impl<'a> Converter<'a> {
         let mut handler_arms = Vec::new();
         let source_handlers = self.ctx.block(handlers_block).ops.to_vec();
         for handler in source_handlers {
-            let arm = self.lower_handler_arm(handler, mapping, after_handle, handle_answer)?;
+            let arm = self.lower_handler_arm(handler, mapping, handle_frame, handle_answer)?;
             self.ctx.push_op(block, arm.op);
             handler_arms.push(arm);
         }
@@ -2439,37 +3196,83 @@ impl<'a> Converter<'a> {
                 .filter(|arm| arm.ability_ref == ability_ref)
                 .cloned()
                 .collect::<Vec<_>>();
-            let (tr_op, tr_value) = self.build_handler_dispatcher(location, &ability_arms, false);
+            let (tr_op, tr_value) =
+                self.build_handler_dispatcher(location, &ability_arms, false)?;
             self.ctx.push_op(block, tr_op);
             dispatchers.push(tr_value);
             let (handler_op, handler_value) =
-                self.build_handler_dispatcher(location, &ability_arms, true);
+                self.build_handler_dispatcher(location, &ability_arms, true)?;
             self.ctx.push_op(block, handler_op);
             dispatchers.push(handler_value);
         }
 
         let evidence_type = self.evidence_type();
+        let i32_type = self.i32_type();
+        let prompt = effect::fresh_prompt_tag(self.ctx, location, i32_type);
+        self.ctx.push_op(block, prompt.op_ref());
         let body_block = self.make_block(location, &[evidence_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];
         let mut body_mapping = mapping.clone();
         let body_flow_base = Flow {
             convention: CallingConvention::Cps,
             evidence: Some(extended_evidence),
-            exit_k: Some(after_handle),
-            root_exit_k: Some(after_handle),
+            exit_k: Some(handle_frame),
+            root_exit_k: Some(handle_frame),
+            void_exit_k: None,
+            dispatch: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
         };
         let (completion_op, completion_k) = self.build_completion_continuation(
             completion_source,
-            after_handle,
             &body_mapping,
             &body_flow_base,
             location,
         )?;
         self.ctx.push_op(body_block, completion_op);
+        let completion_input = self.convert_type(
+            self.ctx.value_ty(
+                self.ctx
+                    .block_args(self.ctx.region(completion_source).blocks[0])[0],
+            ),
+        );
+        let completion_frame = self.frame_for_suffix(
+            body_block,
+            location,
+            completion_input,
+            &body_flow_base,
+            completion_k,
+        )?;
+        let (_, parent_dispatch) =
+            self.unpack_frame(body_block, location, handle_answer, handle_frame);
+        let local_dispatch_factory = self.build_local_dispatcher_factory(
+            location,
+            &handler_arms,
+            completion_input,
+            handle_answer,
+        )?;
+        let mut local_dispatch_args = vec![completion_k, parent_dispatch, prompt.result(self.ctx)];
+        local_dispatch_args.extend(handler_arms.iter().map(|arm| arm.value));
+        let local_dispatch_type = self.frame_types(completion_input).dispatch;
+        let local_dispatch_op = func::call(
+            self.ctx,
+            location,
+            local_dispatch_args,
+            local_dispatch_type,
+            local_dispatch_factory,
+        );
+        set_calling_convention(
+            self.ctx,
+            local_dispatch_op.op_ref(),
+            CallingConvention::Direct,
+        );
+        let local_dispatch = local_dispatch_op.result(self.ctx);
+        self.ctx.push_op(body_block, local_dispatch_op.op_ref());
         let body_flow = Flow {
-            exit_k: Some(completion_k),
+            exit_k: Some(completion_frame),
+            root_exit_k: Some(completion_frame),
+            dispatch: Some(local_dispatch),
+            answer_type: completion_input,
             ..body_flow_base
         };
         let source_body_block = self.ctx.region(body_source).blocks[0];
@@ -2486,6 +3289,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             current_evidence,
+            prompt.result(self.ctx),
             dispatchers,
             Attribute::List(ability_refs.into_iter().map(Attribute::Type).collect()),
             body_region,
@@ -2607,7 +3411,15 @@ impl<'a> Converter<'a> {
                             _ => unreachable!("continuation is produced by closure.lambda"),
                         };
                         self.ctx.push_op(block, continuation_op);
-                        let mut args = vec![self.current_evidence(source, flow)?, continuation];
+                        let converted_result = self.convert_type(result_type);
+                        let frame = self.frame_for_suffix(
+                            block,
+                            location,
+                            converted_result,
+                            flow,
+                            continuation,
+                        )?;
+                        let mut args = vec![self.current_evidence(source, flow)?, frame];
                         args.extend(
                             self.ctx
                                 .op_operands(source)
@@ -2660,15 +3472,21 @@ impl<'a> Converter<'a> {
                             _ => unreachable!("continuation is produced by closure.lambda"),
                         };
                         self.ctx.push_op(block, continuation_op);
-                        let mut args = vec![self.current_evidence(source, flow)?, continuation];
+                        let converted_result = self.convert_type(result_type);
+                        let frame = self.frame_for_suffix(
+                            block,
+                            location,
+                            converted_result,
+                            flow,
+                            continuation,
+                        )?;
+                        let mut args = vec![self.current_evidence(source, flow)?, frame];
                         args.extend(
                             source_args
                                 .iter()
                                 .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                         );
-                        let tail = func::tail_call_indirect(self.ctx, location, callee, args);
-                        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-                        self.ctx.push_op(block, tail.op_ref());
+                        self.emit_cps_tail_call_indirect(block, location, callee, args)?;
                         return Ok(());
                     }
                     let mut args = Vec::new();
@@ -2805,8 +3623,8 @@ impl<'a> Converter<'a> {
             .collect();
         let abi = CallableAbi::new(info.convention, source_params, source_result);
         let evidence_ty = self.evidence_type();
-        let done_k_ty = self.done_k_type(source_result);
-        let params = abi.lowered_params(evidence_ty, done_k_ty);
+        let frame_ty = self.frame_types(source_result).reference;
+        let params = abi.lowered_params(evidence_ty, frame_ty);
         let block = self.make_block(location, &params);
         let mut mapping = HashMap::new();
         for (old, new) in self.ctx.block_args(source_block).to_vec().into_iter().zip(
@@ -2829,6 +3647,8 @@ impl<'a> Converter<'a> {
             evidence,
             exit_k,
             root_exit_k: exit_k,
+            void_exit_k: None,
+            dispatch: None,
             answer_type: source_result,
             preserve_scf_yield: false,
         };
@@ -3039,6 +3859,7 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (*name, converter.convert_type(*ty))),
         );
+        converted_aliases.extend(converter.frame_layout_aliases.iter().copied());
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,
@@ -3126,6 +3947,75 @@ mod tests {
         (ctx, module)
     }
 
+    fn operation_declarations(
+        ctx: &IrContext,
+        operations: &[(&str, &str)],
+    ) -> Vec<tribute_control::OperationDeclaration> {
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .expect("test module declares core.i32");
+        operations
+            .iter()
+            .map(|&(ability_name, op_name)| {
+                let ability_ref = ctx
+                    .types
+                    .iter()
+                    .find_map(|(ty, data)| {
+                        (data.dialect == Symbol::new("core")
+                            && data.name == Symbol::new("ability_ref")
+                            && data.attrs.get_symbol("name")
+                                == Some(Symbol::from_dynamic(ability_name)))
+                        .then_some(ty)
+                    })
+                    .unwrap_or_else(|| panic!("test module declares {ability_name}"));
+                tribute_control::OperationDeclaration::new(
+                    ability_ref,
+                    Symbol::from_dynamic(op_name),
+                    Symbol::new("op"),
+                    [i32_type],
+                    i32_type,
+                )
+            })
+            .collect()
+    }
+
+    fn assert_nested_resume_frames(printed: &str) {
+        assert_eq!(
+            printed.matches("ability.handle_dispatch").count(),
+            2,
+            "{printed}"
+        );
+        assert_eq!(printed.matches("ability.perform").count(), 2, "{printed}");
+        assert!(
+            printed
+                .matches("tribute.cps_continuation_frame_result")
+                .count()
+                >= 2,
+            "{printed}"
+        );
+        assert!(
+            printed.matches("adt.struct_get").count() >= 6,
+            "dynamic frames must be unpacked to recover done and dispatch: {printed}"
+        );
+        assert!(
+            printed.matches("adt.struct_new").count() >= 4,
+            "suffixes and resumes must repack the lexical dispatcher with a new done target: {printed}"
+        );
+        assert!(
+            printed
+                .lines()
+                .filter(|line| line.contains("ability.perform"))
+                .all(|line| !line.contains(": core.i32")),
+            "final ability.perform must be resultless: {printed}"
+        );
+        assert!(!printed.contains("tribute_control."), "{printed}");
+    }
+
     fn collect_lambdas(ctx: &IrContext, op: OpRef, lambdas: &mut Vec<OpRef>) {
         if closure::Lambda::matches(ctx, op) {
             lambdas.push(op);
@@ -3135,6 +4025,21 @@ mod tests {
             for &block in &ctx.region(region).blocks {
                 for &child in &ctx.block(block).ops {
                     collect_lambdas(ctx, child, lambdas);
+                }
+            }
+        }
+    }
+
+    fn collect_cps_tail_calls(ctx: &IrContext, op: OpRef, tails: &mut Vec<OpRef>) {
+        if func::TailCallIndirect::matches(ctx, op)
+            && tribute_core::get_calling_convention(ctx, op) == Some(CallingConvention::Cps)
+        {
+            tails.push(op);
+        }
+        for &region in &ctx.op(op).regions {
+            for &block in &ctx.region(region).blocks {
+                for &child in &ctx.block(block).ops {
+                    collect_cps_tail_calls(ctx, child, tails);
                 }
             }
         }
@@ -3740,8 +4645,8 @@ mod tests {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
   !tr = closure.closure(core.func(tribute_rt.anyref, !evidence, core.i32, tribute_rt.anyref))
   !general = closure.closure(core.func(core.never, !evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref))
-  func.func @caller(%ev: !evidence, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3758,14 +4663,14 @@ mod tests {
 
         let wrong_abi_input = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
-  func.func @caller(%ev: !evidence) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
     }
     %general = closure.lambda(%inner: !evidence) -> core.never {tribute.calling_convention = 2} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3782,14 +4687,14 @@ mod tests {
 
         let wrong_metadata_input = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
-  func.func @caller(%ev: !evidence) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
     }
     %general = closure.lambda(%inner: !evidence, %continuation: tribute_rt.anyref, %op_idx: core.i32, %payload: tribute_rt.anyref) -> core.never {tribute.calling_convention = 1} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -3871,6 +4776,47 @@ mod tests {
             i32_type,
         )];
         tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        let mut perform_resume = None;
+        fn find_perform_resume(ctx: &IrContext, op: OpRef, found: &mut Option<ValueRef>) {
+            if let Ok(perform) = ability::Perform::from_op(ctx, op) {
+                *found = Some(perform.resume(ctx));
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        find_perform_resume(ctx, child, found);
+                    }
+                }
+            }
+        }
+        find_perform_resume(&ctx, module.op(), &mut perform_resume);
+        let perform_resume = perform_resume.expect("resumptive handler emits ability.perform");
+        let erased_function = cps_closure_function_type(&ctx, ctx.value_ty(perform_resume))
+            .expect("ability.perform resume has CPS callable provenance");
+        let erased = core::Func::from_type_ref(&ctx, erased_function)
+            .expect("ability.perform resume has a function signature");
+        assert_eq!(erased.params(&ctx).len(), 3);
+        assert!(
+            type_is(&ctx, erased.params(&ctx)[2], "tribute_rt", "anyref"),
+            "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
+            print_module(&ctx, module.op())
+        );
+        let trunk_ir::ValueDef::OpResult(wrapper_op, _) = ctx.value_def(perform_resume) else {
+            panic!("ability.perform resume must be the one-shot adapter closure");
+        };
+        assert!(closure::Lambda::matches(&ctx, wrapper_op));
+        assert!(
+            ctx.op_operands(wrapper_op).iter().copied().any(|capture| {
+                cps_closure_function_type(&ctx, ctx.value_ty(capture))
+                    .and_then(|function| core::Func::from_type_ref(&ctx, function))
+                    .is_some_and(|function| {
+                        function.params(&ctx).len() == 3
+                            && type_is(&ctx, function.params(&ctx)[2], "core", "i32")
+                    })
+            }),
+            "the erased adapter must capture the declared ResumeExact<I, R>: {}",
+            print_module(&ctx, module.op())
+        );
         let mut consumed_get = None;
         let mut consumed_set = None;
         fn find_one_shot_state_ops(
@@ -3912,7 +4858,7 @@ mod tests {
         assert!(consumed_get.is_some(), "one-shot state was not emitted");
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 1);
-        assert!(!printed.contains("effect."));
+        assert!(printed.contains("effect.fresh_prompt_tag"));
         assert!(printed.contains("ability_refs = [core.ability_ref"));
         assert!(printed.contains("func.tail_call_indirect"));
         assert!(printed.contains("adt.struct_set"));
@@ -3999,7 +4945,7 @@ mod tests {
         let [delimiter] = delimiters.as_slice() else {
             panic!("expected one final delimiter");
         };
-        assert_eq!(ctx.op_operands(*delimiter).len(), 3);
+        assert_eq!(ctx.op_operands(*delimiter).len(), 4);
         let Some(Attribute::List(ability_refs)) = ctx.op(*delimiter).attributes.get("ability_refs")
         else {
             panic!("final delimiter must have ability_refs");
@@ -4008,7 +4954,29 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("value = 9"));
         assert!(printed.contains("func.tail_call_indirect"));
-        assert!(!printed.contains("effect."));
+        assert!(
+            printed.contains("@__tribute_make_dispatch_adapter_"),
+            "the dispatch-adapter factory must be present: {printed}"
+        );
+        let mut tails = Vec::new();
+        collect_cps_tail_calls(&ctx, module.op(), &mut tails);
+        assert!(
+            tails.len() >= 3,
+            "the dispatch adapter and separate handler paths must tail-transfer: {printed}"
+        );
+        for tail in tails {
+            let signature = tribute_core::get_indirect_call_signature(&ctx, tail)
+                .expect("every emitted CPS indirect tail has its exact closure contract");
+            let callable = core::Func::from_type_ref(&ctx, signature)
+                .expect("the indirect tail signature is a core.func");
+            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
+            assert_eq!(
+                callable.params(&ctx).len() + 1,
+                ctx.op_operands(tail).len(),
+                "the exact signature covers every tail operand: {printed}"
+            );
+        }
+        assert!(printed.contains("effect.fresh_prompt_tag"));
     }
 
     #[test]
@@ -4140,6 +5108,33 @@ mod tests {
         assert!(printed.contains("func.call") && printed.contains("func.tail_call_indirect"));
         assert!(!printed.contains("tribute_control."));
 
+        let mut tails = Vec::new();
+        collect_cps_tail_calls(&ctx, module.op(), &mut tails);
+        assert!(
+            tails.len() >= 3,
+            "the dispatch adapter and independent CPS exits must both tail-transfer: {printed}"
+        );
+        for tail in tails {
+            let signature = tribute_core::get_indirect_call_signature(&ctx, tail)
+                .expect("every emitted CPS indirect tail has its exact closure contract");
+            let callable = core::Func::from_type_ref(&ctx, signature)
+                .expect("the indirect tail signature is a core.func");
+            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
+            assert_eq!(
+                callable.params(&ctx).len() + 1,
+                ctx.op_operands(tail).len(),
+                "the exact signature covers every tail operand: {printed}"
+            );
+            assert!(
+                callable
+                    .params(&ctx)
+                    .iter()
+                    .zip(&ctx.op_operands(tail)[1..])
+                    .all(|(expected, actual)| *expected == ctx.value_ty(*actual)),
+                "the exact signature must not be inferred from erased operands: {printed}"
+            );
+        }
+
         let mut lambdas = Vec::new();
         collect_lambdas(&ctx, module.op(), &mut lambdas);
         let mut generated_param_counts = Vec::new();
@@ -4157,7 +5152,7 @@ mod tests {
                 .unwrap();
             generated_param_counts.push(callable.params(&ctx).len());
         }
-        assert!(generated_param_counts.contains(&0), "{printed}");
+        assert!(generated_param_counts.contains(&2), "{printed}");
 
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
         let lifted = print_module(&ctx, module.op());
@@ -4172,6 +5167,44 @@ mod tests {
         assert!(
             lowered.contains("func.indirect_call_signature"),
             "{lowered}"
+        );
+    }
+
+    #[test]
+    fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion() {
+        let (mut ctx, module) = parse(
+            r#"core.module @test {
+  func.func @caller() -> core.never {
+    func.unreachable
+  }
+}"#,
+        );
+        let module_block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let location = ctx.op(module.op()).location;
+        let never = core::never(&mut ctx).as_type_ref();
+        let raw_type = core::func(&mut ctx, never, []).as_type_ref();
+        let raw = func::constant(&mut ctx, location, raw_type, Symbol::new("raw"));
+        let before = ctx.block(module_block).ops.to_vec();
+        let mut converter = Converter::new(&mut ctx, module_block, HashMap::new(), module.op());
+
+        let error = converter
+            .emit_cps_tail_call_indirect(
+                module_block,
+                location,
+                raw.result(converter.ctx),
+                std::iter::empty(),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("no exact provenance-bearing closure contract"),
+            "{error}"
+        );
+        assert_eq!(
+            converter.ctx.block(module_block).ops.as_slice(),
+            before.as_slice()
         );
     }
 
@@ -4358,11 +5391,88 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
-        assert!(!printed.contains("effect."));
+        assert!(printed.contains("effect.fresh_prompt_tag"));
         assert!(printed.matches("func.tail_call_indirect").count() >= 3);
         assert!(!printed.contains("__tribute_cps_control"));
     }
 
+    #[test]
+    fn nested_same_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
+        let input = r#"core.module @test {
+  tribute_control.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
+    %outer = tribute_control.handle : core.i32 {
+      %inner = tribute_control.handle : core.i32 {
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+        tribute_control.yield %performed
+      } {
+        ^inner_completion(%value: core.i32):
+          tribute_control.yield %value
+      } {
+        tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+            %resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.yield %resumed
+        }
+      }
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      tribute_control.yield %performed
+    } {
+      ^outer_completion(%value: core.i32):
+        tribute_control.yield %value
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.yield %resumed
+      }
+    }
+    tribute_control.return %outer
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let declarations = operation_declarations(&ctx, &[("State", "get")]);
+        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        assert_nested_resume_frames(&print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn nested_cross_ability_resumes_rebuild_the_dynamic_frame_dispatcher() {
+        let input = r#"core.module @test {
+  tribute_control.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
+    %outer = tribute_control.handle : core.i32 {
+      %inner = tribute_control.handle : core.i32 {
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @Console}, op_name = @read, operation_kind = @op} : core.i32
+        tribute_control.yield %performed
+      } {
+        ^inner_completion(%value: core.i32):
+          tribute_control.yield %value
+      } {
+        tribute_control.handler {ability_ref = core.ability_ref() {name = @Console}, kind = @op, op_name = @read, operation_result_type = core.i32} {
+          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+            %resumed = tribute_control.resume %token, %argument : core.i32
+            tribute_control.yield %resumed
+        }
+      }
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      tribute_control.yield %performed
+    } {
+      ^outer_completion(%value: core.i32):
+        tribute_control.yield %value
+    } {
+      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+          %resumed = tribute_control.resume %token, %argument : core.i32
+          tribute_control.yield %resumed
+      }
+    }
+    tribute_control.return %outer
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let declarations = operation_declarations(&ctx, &[("State", "get"), ("Console", "read")]);
+        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        assert_nested_resume_frames(&print_module(&ctx, module.op()));
+    }
     #[test]
     fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         let input = r#"core.module @test {
