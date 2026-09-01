@@ -1201,15 +1201,13 @@ fn lower_expr<'db>(
         }
         ExprKind::Resume { arg, local_id } => {
             let token = builder.ctx.lookup_resume(local_id?)?;
+            let (input_ty, answer_ty) =
+                tribute_control::resume_token_parts(builder.ir, builder.ir.value_ty(token))
+                    .expect("typechecked resume local must lower to a resume token");
             let value = lower_expr(builder, arg, declarations)?;
-            let result_ty = builder
-                .ctx
-                .get_node_type(expr.id)
-                .copied()
-                .map(|ty| builder.ctx.convert_logical_type(builder.ir, ty))
-                .unwrap_or_else(|| panic!("missing typechecked result for resume"));
+            let value = builder.cast_if_needed(location, value, input_ty);
             let resume = op(builder.ir, builder.block, location, "resume", |builder| {
-                builder.operand(token).operand(value).result(result_ty)
+                builder.operand(token).operand(value).result(answer_ty)
             });
             Some(result(builder.ir, resume))
         }
