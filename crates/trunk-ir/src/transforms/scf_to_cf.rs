@@ -35,7 +35,7 @@ use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
-use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
@@ -129,12 +129,80 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
+/// Whether this is a terminal `scf.if : core.never` whose branches each
+/// already transfer control. Such an if has no continuation to merge into.
+fn is_terminal_never_if(
+    ctx: &IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    then_region: RegionRef,
+    else_region: RegionRef,
+) -> bool {
+    let [result] = ctx.op_results(scf_op) else {
+        return false;
+    };
+    let result_ty = ctx.types.get(ctx.value_ty(*result));
+    if result_ty.dialect != Symbol::new("core")
+        || result_ty.name != Symbol::new("never")
+        || ctx.has_uses(*result)
+        || ctx.block(block).ops.last() != Some(&scf_op)
+    {
+        return false;
+    }
+
+    [then_region, else_region].into_iter().all(|region| {
+        let [branch] = ctx.region(region).blocks.as_slice() else {
+            return false;
+        };
+        let Some(&terminator) = ctx.block(*branch).ops.last() else {
+            return false;
+        };
+        !is_scf_control_flow(ctx, terminator)
+            && crate::validation::is_proper_tail_terminator(ctx, terminator)
+    })
+}
+
+/// Lower a terminal `scf.if : core.never` without creating a merge block.
+fn lower_terminal_never_if(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    loc: Location,
+    cond: ValueRef,
+    then_region: RegionRef,
+    else_region: RegionRef,
+) {
+    let parent_region = ctx.block(block).parent_region.unwrap();
+    let blocks = ctx.region(parent_region).blocks.to_vec();
+    let insert_before = blocks
+        .iter()
+        .position(|&candidate| candidate == block)
+        .and_then(|index| blocks.get(index + 1).copied());
+
+    ctx.detach_op(scf_op);
+    let then_blocks = inline_region_blocks(ctx, then_region, parent_region, insert_before);
+    let else_blocks = inline_region_blocks(ctx, else_region, parent_region, insert_before);
+    ctx.remove_op(scf_op);
+
+    let cond_br = cf::cond_br(ctx, loc, cond, then_blocks[0], else_blocks[0]);
+    ctx.push_op(block, cond_br.op_ref());
+
+    for &branch in then_blocks.iter().chain(&else_blocks) {
+        transform_block(ctx, branch);
+    }
+}
+
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
 fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
     let if_op = scf::If::from_op(ctx, scf_op).unwrap();
     let cond = if_op.cond(ctx);
     let then_region = if_op.then_region(ctx);
     let else_region = if_op.else_region(ctx);
+
+    if is_terminal_never_if(ctx, block, scf_op, then_region, else_region) {
+        lower_terminal_never_if(ctx, block, scf_op, loc, cond, then_region, else_region);
+        return;
+    }
 
     // Only results with users need a CFG merge value. This intentionally
     // applies to every result type: an unused result does not need a block
@@ -926,7 +994,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     %discarded = scf.if %cond : core.never {
-      func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      func.unreachable
     } {
       func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
     }
@@ -948,9 +1016,14 @@ mod tests {
                 .iter()
                 .filter(|name| name.as_str() == "func.tail_call_indirect")
                 .count(),
-            2
+            1
         );
+        assert!(names.iter().any(|name| name == "func.unreachable"));
         assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+        assert!(
+            crate::validation::validate_operation_verifiers(&ctx, module).is_ok(),
+            "terminal lowering must keep the CFG well-formed"
+        );
 
         let has_non_entry_never_arg = ctx
             .region(body)
@@ -965,6 +1038,11 @@ mod tests {
         assert!(
             !has_non_entry_never_arg,
             "unused scf.if result must not create a core.never CFG block argument"
+        );
+        assert_eq!(
+            count_blocks(&ctx, body),
+            3,
+            "a terminal core.never scf.if must not leave an empty merge block"
         );
     }
 
