@@ -433,9 +433,13 @@ entrypoint 전에 거부한다. Frontend는 root body도 direct-style control로
 shared conversion은 typed completion cell과 `core.never` root `done_k`의 추상
 계약을 만든다. Target signature lowering이 CPS entry를 empty result로 바꾼 뒤에만
 Direct/EvidenceDirect export wrapper의 ordinary call을 합성한다. Wrapper는
-completion cell을 소유하고 root `done_k`가 이를 쓴 뒤 target call이 돌아오면
-cell을 읽는다. Shared `func.call`에 zero-result 형상을 추가하지 않으며
-nested-module `main`은 특별하지 않다.
+completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
+`Dispatch<R>`를 exact nominal `ContinuationFrame<R>`에 materialize해 worker에
+전달한다. `done_k`가 cell을 쓴 뒤 target call이 돌아오면 wrapper가 cell을 읽는다.
+worker frame 계약은 명시적 frame result/layout provenance로 검사하며 closure 이름,
+arity, raw storage, `anyref`에서 추론하지 않는다.
+Shared `func.call`에 zero-result 형상을 추가하지 않으며 nested-module `main`은
+특별하지 않다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와
