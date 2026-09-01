@@ -1293,6 +1293,15 @@ mod tests {
     }
 
     #[test]
+    fn root_bridge_creates_no_lambda_for_target_phase() {
+        let (ctx, module) = compose_promoted_root(CallingConvention::Direct);
+        let printed = print_module(&ctx, module.op());
+
+        assert!(!printed.contains("closure.lambda"), "{printed}");
+        assert!(printed.contains("adt.struct_new"), "{printed}");
+    }
+
+    #[test]
     fn malformed_transfers_and_ambiguous_nested_never_leave_ir_unchanged() {
         for (input, expected) in [
             (
@@ -1328,6 +1337,31 @@ mod tests {
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before);
         }
+    }
+
+    #[test]
+    fn raw_closure_storage_never_satisfies_a_semantic_direct_transfer() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !semantic = closure.closure(core.func(core.i32)) {tribute.calling_convention = 0}
+  !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+  func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
+    func.unreachable
+  }
+  func.func @run(%raw: !_closure) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %result = func.call %raw {callee = @factory, tribute.calling_convention = 0} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(error.to_string().contains("operands differ"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

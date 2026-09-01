@@ -19,9 +19,12 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use tribute_core::calling_convention::get_physical_closure_environment_index;
+use tribute_core::calling_convention::{
+    CLOSURE_CALLABLE_TYPE_ATTR, get_physical_closure_environment_index,
+};
 use tribute_core::{
     CallableAbi, CallingConvention, get_calling_convention, get_closure_callable_type,
     get_physical_closure_convention, set_closure_callable_type, set_indirect_call_signature,
@@ -40,7 +43,7 @@ use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
-use trunk_ir::walk::{WalkAction, walk_region};
+use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
@@ -690,6 +693,165 @@ pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
     applicator.apply_partial(ctx, func_op);
 }
 
+/// Select the canonical `_closure` storage type after all semantic consumers
+/// have validated the exact convention-proven callable type.
+///
+/// The plan covers aliases, nested type parameters, type-bearing operation
+/// attributes, results, and block arguments before applying any update. The
+/// pack provenance is consumed by exact closure lowering, then removed: it is
+/// not a type-equivalence rule or final physical-IR contract.
+pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
+    let closure_struct = closure_struct_type_ref(ctx);
+    let ops = collect_ops(ctx, module.op());
+    let aliases = ctx.type_aliases().to_vec();
+    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct);
+    let mut alias_updates = Vec::new();
+    let mut attribute_removals = Vec::new();
+    let mut attribute_updates = Vec::new();
+    let mut result_updates = Vec::new();
+    let mut block_arg_updates = Vec::new();
+
+    for (name, ty) in aliases {
+        let converted = physicalizer.convert_type(ty);
+        if converted != ty {
+            alias_updates.push((name, converted));
+        }
+    }
+    for op in ops {
+        for (name, value) in physicalizer.ctx.op(op).attributes.clone() {
+            if name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
+                attribute_removals.push(op);
+                continue;
+            }
+            let converted = physicalizer.convert_attribute(value.clone());
+            if converted != value {
+                attribute_updates.push((op, name, converted));
+            }
+        }
+        for (index, ty) in physicalizer
+            .ctx
+            .op_result_types(op)
+            .to_vec()
+            .into_iter()
+            .enumerate()
+        {
+            let converted = physicalizer.convert_type(ty);
+            if converted != ty {
+                result_updates.push((op, index as u32, converted));
+            }
+        }
+        for region in physicalizer.ctx.op(op).regions.clone() {
+            for block in physicalizer.ctx.region(region).blocks.clone() {
+                let args = physicalizer
+                    .ctx
+                    .block(block)
+                    .args
+                    .iter()
+                    .map(|argument| argument.ty)
+                    .collect::<Vec<_>>();
+                for (index, ty) in args.into_iter().enumerate() {
+                    let converted = physicalizer.convert_type(ty);
+                    if converted != ty {
+                        block_arg_updates.push((block, index as u32, converted));
+                    }
+                }
+            }
+        }
+    }
+
+    drop(physicalizer);
+    for (name, ty) in alias_updates {
+        ctx.register_type_alias(name, ty);
+    }
+    for op in attribute_removals {
+        ctx.op_mut(op)
+            .attributes
+            .remove(Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR));
+    }
+    for (op, name, value) in attribute_updates {
+        ctx.op_mut(op).attributes.insert(name, value);
+    }
+    for (op, index, ty) in result_updates {
+        ctx.set_op_result_type(op, index, ty);
+    }
+    for (block, index, ty) in block_arg_updates {
+        ctx.set_block_arg_type(block, index, ty);
+    }
+}
+
+struct ClosureTypePhysicalizer<'a> {
+    ctx: &'a mut IrContext,
+    closure_struct: TypeRef,
+    cache: HashMap<TypeRef, TypeRef>,
+    visiting: HashSet<TypeRef>,
+}
+
+impl<'a> ClosureTypePhysicalizer<'a> {
+    fn new(ctx: &'a mut IrContext, closure_struct: TypeRef) -> Self {
+        Self {
+            ctx,
+            closure_struct,
+            cache: HashMap::new(),
+            visiting: HashSet::new(),
+        }
+    }
+
+    fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
+        if closure::Closure::matches(self.ctx, ty) {
+            return self.closure_struct;
+        }
+        if let Some(&converted) = self.cache.get(&ty) {
+            return converted;
+        }
+        if !self.visiting.insert(ty) {
+            return ty;
+        }
+
+        let data = self.ctx.types.get(ty).clone();
+        let mut converted = data.clone();
+        for parameter in &mut converted.params {
+            *parameter = self.convert_type(*parameter);
+        }
+        let attributes: Vec<_> = data
+            .attrs
+            .iter()
+            .map(|(name, value)| (*name, self.convert_attribute(value.clone())))
+            .collect();
+        converted.attrs.clear();
+        converted.attrs.extend(attributes);
+        let converted = if converted == data {
+            ty
+        } else {
+            self.ctx.types.intern(converted)
+        };
+        self.visiting.remove(&ty);
+        self.cache.insert(ty, converted);
+        converted
+    }
+
+    fn convert_attribute(&mut self, attribute: Attribute) -> Attribute {
+        match attribute {
+            Attribute::Type(ty) => Attribute::Type(self.convert_type(ty)),
+            Attribute::List(values) => Attribute::List(
+                values
+                    .into_iter()
+                    .map(|value| self.convert_attribute(value))
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
+}
+
+fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
+    let mut ops = Vec::new();
+    let _ = walk_op::<()>(ctx, root, &mut |op| {
+        ops.push(op);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    ops
+}
+
 /// PassManager-friendly wrapper for [`lower_closures`].
 pub struct LowerClosures;
 
@@ -937,6 +1099,69 @@ mod tests {
                 "{name} should pass the enclosing function's evidence argument immediately after table index"
             );
         }
+    }
+
+    #[test]
+    fn storage_finalization_rewrites_every_type_surface_but_not_pack_provenance() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !closure = closure.closure(core.func(core.i32, core.i32)) {tribute.calling_convention = 0}
+  !nested = core.tuple(!closure)
+  func.func @run(%callback: !closure) -> !nested {
+    %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %created = closure.new %environment {func_ref = @callback} : !closure
+    %packed = core.tuple_pack %created : !nested
+    func.return %packed
+  }
+}"#,
+        );
+
+        let run = func_by_name(&ctx, module, "run");
+        let logical = ctx
+            .type_aliases()
+            .iter()
+            .find_map(|(name, ty)| (*name == Symbol::new("closure")).then_some(*ty))
+            .expect("test module must define the logical closure alias");
+        let pack = ctx
+            .block(ctx.region(run.body(&ctx)).blocks[0])
+            .ops
+            .iter()
+            .copied()
+            .find(|op| closure::New::from_op(&ctx, *op).is_ok())
+            .expect("test module must create a closure");
+        ctx.op_mut(pack).attributes.insert(
+            Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR),
+            Attribute::Type(logical),
+        );
+
+        finalize_closure_storage_layout(&mut ctx, module);
+
+        let physical = closure_struct_type_ref(&mut ctx);
+        let signature = core::Func::from_type_ref(&ctx, run.r#type(&ctx)).unwrap();
+        assert_eq!(signature.params(&ctx), [physical]);
+        assert_eq!(
+            ctx.value_ty(ctx.block_args(ctx.region(run.body(&ctx)).blocks[0])[0]),
+            physical
+        );
+        assert_eq!(ctx.op_result_types(pack), [physical]);
+        assert!(
+            !ctx.op(pack)
+                .attributes
+                .contains_key(CLOSURE_CALLABLE_TYPE_ATTR),
+            "final physical IR must not retain logical closure provenance"
+        );
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            !printed.contains(CLOSURE_CALLABLE_TYPE_ATTR),
+            "final physical IR must not retain logical closure provenance:\n{printed}"
+        );
+        assert!(printed.contains("!closure = adt.struct"), "{printed}");
+        assert!(
+            printed.contains("!nested = core.tuple(!closure)"),
+            "{printed}"
+        );
     }
 
     #[test]
