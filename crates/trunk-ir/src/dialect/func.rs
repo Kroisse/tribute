@@ -1,8 +1,8 @@
 //! Arena-based func dialect.
 
-/// Exact callable signature retained after a typed indirect callee becomes a
-/// runtime function or table index.
-pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "func.indirect_call_signature";
+/// The optional exact callable signature retained after a typed indirect callee
+/// becomes a runtime function or table index.
+pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
@@ -19,11 +19,13 @@ mod func {
     #[attr(callee: Symbol)]
     fn call(#[rest] args: ()) -> result {}
 
+    #[attr(signature?: Type)]
     fn call_indirect(callee: (), #[rest] args: ()) -> result {}
 
     #[attr(callee: Symbol)]
     fn tail_call(#[rest] args: ()) {}
 
+    #[attr(signature?: Type)]
     fn tail_call_indirect(callee: (), #[rest] args: ()) {}
 
     fn r#return(#[rest] values: ()) {}
@@ -246,5 +248,35 @@ inventory::submit! {
         op_name: "func",
         print_fn: print_func,
         parse_fn: parse_func,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::DialectOp;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    #[test]
+    fn indirect_signature_is_declared_and_round_trips() {
+        let input = r#"core.module @test {
+  func.func @run(%callee: core.func(core.i32, core.i32), %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, core.i32)} : core.i32
+    func.return %result
+  }
+}"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let function = Func::from_op(&ctx, ctx.block(module.first_block(&ctx).unwrap()).ops[0])
+            .expect("function");
+        let body = function.body_if_present(&ctx).expect("function body");
+        let call = CallIndirect::from_op(&ctx, ctx.block(ctx.region(body).blocks[0]).ops[0])
+            .expect("indirect call");
+        assert!(call.signature(&ctx).is_some(), "declared signature");
+
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
+        assert!(!printed.contains("func.indirect_call_signature"));
     }
 }

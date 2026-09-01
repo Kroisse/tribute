@@ -85,7 +85,7 @@ core.module @mixed_nested {
       %15 = arith.const {value = 0} : tribute_rt.anyref
       %16 = func.call {callee = @__tribute_next_tag} : core.i32
       %17 = effect.extend %0, %16, %15, %14 {ability_ref = core.ability_ref() {name = @State}} : !t0
-      %18 = func.call_indirect %10, %17, %11, %9 {func.indirect_call_signature = !t7} : tribute_rt.anyref
+      %18 = func.call_indirect %10, %17, %11, %9 {signature = !t7} : tribute_rt.anyref
       %19 = adt.variant_is %18 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %20 = scf.if %19 : tribute_rt.anyref {
           %21 = adt.variant_cast %18 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -94,7 +94,7 @@ core.module @mixed_nested {
           %24 = core.unrealized_conversion_cast %23 : tribute_rt.anyref
           %25 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
           %26 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-          %27 = func.call_indirect %25, %17, %26, %24 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %27 = func.call_indirect %25, %17, %26, %24 {signature = !t1} : tribute_rt.anyref
           scf.yield %27
       } {
           %28 = adt.variant_cast %18 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -104,7 +104,7 @@ core.module @mixed_nested {
           %32 = scf.if %31 : tribute_rt.anyref {
               %33 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
               %34 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-              %35 = func.call_indirect %33, %0, %34, %30 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %35 = func.call_indirect %33, %0, %34, %30 {signature = !t1} : tribute_rt.anyref
               scf.yield %35
           } {
               scf.yield %18
@@ -138,7 +138,7 @@ core.module @mixed_nested {
       %19 = adt.struct_new %18, %17 {type = !_closure} : !_closure
       %20 = func.call {callee = @__tribute_next_tag} : core.i32
       %21 = effect.extend %1, %20, %19, %16 {ability_ref = core.ability_ref() {name = @Console}} : !t0
-      %22 = func.call_indirect %12, %21, %13, %10 {func.indirect_call_signature = !t7} : tribute_rt.anyref
+      %22 = func.call_indirect %12, %21, %13, %10 {signature = !t7} : tribute_rt.anyref
       %23 = adt.variant_is %22 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %24 = scf.if %23 : tribute_rt.anyref {
           %25 = adt.variant_cast %22 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -148,7 +148,7 @@ core.module @mixed_nested {
           %29 = adt.ref_null {type = !t0} : !t0
           %30 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
           %31 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-          %32 = func.call_indirect %30, %21, %31, %28 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %32 = func.call_indirect %30, %21, %31, %28 {signature = !t1} : tribute_rt.anyref
           scf.yield %32
       } {
           %33 = adt.variant_cast %22 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -159,7 +159,7 @@ core.module @mixed_nested {
               %38 = adt.ref_null {type = !t0} : !t0
               %39 = adt.struct_get %4 {field = 0, type = !_closure} : core.i32
               %40 = adt.struct_get %4 {field = 1, type = !_closure} : tribute_rt.anyref
-              %41 = func.call_indirect %39, %38, %40, %35 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %41 = func.call_indirect %39, %38, %40, %35 {signature = !t1} : tribute_rt.anyref
               scf.yield %41
           } {
               scf.yield %22
@@ -208,7 +208,7 @@ core.module @mixed_nested {
           %14 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
           %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
           %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-          %17 = func.call_indirect %15, %0, %16, %14 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %17 = func.call_indirect %15, %0, %16, %14 {signature = !t1} : tribute_rt.anyref
           %18 = adt.variant_is %17 {tag = @Normal, type = !__tribute_cps_control} : core.i1
           %19 = scf.if %18 : tribute_rt.anyref {
               %20 = adt.variant_cast %17 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -217,7 +217,7 @@ core.module @mixed_nested {
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
               %24 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
               %25 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-              %26 = func.call_indirect %24, %0, %25, %23 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %26 = func.call_indirect %24, %0, %25, %23 {signature = !t1} : tribute_rt.anyref
               %27 = adt.variant_cast %26 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
               %28 = adt.variant_get %27 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
               %29 = adt.variant_get %27 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -244,7 +244,7 @@ core.module @mixed_nested {
               %40 = core.unrealized_conversion_cast %38 : tribute_rt.anyref
               %41 = adt.struct_get %39 {field = 0, type = !_closure} : core.i32
               %42 = adt.struct_get %39 {field = 1, type = !_closure} : tribute_rt.anyref
-              %43 = func.call_indirect %41, %0, %42, %40 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %43 = func.call_indirect %41, %0, %42, %40 {signature = !t1} : tribute_rt.anyref
               %44 = adt.variant_is %43 {tag = @Normal, type = !__tribute_cps_control} : core.i1
               %45 = scf.if %44 : tribute_rt.anyref {
                   %46 = adt.variant_cast %43 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -253,7 +253,7 @@ core.module @mixed_nested {
                   %49 = core.unrealized_conversion_cast %48 : tribute_rt.anyref
                   %50 = adt.struct_get %37 {field = 0, type = !_closure} : core.i32
                   %51 = adt.struct_get %37 {field = 1, type = !_closure} : tribute_rt.anyref
-                  %52 = func.call_indirect %50, %0, %51, %49 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+                  %52 = func.call_indirect %50, %0, %51, %49 {signature = !t1} : tribute_rt.anyref
                   %53 = adt.variant_cast %52 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
                   %54 = adt.variant_get %53 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
                   %55 = adt.variant_get %53 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -284,7 +284,7 @@ core.module @mixed_nested {
       %6 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
       %7 = adt.struct_get %5 {field = 0, type = !_closure} : core.i32
       %8 = adt.struct_get %5 {field = 1, type = !_closure} : tribute_rt.anyref
-      %9 = func.call_indirect %7, %0, %8, %6 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+      %9 = func.call_indirect %7, %0, %8, %6 {signature = !t1} : tribute_rt.anyref
       func.return %9
   }
 
@@ -299,7 +299,7 @@ core.module @mixed_nested {
           %13 = core.unrealized_conversion_cast %12 : tribute_rt.anyref
           %14 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
           %15 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-          %16 = func.call_indirect %14, %0, %15, %13 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %16 = func.call_indirect %14, %0, %15, %13 {signature = !t1} : tribute_rt.anyref
           scf.yield %16
       } {
           %17 = arith.const {value = 1} : core.i1
@@ -311,7 +311,7 @@ core.module @mixed_nested {
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
               %24 = adt.struct_get %21 {field = 0, type = !_closure} : core.i32
               %25 = adt.struct_get %21 {field = 1, type = !_closure} : tribute_rt.anyref
-              %26 = func.call_indirect %24, %0, %25, %23 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %26 = func.call_indirect %24, %0, %25, %23 {signature = !t1} : tribute_rt.anyref
               scf.yield %26
           } {
               func.unreachable
@@ -332,7 +332,7 @@ core.module @mixed_nested {
           %11 = core.unrealized_conversion_cast %10 : tribute_rt.anyref
           %12 = adt.struct_get %9 {field = 0, type = !_closure} : core.i32
           %13 = adt.struct_get %9 {field = 1, type = !_closure} : tribute_rt.anyref
-          %14 = func.call_indirect %12, %0, %13, %11 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %14 = func.call_indirect %12, %0, %13, %11 {signature = !t1} : tribute_rt.anyref
           scf.yield %14
       } {
           %15 = arith.const {value = 1} : core.i1
@@ -344,7 +344,7 @@ core.module @mixed_nested {
               %21 = core.unrealized_conversion_cast %20 : tribute_rt.anyref
               %22 = adt.struct_get %19 {field = 0, type = !_closure} : core.i32
               %23 = adt.struct_get %19 {field = 1, type = !_closure} : tribute_rt.anyref
-              %24 = func.call_indirect %22, %0, %23, %21 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %24 = func.call_indirect %22, %0, %23, %21 {signature = !t1} : tribute_rt.anyref
               scf.yield %24
           } {
               func.unreachable
@@ -368,7 +368,7 @@ core.module @mixed_nested {
       %13 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
       %14 = adt.struct_get %12 {field = 0, type = !_closure} : core.i32
       %15 = adt.struct_get %12 {field = 1, type = !_closure} : tribute_rt.anyref
-      %16 = func.call_indirect %14, %0, %15, %13 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+      %16 = func.call_indirect %14, %0, %15, %13 {signature = !t1} : tribute_rt.anyref
       func.return %16
   }
 

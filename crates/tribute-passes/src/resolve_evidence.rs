@@ -914,6 +914,7 @@ fn transform_shifts_in_block(
                                     .chain(operands[2..].iter().copied())
                                     .collect::<Vec<_>>(),
                                 ctx.op_result_types(candidate)[0],
+                                None,
                             );
                             attach_exact_indirect_signature(ctx, new_call.op_ref());
                             let old_result = ctx.op_result(candidate, 0);
@@ -1000,7 +1001,8 @@ fn transform_shifts_in_block(
                     let mut new_args = vec![ev_value];
                     new_args.extend(current_operands[2..].iter().copied());
 
-                    let new_call = func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
+                    let new_call =
+                        func::call_indirect(ctx, loc, table_idx, new_args, result_ty, None);
                     attach_exact_indirect_signature(ctx, new_call.op_ref());
 
                     if !ctx.op_results(op).is_empty() {

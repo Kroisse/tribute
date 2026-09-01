@@ -71,7 +71,7 @@ core.module @resumptive_op_native {
       %19 = core.unrealized_conversion_cast %16 : core.ptr
       %20 = tribute_rt.into_raw %15 : core.ptr
       %21 = func.call %0, %18, %17, %19, %20 {callee = @__tribute_evidence_extend} : core.ptr
-      %22 = func.call_indirect %11, %21, %12, %9 {func.indirect_call_signature = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
+      %22 = func.call_indirect %11, %21, %12, %9 {signature = core.func(tribute_rt.anyref, !t0, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
       %23 = adt.variant_is %22 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %24 = scf.if %23 : tribute_rt.anyref {
           %25 = adt.variant_cast %22 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -80,7 +80,7 @@ core.module @resumptive_op_native {
           %28 = func.call {callee = @__tribute_evidence_empty} : core.ptr
           %29 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
           %30 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-          %31 = func.call_indirect %29, %21, %30, %26 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %31 = func.call_indirect %29, %21, %30, %26 {signature = !t1} : tribute_rt.anyref
           scf.yield %31
       } {
           %32 = adt.variant_cast %22 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -91,7 +91,7 @@ core.module @resumptive_op_native {
               %37 = func.call {callee = @__tribute_evidence_empty} : core.ptr
               %38 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
               %39 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-              %40 = func.call_indirect %38, %37, %39, %34 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %40 = func.call_indirect %38, %37, %39, %34 {signature = !t1} : tribute_rt.anyref
               scf.yield %40
           } {
               scf.yield %22
@@ -119,7 +119,7 @@ core.module @resumptive_op_native {
       %15 = arith.const {value = 1348736788} : core.i32
       %16 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
       %17 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-      %18 = func.call_indirect %16, %0, %17, %10, %14, %15, %11 {func.indirect_call_signature = !t4} : tribute_rt.anyref
+      %18 = func.call_indirect %16, %0, %17, %10, %14, %15, %11 {signature = !t4} : tribute_rt.anyref
       func.return %18
   }
 
@@ -135,7 +135,7 @@ core.module @resumptive_op_native {
       %11 = arith.const {value = 1972422014} : core.i32
       %12 = adt.struct_get %9 {field = 0, type = !_closure} : core.i32
       %13 = adt.struct_get %9 {field = 1, type = !_closure} : tribute_rt.anyref
-      %14 = func.call_indirect %12, %0, %13, %6, %10, %11, %7 {func.indirect_call_signature = !t4} : tribute_rt.anyref
+      %14 = func.call_indirect %12, %0, %13, %6, %10, %11, %7 {signature = !t4} : tribute_rt.anyref
       func.return %14
   }
 
@@ -151,7 +151,7 @@ core.module @resumptive_op_native {
           %14 = tribute_rt.box_int %12 : tribute_rt.anyref
           %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
           %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-          %17 = func.call_indirect %15, %0, %16, %14 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %17 = func.call_indirect %15, %0, %16, %14 {signature = !t1} : tribute_rt.anyref
           %18 = adt.variant_is %17 {tag = @Normal, type = !__tribute_cps_control} : core.i1
           %19 = scf.if %18 : tribute_rt.anyref {
               %20 = adt.variant_cast %17 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -159,7 +159,7 @@ core.module @resumptive_op_native {
               %22 = tribute_rt.unbox_int %21 : core.i32
               %23 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
               %24 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-              %25 = func.call_indirect %23, %0, %24, %21 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %25 = func.call_indirect %23, %0, %24, %21 {signature = !t1} : tribute_rt.anyref
               %26 = adt.variant_cast %25 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
               %27 = adt.variant_get %26 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
               %28 = adt.variant_get %26 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -184,7 +184,7 @@ core.module @resumptive_op_native {
           %37 = core.unrealized_conversion_cast %35 : tribute_rt.anyref
           %38 = adt.struct_get %36 {field = 0, type = !_closure} : core.i32
           %39 = adt.struct_get %36 {field = 1, type = !_closure} : tribute_rt.anyref
-          %40 = func.call_indirect %38, %0, %39, %37 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+          %40 = func.call_indirect %38, %0, %39, %37 {signature = !t1} : tribute_rt.anyref
           %41 = adt.variant_is %40 {tag = @Normal, type = !__tribute_cps_control} : core.i1
           %42 = scf.if %41 : tribute_rt.anyref {
               %43 = adt.variant_cast %40 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -192,7 +192,7 @@ core.module @resumptive_op_native {
               %45 = tribute_rt.unbox_int %44 : core.i32
               %46 = adt.struct_get %34 {field = 0, type = !_closure} : core.i32
               %47 = adt.struct_get %34 {field = 1, type = !_closure} : tribute_rt.anyref
-              %48 = func.call_indirect %46, %0, %47, %44 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+              %48 = func.call_indirect %46, %0, %47, %44 {signature = !t1} : tribute_rt.anyref
               %49 = adt.variant_cast %48 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
               %50 = adt.variant_get %49 {field = 0, tag = @Escape, type = !__tribute_cps_control} : core.i32
               %51 = adt.variant_get %49 {field = 1, tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -221,7 +221,7 @@ core.module @resumptive_op_native {
       %8 = tribute_rt.box_int %4 : tribute_rt.anyref
       %9 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
       %10 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
-      %11 = func.call_indirect %9, %0, %10, %8 {func.indirect_call_signature = !t1} : tribute_rt.anyref
+      %11 = func.call_indirect %9, %0, %10, %8 {signature = !t1} : tribute_rt.anyref
       func.return %11
   }
 

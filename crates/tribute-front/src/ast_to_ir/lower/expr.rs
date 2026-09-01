@@ -404,6 +404,7 @@ fn lower_value_impl<'db>(
                                     callee_closure,
                                     vec![resume_anyref],
                                     anyref_ty,
+                                    None,
                                 );
                                 set_calling_convention(
                                     builder.ir,
@@ -477,6 +478,7 @@ fn lower_value_impl<'db>(
                                 callee,
                                 hidden_args,
                                 call_result_ty,
+                                None,
                             );
                             set_calling_convention(builder.ir, op.op_ref(), convention);
                             builder.ir.push_op(builder.block, op.op_ref());
@@ -576,6 +578,7 @@ fn lower_value_impl<'db>(
                         callee,
                         hidden_args,
                         call_result_ty,
+                        None,
                     );
                     set_calling_convention(builder.ir, op.op_ref(), convention);
                     builder.ir.push_op(builder.block, op.op_ref());
@@ -1382,8 +1385,9 @@ fn lower_cps_call_expr<'db, D: ControlDomain>(
                 let mut cps_args = vec![evidence, continuation];
                 cps_args.append(&mut arg_values);
 
-                let call_op =
-                    func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+                let call_op = func::call_indirect(
+                    builder.ir, location, callee_cps, cps_args, anyref_ty, None,
+                );
                 set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
                 builder.ir.push_op(builder.block, call_op.op_ref());
                 Some(control_from_abi(call_op.result(builder.ir)))
@@ -1405,7 +1409,7 @@ fn lower_cps_call_expr<'db, D: ControlDomain>(
             let mut cps_args = vec![evidence, continuation];
             cps_args.append(&mut arg_values);
             let call_op =
-                func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+                func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty, None);
             set_calling_convention(builder.ir, call_op.op_ref(), CallingConvention::Cps);
             builder.ir.push_op(builder.block, call_op.op_ref());
             Some(control_from_abi(call_op.result(builder.ir)))

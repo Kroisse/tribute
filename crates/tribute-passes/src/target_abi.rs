@@ -1111,7 +1111,7 @@ mod tests {
   func.func @evidence() -> core.never attributes {tribute.calling_convention = 1} { func.unreachable }
   func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
   func.func @run(%callee: core.i32, %evidence: core.i32, %env: tribute_rt.anyref, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %evidence, %env, %done, %dispatch, %value {func.indirect_call_signature = core.func(core.never, core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %evidence, %env, %done, %dispatch, %value {signature = core.func(core.never, core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32), tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -1136,7 +1136,7 @@ mod tests {
         }
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("func.indirect_call_signature = core.func(core.nil"),
+            printed.contains("signature = core.func(core.nil"),
             "{printed}"
         );
         assert!(
@@ -1311,6 +1311,14 @@ mod tests {
   }
 }"#,
                 "lacks exact callable signature",
+            ),
+            (
+                r#"core.module @test {
+  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = 2}
+  }
+}"#,
+                "indirect callable signature is not core.func",
             ),
             (
                 r#"core.module @test {

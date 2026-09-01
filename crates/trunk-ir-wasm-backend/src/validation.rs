@@ -128,13 +128,13 @@ mod tests {
     wasm.return_call_indirect %table_index, %value {table = 0, type_idx = 0}
   }
 }"#,
-            "lacks func.indirect_call_signature",
+            "lacks signature",
         );
 
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.i32, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.i32, table = 0, type_idx = 0}
   }
 }"#,
             "signature must be core.func",
@@ -143,7 +143,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.i32, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.i32, core.i32), table = 0, type_idx = 0}
   }
 }"#,
             "must have an empty result",
@@ -152,7 +152,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller() -> core.nil {
-    wasm.return_call_indirect {func.indirect_call_signature = core.func(core.nil), table = 0, type_idx = 0}
+    wasm.return_call_indirect {signature = core.func(core.nil), table = 0, type_idx = 0}
   }
 }"#,
             "requires a table index operand",
@@ -161,7 +161,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
   }
 }"#,
             "first operand must be an i32 table index",
@@ -170,7 +170,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i64) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
   }
 }"#,
             "operands do not match its exact signature",

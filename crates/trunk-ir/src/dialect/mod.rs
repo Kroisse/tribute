@@ -344,6 +344,7 @@ mod tests {
             v1,     // callee
             [v2],   // args
             i32_ty, // result type
+            None,   // exact signature
         );
 
         assert_eq!(call.callee(&ctx), v1);

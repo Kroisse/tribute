@@ -325,7 +325,7 @@ impl RewritePattern for FuncTailCallPattern {
 /// Pattern for `func.tail_call_indirect` -> `wasm.return_call_indirect`.
 ///
 /// The shared physical-ABI boundary retains the precise callee signature in
-/// `func.indirect_call_signature` after closure lowering has replaced the
+/// `signature` after closure lowering has replaced the
 /// typed closure with a table index.  This backend must carry that metadata
 /// through instead of rebuilding a signature from the runtime operands.
 struct FuncTailCallIndirectPattern;
@@ -563,7 +563,7 @@ mod tests {
     func.tail_call %value {callee = @target}
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32)}
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
     %result = func.call_indirect %table_index, %value : core.i32
@@ -585,7 +585,7 @@ mod tests {
         );
         assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("func.indirect_call_signature = core.func(core.nil, core.i32)"),
+            output.contains("signature = core.func(core.nil, core.i32)"),
             "{output}"
         );
     }
@@ -601,7 +601,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32) -> core.nil {
     %table_index = func.constant {func_ref = @target} : core.i32
-    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32)}
   }
 }"#,
         );
@@ -629,7 +629,7 @@ mod tests {
     func.tail_call_indirect %table_index, %value
   }
   func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.i32, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.i32, core.i32)}
   }
 }"#,
         );

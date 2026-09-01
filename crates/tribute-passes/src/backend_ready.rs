@@ -302,7 +302,7 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
         }
         key == Symbol::new(match self.backend {
             TributeBackend::Native => "sig",
-            TributeBackend::Wasm => "func.indirect_call_signature",
+            TributeBackend::Wasm => "signature",
         })
     }
 

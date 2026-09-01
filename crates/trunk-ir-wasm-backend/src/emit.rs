@@ -1235,7 +1235,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1285,7 +1285,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
   }
 }"#,
         );
@@ -1327,7 +1327,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.block {
-      wasm.return_call_indirect %table_index, %value {func.indirect_call_signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+      wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
     }
   }
   wasm.func @tail_direct(%value: core.i32) -> core.nil {

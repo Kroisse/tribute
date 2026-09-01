@@ -532,7 +532,7 @@ mod tests {
     func.tail_call %value {callee = @direct_target, tribute.calling_convention = 2}
   }
   func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32), tribute.calling_convention = 2}
   }
 }"#;
 
@@ -613,7 +613,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.i32, core.i32), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = core.func(core.i32, core.i32), tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -632,7 +632,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32)}
   }
 }"#,
         );
@@ -653,7 +653,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {func.indirect_call_signature = core.func(core.nil, core.i32), tribute.calling_convention = 0}
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32), tribute.calling_convention = 0}
   }
 }"#,
         );

@@ -27,7 +27,7 @@ use tribute_core::calling_convention::{
 };
 use tribute_core::{
     CallableAbi, CallingConvention, get_calling_convention, get_closure_callable_type,
-    get_physical_closure_convention, set_closure_callable_type, set_indirect_call_signature,
+    get_physical_closure_convention, set_closure_callable_type,
 };
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
@@ -321,18 +321,31 @@ impl RewritePattern for LowerClosureCallArena {
             legacy.extend_from_slice(&args);
             legacy
         };
-        let new_call = func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
-        if let Some(contract) = exact_contract {
+        let signature = exact_contract
+            .as_ref()
+            .map(|contract| contract.signature)
+            .unwrap_or_else(|| {
+                core::func(
+                    ctx,
+                    callee_return_ty,
+                    new_args
+                        .iter()
+                        .map(|&value| ctx.value_ty(value))
+                        .collect::<Vec<_>>(),
+                )
+                .as_type_ref()
+            });
+        let new_call = func::call_indirect(
+            ctx,
+            loc,
+            table_idx,
+            new_args,
+            callee_return_ty,
+            Some(signature),
+        );
+        if exact_contract.is_some() {
             let attributes = ctx.op(op).attributes.clone();
             ctx.op_mut(new_call.op_ref()).attributes.extend(attributes);
-            set_indirect_call_signature(ctx, new_call.op_ref(), contract.signature);
-        } else {
-            let parameter_types = ctx.op_operands(new_call.op_ref())[1..]
-                .iter()
-                .map(|&value| ctx.value_ty(value))
-                .collect::<Vec<_>>();
-            let signature = core::func(ctx, callee_return_ty, parameter_types).as_type_ref();
-            set_indirect_call_signature(ctx, new_call.op_ref(), signature);
         }
 
         rewriter.insert_op(table_idx_op.op_ref());
@@ -403,10 +416,15 @@ impl RewritePattern for LowerClosureTailCallArena {
             args[index] = cast.result(ctx);
         }
         args.insert(contract.environment_index, environment.result(ctx));
-        let tail = func::tail_call_indirect(ctx, location, func_ref.result(ctx), args);
+        let tail = func::tail_call_indirect(
+            ctx,
+            location,
+            func_ref.result(ctx),
+            args,
+            Some(contract.signature),
+        );
         let attributes = ctx.op(op).attributes.clone();
         ctx.op_mut(tail.op_ref()).attributes.extend(attributes);
-        set_indirect_call_signature(ctx, tail.op_ref(), contract.signature);
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.insert_op(environment.op_ref());
@@ -1080,7 +1098,7 @@ mod tests {
             "module entrypoint should lower closure accessors:\n{ir}"
         );
         assert_eq!(
-            ir.matches("func.indirect_call_signature").count(),
+            ir.matches("signature").count(),
             2,
             "each lowered indirect call must retain an exact signature:\n{ir}"
         );

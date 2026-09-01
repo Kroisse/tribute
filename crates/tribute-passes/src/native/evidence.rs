@@ -373,6 +373,7 @@ impl RewritePattern for LowerLegacyEffectDispatchCpsToNative {
                 dispatch_op.payload(ctx),
             ],
             *result_ty,
+            None,
         );
         attach_exact_indirect_signature(ctx, call.op_ref());
         let result = call.result(ctx);
@@ -578,6 +579,7 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
                 dispatch_op.payload(ctx),
             ],
             result_ty,
+            None,
         );
         attach_exact_indirect_signature(ctx, call.op_ref());
         let new_result = call.result(ctx);
@@ -658,6 +660,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
+            None,
         );
         attach_exact_indirect_signature(ctx, tail.op_ref());
         set_calling_convention(ctx, tail.op_ref(), tribute_core::CallingConvention::Cps);
@@ -1247,7 +1250,7 @@ mod tests {
             "the native tail must not cast the explicit dispatch operand: {output}"
         );
         assert!(output.contains("func.tail_call_indirect"), "{output}");
-        assert!(output.contains("func.indirect_call_signature"), "{output}");
+        assert!(output.contains("signature"), "{output}");
         assert!(
             output.contains("tribute.calling_convention = 2"),
             "{output}"

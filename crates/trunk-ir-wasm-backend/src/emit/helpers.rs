@@ -117,9 +117,7 @@ pub(crate) fn exact_return_call_indirect_signature(
         .attributes
         .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
         .ok_or_else(|| {
-            CompilationError::invalid_module(
-                "wasm.return_call_indirect lacks func.indirect_call_signature",
-            )
+            CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
         })?;
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.return_call_indirect signature must be core.func")
