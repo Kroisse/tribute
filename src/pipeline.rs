@@ -1962,6 +1962,142 @@ fn main() ->{std::io::Io} Nil {
     }
 
     #[salsa_test]
+    fn logical_prelude_read_line_requires_exact_intrinsic_provenance(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "logical-read-line.trb",
+            r#"
+fn main() { }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let (logical_ctx, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
+                typed.ast.decls.retain(|declaration| {
+                    matches!(
+                        declaration,
+                        tribute_front::ast::Decl::Module(module)
+                            if module.name == trunk_ir::Symbol::new("std")
+                    ) || matches!(declaration, tribute_front::ast::Decl::Function(_))
+                });
+                let std = typed
+                    .ast
+                    .decls
+                    .iter_mut()
+                    .find_map(|declaration| match declaration {
+                        tribute_front::ast::Decl::Module(module)
+                            if module.name == trunk_ir::Symbol::new("std") =>
+                        {
+                            Some(module)
+                        }
+                        _ => None,
+                    })
+                    .expect("merged prelude must contain std");
+                let std_body = std.body.as_mut().expect("std must have a body");
+                std_body.retain(|declaration| {
+                    matches!(
+                        declaration,
+                        tribute_front::ast::Decl::Module(module)
+                            if module.name == trunk_ir::Symbol::new("io")
+                    )
+                });
+                let io = std_body
+                    .iter_mut()
+                    .find_map(|declaration| match declaration {
+                        tribute_front::ast::Decl::Module(module)
+                            if module.name == trunk_ir::Symbol::new("io") =>
+                        {
+                            Some(module)
+                        }
+                        _ => None,
+                    })
+                    .expect("std must contain io");
+                io.body
+                    .as_mut()
+                    .expect("std::io must have a body")
+                    .retain(|declaration| {
+                        matches!(
+                            declaration,
+                            tribute_front::ast::Decl::Enum(declaration)
+                                if declaration.name == trunk_ir::Symbol::new("ReadLineResult")
+                        ) || matches!(
+                            declaration,
+                            tribute_front::ast::Decl::ExternFunction(declaration)
+                                if declaration.name
+                                    == trunk_ir::Symbol::new("__tribute_io_read_line")
+                        )
+                    });
+                typed.lower_to_ir(db, ir, uri)
+            });
+
+        let read_line = logical
+            .compiler_intrinsics
+            .iter()
+            .find(|declaration| {
+                declaration.symbol == trunk_ir::Symbol::new("std::io::__tribute_io_read_line")
+            })
+            .expect("canonical prelude read-line declaration must retain exact provenance");
+        assert_eq!(
+            read_line.identity,
+            trunk_ir::Symbol::new("std::io::__tribute_io_read_line")
+        );
+        let logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
+        assert!(
+            logical_ir.contains("tribute_control.func @\"std::io::__tribute_io_read_line\"")
+                && logical_ir.contains("convention(direct)")
+                && logical_ir
+                    .contains("tribute.compiler_intrinsic = @\"std::io::__tribute_io_read_line\""),
+            "the canonical prelude extern must retain its complete direct callable declaration:\n{logical_ir}"
+        );
+        let validation = tribute_passes::tribute_control_to_cps::verify_tribute_control_pre_cps(
+            &logical_ctx,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        );
+        assert!(validation.is_ok(), "{validation:?}");
+    }
+
+    #[salsa_test]
+    fn logical_user_read_line_shape_remains_untrusted(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "untrusted-read-line.trb",
+            r#"
+enum UserReadLineResult { Success }
+
+extern "intrinsic" fn user_read_line() -> UserReadLineResult
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let (logical_ctx, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
+                typed.ast.decls.retain(|declaration| {
+                    !matches!(declaration, tribute_front::ast::Decl::Module(_))
+                });
+                typed.lower_to_ir(db, ir, uri)
+            });
+
+        assert!(
+            logical.compiler_intrinsics.iter().all(|declaration| {
+                declaration.symbol != trunk_ir::Symbol::new("user_read_line")
+            }),
+            "a same-shaped user extern must not acquire compiler-owned provenance"
+        );
+        let validation = tribute_passes::tribute_control_to_cps::verify_tribute_control_pre_cps(
+            &logical_ctx,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        )
+        .expect_err("a same-shaped user extern must fail closed");
+        assert!(
+            validation.to_string().contains(
+                "unclassified bodyless external declaration cannot use managed adt.typeref"
+            ),
+            "{validation}"
+        );
+    }
+
+    #[salsa_test]
     fn test_compile_with_diagnostics(db: &salsa::DatabaseImpl) {
         let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
