@@ -184,7 +184,8 @@ pub fn callable_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConven
         .and_then(|code| CallingConvention::try_from(code).ok())
 }
 
-fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
+/// Read the exact input and answer types carried by a resume token.
+pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, TypeRef)> {
     if !ResumeToken::matches(ctx, ty) {
         return None;
     }

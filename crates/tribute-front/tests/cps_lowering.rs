@@ -147,6 +147,63 @@ fn main() { }
     assert_resume_shape(checked_logical_function(&ir_text, "run"));
 }
 
+/// Resume materializes an erased literal to the token input and returns the
+/// token answer, rather than using the literal or source-expression type.
+#[salsa_test]
+fn resume_uses_exact_token_input_and_answer_types(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum String {
+    Leaf(Bytes),
+    Branch(String, String, Nat),
+}
+
+ability Read {
+    op read() -> String
+}
+
+fn run() -> Int {
+    handle Read::read() {
+        do result { 0 }
+        op Read::read() {
+            let answer = resume "resumed"
+            answer + 1
+        }
+    }
+}
+
+fn main() { }
+"#,
+    );
+
+    let ir = run_ast_pipeline_with_ir(db, source);
+    let run = checked_logical_function(&ir, "run");
+    assert!(
+        run.contains("resume_token(!String, core.i32)"),
+        "handler token must retain its exact input and answer types:\n{run}"
+    );
+    assert_in_order(
+        run,
+        &[
+            "adt.string_const",
+            "core.unrealized_conversion_cast",
+            "tribute_control.resume",
+        ],
+    );
+    let cast = run
+        .lines()
+        .find(|line| line.contains("core.unrealized_conversion_cast"))
+        .expect("resume input materialization");
+    assert!(cast.contains(": !String"), "{run}");
+    let resume = run
+        .lines()
+        .find(|line| line.contains("= tribute_control.resume "))
+        .expect("source-logical resume");
+    assert!(resume.contains(": core.i32"), "{run}");
+}
+
 #[salsa_test]
 fn handler_kind_mismatch_is_a_type_diagnostic_not_a_lowering_panic(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
