@@ -220,6 +220,9 @@ impl RewritePattern for LowerLegacyCallPattern {
         let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
         let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+        if operands.len() > 1 {
+            return false;
+        }
         let Some(evidence_val) = find_evidence_from_op(ctx, op) else {
             return false;
         };
@@ -599,6 +602,31 @@ mod tests {
             "{output}"
         );
         assert!(!output.contains("effect.legacy_dispatch_cps"), "{output}");
+    }
+
+    #[test]
+    fn malformed_legacy_call_remains_byte_for_byte_unchanged() {
+        let mut ctx = IrContext::new();
+        init_common_types(&mut ctx);
+        let ev_ty = evidence_type_str();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  func.func @legacy_call(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %left = arith.const {{value = 1}} : core.i32
+    %right = arith.const {{value = 2}} : core.i32
+    %result = ability.legacy_call %left, %right {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
+    func.return %result
+  }}
+}}"#
+            ),
+        );
+        let before = print_module(&ctx, module.op());
+
+        lower_ability_perform(&mut ctx, module);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
