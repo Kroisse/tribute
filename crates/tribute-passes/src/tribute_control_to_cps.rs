@@ -11,11 +11,11 @@ use std::fmt;
 use tribute_core::calling_convention::{
     cps_closure_function_type, cps_completion_type, cps_continuation_frame_layout_type,
     cps_continuation_frame_ref_type, cps_done_type, cps_resume_exact_type,
-    physical_closure_type_with_environment_index,
+    physical_closure_function_type, physical_closure_type_with_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
-    set_calling_convention, set_indirect_call_signature,
+    set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -872,9 +872,8 @@ impl<'a> Converter<'a> {
                 "CPS indirect tail operands differ from the exact closure contract",
             ));
         }
-        let tail = func::tail_call_indirect(self.ctx, location, callee, args);
+        let tail = func::tail_call_indirect(self.ctx, location, callee, args, Some(signature));
         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-        set_indirect_call_signature(self.ctx, tail.op_ref(), signature);
         self.ctx.push_op(block, tail.op_ref());
         Ok(tail.op_ref())
     }
@@ -3074,12 +3073,26 @@ impl<'a> Converter<'a> {
             if general {
                 self.emit_cps_tail_call_indirect(case_block, location, arm.value, call_args)?;
             } else {
+                let signature = physical_closure_function_type(
+                    self.ctx,
+                    self.ctx.value_ty(arm.value),
+                    CallingConvention::EvidenceDirect,
+                )
+                .ok_or_else(|| {
+                    TributeControlToCpsError::one(
+                        POST_CPS_BOUNDARY,
+                        Some(arm.op),
+                        Some(location),
+                        "fn handler indirect callee has no exact provenance-bearing closure contract",
+                    )
+                })?;
                 let call = func::call_indirect(
                     self.ctx,
                     location,
                     arm.value,
                     call_args,
                     arm.operation_result,
+                    Some(signature),
                 );
                 set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
                 self.ctx.push_op(case_block, call.op_ref());
@@ -3499,7 +3512,8 @@ impl<'a> Converter<'a> {
                             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                     );
                     let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
-                    let call = func::call_indirect(self.ctx, location, callee, args, result_type);
+                    let call =
+                        func::call_indirect(self.ctx, location, callee, args, result_type, None);
                     set_calling_convention(self.ctx, call.op_ref(), convention);
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -5164,10 +5178,7 @@ mod tests {
         crate::closure_lower::lower_closures(&mut ctx, module);
         let lowered = print_module(&ctx, module.op());
         assert!(!lowered.contains("closure.new"), "{lowered}");
-        assert!(
-            lowered.contains("func.indirect_call_signature"),
-            "{lowered}"
-        );
+        assert!(lowered.contains("signature"), "{lowered}");
     }
 
     #[test]
@@ -5586,6 +5597,35 @@ mod tests {
         assert!(!printed.contains("@consumed"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(printed.contains("tribute.calling_convention = 1"));
+        let mut indirect_calls = Vec::new();
+        fn collect_indirect_calls(ctx: &IrContext, op: OpRef, calls: &mut Vec<OpRef>) {
+            if func::CallIndirect::matches(ctx, op) {
+                calls.push(op);
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        collect_indirect_calls(ctx, child, calls);
+                    }
+                }
+            }
+        }
+        collect_indirect_calls(&ctx, module.op(), &mut indirect_calls);
+        let call = indirect_calls
+            .into_iter()
+            .find(|op| {
+                tribute_core::get_calling_convention(&ctx, *op)
+                    == Some(CallingConvention::EvidenceDirect)
+            })
+            .expect("fn handler dispatcher call");
+        let call = func::CallIndirect::from_op(&ctx, call).unwrap();
+        let expected = physical_closure_function_type(
+            &ctx,
+            ctx.value_ty(call.callee(&ctx)),
+            CallingConvention::EvidenceDirect,
+        )
+        .expect("fn arm retains an exact closure contract");
+        assert_eq!(call.signature(&ctx), Some(expected));
     }
 
     #[test]

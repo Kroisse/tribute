@@ -900,7 +900,7 @@ mod tests {
         assert_eq!(nil_merge_args, expected_nil_merge_args);
 
         let printed = crate::printer::print_module(&ctx, module.op());
-        assert!(printed.contains("func.indirect_call_signature = core.func(core.never, core.nil)"));
+        assert!(printed.contains("signature = core.func(core.never, core.nil)"));
         assert!(printed.contains("tribute.calling_convention = 2"));
     }
 
@@ -914,7 +914,7 @@ mod tests {
     } {
       scf.yield %unit
     }
-    func.tail_call_indirect %callee, %selected {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %selected {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
   }
 }"#,
             1,
@@ -926,9 +926,9 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     %discarded = scf.if %cond : core.never {
-      func.tail_call_indirect %callee, %unit {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
     } {
-      func.tail_call_indirect %callee, %unit {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
     }
   }
 }"#;
@@ -983,7 +983,7 @@ mod tests {
     } {
       scf.yield %inner
     }
-    func.tail_call_indirect %callee, %outer {func.indirect_call_signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %outer {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
   }
 }"#,
             2,

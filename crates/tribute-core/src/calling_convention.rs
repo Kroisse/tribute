@@ -3,6 +3,8 @@
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -204,8 +206,21 @@ pub fn cps_dispatch_type(
 /// Callers must reject absent or malformed outer closure provenance rather than infer a
 /// callable contract from a structurally similar type.
 pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<TypeRef> {
+    physical_closure_function_type(ctx, closure, CallingConvention::Cps)
+}
+
+/// Return the exact `core.func` contract only for a provenance-bearing physical closure
+/// with the requested convention.
+///
+/// The result comes from the closure type's explicit callable contract, never from
+/// an erased closure operand or its runtime storage shape.
+pub fn physical_closure_function_type(
+    ctx: &IrContext,
+    closure: TypeRef,
+    convention: CallingConvention,
+) -> Option<TypeRef> {
     let environment_index = get_physical_closure_environment_index(ctx, closure)?;
-    if get_physical_closure_convention(ctx, closure) != Some(CallingConvention::Cps) {
+    if get_physical_closure_convention(ctx, closure) != Some(convention) {
         return None;
     }
     let [function] = ctx.types.get(closure).params.as_slice() else {
@@ -224,6 +239,10 @@ fn generated_cps_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef
 }
 
 /// Attach the exact callable signature to an indirect transfer.
+///
+/// On `func.*` this is the dialect-declared `signature` attribute. Target
+/// lowering carries the same canonical attribute onto its own indirect
+/// transfer operations until their backend-specific signature index is ready.
 pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) {
     ctx.op_mut(op).attributes.insert(
         Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
@@ -233,7 +252,14 @@ pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: Ty
 
 /// Read the exact callable signature retained on an indirect transfer.
 pub fn get_indirect_call_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    ctx.op(op).attributes.get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+    func::CallIndirect::from_op(ctx, op)
+        .ok()
+        .and_then(|call| call.signature(ctx))
+        .or_else(|| {
+            func::TailCallIndirect::from_op(ctx, op)
+                .ok()
+                .and_then(|tail| tail.signature(ctx))
+        })
 }
 
 /// Retain a typed closure contract on its canonical runtime pair.

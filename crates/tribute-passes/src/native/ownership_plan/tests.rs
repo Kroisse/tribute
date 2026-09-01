@@ -1188,7 +1188,7 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
   func.func @caller(%value: !R, %callee: core.func(!R, !R)) -> !R {
     %seen = func.call %value {callee = @observe} : core.i32
     %direct = func.call %value {callee = @ordinary} : !R
-    %indirect = func.call_indirect %callee, %direct {func.indirect_call_signature = core.func(!R, !R)} : !R
+    %indirect = func.call_indirect %callee, %direct {signature = core.func(!R, !R)} : !R
     func.return %indirect
   }
   func.func @tail(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
@@ -1232,7 +1232,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
   func.func @f(%value: !R, %callee: core.func(!R, !R)) -> !R {
-    %x = func.call_indirect %callee {func.indirect_call_signature = core.func(!R, !R)} : !R
+    %x = func.call_indirect %callee {signature = core.func(!R, !R)} : !R
     func.return %x
   }
 }"#,

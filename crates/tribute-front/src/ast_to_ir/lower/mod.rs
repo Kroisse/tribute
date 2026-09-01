@@ -658,6 +658,7 @@ pub(super) fn emit_done_k_call(
         done_k_closure,
         vec![result_anyref],
         anyref_ty,
+        None,
     );
     builder.ir.push_op(builder.block, call.op_ref());
 

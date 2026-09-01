@@ -103,7 +103,14 @@ pub(super) fn invoke_continuation<D: ControlDomain>(
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let continuation = builder.cast_if_needed(location, continuation.0, closure_ty);
     let value = builder.cast_if_needed(location, value, anyref_ty);
-    let call = func::call_indirect(builder.ir, location, continuation, vec![value], anyref_ty);
+    let call = func::call_indirect(
+        builder.ir,
+        location,
+        continuation,
+        vec![value],
+        anyref_ty,
+        None,
+    );
     builder.ir.push_op(builder.block, call.op_ref());
     control_from_abi(call.result(builder.ir))
 }

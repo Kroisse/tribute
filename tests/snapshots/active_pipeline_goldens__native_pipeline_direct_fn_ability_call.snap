@@ -68,7 +68,7 @@ core.module @direct_fn_native {
       %21 = tribute_rt.into_raw %18 : core.ptr
       %22 = tribute_rt.into_raw %15 : core.ptr
       %23 = func.call %0, %20, %19, %21, %22 {callee = @__tribute_evidence_extend} : core.ptr
-      %24 = func.call_indirect %11, %23, %12, %9 {func.indirect_call_signature = core.func(tribute_rt.anyref, !t2, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
+      %24 = func.call_indirect %11, %23, %12, %9 {signature = core.func(tribute_rt.anyref, !t2, tribute_rt.anyref, !_closure)} : tribute_rt.anyref
       %25 = adt.variant_is %24 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %26 = scf.if %25 : tribute_rt.anyref {
           %27 = adt.variant_cast %24 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -77,7 +77,7 @@ core.module @direct_fn_native {
           %30 = func.call {callee = @__tribute_evidence_empty} : core.ptr
           %31 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
           %32 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-          %33 = func.call_indirect %31, %23, %32, %28 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+          %33 = func.call_indirect %31, %23, %32, %28 {signature = !t0} : tribute_rt.anyref
           scf.yield %33
       } {
           %34 = adt.variant_cast %24 {tag = @Escape, type = !__tribute_cps_control} : tribute_rt.anyref
@@ -88,7 +88,7 @@ core.module @direct_fn_native {
               %39 = func.call {callee = @__tribute_evidence_empty} : core.ptr
               %40 = adt.struct_get %3 {field = 0, type = !_closure} : core.i32
               %41 = adt.struct_get %3 {field = 1, type = !_closure} : tribute_rt.anyref
-              %42 = func.call_indirect %40, %39, %41, %36 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+              %42 = func.call_indirect %40, %39, %41, %36 {signature = !t0} : tribute_rt.anyref
               scf.yield %42
           } {
               scf.yield %24
@@ -108,19 +108,19 @@ core.module @direct_fn_native {
       %7 = arith.const {value = 664197438} : core.i32
       %8 = adt.struct_get %6 {field = 0, type = !_closure} : core.i32
       %9 = adt.struct_get %6 {field = 1, type = !_closure} : tribute_rt.anyref
-      %10 = func.call_indirect %8, %0, %9, %7, %4 {func.indirect_call_signature = !t3} : tribute_rt.anyref
+      %10 = func.call_indirect %8, %0, %9, %7, %4 {signature = !t3} : tribute_rt.anyref
       %11 = tribute_rt.unbox_int %10 : core.i32
       %12 = arith.const {value = 1361557906} : core.i32
       %13 = func.call %0, %12 {callee = @__tribute_evidence_lookup_tr} : core.ptr
       %14 = arith.const {value = 2110389019} : core.i32
       %15 = adt.struct_get %13 {field = 0, type = !_closure} : core.i32
       %16 = adt.struct_get %13 {field = 1, type = !_closure} : tribute_rt.anyref
-      %17 = func.call_indirect %15, %0, %16, %14, %10 {func.indirect_call_signature = !t3} : tribute_rt.anyref
+      %17 = func.call_indirect %15, %0, %16, %14, %10 {signature = !t3} : tribute_rt.anyref
       %18 = core.unrealized_conversion_cast %17 : core.nil
       %19 = core.unrealized_conversion_cast %2 : closure.closure(!t1)
       %20 = adt.struct_get %19 {field = 0, type = !_closure} : core.i32
       %21 = adt.struct_get %19 {field = 1, type = !_closure} : tribute_rt.anyref
-      %22 = func.call_indirect %20, %0, %21, %10 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+      %22 = func.call_indirect %20, %0, %21, %10 {signature = !t0} : tribute_rt.anyref
       func.return %22
   }
 
@@ -135,7 +135,7 @@ core.module @direct_fn_native {
           %13 = tribute_rt.box_int %12 : tribute_rt.anyref
           %14 = adt.struct_get %11 {field = 0, type = !_closure} : core.i32
           %15 = adt.struct_get %11 {field = 1, type = !_closure} : tribute_rt.anyref
-          %16 = func.call_indirect %14, %0, %15, %13 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+          %16 = func.call_indirect %14, %0, %15, %13 {signature = !t0} : tribute_rt.anyref
           scf.yield %16
       } {
           %17 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -145,7 +145,7 @@ core.module @direct_fn_native {
           %21 = core.unrealized_conversion_cast %20 : tribute_rt.anyref
           %22 = adt.struct_get %19 {field = 0, type = !_closure} : core.i32
           %23 = adt.struct_get %19 {field = 1, type = !_closure} : tribute_rt.anyref
-          %24 = func.call_indirect %22, %0, %23, %21 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+          %24 = func.call_indirect %22, %0, %23, %21 {signature = !t0} : tribute_rt.anyref
           scf.yield %24
       }
       func.return %8
@@ -162,7 +162,7 @@ core.module @direct_fn_native {
           %11 = tribute_rt.box_int %10 : tribute_rt.anyref
           %12 = adt.struct_get %9 {field = 0, type = !_closure} : core.i32
           %13 = adt.struct_get %9 {field = 1, type = !_closure} : tribute_rt.anyref
-          %14 = func.call_indirect %12, %0, %13, %11 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+          %14 = func.call_indirect %12, %0, %13, %11 {signature = !t0} : tribute_rt.anyref
           scf.yield %14
       } {
           %15 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -172,7 +172,7 @@ core.module @direct_fn_native {
           %19 = core.unrealized_conversion_cast %18 : tribute_rt.anyref
           %20 = adt.struct_get %17 {field = 0, type = !_closure} : core.i32
           %21 = adt.struct_get %17 {field = 1, type = !_closure} : tribute_rt.anyref
-          %22 = func.call_indirect %20, %0, %21, %19 {func.indirect_call_signature = !t0} : tribute_rt.anyref
+          %22 = func.call_indirect %20, %0, %21, %19 {signature = !t0} : tribute_rt.anyref
           scf.yield %22
       }
       func.return %6

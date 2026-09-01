@@ -690,6 +690,12 @@ make these attributes round-trip explicitly.
 
 `func.*` represents function definitions, direct calls, indirect calls, function
 references, returns, tail calls, and unreachable control flow.
+`func.call_indirect`와 `func.tail_call_indirect`는 선택적 `signature: TypeRef`
+attribute로 erased callee/table index 이전의 exact `core.func` contract를 보존할 수
+있다. 일반 pre-contract indirect call은 이 attribute 없이 존재할 수 있지만,
+`tribute.calling_convention`이 붙은 indirect transfer는 exact `signature`를 반드시
+가지며 verifier가 operand/result 및 convention과 대조한다. Physical operand type,
+symbol, ABI string 또는 storage shape로 signature를 재구성하지 않는다.
 `func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
 terminator다. Shared verifier는 callee `core.func`와 enclosing caller의 result가
 모두 `core.never`인지 검사한다. Native/Wasm signature lowering은 이를 empty result
