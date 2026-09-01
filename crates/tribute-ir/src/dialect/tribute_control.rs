@@ -4979,16 +4979,16 @@ mod tests {
     }
 
     #[test]
-    fn managed_bodyless_external_and_raw_pointer_cast_chain_fail_closed() {
+    fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct() {name = @S, fields = []}
-  !R = adt.typeref() {name = @S}
-  tribute_control.func @private_helper(%value: !R) -> !R convention(direct)
-    attributes {abi = "C"}
-  tribute_control.func @masquerade(%raw: core.ptr) -> !R convention(direct) {
+  !ReadLineResult = adt.enum() {name = @ReadLineResult, variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
+  !ReadLineResultRef = adt.typeref() {name = @ReadLineResult}
+  tribute_control.func @user_read_line() -> !ReadLineResultRef convention(direct)
+    attributes {abi = "intrinsic"}
+  tribute_control.func @masquerade(%raw: core.ptr) -> !ReadLineResultRef convention(direct) {
     %middle = arith.cast %raw : core.i64
-    %managed = core.unrealized_conversion_cast %middle : !R
+    %managed = core.unrealized_conversion_cast %middle : !ReadLineResultRef
     tribute_control.return %managed
   }
 }"#,
@@ -4996,7 +4996,12 @@ mod tests {
 
         let result = validate(&ctx, module, &[], &[]);
         let diagnostics = messages(&result);
-        assert!(diagnostics.contains("bodyless external"), "{result}");
+        assert!(
+            diagnostics.contains(
+                "unclassified bodyless external declaration cannot use managed adt.typeref"
+            ),
+            "{result}"
+        );
         assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
     }
 
