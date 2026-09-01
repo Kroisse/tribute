@@ -1483,6 +1483,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-core",
  "tribute-front",
  "tribute-ir",
  "tribute-passes",

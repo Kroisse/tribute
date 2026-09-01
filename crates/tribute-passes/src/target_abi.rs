@@ -1703,6 +1703,71 @@ mod tests {
     }
 
     #[test]
+    fn parameterized_dispatch_tag_fails_before_bridge_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+        );
+        let main = function(&ctx, module, "main");
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let never = core::never(&mut ctx).as_type_ref();
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let frame_name = Symbol::new("__tribute_parameterized_dispatch_tag");
+        let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
+            &mut ctx, frame_name, nil,
+        );
+        let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let parameterized_i32 = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+                .param(nil)
+                .build(),
+        );
+        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+            &mut ctx,
+            evidence,
+            frame,
+            anyref,
+            parameterized_i32,
+        );
+        let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
+            &mut ctx, frame_name, nil, done, dispatch,
+        );
+        ctx.register_type_alias(frame_name, layout);
+        let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+        ctx.op_mut(main.op_ref())
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(worker));
+        let entry = ctx.region(main.body(&ctx)).blocks[0];
+        ctx.set_block_arg_type(entry, 0, evidence);
+        ctx.set_block_arg_type(entry, 1, frame);
+        ctx.op_mut(main.op_ref()).attributes.insert(
+            Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
+            Attribute::Int(CallingConvention::Direct as i128),
+        );
+        ctx.op_mut(main.op_ref())
+            .attributes
+            .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        let before = print_module(&ctx, module.op());
+        let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("frame Dispatch operands differ from the exact terminal ABI"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
     fn malformed_transfers_and_ambiguous_nested_never_leave_ir_unchanged() {
         for (input, expected) in [
             (
