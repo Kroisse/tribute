@@ -93,6 +93,7 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "Float::<=",
         "Float::>",
         "Float::>=",
+        "std::io::__tribute_io_read_line",
     ]
     .into_iter()
     .map(Symbol::new)

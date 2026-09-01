@@ -2397,6 +2397,92 @@ fn comparison(left: Float, right: Float) -> Bool { left == right }
     }
 
     #[salsa_test]
+    fn logical_prelude_read_line_requires_exact_intrinsic_provenance(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "logical-read-line.trb",
+            r#"
+use std::io::read_line
+
+fn input() ->{std::io::Io, abilities::Throw(std::io::Error)} String {
+    read_line()
+}
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let (logical_ctx, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
+                typed.ast.decls.retain_mut(|declaration| {
+                    let tribute_front::ast::Decl::Module(std) = declaration else {
+                        return false;
+                    };
+                    if std.name != trunk_ir::Symbol::new("std") {
+                        return false;
+                    }
+                    let Some(std_declarations) = std.body.as_mut() else {
+                        return false;
+                    };
+                    std_declarations.retain_mut(|declaration| {
+                        let tribute_front::ast::Decl::Module(io) = declaration else {
+                            return false;
+                        };
+                        if io.name != trunk_ir::Symbol::new("io") {
+                            return false;
+                        }
+                        let Some(io_declarations) = io.body.as_mut() else {
+                            return false;
+                        };
+                        io_declarations.retain(|declaration| {
+                            matches!(
+                                declaration,
+                                tribute_front::ast::Decl::Enum(enum_decl)
+                                    if enum_decl.name
+                                        == trunk_ir::Symbol::new("ReadLineResult")
+                            ) || matches!(
+                                declaration,
+                                tribute_front::ast::Decl::ExternFunction(extern_decl)
+                                    if extern_decl.name
+                                        == trunk_ir::Symbol::new("__tribute_io_read_line")
+                            )
+                        });
+                        true
+                    });
+                    true
+                });
+                typed.compiler_intrinsics.retain(|_, identity| {
+                    *identity == trunk_ir::Symbol::new("std::io::__tribute_io_read_line")
+                });
+                typed.lower_to_ir(db, ir, uri)
+            });
+
+        let logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
+        let validation = tribute_passes::tribute_control_to_cps::verify_tribute_control_pre_cps(
+            &logical_ctx,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        );
+        assert!(validation.is_ok(), "{validation:?}\n{logical_ir}");
+        let read_line = logical
+            .compiler_intrinsics
+            .iter()
+            .find(|declaration| {
+                declaration.symbol == trunk_ir::Symbol::new("std::io::__tribute_io_read_line")
+            })
+            .expect("canonical prelude read-line declaration must retain exact provenance");
+        assert_eq!(
+            read_line.identity,
+            trunk_ir::Symbol::new("std::io::__tribute_io_read_line")
+        );
+        assert!(
+            logical_ir.contains("tribute_control.func @\"std::io::__tribute_io_read_line\"")
+                && logical_ir.contains("convention(direct)")
+                && logical_ir
+                    .contains("tribute.compiler_intrinsic = @\"std::io::__tribute_io_read_line\""),
+            "the canonical prelude extern must retain its direct callable declaration:\n{logical_ir}"
+        );
+    }
+
+    #[salsa_test]
     fn well_known_string_metadata_uses_prelude_declaration_identity(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "lookalike.trb",
