@@ -1473,7 +1473,8 @@ mod tests {
             output.contains("tribute.calling_convention = 2"),
             "{output}"
         );
-        assert!(output.contains("signature"), "{output}");
+        assert!(output.contains("signature ="), "{output}");
+        assert!(!output.contains("func.indirect_call_signature"), "{output}");
     }
 
     #[test]

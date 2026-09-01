@@ -344,8 +344,7 @@ impl RewritePattern for LowerClosureCallArena {
             Some(signature),
         );
         if exact_contract.is_some() {
-            let attributes = ctx.op(op).attributes.clone();
-            ctx.op_mut(new_call.op_ref()).attributes.extend(attributes);
+            copy_indirect_call_attributes(ctx, op, new_call.op_ref());
         }
 
         rewriter.insert_op(table_idx_op.op_ref());
@@ -423,8 +422,7 @@ impl RewritePattern for LowerClosureTailCallArena {
             args,
             Some(contract.signature),
         );
-        let attributes = ctx.op(op).attributes.clone();
-        ctx.op_mut(tail.op_ref()).attributes.extend(attributes);
+        copy_indirect_call_attributes(ctx, op, tail.op_ref());
 
         rewriter.insert_op(func_ref.op_ref());
         rewriter.insert_op(environment.op_ref());
@@ -435,6 +433,13 @@ impl RewritePattern for LowerClosureTailCallArena {
     fn name(&self) -> &'static str {
         "LowerClosureTailCallArena"
     }
+}
+
+/// Copy source metadata without replacing the physical indirect-call contract.
+fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
+    let mut attributes = ctx.op(source).attributes.clone();
+    attributes.remove(func::INDIRECT_CALL_SIGNATURE_ATTR);
+    ctx.op_mut(destination).attributes.extend(attributes);
 }
 
 fn physical_closure_type_for_callee(ctx: &IrContext, callee: ValueRef) -> Option<TypeRef> {
@@ -1218,7 +1223,7 @@ mod tests {
                 r#"core.module @test {{
   !cps = closure.closure(core.func(core.never, {ev}, core.i32, core.i32, core.i32)) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
-    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2}}
+    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2, signature = core.func(core.never, {ev}, core.i32, core.i32, core.i32)}}
   }}
 }}"#
             ),
@@ -1241,7 +1246,6 @@ mod tests {
             .unwrap();
         let signature = tribute_core::get_indirect_call_signature(&ctx, tail).unwrap();
         let callable = core::Func::from_type_ref(&ctx, signature).unwrap();
-        assert_eq!(callable.params(&ctx).len(), 5);
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
         assert_eq!(
@@ -1251,6 +1255,14 @@ mod tests {
         assert_eq!(ctx.op_operands(tail)[3], done);
         assert_eq!(ctx.op_operands(tail)[4], dispatch);
         assert_eq!(ctx.op_operands(tail)[5], value);
+        assert_eq!(
+            callable.params(&ctx),
+            ctx.op_operands(tail)[1..]
+                .iter()
+                .map(|&operand| ctx.value_ty(operand))
+                .collect::<Vec<_>>(),
+            "the physical signature must include the inserted environment operand"
+        );
     }
 
     #[test]
