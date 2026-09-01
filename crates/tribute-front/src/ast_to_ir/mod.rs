@@ -93,6 +93,7 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "Float::<=",
         "Float::>",
         "Float::>=",
+        "std::io::__tribute_io_read_line",
     ]
     .into_iter()
     .map(Symbol::new)
@@ -247,6 +248,9 @@ mod tests {
     #[test]
     fn compiler_intrinsic_registry_is_explicit() {
         assert!(is_supported_compiler_intrinsic(Symbol::new("Float::==")));
+        assert!(is_supported_compiler_intrinsic(Symbol::new(
+            "std::io::__tribute_io_read_line"
+        )));
         assert!(!is_supported_compiler_intrinsic(Symbol::new(
             "user_intrinsic"
         )));
