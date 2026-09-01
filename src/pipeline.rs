@@ -1726,6 +1726,81 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
 
+    fn source_logical_cps_root_module() -> (IrContext, Module) {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%evidence: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+        );
+        let main = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| func_dialect::Func::from_op(&ctx, op).ok())
+            .expect("test module must define main");
+        let nil = core_dialect::nil(&mut ctx).as_type_ref();
+        let never = core_dialect::never(&mut ctx).as_type_ref();
+        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let done_callable = core_dialect::func(&mut ctx, never, [nil]).as_type_ref();
+        let done = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("closure"),
+                trunk_ir::Symbol::new("closure"),
+            )
+            .param(done_callable)
+            .attr("tribute.calling_convention", trunk_ir::Attribute::Int(2))
+            .attr(
+                "tribute.closure_environment_index",
+                trunk_ir::Attribute::Int(0),
+            )
+            .build(),
+        );
+        let worker = core_dialect::func(&mut ctx, never, [evidence, done]).as_type_ref();
+        ctx.op_mut(main.op_ref()).attributes.insert(
+            trunk_ir::Symbol::new("type"),
+            trunk_ir::Attribute::Type(worker),
+        );
+        let entry = ctx.region(main.body(&ctx)).blocks[0];
+        ctx.set_block_arg_type(entry, 0, evidence);
+        ctx.set_block_arg_type(entry, 1, done);
+        ctx.op_mut(main.op_ref()).attributes.insert(
+            trunk_ir::Symbol::new("tribute.root_export_convention"),
+            trunk_ir::Attribute::Int(0),
+        );
+        ctx.op_mut(main.op_ref()).attributes.insert(
+            trunk_ir::Symbol::new("tribute.root_source_result"),
+            trunk_ir::Attribute::Type(nil),
+        );
+        (ctx, module)
+    }
+
+    #[test]
+    fn source_logical_root_defers_closure_storage_until_target_finalization() {
+        let (mut ctx, module) = source_logical_cps_root_module();
+        let core_module = core_dialect::Module::from_op(&ctx, module.op())
+            .expect("test module must be a core.module");
+        let before = trunk_ir::printer::print_module(&ctx, module.op());
+
+        lower_legacy_closures_before_target_boundary(&mut ctx, module, core_module).unwrap();
+
+        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        assert!(matches!(
+            boundary,
+            TargetClosureStorageBoundary::SourceLogicalCps
+        ));
+        let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(after_abi.contains("closure.closure"), "{after_abi}");
+
+        finalize_target_closure_storage(&mut ctx, module, boundary);
+
+        let physical = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!physical.contains("closure.closure"), "{physical}");
+    }
+
     #[test]
     fn native_ownership_plan_options_follow_stage_policy_table() {
         let parameter_elision_only = NativeOptimizationOptions {
