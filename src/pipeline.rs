@@ -1731,7 +1731,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%evidence: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     func.unreachable
   }
 }"#,
@@ -1744,6 +1744,19 @@ mod tests {
         let nil = core_dialect::nil(&mut ctx).as_type_ref();
         let never = core_dialect::never(&mut ctx).as_type_ref();
         let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let frame_name = trunk_ir::Symbol::new("__tribute_continuation_frame_root_nil");
+        let frame = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("adt"),
+                trunk_ir::Symbol::new("typeref"),
+            )
+            .attr("name", trunk_ir::Attribute::Symbol(frame_name))
+            .attr(
+                "tribute.cps_continuation_frame_result",
+                trunk_ir::Attribute::Type(nil),
+            )
+            .build(),
+        );
         let done_callable = core_dialect::func(&mut ctx, never, [nil]).as_type_ref();
         let done = ctx.types.intern(
             trunk_ir::TypeDataBuilder::new(
@@ -1758,14 +1771,82 @@ mod tests {
             )
             .build(),
         );
-        let worker = core_dialect::func(&mut ctx, never, [evidence, done]).as_type_ref();
+        let anyref = tribute_ir::dialect::tribute_rt::anyref(&mut ctx).as_type_ref();
+        let i32_ty = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("core"),
+                trunk_ir::Symbol::new("i32"),
+            )
+            .build(),
+        );
+        let resume_callable =
+            core_dialect::func(&mut ctx, never, [evidence, frame, anyref]).as_type_ref();
+        let resume = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("closure"),
+                trunk_ir::Symbol::new("closure"),
+            )
+            .param(resume_callable)
+            .attr("tribute.calling_convention", trunk_ir::Attribute::Int(2))
+            .attr(
+                "tribute.closure_environment_index",
+                trunk_ir::Attribute::Int(0),
+            )
+            .build(),
+        );
+        let dispatch_callable = core_dialect::func(
+            &mut ctx,
+            never,
+            [evidence, resume, i32_ty, i32_ty, i32_ty, anyref],
+        )
+        .as_type_ref();
+        let dispatch = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("closure"),
+                trunk_ir::Symbol::new("closure"),
+            )
+            .param(dispatch_callable)
+            .attr("tribute.calling_convention", trunk_ir::Attribute::Int(2))
+            .attr(
+                "tribute.closure_environment_index",
+                trunk_ir::Attribute::Int(1),
+            )
+            .build(),
+        );
+        let layout = ctx.types.intern(
+            trunk_ir::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("adt"),
+                trunk_ir::Symbol::new("struct"),
+            )
+            .attr("name", trunk_ir::Attribute::Symbol(frame_name))
+            .attr(
+                "tribute.cps_continuation_frame_result",
+                trunk_ir::Attribute::Type(nil),
+            )
+            .attr(
+                "fields",
+                trunk_ir::Attribute::List(vec![
+                    trunk_ir::Attribute::List(vec![
+                        trunk_ir::Attribute::Symbol(trunk_ir::Symbol::new("done")),
+                        trunk_ir::Attribute::Type(done),
+                    ]),
+                    trunk_ir::Attribute::List(vec![
+                        trunk_ir::Attribute::Symbol(trunk_ir::Symbol::new("dispatch")),
+                        trunk_ir::Attribute::Type(dispatch),
+                    ]),
+                ]),
+            )
+            .build(),
+        );
+        ctx.register_type_alias(frame_name, layout);
+        let worker = core_dialect::func(&mut ctx, never, [evidence, frame]).as_type_ref();
         ctx.op_mut(main.op_ref()).attributes.insert(
             trunk_ir::Symbol::new("type"),
             trunk_ir::Attribute::Type(worker),
         );
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
-        ctx.set_block_arg_type(entry, 1, done);
+        ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref()).attributes.insert(
             trunk_ir::Symbol::new("tribute.root_export_convention"),
             trunk_ir::Attribute::Int(0),

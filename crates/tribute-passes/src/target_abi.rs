@@ -10,12 +10,15 @@ use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
+use tribute_core::calling_convention::{
+    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type, cps_continuation_frame_result_type,
+    get_physical_closure_environment_index,
+};
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, INDIRECT_CALL_SIGNATURE_ATTR,
     get_calling_convention, get_indirect_call_signature, get_physical_closure_convention,
 };
-use tribute_ir::dialect::{ability, closure, tribute_rt};
+use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func};
@@ -30,6 +33,7 @@ const ROOT_EXPORT_CONVENTION_ATTR: &str = "tribute.root_export_convention";
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
 const CPS_MAIN_SYMBOL: &str = "__tribute_cps_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_root_done_k";
+const ROOT_DISPATCH_SYMBOL: &str = "__tribute_root_dispatch";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_root_completion_cell";
 const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
 const ROOT_CPS_CALL_ATTR: &str = "tribute.root_cps_call";
@@ -56,6 +60,14 @@ struct FunctionIdentity {
     signature: TypeRef,
     convention: CallingConvention,
     environment_index: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct RootFrameContract {
+    reference: TypeRef,
+    layout: TypeRef,
+    done: TypeRef,
+    dispatch: TypeRef,
 }
 
 /// Physicalize exact CPS callables without selecting target instructions.
@@ -247,10 +259,10 @@ pub fn has_root_entry_contract(ctx: &IrContext, module: Module) -> bool {
 /// Construct the target-independent export delimiter for a root worker that
 /// was promoted from Direct or EvidenceDirect to Cps.
 ///
-/// This runs after physical signature lowering: the worker and `done_k` use
-/// the target's empty `core.nil` result, while the wrapper keeps the exact
-/// source ABI and performs one ordinary call. Legacy modules carry no root
-/// metadata, so they are left unchanged.
+/// This runs after physical signature lowering: the worker and the exact
+/// `ContinuationFrame<R>` members use the target's empty `core.nil` result,
+/// while the wrapper keeps the exact source ABI and performs one ordinary
+/// call. Legacy modules carry no root metadata, so they are left unchanged.
 pub fn compose_root_entry_bridge(
     ctx: &mut IrContext,
     module: Module,
@@ -315,11 +327,16 @@ pub fn compose_root_entry_bridge(
         || worker_params[0] != evidence_ty
     {
         return Err(TargetAbiError::new(
-            "target root bridge: Cps root must have exact physical evidence and done_k ABI",
+            "target root bridge: Cps root must have exact physical evidence and ContinuationFrame ABI",
         ));
     }
-    let done_k_ty = worker_params[1];
-    validate_root_done_k_type(ctx, done_k_ty, source_result, nil_ty)?;
+    let frame = validate_root_continuation_frame(
+        ctx,
+        worker_params[1],
+        source_result,
+        evidence_ty,
+        nil_ty,
+    )?;
     if ctx.op(worker_op).regions.is_empty() {
         return Err(TargetAbiError::new(
             "target root bridge: root worker must be a definition",
@@ -328,11 +345,13 @@ pub fn compose_root_entry_bridge(
 
     let cps_main = Symbol::new(CPS_MAIN_SYMBOL);
     let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
+    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
     for &op in &top_level_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        if matches!(function.sym_name(ctx), name if name == cps_main || name == root_done_k) {
+        if matches!(function.sym_name(ctx), name if name == cps_main || name == root_done_k || name == root_dispatch)
+        {
             return Err(TargetAbiError::new(
                 "target root bridge: reserved root symbol collision",
             ));
@@ -388,6 +407,43 @@ pub fn compose_root_entry_bridge(
         Attribute::Int(0),
     );
 
+    let dispatch_function_ty = dispatch_entry_function_type(ctx, frame.dispatch, anyref_ty)?;
+    let dispatch_entry = ctx.create_block(BlockData {
+        location,
+        args: core::Func::from_type_ref(ctx, dispatch_function_ty)
+            .expect("validated dispatch entry contract")
+            .params(ctx)
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, ty)| BlockArgData {
+                ty,
+                attrs: bind_name(if index == 1 { "__env" } else { "__arg" }),
+            })
+            .collect(),
+        ops: smallvec![],
+        parent_region: None,
+    });
+    let dispatch_unreachable = func::unreachable(ctx, location);
+    ctx.push_op(dispatch_entry, dispatch_unreachable.op_ref());
+    let dispatch_region = ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![dispatch_entry],
+        parent_op: None,
+    });
+    let dispatch_function = func::func(
+        ctx,
+        location,
+        root_dispatch,
+        dispatch_function_ty,
+        dispatch_region,
+    );
+    set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
+    ctx.op_mut(dispatch_function.op_ref()).attributes.insert(
+        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+        Attribute::Int(1),
+    );
+
     let wrapper_params = if export_convention == CallingConvention::EvidenceDirect {
         vec![evidence_ty]
     } else {
@@ -425,8 +481,35 @@ pub fn compose_root_entry_bridge(
     );
     ctx.push_op(wrapper_entry, done_closure.op_ref());
     let typed_done =
-        core::unrealized_conversion_cast(ctx, location, done_closure.result(ctx), done_k_ty);
+        core::unrealized_conversion_cast(ctx, location, done_closure.result(ctx), frame.done);
     ctx.push_op(wrapper_entry, typed_done.op_ref());
+
+    let dispatch_callable_ty = dispatch_callable_function_type(ctx, frame.dispatch)?;
+    let dispatch_constant = func::constant(ctx, location, dispatch_callable_ty, root_dispatch);
+    ctx.push_op(wrapper_entry, dispatch_constant.op_ref());
+    let dispatch_closure = adt::struct_new(
+        ctx,
+        location,
+        [dispatch_constant.result(ctx), erased_cell.result(ctx)],
+        closure_struct_ty,
+        closure_struct_ty,
+    );
+    ctx.push_op(wrapper_entry, dispatch_closure.op_ref());
+    let typed_dispatch = core::unrealized_conversion_cast(
+        ctx,
+        location,
+        dispatch_closure.result(ctx),
+        frame.dispatch,
+    );
+    ctx.push_op(wrapper_entry, typed_dispatch.op_ref());
+    let frame_value = adt::struct_new(
+        ctx,
+        location,
+        [typed_done.result(ctx), typed_dispatch.result(ctx)],
+        frame.reference,
+        frame.layout,
+    );
+    ctx.push_op(wrapper_entry, frame_value.op_ref());
 
     let evidence = if export_convention == CallingConvention::EvidenceDirect {
         ctx.block_args(wrapper_entry)[0]
@@ -443,7 +526,7 @@ pub fn compose_root_entry_bridge(
     let worker_call = func::call(
         ctx,
         location,
-        [evidence, typed_done.result(ctx)],
+        [evidence, frame_value.result(ctx)],
         nil_ty,
         cps_main,
     );
@@ -479,6 +562,7 @@ pub fn compose_root_entry_bridge(
     set_root_convention(ctx, wrapper.op_ref(), export_convention);
 
     ctx.push_op(module_block, done_function.op_ref());
+    ctx.push_op(module_block, dispatch_function.op_ref());
     ctx.push_op(module_block, wrapper.op_ref());
     Ok(())
 }
@@ -506,27 +590,199 @@ fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef 
     })
 }
 
-fn validate_root_done_k_type(
+fn validate_root_continuation_frame(
     ctx: &IrContext,
-    done_k_ty: TypeRef,
+    frame: TypeRef,
+    source_result: TypeRef,
+    evidence: TypeRef,
+    physical_result: TypeRef,
+) -> Result<RootFrameContract, TargetAbiError> {
+    let reference_data = ctx.types.get(frame);
+    if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame must be an exact nominal adt.typeref",
+        ));
+    }
+    if cps_continuation_frame_result_type(ctx, frame) != Some(source_result) {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame result provenance differs from root source result",
+        ));
+    }
+    let name = reference_data.attrs.get_symbol("name").ok_or_else(|| {
+        TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
+    })?;
+    let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
+    })?;
+    let layout_data = ctx.types.get(layout);
+    if layout_data.dialect != Symbol::new("adt")
+        || layout_data.name != Symbol::new("struct")
+        || layout_data.attrs.get_symbol("name") != Some(name)
+        || cps_continuation_frame_result_type(ctx, layout) != Some(source_result)
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame layout provenance is malformed",
+        ));
+    }
+    let fields = layout_data.attrs.get("fields").ok_or_else(|| {
+        TargetAbiError::new("target root bridge: worker frame layout lacks fields")
+    })?;
+    let Attribute::List(fields) = fields else {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame layout fields are malformed",
+        ));
+    };
+    let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice() else {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame layout must contain done then dispatch",
+        ));
+    };
+    let [Attribute::Symbol(done_name), Attribute::Type(done)] = done_field.as_slice() else {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame done field is malformed",
+        ));
+    };
+    let [Attribute::Symbol(dispatch_name), Attribute::Type(dispatch)] = dispatch_field.as_slice()
+    else {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame dispatch field is malformed",
+        ));
+    };
+    if *done_name != Symbol::new("done") || *dispatch_name != Symbol::new("dispatch") {
+        return Err(TargetAbiError::new(
+            "target root bridge: worker frame field roles must be exact Done then Dispatch",
+        ));
+    }
+    validate_root_done_type(ctx, *done, source_result, physical_result)?;
+    validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_result)?;
+    Ok(RootFrameContract {
+        reference: frame,
+        layout,
+        done: *done,
+        dispatch: *dispatch,
+    })
+}
+
+fn validate_root_done_type(
+    ctx: &IrContext,
+    done: TypeRef,
     source_result: TypeRef,
     physical_result: TypeRef,
 ) -> Result<(), TargetAbiError> {
-    if get_physical_closure_convention(ctx, done_k_ty) != Some(CallingConvention::Cps) {
+    if get_physical_closure_convention(ctx, done) != Some(CallingConvention::Cps)
+        || get_physical_closure_environment_index(ctx, done) != Some(0)
+    {
         return Err(TargetAbiError::new(
-            "target root bridge: done_k must carry exact Cps closure provenance",
+            "target root bridge: frame Done must carry exact Cps closure provenance",
         ));
     }
-    let done = closure::Closure::from_type_ref(ctx, done_k_ty)
-        .ok_or_else(|| TargetAbiError::new("target root bridge: done_k is not a closure"))?;
-    let callable = core::Func::from_type_ref(ctx, done.func_type(ctx))
-        .ok_or_else(|| TargetAbiError::new("target root bridge: done_k is not core.func"))?;
+    let callable = cps_closure_function_type(ctx, done).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Done is not an exact Cps closure")
+    })?;
+    let callable = core::Func::from_type_ref(ctx, callable).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Done callable is not core.func")
+    })?;
     if callable.r#return(ctx) != physical_result || callable.params(ctx) != [source_result] {
         return Err(TargetAbiError::new(
-            "target root bridge: done_k must accept the exact source result and return empty",
+            "target root bridge: frame Done must accept the exact source result and return empty",
         ));
     }
     Ok(())
+}
+
+fn validate_root_dispatch_type(
+    ctx: &IrContext,
+    dispatch: TypeRef,
+    frame: TypeRef,
+    evidence: TypeRef,
+    physical_result: TypeRef,
+) -> Result<(), TargetAbiError> {
+    if get_physical_closure_convention(ctx, dispatch) != Some(CallingConvention::Cps)
+        || get_physical_closure_environment_index(ctx, dispatch) != Some(1)
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: frame Dispatch must carry exact Cps closure provenance",
+        ));
+    }
+    let callable = dispatch_callable_function_type(ctx, dispatch)?;
+    let callable = core::Func::from_type_ref(ctx, callable).expect("validated dispatch callable");
+    let params = callable.params(ctx);
+    let [actual_evidence, resume, prompt, ability, operation, payload] = params else {
+        return Err(TargetAbiError::new(
+            "target root bridge: frame Dispatch must have the exact terminal dispatch ABI",
+        ));
+    };
+    if callable.r#return(ctx) != physical_result
+        || *actual_evidence != evidence
+        || !is_core_i32(ctx, *prompt)
+        || !is_core_i32(ctx, *ability)
+        || !is_core_i32(ctx, *operation)
+        || !is_tribute_anyref(ctx, *payload)
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
+        ));
+    }
+    if get_physical_closure_convention(ctx, *resume) != Some(CallingConvention::Cps)
+        || get_physical_closure_environment_index(ctx, *resume) != Some(0)
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: frame Dispatch resume must carry exact Cps closure provenance",
+        ));
+    }
+    let resume = cps_closure_function_type(ctx, *resume).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Dispatch resume is not an exact Cps closure")
+    })?;
+    let resume = core::Func::from_type_ref(ctx, resume).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Dispatch resume callable is not core.func")
+    })?;
+    if resume.r#return(ctx) != physical_result
+        || resume.params(ctx).len() != 3
+        || resume.params(ctx)[0] != evidence
+        || resume.params(ctx)[1] != frame
+        || !is_tribute_anyref(ctx, resume.params(ctx)[2])
+    {
+        return Err(TargetAbiError::new(
+            "target root bridge: frame Dispatch resume differs from the exact frame ABI",
+        ));
+    }
+    Ok(())
+}
+
+fn dispatch_callable_function_type(
+    ctx: &IrContext,
+    dispatch: TypeRef,
+) -> Result<TypeRef, TargetAbiError> {
+    cps_closure_function_type(ctx, dispatch).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Dispatch is not an exact Cps closure")
+    })
+}
+
+fn dispatch_entry_function_type(
+    ctx: &mut IrContext,
+    dispatch: TypeRef,
+    anyref: TypeRef,
+) -> Result<TypeRef, TargetAbiError> {
+    let callable = dispatch_callable_function_type(ctx, dispatch)?;
+    let callable = core::Func::from_type_ref(ctx, callable).ok_or_else(|| {
+        TargetAbiError::new("target root bridge: frame Dispatch callable is not core.func")
+    })?;
+    let mut params = callable.params(ctx).to_vec();
+    params.insert(1, anyref);
+    Ok(core::func(ctx, callable.r#return(ctx), params).as_type_ref())
+}
+
+fn is_core_i32(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32") && data.params.is_empty()
+}
+
+fn is_tribute_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("tribute_rt")
+        && data.name == Symbol::new("anyref")
+        && data.params.is_empty()
 }
 
 fn root_export_convention(
@@ -1150,7 +1406,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%evidence: core.i32, %done: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     func.unreachable
   }
 }"#,
@@ -1166,13 +1422,28 @@ mod tests {
             CallingConvention::Cps,
             0,
         );
-        let worker = core::func(&mut ctx, never, [evidence, done]).as_type_ref();
+        let frame_name = Symbol::new("__tribute_continuation_frame_root_nil");
+        let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
+            &mut ctx, frame_name, nil,
+        );
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+            &mut ctx, evidence, frame, anyref, i32_ty,
+        );
+        let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
+            &mut ctx, frame_name, nil, done, dispatch,
+        );
+        ctx.register_type_alias(frame_name, layout);
+        let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
-        ctx.set_block_arg_type(entry, 1, done);
+        ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref()).attributes.insert(
             Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
             Attribute::Int(export as i128),
@@ -1193,12 +1464,13 @@ mod tests {
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, CPS_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
+        let dispatch = function(&ctx, module, ROOT_DISPATCH_SYMBOL);
 
         assert_eq!(
             get_calling_convention(&ctx, wrapper.op_ref()),
             Some(CallingConvention::Direct)
         );
-        for function in [worker, done_k] {
+        for function in [worker, done_k, dispatch] {
             assert_eq!(
                 get_calling_convention(&ctx, function.op_ref()),
                 Some(CallingConvention::Cps)
@@ -1215,6 +1487,12 @@ mod tests {
                 .attributes
                 .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR),
             Ok(Some(0))
+        );
+        assert_eq!(
+            ctx.op(dispatch.op_ref())
+                .attributes
+                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+            Ok(Some(1))
         );
         assert!(
             !ctx.op(worker.op_ref())
@@ -1237,6 +1515,55 @@ mod tests {
             ctx.op(call).attributes.get_symbol("callee"),
             Some(Symbol::new(CPS_MAIN_SYMBOL))
         );
+        let worker_callable = core::Func::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
+        let [worker_evidence, worker_frame] = worker_callable.params(&ctx) else {
+            panic!("root worker must have Evidence and ContinuationFrame parameters");
+        };
+        assert_eq!(ctx.value_ty(ctx.op_operands(call)[0]), *worker_evidence);
+        assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
+        assert_eq!(ctx.types.get(*worker_frame).dialect, Symbol::new("adt"));
+        assert_eq!(ctx.types.get(*worker_frame).name, Symbol::new("typeref"));
+        let frame_name = ctx
+            .types
+            .get(*worker_frame)
+            .attrs
+            .get_symbol("name")
+            .unwrap();
+        let frame_layout = ctx
+            .type_alias_by_name(frame_name)
+            .expect("worker frame must retain its exact nominal layout");
+        let fields = ctx.types.get(frame_layout).attrs.get("fields");
+        let Attribute::List(fields) = fields.expect("frame fields") else {
+            panic!("frame fields must be a list");
+        };
+        let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice()
+        else {
+            panic!("frame must have distinct Done and Dispatch fields");
+        };
+        let [Attribute::Symbol(done_name), Attribute::Type(done_ty)] = done_field.as_slice() else {
+            panic!("Done field must retain its exact type");
+        };
+        let [
+            Attribute::Symbol(dispatch_name),
+            Attribute::Type(dispatch_ty),
+        ] = dispatch_field.as_slice()
+        else {
+            panic!("Dispatch field must retain its exact type");
+        };
+        assert_eq!(*done_name, Symbol::new("done"));
+        assert_eq!(*dispatch_name, Symbol::new("dispatch"));
+        assert_ne!(*worker_frame, *done_ty);
+        assert_ne!(*done_ty, *dispatch_ty);
+        assert!(wrapper_ops.iter().any(|op| {
+            adt::StructNew::from_op(&ctx, *op).is_ok()
+                && ctx.op_result_types(*op) == [*worker_frame]
+                && ctx
+                    .op_operands(*op)
+                    .iter()
+                    .map(|value| ctx.value_ty(*value))
+                    .collect::<Vec<_>>()
+                    == vec![*done_ty, *dispatch_ty]
+        }));
         assert!(
             wrapper_ops
                 .iter()
@@ -1267,6 +1594,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("__tribute_cps_control"), "{printed}");
         assert!(!printed.contains("Step"), "{printed}");
+        assert!(!printed.contains("trampoline"), "{printed}");
     }
 
     #[test]
@@ -1299,6 +1627,72 @@ mod tests {
 
         assert!(!printed.contains("closure.lambda"), "{printed}");
         assert!(printed.contains("adt.struct_new"), "{printed}");
+    }
+
+    #[test]
+    fn malformed_root_frame_contract_fails_before_bridge_mutation() {
+        for (frame_result, malformed_layout, expected) in [
+            (
+                false,
+                false,
+                "result provenance differs from root source result",
+            ),
+            (true, false, "must have an exact nominal layout"),
+            (true, true, "layout provenance is malformed"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                r#"core.module @test {
+  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.unreachable
+  }
+}"#,
+            );
+            let main = function(&ctx, module, "main");
+            let nil = core::nil(&mut ctx).as_type_ref();
+            let never = core::never(&mut ctx).as_type_ref();
+            let evidence = ability::evidence_adt_type_ref(&mut ctx);
+            let frame_name = Symbol::new("__tribute_malformed_root_frame");
+            let i32_ty = ctx
+                .types
+                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
+                &mut ctx,
+                frame_name,
+                if frame_result { nil } else { i32_ty },
+            );
+            if malformed_layout {
+                let wrong = ctx.types.intern(
+                    TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+                        .attr("name", Attribute::Symbol(frame_name))
+                        .attr("fields", Attribute::List(vec![]))
+                        .build(),
+                );
+                ctx.register_type_alias(frame_name, wrong);
+            }
+            let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+            ctx.op_mut(main.op_ref())
+                .attributes
+                .insert(Symbol::new("type"), Attribute::Type(worker));
+            let entry = ctx.region(main.body(&ctx)).blocks[0];
+            ctx.set_block_arg_type(entry, 0, evidence);
+            ctx.set_block_arg_type(entry, 1, frame);
+            ctx.op_mut(main.op_ref()).attributes.insert(
+                Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
+                Attribute::Int(CallingConvention::Direct as i128),
+            );
+            ctx.op_mut(main.op_ref())
+                .attributes
+                .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+
+            lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+            let before = print_module(&ctx, module.op());
+            let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
     }
 
     #[test]
