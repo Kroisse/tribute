@@ -627,9 +627,14 @@ continuation, and handler closures. It must not expose Marker field indices,
 handler-table storage layout, closure field positions, or backend function
 pointer representation.
 
-`closure.*` represents closure allocation and projection. Closures lower
-differently per backend: Wasm uses function references plus GC structures, while
-native uses function pointers plus heap environments.
+`closure.*` represents closure allocation and projection. Convention-proven
+`closure.closure` keeps its exact callable type through shared effect lowering
+and target-ABI validation. Only after that validation may target lowering choose
+the canonical closure storage layout, rewriting every type-bearing surface
+coherently and removing transient storage-pack provenance; that provenance is
+not semantic type equivalence. Closures lower differently per backend: Wasm uses function
+references plus GC structures, while native uses function pointers plus heap
+environments.
 
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.

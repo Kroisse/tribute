@@ -204,10 +204,12 @@ named pre-CPS boundary가 아니다.
 `tribute_control` operation 또는 `callable`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`core.func` graph와 logical `ability.*` dispatch 표면만
-남는다. 이후 기존 `lower_closure_lambda`, `prepare_closure_lowering`,
-`lower_closures_in_func`가 closure 표면을 소비하고, `lower_ability_perform`,
-`resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지
-낮춘다. Native와 Wasm의 evidence pass가 `effect.*`를 backend ABI로 제거한다.
+남는다. `lower_closure_lambda`와 `prepare_closure_lowering`은 이 shared graph를
+준비하지만 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure
+type은 target ABI validation까지 유지한다. `lower_ability_perform`,
+`resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
+target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
+backend ABI로 제거한다.
 Backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
 `effect.*`를 각각 독립적으로 거부한다.
 
@@ -436,25 +438,34 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 
 Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 
+이 순서는 exact root contract가 있는 source-logical CPS route의 contract다.
+Compatibility route는 그 metadata 없이 기존 closure-lowering 순서를 유지하며,
+이를 이 target ABI boundary에 진입시키지 않는다.
+
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR)
 → tribute_control_to_cps
 → lower_closure_lambda
 → prepare_closure_lowering
-→ lower_closures_in_func
 → lower_ability_perform
 → resolve_evidence
 → lower_handle_dispatch
 → effect ABI verification
-→ backend-specific effect/signature/tail-call lowering
+→ target ABI validation and CPS signature physicalization
+→ lower_closures_in_func
+→ native evidence lowering → finalize_closure_storage_layout → native tail-call lowering
+  or finalize_closure_storage_layout → integrated Wasm evidence/tail-call lowering
 → backend-ready verification
 ```
 
 `tribute_control_to_cps`의 출력은 physical `func.*`/`closure.*` callable 표면과
-logical `ability.*` dispatch 표면이다. Closure pass가 전자를 소비하고,
-ability/evidence pass가 후자를 `effect.*`까지 낮춘 뒤 backend가 evidence runtime
-call, closure decomposition과 proper tail transfer로 제거한다. 다른 일반
-최적화는 이 경계 사이에 놓일 수 있지만 각 named legality를 바꾸지 않는다.
+logical `ability.*` dispatch 표면이다. Shared ability/evidence pass와 strict target
+ABI validation은 convention-proven `closure.closure` callable type을 그대로
+소비한다. 그 뒤 target pipeline이 closure operation과 모든 type-bearing storage
+surface를 canonical `_closure` layout으로 함께 바꾸고 backend evidence/runtime와
+proper tail transfer lowering이 이를 소비한다. `tribute.closure_callable_type`은
+exact closure lowering에서만 잠시 쓰고 storage finalization에서 제거한다. 이는
+semantic type equivalence를 만들지 않는다.
 
 ## Effect ABI Boundary
 
