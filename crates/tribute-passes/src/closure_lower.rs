@@ -667,14 +667,37 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 /// Lower closures using arena IR.
 ///
 /// This compatibility entry point prepares module-level function signatures,
-/// then lowers each function body independently.
+/// then lowers every function body in the module tree.
 pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
     prepare_closure_lowering(ctx, module);
 
-    for op in module.ops(ctx) {
-        let Ok(func_op) = func::Func::from_op(ctx, op) else {
-            continue;
+    lower_prepared_closures(ctx, module);
+}
+
+/// Lower every already-prepared function body in a module to closure storage.
+///
+/// The worklist is refreshed after each function so functions introduced by an
+/// earlier transformation are lowered once as well. Processing each function
+/// operation at most once keeps this traversal bounded without relying on
+/// function names or target-specific pipeline ordering.
+pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) {
+    let mut lowered = HashSet::new();
+    let mut worklist = Vec::new();
+
+    loop {
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if let Ok(func_op) = func::Func::from_op(ctx, op)
+                && lowered.insert(op)
+            {
+                worklist.push(func_op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+
+        let Some(func_op) = worklist.pop() else {
+            break;
         };
+
         lower_closures_in_func(ctx, func_op);
     }
 }
@@ -891,6 +914,23 @@ impl Pass for LowerClosures {
     }
 }
 
+/// PassManager-friendly closure lowering for a module prepared earlier in the
+/// pipeline.
+pub struct LowerPreparedClosures;
+
+impl Pass for LowerPreparedClosures {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-prepared-closures"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+        lower_prepared_closures(ctx, target.into());
+        Ok(())
+    }
+}
+
 /// PassManager-friendly module preparation for closure lowering.
 pub struct PrepareClosureLowering;
 
@@ -1032,6 +1072,20 @@ mod tests {
         )
     }
 
+    fn assert_module_is_structurally_valid(ctx: &IrContext, module: Module) {
+        let use_chains = trunk_ir::validation::validate_use_chains(ctx, module);
+        assert!(
+            use_chains.is_ok(),
+            "invalid use chains after lowering:\n{use_chains}"
+        );
+
+        let operation_verifiers = trunk_ir::validation::validate_operation_verifiers(ctx, module);
+        assert!(
+            operation_verifiers.is_ok(),
+            "invalid operations after lowering:\n{operation_verifiers}"
+        );
+    }
+
     #[test]
     fn prepare_pass_adapter_updates_function_signatures() {
         let mut ctx = IrContext::new();
@@ -1122,6 +1176,45 @@ mod tests {
                 "{name} should pass the enclosing function's evidence argument immediately after table index"
             );
         }
+    }
+
+    #[test]
+    fn module_entrypoint_lowers_nested_function_closures() {
+        let mut ctx = IrContext::new();
+        let module = nested_closure_test_module(&mut ctx);
+
+        lower_closures(&mut ctx, module);
+        assert_module_is_structurally_valid(&ctx, module);
+
+        let inner = func_by_name_recursive(&ctx, module, "inner");
+        let inner_ir = print_module(&ctx, inner.op_ref());
+        assert!(
+            !inner_ir.contains("closure.new"),
+            "module lowering must revisit nested functions:\n{inner_ir}"
+        );
+        assert!(
+            !inner_ir.contains("closure.func") && !inner_ir.contains("closure.env"),
+            "nested closure accessors must be fully lowered:\n{inner_ir}"
+        );
+    }
+
+    #[test]
+    fn prepared_module_worklist_lowers_nested_function_closures() {
+        let mut ctx = IrContext::new();
+        let module = nested_closure_test_module(&mut ctx);
+
+        prepare_closure_lowering(&mut ctx, module);
+        let core_module = core::Module::from_op(&ctx, module.op()).unwrap();
+        let mut pass = LowerPreparedClosures;
+        pass.run(&mut ctx, core_module).unwrap();
+        assert_module_is_structurally_valid(&ctx, module);
+
+        let inner = func_by_name_recursive(&ctx, module, "inner");
+        let inner_ir = print_module(&ctx, inner.op_ref());
+        assert!(
+            !inner_ir.contains("closure.new"),
+            "prepared module worklist must lower nested functions:\n{inner_ir}"
+        );
     }
 
     #[test]
