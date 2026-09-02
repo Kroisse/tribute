@@ -950,7 +950,7 @@ enum TargetClosureStorageBoundary {
 }
 
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
-/// observes semantic closure types first; `LowerClosuresInFunc` then consumes
+/// observes semantic closure types first; `LowerPreparedClosures` then consumes
 /// any remaining closure operations before whole-module storage finalization.
 fn enter_target_closure_storage_boundary(
     ctx: &mut IrContext,
@@ -964,8 +964,7 @@ fn enter_target_closure_storage_boundary(
     let core_module = core_dialect::Module::from_op(ctx, m.op())
         .expect("target closure lowering requires a core.module");
     let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
+    pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     install_debug_use_chain_verifier(&mut pm);
     pm.run(ctx, core_module)?;
     Ok(TargetClosureStorageBoundary::SourceLogicalCps)
