@@ -1229,7 +1229,6 @@ fn prepare_module_to_native(
             tribute_passes::native::type_converter::native_type_converter(ctx);
         tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter)
             .map_err(native_conversion_failure)?;
-        tribute_passes::native::rc_materialization::lower_anyref_to_ptr(ctx, module);
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcInsertion) {

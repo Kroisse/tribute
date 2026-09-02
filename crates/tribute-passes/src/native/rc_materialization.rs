@@ -9,10 +9,10 @@ use std::collections::HashMap;
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, get_struct_fields};
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, clif, core};
+use trunk_ir::dialect::adt;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::{Module, TypeConverter};
-use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, Symbol, TypeRef, ValueRef};
 
 use super::ownership_plan::{ActionAnchor, ActionKind, NativeOwnershipPlan, OwnershipPlanError};
 
@@ -87,130 +87,6 @@ pub fn materialize(
         insert_after(ctx, block, op, operations);
     }
     Ok(())
-}
-
-/// Erase the remaining `anyref` spelling after explicit plan actions have
-/// already fixed RC meaning. This is representation conversion only; it does
-/// not inspect values to discover further ownership operations.
-pub fn lower_anyref_to_ptr(ctx: &mut IrContext, module: Module) {
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let anyref_ty = ctx.types.intern(
-        trunk_ir::TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
-    );
-    let Some(first_block) = module.first_block(ctx) else {
-        return;
-    };
-    let module_ops = ctx
-        .block(first_block)
-        .ops
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    for op in module_ops {
-        if let Ok(function) = clif::Func::from_op(ctx, op) {
-            let ty = function.r#type(ctx);
-            let rewritten = rewrite_type_anyref(ctx, ty, anyref_ty, ptr_ty);
-            if rewritten != ty {
-                ctx.op_mut(op)
-                    .attributes
-                    .insert(Symbol::new("type"), trunk_ir::Attribute::Type(rewritten));
-            }
-            lower_anyref_in_region(ctx, function.body(ctx), ptr_ty);
-        }
-    }
-}
-
-fn lower_anyref_in_region(ctx: &mut IrContext, region: RegionRef, ptr_ty: TypeRef) {
-    let anyref_ty = ctx.types.intern(
-        trunk_ir::TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
-    );
-    let blocks = ctx
-        .region(region)
-        .blocks
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    for block in blocks {
-        for index in 0..ctx.block_args(block).len() {
-            let value = ctx.block_args(block)[index];
-            if ctx.value_ty(value) == anyref_ty {
-                ctx.set_block_arg_type(block, index as u32, ptr_ty);
-            }
-        }
-        let operations = ctx.block(block).ops.iter().copied().collect::<Vec<_>>();
-        for op in operations {
-            for index in 0..ctx.op_results(op).len() {
-                if ctx.value_ty(ctx.op_result(op, index as u32)) == anyref_ty {
-                    ctx.set_op_result_type(op, index as u32, ptr_ty);
-                }
-            }
-            rewrite_op_type_attrs(ctx, op, anyref_ty, ptr_ty);
-            let nested_regions = ctx.op(op).regions.iter().copied().collect::<Vec<_>>();
-            for nested in nested_regions {
-                lower_anyref_in_region(ctx, nested, ptr_ty);
-            }
-        }
-    }
-}
-
-fn rewrite_op_type_attrs(ctx: &mut IrContext, op: OpRef, anyref_ty: TypeRef, ptr_ty: TypeRef) {
-    let attrs = ctx
-        .op(op)
-        .attributes
-        .iter()
-        .map(|(key, value)| (*key, value.clone()))
-        .collect::<Vec<_>>();
-    for (key, attr) in attrs {
-        if let trunk_ir::Attribute::Type(ty) = attr {
-            let rewritten = rewrite_type_anyref(ctx, ty, anyref_ty, ptr_ty);
-            if rewritten != ty {
-                ctx.op_mut(op)
-                    .attributes
-                    .insert(key, trunk_ir::Attribute::Type(rewritten));
-            }
-        }
-    }
-}
-
-fn rewrite_type_anyref(
-    ctx: &mut IrContext,
-    ty: TypeRef,
-    anyref_ty: TypeRef,
-    ptr_ty: TypeRef,
-) -> TypeRef {
-    if ty == anyref_ty {
-        return ptr_ty;
-    }
-    let (dialect, name, params, attrs) = {
-        let data = ctx.types.get(ty);
-        (
-            data.dialect,
-            data.name,
-            data.params.to_vec(),
-            data.attrs
-                .iter()
-                .map(|(key, value)| (*key, value.clone()))
-                .collect::<Vec<_>>(),
-        )
-    };
-    if dialect != Symbol::new("core") || name != Symbol::new("func") {
-        return ty;
-    }
-    let rewritten = params
-        .iter()
-        .map(|&param| rewrite_type_anyref(ctx, param, anyref_ty, ptr_ty))
-        .collect::<Vec<_>>();
-    if rewritten == params {
-        return ty;
-    }
-    let mut builder = trunk_ir::TypeDataBuilder::new(dialect, name);
-    for param in rewritten {
-        builder = builder.param(param);
-    }
-    for (key, attr) in attrs {
-        builder = builder.attr(key, attr);
-    }
-    ctx.types.intern(builder.build())
 }
 
 fn build_schedule(
