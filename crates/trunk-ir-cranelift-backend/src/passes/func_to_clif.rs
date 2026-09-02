@@ -244,6 +244,9 @@ impl RewritePattern for FuncCallPattern {
             Symbol::new("clif"),
             Symbol::new("call"),
         );
+        for (index, result_ty) in rewriter.result_types(ctx, op).into_iter().enumerate() {
+            ctx.set_op_result_type(new_op, index as u32, result_ty);
+        }
         ctx.op_mut(new_op)
             .attributes
             .insert(Symbol::new("callee"), Attribute::Symbol(callee));
@@ -519,10 +522,13 @@ impl RewritePattern for ClosureStructAdaptPattern {
 
 #[cfg(test)]
 mod tests {
+    use trunk_ir::Symbol;
     use trunk_ir::context::IrContext;
+    use trunk_ir::dialect::core;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
+    use trunk_ir::types::TypeDataBuilder;
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
   func.func @direct_target(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
@@ -554,6 +560,37 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn direct_call_result_uses_the_converted_type() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @callee() -> tribute_rt.anyref
+  func.func @caller() -> tribute_rt.anyref {
+    %result = func.call {callee = @callee} : tribute_rt.anyref
+    func.return %result
+  }
+}"#,
+        );
+        let anyref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
+
+        super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
+
+        let printed = print_module(&ctx, module.op());
+        let call = printed
+            .lines()
+            .find(|line| line.contains("clif.call"))
+            .expect("lowered direct call");
+        assert!(call.contains(": core.ptr"), "{printed}");
+        assert!(!call.contains("tribute_rt.anyref"), "{printed}");
     }
 
     #[test]

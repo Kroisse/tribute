@@ -120,6 +120,9 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
 
     // === Primitive type conversions ===
     tc.add_conversion(move |ctx, ty| {
+        if ty == r.tribute_rt_anyref {
+            return Some(r.core_ptr);
+        }
         if ty == r.tribute_rt_int || ty == r.tribute_rt_nat || ty == r.tribute_rt_bool {
             return Some(r.core_i32);
         }
@@ -506,4 +509,78 @@ struct NativeTypeRefsCopy {
     core_i8: TypeRef,
     evidence_ty: TypeRef,
     marker_ty: TypeRef,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::dialect::clif;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    #[test]
+    fn native_type_converter_maps_anyref_to_ptr() {
+        let mut ctx = IrContext::new();
+        let (type_converter, refs) = native_type_converter(&mut ctx);
+
+        assert_eq!(
+            type_converter.convert_type(&ctx, refs.tribute_rt_anyref),
+            Some(refs.core_ptr)
+        );
+    }
+
+    #[test]
+    fn native_func_lowering_converts_bodyless_and_bodied_anyref_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @declaration(%value: tribute_rt.anyref) -> tribute_rt.anyref
+  func.func @definition(%value: tribute_rt.anyref) -> tribute_rt.anyref {
+    func.return %value
+  }
+}"#,
+        );
+        let (type_converter, refs) = native_type_converter(&mut ctx);
+
+        trunk_ir_cranelift_backend::passes::func_to_clif::lower(&mut ctx, module, type_converter)
+            .expect("func-to-clif lowering");
+
+        let functions = module
+            .ops(&ctx)
+            .into_iter()
+            .map(|op| clif::Func::from_op(&ctx, op).expect("clif.func"))
+            .collect::<Vec<_>>();
+        let declaration = functions
+            .iter()
+            .find(|function| function.sym_name(&ctx) == Symbol::new("declaration"))
+            .expect("bodyless declaration");
+        let definition = functions
+            .iter()
+            .find(|function| function.sym_name(&ctx) == Symbol::new("definition"))
+            .expect("bodied definition");
+
+        assert_eq!(ctx.op(declaration.op_ref()).regions.len(), 0);
+        assert_eq!(
+            ctx.types.get(declaration.r#type(&ctx)).params.as_slice(),
+            [refs.core_ptr, refs.core_ptr]
+        );
+        assert_eq!(
+            ctx.types.get(definition.r#type(&ctx)).params.as_slice(),
+            [refs.core_ptr, refs.core_ptr]
+        );
+
+        let body = definition.body(&ctx);
+        let entry = ctx
+            .region(body)
+            .blocks
+            .first()
+            .copied()
+            .expect("definition entry");
+        assert_eq!(ctx.value_ty(ctx.block_args(entry)[0]), refs.core_ptr);
+
+        let printed = print_module(&ctx, module.op());
+        assert!(!printed.contains("tribute_rt.anyref"), "{printed}");
+    }
 }
