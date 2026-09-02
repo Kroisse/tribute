@@ -10,6 +10,7 @@
 //! with their module path (e.g. `nested::helper`).
 
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::ops::ControlFlow;
 
 use crate::analysis::Analysis;
@@ -53,10 +54,12 @@ pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
 /// `CallGraph` as an [`Analysis`]: expects `target` to be a `core.module` op
 /// and delegates to [`build_call_graph`].
 impl Analysis for CallGraph {
-    fn compute(ctx: &IrContext, target: OpRef) -> Self {
+    type Error = Infallible;
+
+    fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, Self::Error> {
         let module =
             Module::new(ctx, target).expect("CallGraph analysis target must be a `core.module` op");
-        build_call_graph(ctx, module)
+        Ok(build_call_graph(ctx, module))
     }
 }
 
@@ -578,7 +581,7 @@ mod tests {
         let direct = build_call_graph(&ctx, module);
 
         let mut am = AnalysisCache::new();
-        let cached = am.get::<CallGraph>(&ctx, module.op());
+        let cached = am.get::<CallGraph>(&ctx, module.op()).unwrap();
 
         assert_eq!(direct.func_ops.len(), cached.func_ops.len());
         assert_eq!(direct.edges.len(), cached.edges.len());
@@ -589,7 +592,7 @@ mod tests {
         assert!(cached.edges.contains_key(&Symbol::new("main")));
 
         // Second call should hit the cache.
-        let cached2 = am.get::<CallGraph>(&ctx, module.op());
+        let cached2 = am.get::<CallGraph>(&ctx, module.op()).unwrap();
         assert!(std::sync::Arc::ptr_eq(&cached, &cached2));
     }
 
