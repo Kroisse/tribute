@@ -108,6 +108,22 @@ impl AnalysisError {
     }
 }
 
+impl fmt::Display for AnalysisError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "analysis {} failed for {}: {}",
+            self.analysis_type, self.target, self.source
+        )
+    }
+}
+
+impl Error for AnalysisError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 /// An analysis computable from an IR context plus a target operation
 /// (typically a `core.module` op).
 ///
@@ -127,22 +143,6 @@ pub trait Analysis: Any + Send + Sync {
     fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, AnalysisError>
     where
         Self: Sized;
-}
-
-impl fmt::Display for AnalysisError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "analysis {} failed for {}: {}",
-            self.analysis_type, self.target, self.source
-        )
-    }
-}
-
-impl Error for AnalysisError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.source.as_ref())
-    }
 }
 
 /// Lazy, typed cache of analyses keyed by `(TypeId, OpRef)`.
