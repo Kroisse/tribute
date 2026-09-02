@@ -72,26 +72,6 @@ use std::sync::Arc;
 use crate::context::IrContext;
 use crate::refs::OpRef;
 
-/// An analysis computable from an IR context plus a target operation
-/// (typically a `core.module` op).
-///
-/// Analyses should be pure functions of the IR state: computing twice on
-/// an unchanged context must produce equivalent results.
-pub trait Analysis: Any + Send + Sync {
-    /// Internal IR-analysis failure returned when computation cannot produce
-    /// a valid result for the requested target.
-    type Error: Error + Send + Sync + 'static;
-
-    /// Compute this analysis for `target` in `ctx`.
-    ///
-    /// Return an error for invalid input IR or an unsupported analysis
-    /// boundary. Violated caller contracts and impossible implementation
-    /// invariants must panic rather than be represented as analysis failures.
-    fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, Self::Error>
-    where
-        Self: Sized;
-}
-
 /// Internal IR-analysis failure returned by [`AnalysisCache::get`].
 ///
 /// The wrapper records the concrete analysis type and requested target in
@@ -104,7 +84,12 @@ pub struct AnalysisError {
 }
 
 impl AnalysisError {
-    fn new<A: Analysis>(target: OpRef, source: A::Error) -> Self {
+    /// Attach an analysis-specific source error to its exact analysis type
+    /// and target operation.
+    pub fn new<A>(target: OpRef, source: impl Error + Send + Sync + 'static) -> Self
+    where
+        A: Analysis,
+    {
         Self {
             analysis_type: type_name::<A>(),
             target,
@@ -121,6 +106,27 @@ impl AnalysisError {
     pub fn target(&self) -> OpRef {
         self.target
     }
+}
+
+/// An analysis computable from an IR context plus a target operation
+/// (typically a `core.module` op).
+///
+/// Analyses should be pure functions of the IR state: computing twice on
+/// an unchanged context must produce equivalent results. `compute` is a
+/// typed static factory: the analysis type is both the query key and the
+/// complete concrete result stored by [`AnalysisCache`].
+pub trait Analysis: Any + Send + Sync {
+    /// Compute this analysis for `target` in `ctx`.
+    ///
+    /// Return an error for invalid input IR or an unsupported analysis
+    /// boundary. Construct failures with [`AnalysisError::new`] using this
+    /// analysis type so dependent queries can preserve their original
+    /// analysis and target context. Violated caller contracts and impossible
+    /// implementation invariants must panic rather than be represented as
+    /// analysis failures.
+    fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, AnalysisError>
+    where
+        Self: Sized;
 }
 
 impl fmt::Display for AnalysisError {
@@ -197,9 +203,7 @@ impl AnalysisCache {
 
         // Compute before inserting so a failure cannot publish a partial or
         // failed type-erased entry. The next lookup is therefore a retry.
-        let analysis = Arc::new(
-            A::compute(ctx, target).map_err(|error| AnalysisError::new::<A>(target, error))?,
-        );
+        let analysis = Arc::new(A::compute(ctx, target)?);
         let entry: Arc<dyn Any + Send + Sync> = analysis.clone();
         self.cache.insert(key, entry);
         Ok(analysis)
@@ -263,9 +267,7 @@ mod tests {
     }
 
     impl Analysis for DummyAnalysis {
-        type Error = TestAnalysisError;
-
-        fn compute(_ctx: &IrContext, target: OpRef) -> Result<Self, Self::Error> {
+        fn compute(_ctx: &IrContext, target: OpRef) -> Result<Self, AnalysisError> {
             Ok(Self { target })
         }
     }
@@ -274,9 +276,7 @@ mod tests {
     struct OtherAnalysis;
 
     impl Analysis for OtherAnalysis {
-        type Error = TestAnalysisError;
-
-        fn compute(_ctx: &IrContext, _target: OpRef) -> Result<Self, Self::Error> {
+        fn compute(_ctx: &IrContext, _target: OpRef) -> Result<Self, AnalysisError> {
             Ok(Self)
         }
     }
@@ -291,9 +291,7 @@ mod tests {
     struct CountedAnalysis;
 
     impl Analysis for CountedAnalysis {
-        type Error = TestAnalysisError;
-
-        fn compute(_ctx: &IrContext, _target: OpRef) -> Result<Self, Self::Error> {
+        fn compute(_ctx: &IrContext, _target: OpRef) -> Result<Self, AnalysisError> {
             COUNTED_COMPUTES.fetch_add(1, Ordering::SeqCst);
             Ok(Self)
         }
@@ -303,16 +301,14 @@ mod tests {
     struct NonEmptyModuleAnalysis;
 
     impl Analysis for NonEmptyModuleAnalysis {
-        type Error = TestAnalysisError;
-
-        fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, Self::Error> {
+        fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, AnalysisError> {
             let module = crate::rewrite::Module::new(ctx, target)
                 .expect("test only requests this analysis for core.module targets");
             module
                 .body(ctx)
                 .filter(|&body| !ctx.region(body).blocks.is_empty())
                 .map(|_| Self)
-                .ok_or(TestAnalysisError)
+                .ok_or_else(|| AnalysisError::new::<Self>(target, TestAnalysisError))
         }
     }
 
