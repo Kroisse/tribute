@@ -33,6 +33,7 @@ use smallvec::SmallVec;
 
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
+use crate::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
@@ -129,15 +130,45 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
+/// Whether a one-block region has only terminal structured control or a
+/// proper-tail transfer, so lowering it cannot need a continuation block.
+fn is_terminal_region(ctx: &IrContext, region: RegionRef) -> bool {
+    let [branch] = ctx.region(region).blocks.as_slice() else {
+        return false;
+    };
+    let Some(&terminator) = ctx.block(*branch).ops.last() else {
+        return false;
+    };
+    if scf::If::matches(ctx, terminator) {
+        is_terminal_never_if(ctx, *branch, terminator)
+    } else if scf::Switch::matches(ctx, terminator) {
+        ctx.op_results(terminator).is_empty()
+            && has_only_terminal_region_successors(ctx, terminator)
+    } else {
+        !is_scf_control_flow(ctx, terminator)
+            && crate::validation::is_proper_tail_terminator(ctx, terminator)
+    }
+}
+
+/// Whether every semantic entry successor of a structured operation is a
+/// terminal region. Missing, incomplete, or parent-returning mappings are
+/// nonterminal by construction.
+fn has_only_terminal_region_successors(ctx: &IrContext, op: OpRef) -> bool {
+    let Some(interface) = RegionBranchOps::get(ctx, op) else {
+        return false;
+    };
+    let Ok(successors) = interface.successors(ctx, op, RegionBranchPoint::Parent) else {
+        return false;
+    };
+    !successors.as_slice().is_empty()
+        && successors.as_slice().iter().all(|successor| {
+            matches!(successor, RegionSuccessor::Region(region) if is_terminal_region(ctx, *region))
+        })
+}
+
 /// Whether this is a terminal `scf.if : core.never` whose branches each
 /// already transfer control. Such an if has no continuation to merge into.
-fn is_terminal_never_if(
-    ctx: &IrContext,
-    block: BlockRef,
-    scf_op: OpRef,
-    then_region: RegionRef,
-    else_region: RegionRef,
-) -> bool {
+fn is_terminal_never_if(ctx: &IrContext, block: BlockRef, scf_op: OpRef) -> bool {
     let [result] = ctx.op_results(scf_op) else {
         return false;
     };
@@ -150,16 +181,7 @@ fn is_terminal_never_if(
         return false;
     }
 
-    [then_region, else_region].into_iter().all(|region| {
-        let [branch] = ctx.region(region).blocks.as_slice() else {
-            return false;
-        };
-        let Some(&terminator) = ctx.block(*branch).ops.last() else {
-            return false;
-        };
-        !is_scf_control_flow(ctx, terminator)
-            && crate::validation::is_proper_tail_terminator(ctx, terminator)
-    })
+    has_only_terminal_region_successors(ctx, scf_op)
 }
 
 /// Lower a terminal `scf.if : core.never` without creating a merge block.
@@ -199,7 +221,7 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
     let then_region = if_op.then_region(ctx);
     let else_region = if_op.else_region(ctx);
 
-    if is_terminal_never_if(ctx, block, scf_op, then_region, else_region) {
+    if is_terminal_never_if(ctx, block, scf_op) {
         lower_terminal_never_if(ctx, block, scf_op, loc, cond, then_region, else_region);
         return;
     }
@@ -312,35 +334,158 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
     }
 }
 
+struct SwitchArms {
+    discriminant: ValueRef,
+    cases: Vec<(Attribute, RegionRef)>,
+    default_region: Option<RegionRef>,
+}
+
+/// Immutable switch dispatch inputs after all arm blocks have been inlined.
+struct SwitchDispatch<'a> {
+    discriminant: ValueRef,
+    cases: &'a [(Attribute, RegionRef)],
+    case_entries: &'a [BlockRef],
+    default_entry: BlockRef,
+    parent_region: RegionRef,
+    insert_before: Option<BlockRef>,
+}
+
+/// Collect a well-formed resultless switch's discriminant and arms.
+///
+/// The lowering intentionally leaves malformed switches untouched so the
+/// operation and interface verifiers can report the source shape.
+fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
+    if !ctx.op_results(scf_op).is_empty() {
+        return None;
+    }
+
+    let [discriminant] = ctx.op_operands(scf_op) else {
+        return None;
+    };
+    let [body_region] = ctx.op(scf_op).regions.as_slice() else {
+        return None;
+    };
+    let [body_block] = ctx.region(*body_region).blocks.as_slice() else {
+        return None;
+    };
+
+    let mut cases = Vec::new();
+    let mut default_region = None;
+    for &arm in &ctx.block(*body_block).ops {
+        let arm_data = ctx.op(arm);
+        let [arm_region] = arm_data.regions.as_slice() else {
+            return None;
+        };
+        let [_arm_block] = ctx.region(*arm_region).blocks.as_slice() else {
+            return None;
+        };
+        if scf::Case::matches(ctx, arm) {
+            cases.push((arm_data.attributes.get("value")?.clone(), *arm_region));
+        } else if scf::Default::matches(ctx, arm) {
+            if default_region.replace(*arm_region).is_some() {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    Some(SwitchArms {
+        discriminant: *discriminant,
+        cases,
+        default_region,
+    })
+}
+
+/// Whether a resultless switch is the final operation in its block and every
+/// selectable arm transfers control, leaving no continuation to merge into.
+fn is_terminal_resultless_switch(
+    ctx: &IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    cases: &[(Attribute, RegionRef)],
+    default_region: Option<RegionRef>,
+) -> bool {
+    ctx.block(block).ops.last() == Some(&scf_op)
+        && default_region.is_some_and(|region| is_terminal_region(ctx, region))
+        && cases
+            .iter()
+            .all(|(_, region)| is_terminal_region(ctx, *region))
+}
+
+/// Lower a terminal resultless switch without manufacturing an unreachable
+/// merge block. The explicit default is required because an unmatched switch
+/// must also transfer control.
+fn lower_terminal_resultless_switch(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    loc: Location,
+    discriminant: ValueRef,
+    cases: Vec<(Attribute, RegionRef)>,
+    default_region: RegionRef,
+) {
+    let parent_region = ctx.block(block).parent_region.unwrap();
+    let blocks = ctx.region(parent_region).blocks.to_vec();
+    let insert_before = blocks
+        .iter()
+        .position(|&candidate| candidate == block)
+        .and_then(|index| blocks.get(index + 1).copied());
+
+    ctx.detach_op(scf_op);
+    let mut case_entries = Vec::new();
+    let mut all_inlined = Vec::new();
+    for (_, case_region) in &cases {
+        let inlined = inline_region_blocks(ctx, *case_region, parent_region, insert_before);
+        case_entries.push(inlined[0]);
+        all_inlined.push(inlined);
+    }
+    let default_blocks = inline_region_blocks(ctx, default_region, parent_region, insert_before);
+    let default_entry = default_blocks[0];
+    all_inlined.push(default_blocks);
+    ctx.remove_op(scf_op);
+
+    SwitchDispatch {
+        discriminant,
+        cases: &cases,
+        case_entries: &case_entries,
+        default_entry,
+        parent_region,
+        insert_before,
+    }
+    .append(ctx, block, loc);
+
+    for group in &all_inlined {
+        for &branch in group {
+            transform_block(ctx, branch);
+        }
+    }
+}
+
 /// Lower `scf.switch` to chained cond_br comparisons.
 fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
-    // `scf.switch` is resultless. Leave malformed result-bearing input
-    // untouched so the verifier can reject it without accessing malformed
-    // body regions or corrupting CFG edges.
-    if !ctx.op_results(scf_op).is_empty() {
+    let Some(arms) = switch_arms(ctx, scf_op) else {
+        return;
+    };
+
+    if is_terminal_resultless_switch(ctx, block, scf_op, &arms.cases, arms.default_region) {
+        lower_terminal_resultless_switch(
+            ctx,
+            block,
+            scf_op,
+            loc,
+            arms.discriminant,
+            arms.cases,
+            arms.default_region.unwrap(),
+        );
         return;
     }
 
-    let switch_op = scf::Switch::from_op(ctx, scf_op).unwrap();
-    let discriminant = switch_op.discriminant(ctx);
-    let body_region = switch_op.body(ctx);
-
-    // Collect cases and default from the body region
-    let body_blocks_vec = ctx.region(body_region).blocks.to_vec();
-    let body_block = body_blocks_vec[0];
-    let body_ops: Vec<OpRef> = ctx.block(body_block).ops.to_vec();
-
-    let mut cases: Vec<(Attribute, RegionRef)> = Vec::new();
-    let mut default_region: Option<RegionRef> = None;
-
-    for &op in &body_ops {
-        if let Ok(case_op) = scf::Case::from_op(ctx, op) {
-            cases.push((case_op.value(ctx), case_op.body(ctx)));
-        } else if scf::Default::matches(ctx, op) {
-            let default_op = scf::Default::from_op(ctx, op).unwrap();
-            default_region = Some(default_op.body(ctx));
-        }
-    }
+    let SwitchArms {
+        discriminant,
+        cases,
+        default_region,
+    } = arms;
 
     // Split block at scf op: ops after go to merge block
     let merge_block = split_block(ctx, block, scf_op);
@@ -398,82 +543,109 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
     };
     ctx.remove_op(scf_op);
 
-    // Get the discriminant type for comparisons
-    let disc_ty = ctx.value_ty(discriminant);
-
-    if cases.is_empty() {
-        // No cases: branch directly to default
-        let br = cf::br(
-            ctx,
-            loc,
-            std::iter::empty::<crate::refs::ValueRef>(),
-            default_entry,
-        );
-        ctx.push_op(block, br.op_ref());
-    } else {
-        // Build chained comparisons
-        // We'll use the entry block for the first comparison, and create
-        // new blocks for subsequent comparisons.
-        let mut current_block = block;
-
-        for (i, ((case_attr, _), &case_entry)) in cases.iter().zip(case_entries.iter()).enumerate()
-        {
-            let is_last = i == cases.len() - 1;
-
-            // Create comparison: discriminant == case_value
-            let case_const = arith::r#const(ctx, loc, disc_ty, case_attr.clone());
-            ctx.push_op(current_block, case_const.op_ref());
-
-            let i1_ty = ctx.types.intern(
-                crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build(),
-            );
-            let cmp = arith::cmpi(
-                ctx,
-                loc,
-                discriminant,
-                case_const.result(ctx),
-                i1_ty,
-                Symbol::new("eq"),
-            );
-            ctx.push_op(current_block, cmp.op_ref());
-
-            let else_target = if is_last {
-                default_entry
-            } else {
-                // Create next check block
-                let next_block = ctx.create_block(BlockData {
-                    location: loc,
-                    args: vec![],
-                    ops: SmallVec::new(),
-                    parent_region: None,
-                });
-                // Insert into parent region before merge
-                let merge_pos = ctx
-                    .region(parent_region)
-                    .blocks
-                    .iter()
-                    .position(|&b| b == merge_block)
-                    .unwrap();
-                ctx.region_mut(parent_region)
-                    .blocks
-                    .insert(merge_pos, next_block);
-                ctx.block_mut(next_block).parent_region = Some(parent_region);
-                next_block
-            };
-
-            let cond_br = cf::cond_br(ctx, loc, cmp.result(ctx), case_entry, else_target);
-            ctx.push_op(current_block, cond_br.op_ref());
-
-            if !is_last {
-                current_block = else_target;
-            }
-        }
+    SwitchDispatch {
+        discriminant,
+        cases: &cases,
+        case_entries: &case_entries,
+        default_entry,
+        parent_region,
+        insert_before: Some(merge_block),
     }
+    .append(ctx, block, loc);
 
     // Recursively transform inlined blocks
     for group in &all_inlined {
         for &b in group {
             transform_block(ctx, b);
+        }
+    }
+}
+
+/// Add the CFG dispatch chain for a switch whose arm entries are already in
+/// the parent region.
+impl SwitchDispatch<'_> {
+    fn append(self, ctx: &mut IrContext, block: BlockRef, loc: Location) {
+        let Self {
+            discriminant,
+            cases,
+            case_entries,
+            default_entry,
+            parent_region,
+            insert_before,
+        } = self;
+
+        // Get the discriminant type for comparisons
+        let disc_ty = ctx.value_ty(discriminant);
+
+        if cases.is_empty() {
+            // No cases: branch directly to default
+            let br = cf::br(
+                ctx,
+                loc,
+                std::iter::empty::<crate::refs::ValueRef>(),
+                default_entry,
+            );
+            ctx.push_op(block, br.op_ref());
+        } else {
+            // Build chained comparisons
+            // We'll use the entry block for the first comparison, and create
+            // new blocks for subsequent comparisons.
+            let mut current_block = block;
+
+            for (i, ((case_attr, _), &case_entry)) in cases.iter().zip(case_entries).enumerate() {
+                let is_last = i == cases.len() - 1;
+
+                // Create comparison: discriminant == case_value
+                let case_const = arith::r#const(ctx, loc, disc_ty, case_attr.clone());
+                ctx.push_op(current_block, case_const.op_ref());
+
+                let i1_ty = ctx.types.intern(
+                    crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
+                        .build(),
+                );
+                let cmp = arith::cmpi(
+                    ctx,
+                    loc,
+                    discriminant,
+                    case_const.result(ctx),
+                    i1_ty,
+                    Symbol::new("eq"),
+                );
+                ctx.push_op(current_block, cmp.op_ref());
+
+                let else_target = if is_last {
+                    default_entry
+                } else {
+                    // Create next check block
+                    let next_block = ctx.create_block(BlockData {
+                        location: loc,
+                        args: vec![],
+                        ops: SmallVec::new(),
+                        parent_region: None,
+                    });
+                    // Insert subsequent checks alongside the already-inlined arms.
+                    let insert_pos = insert_before
+                        .and_then(|boundary| {
+                            ctx.region(parent_region)
+                                .blocks
+                                .iter()
+                                .position(|&candidate| candidate == boundary)
+                        })
+                        .unwrap_or(ctx.region(parent_region).blocks.len());
+                    ctx.region_mut(parent_region)
+                        .blocks
+                        .insert(insert_pos, next_block);
+                    ctx.block_mut(next_block).parent_region = Some(parent_region);
+                    next_block
+                };
+
+                let cond_br = cf::cond_br(ctx, loc, cmp.result(ctx), case_entry, else_target);
+                ctx.push_op(current_block, cond_br.op_ref());
+
+                if !is_last {
+                    current_block = else_target;
+                }
+            }
         }
     }
 }
@@ -1043,6 +1215,225 @@ mod tests {
             count_blocks(&ctx, body),
             3,
             "a terminal core.never scf.if must not leave an empty merge block"
+        );
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_without_empty_merge_block() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        func.unreachable
+      }
+      scf.default {
+        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let names = collect_op_names(&ctx, body);
+        assert!(
+            !names.iter().any(|name| name.starts_with("scf.")),
+            "terminal switch must be fully lowered: {names:?}"
+        );
+        assert!(names.iter().any(|name| name == "cf.cond_br"));
+        assert!(names.iter().any(|name| name == "func.unreachable"));
+        assert!(names.iter().any(|name| name == "func.tail_call_indirect"));
+        assert_eq!(
+            count_blocks(&ctx, body),
+            3,
+            "terminal switch needs only the dispatch and two terminal arms"
+        );
+        assert!(
+            ctx.region(body)
+                .blocks
+                .iter()
+                .all(|&block| !ctx.block(block).ops.is_empty()),
+            "terminal switch must not leave an empty CFG block"
+        );
+        let use_chains = crate::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_with_nested_never_if_has_no_merge_block() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        %discarded = scf.if %cond : core.never {
+          func.unreachable
+        } {
+          func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+        }
+      }
+      scf.default {
+        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        assert_eq!(count_blocks(&ctx, body), 5);
+        for &block in blocks.iter().skip(1) {
+            assert!(
+                !ctx.block(block).ops.is_empty(),
+                "terminal lowering left an empty block: {block}"
+            );
+            assert!(
+                blocks.iter().any(|&candidate| {
+                    ctx.block(candidate)
+                        .ops
+                        .iter()
+                        .any(|&op| ctx.op(op).successors.contains(&block))
+                }),
+                "terminal lowering left a predecessor-free block: {block}"
+            );
+        }
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+        assert!(crate::validation::validate_operation_verifiers(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_with_nested_terminal_switch_has_no_empty_merge_block() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        scf.switch %nested_choice {
+          scf.case {value = 0} {
+            func.unreachable
+          }
+          scf.default {
+            func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+          }
+        }
+      }
+      scf.default {
+        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        assert_eq!(count_blocks(&ctx, body), 5);
+        assert!(
+            blocks.iter().skip(1).all(|&block| {
+                !ctx.block(block).ops.is_empty()
+                    && blocks.iter().any(|&candidate| {
+                        ctx.block(candidate)
+                            .ops
+                            .iter()
+                            .any(|&op| ctx.op(op).successors.contains(&block))
+                    })
+            }),
+            "terminal switches must not leave a predecessor-free empty merge block"
+        );
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+        assert!(crate::validation::validate_operation_verifiers(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn lower_nonterminal_scf_switch_keeps_merge_continuation() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    %unit = arith.const {value = 0} : core.nil
+    func.return %unit
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        let continuation = *blocks.last().unwrap();
+        let names = collect_op_names(&ctx, body);
+        assert!(!names.iter().any(|name| name.starts_with("scf.")));
+        assert_eq!(count_blocks(&ctx, body), 4);
+        assert!(
+            ctx.block(continuation).ops.iter().any(|&op| {
+                ctx.op(op).dialect == Symbol::new("func")
+                    && ctx.op(op).name == Symbol::new("return")
+            }),
+            "ordinary switch continuation must remain in its merge block"
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .flat_map(|&block| ctx.block(block).ops.iter())
+                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .count(),
+            2,
+            "both yielding arms must branch to the merge continuation"
+        );
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+        assert!(crate::validation::validate_operation_verifiers(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_with_multiblock_arm_fails_closed() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    scf.switch %choice {
+      scf.default {
+        ^first:
+          func.unreachable
+        ^second:
+          func.unreachable
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let names = collect_op_names(&ctx, func_op.body(&ctx));
+        assert!(names.iter().any(|name| name == "scf.switch"));
+        assert!(
+            !names.iter().any(|name| name == "cf.cond_br"),
+            "malformed switch must not be partially lowered: {names:?}"
         );
     }
 
