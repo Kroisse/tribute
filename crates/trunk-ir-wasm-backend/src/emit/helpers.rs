@@ -105,6 +105,47 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
     Some((params, *ret))
 }
 
+/// Whether an argument can satisfy an indirect-tail parameter after the Wasm
+/// backend's physical type mapping.
+fn is_wasm_physical_argument_assignable(
+    ctx: &IrContext,
+    argument: TypeRef,
+    parameter: TypeRef,
+) -> bool {
+    if argument == parameter {
+        return true;
+    }
+
+    let argument_is_typeref = is_type(ctx, argument, "adt", "typeref");
+    let argument_is_structref = is_type(ctx, argument, "wasm", "structref");
+    let parameter_is_structref = is_type(ctx, parameter, "wasm", "structref");
+    let parameter_is_anyref = is_type(ctx, parameter, "wasm", "anyref");
+
+    // `adt.typeref` is emitted as the abstract Wasm `structref` type.
+    if argument_is_typeref && parameter_is_structref {
+        return true;
+    }
+
+    let argument_is_generic_adt_struct = is_type(ctx, argument, "adt", "struct")
+        || ctx.types.get(argument).attrs.get_bool("is_variant") == Some(true);
+    if argument_is_generic_adt_struct && parameter_is_anyref {
+        return true;
+    }
+
+    let argument_is_core_array = is_type(ctx, argument, "core", "array");
+    let parameter_is_arrayref = is_type(ctx, parameter, "wasm", "arrayref");
+    if argument_is_core_array && parameter_is_arrayref {
+        return true;
+    }
+
+    // WasmGC abstract-reference upcasts. The reverse directions are checked
+    // downcasts and therefore intentionally remain false here.
+    let argument_is_wasm_gc_ref = is_type(ctx, argument, "wasm", "i31ref")
+        || argument_is_structref
+        || is_type(ctx, argument, "wasm", "arrayref");
+    argument_is_wasm_gc_ref && parameter_is_anyref
+}
+
 /// Read and validate the exact physical function type required by an indirect
 /// proper tail transfer. This backend deliberately does not infer the type
 /// from the runtime table index and operands.
@@ -139,10 +180,9 @@ pub(crate) fn exact_return_call_indirect_signature(
         ));
     }
     if params.len() != args.len()
-        || params
-            .iter()
-            .zip(args)
-            .any(|(param, arg)| *param != value_type(ctx, *arg))
+        || params.iter().zip(args).any(|(param, arg)| {
+            !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
+        })
     {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect operands do not match its exact signature",
@@ -233,6 +273,14 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
+        }))
+    } else if is_type(ctx, ty, "adt", "typeref") {
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            },
         }))
     } else if ctx.types.get(ty).dialect == Symbol::new("adt") {
         Ok(ValType::Ref(RefType::ANYREF))
