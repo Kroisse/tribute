@@ -25,6 +25,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
+    convert_function_type,
 };
 use trunk_ir::types::Attribute;
 use trunk_ir::types::TypeDataBuilder;
@@ -341,11 +342,35 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
+        // The exact callable metadata is source-authoritative, but the
+        // arguments have already reached their Wasm representations. Convert
+        // the attribute with the shared signature converter before validating
+        // it; never derive a replacement signature from the operands.
+        let Some(signature) = ctx
+            .op(op)
+            .attributes
+            .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
+        else {
+            return false;
+        };
+        let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+        else {
+            return false;
+        };
+
+        let mut converted_attrs = ctx.op(op).attributes.clone();
+        converted_attrs.insert(
+            Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
+            Attribute::Type(signature),
+        );
+
         // This is intentionally checked before creating any replacement.
         // Missing or malformed metadata remains a residual `func.*` op and is
         // rejected by the Wasm readiness boundary rather than guessed from
         // table-index and argument values.
-        if crate::emit::helpers::exact_return_call_indirect_signature(ctx, op).is_err() {
+        if crate::emit::helpers::exact_return_call_indirect_signature_with(ctx, op, signature)
+            .is_err()
+        {
             return false;
         }
 
@@ -355,9 +380,10 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         }
 
         let loc = ctx.op(op).location;
-        let attrs = ctx.op(op).attributes.clone();
         let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0);
-        ctx.op_mut(new_op.op_ref()).attributes.extend(attrs);
+        ctx.op_mut(new_op.op_ref())
+            .attributes
+            .extend(converted_attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -617,6 +643,61 @@ mod tests {
         );
         assert!(output.contains("wasm.i32_const {value = 0}"), "{output}");
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn converts_exact_tail_signature_before_validating_physical_operands() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.nil {
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+  }
+  func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+
+        let anyref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            (ctx.types
+                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
+            .then_some(anyref_ty)
+        });
+        type_converter.add_conversion(move |ctx, ty| {
+            (ctx.types
+                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
+            .then_some(f64_ty)
+        });
+        lower(&mut ctx, module, type_converter);
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains(
+                "wasm.return_call_indirect %0, %1 {signature = core.func(core.nil, wasm.anyref)"
+            ),
+            "{output}"
+        );
+        assert!(
+            output.contains("wasm.return_call_indirect %0, %1 {signature = core.func(core.nil, wasm.anyref), table = 0, tribute.calling_convention = 2, type_idx = 0}"),
+            "the converted transfer must retain its calling convention: {output}"
+        );
+        assert!(
+            !output.contains("signature = core.func(core.nil, tribute_rt.anyref)"),
+            "{output}"
+        );
+        assert!(
+            output.contains("func.tail_call_indirect %0, %1 {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}"),
+            "the mismatched transfer must remain unchanged: {output}"
+        );
     }
 
     #[test]

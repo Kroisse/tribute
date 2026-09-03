@@ -160,6 +160,16 @@ pub(crate) fn exact_return_call_indirect_signature(
         .ok_or_else(|| {
             CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
         })?;
+    exact_return_call_indirect_signature_with(ctx, op, signature)
+}
+
+/// Validate an exact callable signature against an indirect proper tail
+/// transfer without reading or mutating its attribute map.
+pub(crate) fn exact_return_call_indirect_signature_with(
+    ctx: &IrContext,
+    op: OpRef,
+    signature: TypeRef,
+) -> CompilationResult<TypeRef> {
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.return_call_indirect signature must be core.func")
     })?;
