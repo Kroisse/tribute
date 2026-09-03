@@ -370,11 +370,17 @@ impl AnalysisCache {
     }
 
     /// Invalidate the cached analysis `A` for `target`, if present.
+    ///
+    /// Every analysis that transitively depends on it is also invalidated,
+    /// including analyses of other types and other targets. Prerequisites of
+    /// the invalidated analyses are kept.
     pub fn invalidate<A: Analysis>(&mut self, target: OpRef) {
         self.invalidate_keys([AnalysisKey::of::<A>(target)]);
     }
 
-    /// Invalidate every cached analysis for `target`.
+    /// Invalidate every cached analysis for `target`, and every analysis that
+    /// transitively depends on them. Dependents attached to other targets are
+    /// invalidated too; prerequisites are kept.
     pub fn invalidate_all(&mut self, target: OpRef) {
         let keys = self
             .cache
@@ -503,6 +509,12 @@ mod tests {
     static MIDDLE_COMPUTES: AtomicUsize = AtomicUsize::new(0);
     static ROOT_COMPUTES: AtomicUsize = AtomicUsize::new(0);
     static COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_counters() -> std::sync::MutexGuard<'static, ()> {
+        COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[derive(Debug)]
     struct CountedAnalysis;
@@ -663,6 +675,7 @@ mod tests {
 
     #[test]
     fn get_returns_same_arc_on_cache_hit() {
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         COUNTED_COMPUTES.store(0, Ordering::SeqCst);
@@ -829,7 +842,7 @@ mod tests {
 
     #[test]
     fn dependent_chain_and_diamond_compute_each_key_once() {
-        let _counters = COUNTER_LOCK.lock().unwrap();
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         LEAF_COMPUTES.store(0, Ordering::SeqCst);
@@ -847,6 +860,7 @@ mod tests {
 
     #[test]
     fn cached_prerequisite_lookup_records_direct_dependency() {
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
 
@@ -897,7 +911,7 @@ mod tests {
 
     #[test]
     fn prerequisite_invalidation_cascades_but_dependent_invalidation_preserves_prerequisites() {
-        let _counters = COUNTER_LOCK.lock().unwrap();
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         LEAF_COMPUTES.store(0, Ordering::SeqCst);
@@ -957,7 +971,7 @@ mod tests {
 
     #[test]
     fn failed_dependent_leaves_no_cache_entry_or_dependency_edge() {
-        let _counters = COUNTER_LOCK.lock().unwrap();
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
 
@@ -1010,7 +1024,7 @@ mod tests {
 
     #[test]
     fn clear_removes_dependency_metadata() {
-        let _counters = COUNTER_LOCK.lock().unwrap();
+        let _counters = lock_counters();
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
