@@ -846,6 +846,19 @@ mod tests {
     }
 
     #[test]
+    fn cached_prerequisite_lookup_records_direct_dependency() {
+        let (ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+
+        let _ = analyses.get::<LeafAnalysis>(&ctx, op).unwrap();
+        let _ = analyses.get::<MiddleAnalysis>(&ctx, op).unwrap();
+
+        analyses.invalidate::<LeafAnalysis>(op);
+        assert!(analyses.get_cached::<LeafAnalysis>(op).is_none());
+        assert!(analyses.get_cached::<MiddleAnalysis>(op).is_none());
+    }
+
+    #[test]
     fn direct_and_indirect_cycles_are_structured_and_publish_nothing() {
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
@@ -959,32 +972,38 @@ mod tests {
     }
 
     #[test]
-    fn cross_target_dependencies_cascade_and_invalidate_all_cleans_metadata() {
+    fn cross_target_invalidate_all_cascades_but_preserves_unrelated_entries() {
         let mut ctx = IrContext::new();
         let outer = crate::parser::parse_test_module(
             &mut ctx,
-            "core.module @outer { core.module @inner {} }",
+            "core.module @outer { core.module @inner {} core.module @unrelated {} }",
         )
         .op();
         let body = ctx.op(outer).regions[0];
         let block = ctx.region(body).blocks[0];
         let inner = ctx.block(block).ops[0];
+        let unrelated = ctx.block(block).ops[1];
         let mut analyses = AnalysisCache::new();
 
+        let _ = analyses
+            .get::<CrossTargetPrerequisite>(&ctx, inner)
+            .unwrap();
         let _ = analyses.get::<CrossTargetDependent>(&ctx, outer).unwrap();
+        let _ = analyses.get::<OtherAnalysis>(&ctx, inner).unwrap();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, outer).unwrap();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, unrelated).unwrap();
+        analyses.invalidate_all(inner);
+
         assert!(
             analyses
                 .get_cached::<CrossTargetPrerequisite>(inner)
-                .is_some()
+                .is_none()
         );
-        analyses.invalidate::<CrossTargetPrerequisite>(inner);
-        assert!(analyses.is_empty());
-        assert!(analyses.dependencies.is_empty());
-        assert!(analyses.dependents.is_empty());
-
-        let _ = analyses.get::<CrossTargetDependent>(&ctx, outer).unwrap();
-        analyses.invalidate_all(inner);
-        assert!(analyses.is_empty());
+        assert!(analyses.get_cached::<CrossTargetDependent>(outer).is_none());
+        assert!(analyses.get_cached::<OtherAnalysis>(inner).is_none());
+        assert!(analyses.get_cached::<DummyAnalysis>(outer).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(unrelated).is_some());
+        assert_eq!(analyses.len(), 2);
         assert!(analyses.dependencies.is_empty());
         assert!(analyses.dependents.is_empty());
     }
