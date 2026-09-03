@@ -280,13 +280,19 @@ impl RewritePattern for FuncCallIndirectPattern {
             let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
                 return false;
             };
+            let callable_result = callable.r#return(ctx);
+            let results_match = if crate::function::is_nil_type(ctx, callable_result) {
+                result_types.is_empty()
+            } else {
+                result_types == [callable_result]
+            };
             if callable.params(ctx).len() != CallLike::call_args(&call, ctx).len()
                 || callable
                     .params(ctx)
                     .iter()
                     .zip(CallLike::call_args(&call, ctx))
                     .any(|(&param, &arg)| param != ctx.value_ty(arg))
-                || result_types != [callable.r#return(ctx)]
+                || !results_match
             {
                 return false;
             }
@@ -636,6 +642,24 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn exact_unit_call_indirect_has_no_ssa_result() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn(%callee: core.ptr) -> core.nil {
+    func.call_indirect %callee {signature = core.func(core.nil)}
+    func.return
+  }
+}"#,
+        );
+
+        assert!(
+            result.contains("clif.call_indirect %0 {sig = core.func(core.nil)}"),
+            "{result}"
+        );
+        assert!(!result.contains("func.call_indirect"), "{result}");
     }
 
     #[test]

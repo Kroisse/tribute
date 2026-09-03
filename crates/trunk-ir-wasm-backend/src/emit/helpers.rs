@@ -178,11 +178,17 @@ pub(crate) fn exact_call_indirect_signature_with(
             "wasm.call_indirect has malformed operands",
         ));
     };
+    let results = ctx.op_result_types(op);
+    let results_match = if is_nil_type(ctx, result) {
+        results.is_empty()
+    } else {
+        results == [result]
+    };
     if params.len() != args.len()
         || params.iter().zip(args).any(|(param, arg)| {
             !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
         })
-        || ctx.op_result_types(op) != [result]
+        || !results_match
     {
         return Err(CompilationError::invalid_module(
             "wasm.call_indirect operands or result do not match its exact signature",
