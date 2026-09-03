@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
-use tribute_core::set_indirect_call_signature;
 use tribute_ir::dialect::ability::{self, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
@@ -48,7 +47,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
     let signature = core::func(ctx, result, parameters).as_type_ref();
-    set_indirect_call_signature(ctx, call, signature);
+    let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
 #[derive(Debug)]

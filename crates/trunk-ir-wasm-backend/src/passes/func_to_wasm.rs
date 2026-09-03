@@ -19,16 +19,16 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
-use trunk_ir::dialect::func::{self, CallLike, IndirectCallLike, TailCallLike};
+use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
     convert_function_type,
 };
-use trunk_ir::types::Attribute;
-use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{BlockData, RegionData};
 
 use trunk_ir::smallvec::smallvec;
@@ -265,7 +265,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         };
 
         let loc = ctx.op(op).location;
-        let all_operands = std::iter::once(IndirectCallLike::callee(&call, ctx))
+        let all_operands = std::iter::once(call.callee(ctx))
             .chain(CallLike::call_args(&call, ctx).iter().copied())
             .collect::<Vec<_>>();
         let result_types = CallLike::call_result_types(&call, ctx).to_vec();
@@ -286,13 +286,8 @@ impl RewritePattern for FuncCallIndirectPattern {
 
         // The emit phase resolves the type index and table attributes. An
         // optional exact signature stays attached for authoritative indexing.
-        let new_op = wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
-        if let Some(signature) = signature {
-            ctx.op_mut(new_op.op_ref()).attributes.insert(
-                Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
-                Attribute::Type(signature),
-            );
-        }
+        let new_op =
+            wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0, signature);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -377,10 +372,9 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         };
 
         let mut converted_attrs = ctx.op(op).attributes.clone();
-        converted_attrs.insert(
-            Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
-            Attribute::Type(signature),
-        );
+        func::remove_indirect_call_signature(&mut converted_attrs);
+        converted_attrs.remove("table");
+        converted_attrs.remove("type_idx");
 
         // This is intentionally checked before creating any replacement.
         // Missing or malformed metadata remains a residual `func.*` op and is
@@ -392,7 +386,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
-        let operands = std::iter::once(IndirectCallLike::callee(&tail, ctx))
+        let operands = std::iter::once(tail.callee(ctx))
             .chain(CallLike::call_args(&tail, ctx).iter().copied())
             .collect::<Vec<_>>();
         if !TailCallLike::is_resultless(&tail, ctx) {
@@ -400,7 +394,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         }
 
         let loc = ctx.op(op).location;
-        let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0);
+        let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0, Some(signature));
         ctx.op_mut(new_op.op_ref())
             .attributes
             .extend(converted_attrs);
@@ -672,7 +666,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.anyref), tribute.calling_convention = 2}
+    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.anyref), table = 7, tribute.calling_convention = 2, type_idx = 9}
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.nil {
     func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}
@@ -713,6 +707,10 @@ mod tests {
         assert!(
             !output.contains("signature = core.func(core.nil, tribute_rt.anyref)"),
             "{output}"
+        );
+        assert!(
+            !output.contains("table = 7") && !output.contains("type_idx = 9"),
+            "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
             output.contains("func.tail_call_indirect %0, %1 {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}"),

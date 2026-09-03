@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::func;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -153,10 +153,7 @@ pub(crate) fn exact_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
 ) -> CompilationResult<TypeRef> {
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
+    let signature = IndirectCallLikeOps::exact_signature(ctx, op)
         .ok_or_else(|| CompilationError::invalid_module("wasm.call_indirect lacks signature"))?;
     exact_call_indirect_signature_with(ctx, op, signature)
 }
@@ -197,13 +194,9 @@ pub(crate) fn exact_return_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
 ) -> CompilationResult<TypeRef> {
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
-        .ok_or_else(|| {
-            CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
-        })?;
+    let signature = IndirectCallLikeOps::exact_signature(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
+    })?;
     exact_return_call_indirect_signature_with(ctx, op, signature)
 }
 

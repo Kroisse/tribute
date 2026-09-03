@@ -9,8 +9,6 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 /// Result type carried by a private immutable CPS continuation frame.
 pub const CPS_CONTINUATION_FRAME_RESULT_ATTR: &str = "tribute.cps_continuation_frame_result";
-pub const INDIRECT_CALL_SIGNATURE_ATTR: &str =
-    trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR;
 pub const CLOSURE_CALLABLE_TYPE_ATTR: &str = "tribute.closure_callable_type";
 pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
@@ -234,18 +232,6 @@ pub fn physical_closure_function_type(
 
 fn generated_cps_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef {
     physical_closure_type_with_environment_index(ctx, function, CallingConvention::Cps, 0)
-}
-
-/// Attach the exact callable signature to an indirect transfer.
-///
-/// On `func.*` this is the dialect-declared `signature` attribute. Target
-/// lowering carries the same canonical attribute onto its own indirect
-/// transfer operations until their backend-specific signature index is ready.
-pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: TypeRef) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
-        Attribute::Type(signature),
-    );
 }
 
 /// Retain a typed closure contract on its canonical runtime pair.

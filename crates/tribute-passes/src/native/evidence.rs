@@ -24,9 +24,7 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
-use tribute_core::{
-    get_physical_closure_convention, set_calling_convention, set_indirect_call_signature,
-};
+use tribute_core::{get_physical_closure_convention, set_calling_convention};
 use tribute_ir::dialect::ability::{
     self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
 };
@@ -57,7 +55,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
     let signature = core::func(ctx, result, parameters).as_type_ref();
-    set_indirect_call_signature(ctx, call, signature);
+    let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
 /// Lower evidence operations for the native backend.
@@ -1196,7 +1194,8 @@ mod tests {
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .expect("lowered indirect dispatch");
         assert!(
-            func::indirect_call_signature(&ctx, inner_call).is_some(),
+            trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, inner_call)
+                .is_some(),
             "native-generated indirect calls must carry an exact signature"
         );
     }

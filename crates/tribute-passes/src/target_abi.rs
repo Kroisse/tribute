@@ -15,13 +15,14 @@ use tribute_core::calling_convention::{
     get_physical_closure_environment_index,
 };
 use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallingConvention, INDIRECT_CALL_SIGNATURE_ATTR,
-    get_calling_convention, get_physical_closure_convention,
+    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
+    get_physical_closure_convention,
 };
 use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -162,6 +163,7 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
+        let indirect_signature = IndirectCallLikeOps::exact_signature(converter.ctx, op);
         let op_attributes: Vec<_> = converter
             .ctx
             .op(op)
@@ -173,11 +175,10 @@ pub fn lower_cps_signatures_to_physical(
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
                 continue;
             }
-            let converted = if name == Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR) {
+            let converted = if matches!(&value, Attribute::Type(signature) if Some(*signature) == indirect_signature)
+            {
                 let Attribute::Type(signature) = value else {
-                    return Err(TargetAbiError::new(
-                        "target ABI: indirect callable signature must be a type attribute",
-                    ));
+                    unreachable!("matched indirect signature must be a type attribute");
                 };
                 let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
                     TargetAbiError::new(
@@ -978,7 +979,7 @@ fn validate_transfers(
         if !func::CallIndirect::matches(ctx, op) && !func::TailCallIndirect::matches(ctx, op) {
             continue;
         }
-        let signature = func::indirect_call_signature(ctx, op);
+        let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let convention = exact_convention(ctx, op)?;
         if signature.is_none() && convention.is_none() {
             continue;

@@ -8,7 +8,8 @@
 use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::{func, wasm as wasm_dialect};
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
 use wasm_encoder::{Function, Instruction};
 
@@ -76,11 +77,7 @@ pub(crate) fn handle_call_indirect(
         )));
     }
 
-    if ctx
-        .op(op)
-        .attributes
-        .contains_key(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR))
-    {
+    if IndirectCallLikeOps::exact_signature(ctx, op).is_some() {
         let signature = helpers::exact_call_indirect_signature(ctx, op)?;
         let type_index = module_info
             .type_idx_by_type

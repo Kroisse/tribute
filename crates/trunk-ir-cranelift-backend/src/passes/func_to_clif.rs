@@ -17,7 +17,8 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::func::{self, CallLike, IndirectCallLike, TailCallLike};
+use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
+use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -308,9 +309,10 @@ impl RewritePattern for FuncCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("call_indirect"),
         );
-        let attributes = &mut ctx.op_mut(new_op).attributes;
-        attributes.remove(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR));
-        attributes.insert(Symbol::new("sig"), Attribute::Type(sig_ty));
+        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
+            return false;
+        }
         for (index, result_ty) in result_types.into_iter().enumerate() {
             ctx.set_op_result_type(new_op, index as u32, result_ty);
         }
@@ -427,9 +429,10 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("return_call_indirect"),
         );
-        let attributes = &mut ctx.op_mut(new_op).attributes;
-        attributes.remove(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR));
-        attributes.insert(Symbol::new("sig"), Attribute::Type(signature));
+        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        if !clif::set_indirect_call_signature(ctx, new_op, signature) {
+            return false;
+        }
         rewriter.replace_op(new_op);
         true
     }

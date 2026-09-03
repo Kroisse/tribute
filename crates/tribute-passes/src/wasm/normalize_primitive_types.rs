@@ -29,6 +29,7 @@ use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -191,7 +192,7 @@ impl RewritePattern for NormalizeCallIndirectPattern {
             .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
         let args: Vec<_> = operands[1..].to_vec();
 
-        let signature = func::indirect_call_signature(ctx, op);
+        let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let new_op = func::call_indirect(ctx, loc, callee, args, new_result_ty, signature);
         rewriter.replace_op(new_op.op_ref());
         true

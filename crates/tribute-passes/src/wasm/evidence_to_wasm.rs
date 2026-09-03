@@ -20,7 +20,7 @@
 //! binary search (O(log n)) since the evidence array is maintained in sorted order
 //! by ability_id.
 
-use tribute_core::{CallingConvention, set_calling_convention, set_indirect_call_signature};
+use tribute_core::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
@@ -204,6 +204,7 @@ impl RewritePattern for LegacyEffectDispatchCpsPattern {
             [*result_ty],
             0,
             0,
+            None,
         );
         let result = call.results(ctx)[0];
         rewriter.insert_op(call.op_ref());
@@ -418,6 +419,7 @@ impl RewritePattern for EffectDispatchTailPattern {
             [result_ty],
             0,
             0,
+            None,
         );
         let call_result = call.results(ctx)[0];
         rewriter.insert_op(call.op_ref());
@@ -492,6 +494,7 @@ impl RewritePattern for EffectDispatchCpsPattern {
             ],
             0,
             0,
+            None,
         );
         attach_exact_indirect_signature(ctx, tail.op_ref());
         set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
@@ -511,7 +514,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .collect::<Vec<_>>();
     let result = core::nil(ctx).as_type_ref();
     let signature = core::func(ctx, result, parameters).as_type_ref();
-    set_indirect_call_signature(ctx, call, signature);
+    let _ = wasm_dialect::set_indirect_call_signature(ctx, call, signature);
 }
 
 /// Pattern that matches `ability.evidence_extend` and replaces it with

@@ -11,6 +11,7 @@ use trunk_ir::Module;
 use trunk_ir::Symbol;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
@@ -151,9 +152,7 @@ pub(crate) fn collect_call_indirect_types(
                     // When source lowering retained an exact contract, use it
                     // as the sole type-section key. It must not be recreated
                     // from the erased table index and operands.
-                    if ctx.op(op).attributes.contains_key(trunk_ir::Symbol::new(
-                        trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR,
-                    )) {
+                    if IndirectCallLikeOps::exact_signature(ctx, op).is_some() {
                         let func_type = helpers::exact_call_indirect_signature(ctx, op)?;
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             type_idx_by_type.entry(func_type)

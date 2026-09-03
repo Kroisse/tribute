@@ -1,5 +1,8 @@
 //! Arena-based clif dialect.
 
+use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::ops::{DialectOp, DialectType};
+
 #[trunk_ir::dialect]
 mod clif {
     // Module
@@ -112,4 +115,88 @@ mod clif {
     fn fcvt_from_sint(operand: ()) -> result {}
     fn fcvt_to_uint(operand: ()) -> result {}
     fn fcvt_from_uint(operand: ()) -> result {}
+}
+
+const INDIRECT_CALL_SIGNATURE_ATTR: &str = "sig";
+
+impl IndirectCallLikeModel for CallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        Some(self.sig(ctx))
+    }
+}
+
+impl IndirectCallLikeModel for ReturnCallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        Some(self.sig(ctx))
+    }
+}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<CallIndirect>()
+}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<ReturnCallIndirect>()
+}
+
+/// Attach the required exact callable contract to a `clif` indirect transfer.
+///
+/// Returns `false` without mutation when the operation is not a `clif`
+/// indirect call or the supplied type is not a `core.func` contract.
+pub fn set_indirect_call_signature(
+    ctx: &mut crate::IrContext,
+    op: crate::OpRef,
+    signature: crate::TypeRef,
+) -> bool {
+    if crate::dialect::core::Func::from_type_ref(ctx, signature).is_none()
+        || (CallIndirect::from_op(ctx, op).is_err()
+            && ReturnCallIndirect::from_op(ctx, op).is_err())
+    {
+        return false;
+    }
+    ctx.op_mut(op).attributes.insert(
+        crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+        crate::Attribute::Type(signature),
+    );
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::op_interface::IndirectCallLikeOps;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    #[test]
+    fn indirect_call_interface_uses_clif_owned_sig() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
+    %result = clif.call_indirect %callee, %value {sig = core.func(core.i32, core.i32)} : core.i32
+    clif.return %result
+  }
+  clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
+    clif.return_call_indirect %callee, %value {sig = core.func(core.nil, core.i32)}
+  }
+  clif.func @direct() -> core.nil {
+    clif.return
+  }
+}"#,
+        );
+        let functions = module.ops(&ctx);
+        let body_op = |index| {
+            let body = ctx.op(functions[index]).regions[0];
+            ctx.block(ctx.region(body).blocks[0]).ops[0]
+        };
+
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, body_op(0)).is_some());
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, body_op(1)).is_some());
+        assert!(IndirectCallLikeOps::get(&ctx, body_op(2)).is_none());
+
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("clif.call_indirect"));
+        assert!(printed.contains("sig = core.func(core.i32, core.i32)"));
+    }
 }

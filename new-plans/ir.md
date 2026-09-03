@@ -696,6 +696,12 @@ attribute로 erased callee/table index 이전의 exact `core.func` contract를 �
 `tribute.calling_convention`이 붙은 indirect transfer는 exact `signature`를 반드시
 가지며 verifier가 operand/result 및 convention과 대조한다. Physical operand type,
 symbol, ABI string 또는 storage shape로 signature를 재구성하지 않는다.
+Backend indirect-call operation도 runtime-queried `IndirectCallLike` operation
+interface를 통해 같은 contract를 보존한다. 각 dialect는 attribute spelling과
+accessor를 소유한다 (`func`와 `wasm`은 선택적 `signature`, `clif`는 필수 `sig`).
+Generic consumer는 다른 dialect의 attribute key 대신 interface를 query한다.
+Interface를 구현하지 않는 operation에는 exact signature가 없으며, erased callee나
+result operand로 이를 추론해서는 안 된다.
 `func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
 terminator다. Shared verifier는 callee `core.func`와 enclosing caller의 result가
 모두 `core.never`인지 검사한다. Native/Wasm signature lowering은 이를 empty result
