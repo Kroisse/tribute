@@ -191,9 +191,22 @@ mod tests {
             ctx.block(ctx.region(body).blocks[0]).ops[0]
         };
 
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, body_op(0)).is_some());
-        assert!(IndirectCallLikeOps::exact_signature(&ctx, body_op(1)).is_some());
-        assert!(IndirectCallLikeOps::get(&ctx, body_op(2)).is_none());
+        let ordinary = body_op(0);
+        let tail = body_op(1);
+        let direct = body_op(2);
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
+        for op in [ordinary, tail] {
+            let operands = ctx.op_operands(op);
+            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
+            assert_eq!(
+                IndirectCallLikeOps::arguments(&ctx, op),
+                Some(&operands[1..])
+            );
+        }
+        assert!(IndirectCallLikeOps::get(&ctx, direct).is_none());
+        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
+        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.call_indirect"));

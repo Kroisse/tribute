@@ -469,7 +469,19 @@ mod tests {
         assert!(IndirectCallLikeOps::get(&ctx, plain).is_some());
         assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, plain), None);
         assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
+        for op in [ordinary, tail] {
+            let operands = ctx.op_operands(op);
+            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
+            assert_eq!(
+                IndirectCallLikeOps::arguments(&ctx, op),
+                Some(&operands[1..])
+            );
+        }
+        assert!(IndirectCallLikeOps::callee(&ctx, plain).is_some());
+        assert!(IndirectCallLikeOps::arguments(&ctx, plain).is_some());
         assert!(IndirectCallLikeOps::get(&ctx, direct).is_none());
+        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
+        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("wasm.call_indirect"));

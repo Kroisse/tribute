@@ -168,10 +168,14 @@ pub(crate) fn exact_call_indirect_signature_with(
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.call_indirect signature must be core.func")
     })?;
-    let operands = ctx.op_operands(op);
-    let Some((_table_index, args)) = operands.split_first() else {
+    let Some(_table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
             "wasm.call_indirect requires a table index operand",
+        ));
+    };
+    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect has malformed operands",
         ));
     };
     if params.len() != args.len()
@@ -215,10 +219,14 @@ pub(crate) fn exact_return_call_indirect_signature_with(
             "wasm.return_call_indirect signature must have an empty result",
         ));
     }
-    let operands = ctx.op_operands(op);
-    let Some((&table_index, args)) = operands.split_first() else {
+    let Some(table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect requires a table index operand",
+        ));
+    };
+    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect has malformed operands",
         ));
     };
     if !is_type(ctx, value_type(ctx, table_index), "core", "i32") {

@@ -186,11 +186,15 @@ impl RewritePattern for NormalizeCallIndirectPattern {
         debug!("normalize_primitive_types: func.call_indirect result type normalized");
 
         let loc = ctx.op(op).location;
-        let operands = ctx.op_operands(op).to_vec();
-        let callee = *operands
-            .first()
-            .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
-        let args: Vec<_> = operands[1..].to_vec();
+        let Some(callee) = IndirectCallLikeOps::callee(ctx, op) else {
+            return false;
+        };
+        let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+            return false;
+        };
+        // Constructing the replacement mutates the context, so release the
+        // interface's borrowed view before creating the new operation.
+        let args = args.to_vec();
 
         let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let new_op = func::call_indirect(ctx, loc, callee, args, new_result_ty, signature);

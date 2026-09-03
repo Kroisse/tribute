@@ -993,7 +993,9 @@ fn validate_transfers(
         let callable = core::Func::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect callable signature is not core.func")
         })?;
-        let args = ctx.op_operands(op).get(1..).unwrap_or_default();
+        let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
+            TargetAbiError::new("target ABI: indirect transfer has malformed operands")
+        })?;
         if !operands_match(ctx, args, callable.params(ctx)) {
             return Err(TargetAbiError::new(
                 "target ABI: indirect transfer operands differ from exact callable signature",

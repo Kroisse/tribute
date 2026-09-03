@@ -399,19 +399,48 @@ pub struct RegionValueTransfer {
     pub inputs: SuccessorInputs,
 }
 
-/// Object-safe exact-signature semantics for indirect calls.
+/// Object-safe semantic accessors for indirect calls.
 ///
-/// The interface deliberately returns no signature for an ordinary indirect
-/// transfer. Consumers must not reconstruct a contract from erased operands or
-/// operation result types.
+/// An exact signature is optional on otherwise valid ordinary indirect
+/// transfers. When it is absent, consumers must not reconstruct a contract
+/// from erased operands or operation result types.
 pub trait IndirectCallLike: Sync {
+    fn callee(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef>;
+
+    fn arguments<'a>(&self, ctx: &'a IrContext, op: OpRef) -> Option<&'a [ValueRef]>;
+
     fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef>;
 }
 
-/// Typed exact-signature semantics supplied by an indirect-call operation
-/// wrapper.
+/// Typed indirect-call semantics supplied by a generated operation wrapper.
 pub trait IndirectCallLikeModel: DialectOp {
+    fn indirect_callee(self, ctx: &IrContext) -> Option<ValueRef> {
+        ctx.op_operands(self.op_ref()).first().copied()
+    }
+
+    fn indirect_arguments(self, ctx: &IrContext) -> Option<&[ValueRef]> {
+        ctx.op_operands(self.op_ref()).get(1..)
+    }
+
     fn exact_signature(self, ctx: &IrContext) -> Option<TypeRef>;
+}
+
+fn indirect_call_like_model_callee<T: IndirectCallLikeModel>(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Option<ValueRef> {
+    T::from_op(ctx, op)
+        .ok()
+        .and_then(|model| model.indirect_callee(ctx))
+}
+
+fn indirect_call_like_model_arguments<T: IndirectCallLikeModel>(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Option<&[ValueRef]> {
+    T::from_op(ctx, op)
+        .ok()
+        .and_then(|model| model.indirect_arguments(ctx))
 }
 
 fn indirect_call_like_model_signature<T: IndirectCallLikeModel>(
@@ -427,10 +456,20 @@ fn indirect_call_like_model_signature<T: IndirectCallLikeModel>(
 pub struct IndirectCallLikeRegistration {
     pub dialect: &'static str,
     pub op_name: &'static str,
+    pub callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
+    pub arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
     pub exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
 }
 
 impl IndirectCallLike for IndirectCallLikeRegistration {
+    fn callee(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+        (self.callee)(ctx, op)
+    }
+
+    fn arguments<'a>(&self, ctx: &'a IrContext, op: OpRef) -> Option<&'a [ValueRef]> {
+        (self.arguments)(ctx, op)
+    }
+
     fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
         (self.exact_signature)(ctx, op)
     }
@@ -466,6 +505,8 @@ impl IndirectCallLikeOps {
         IndirectCallLikeRegistration {
             dialect: T::DIALECT_NAME,
             op_name: T::OP_NAME,
+            callee: indirect_call_like_model_callee::<T>,
+            arguments: indirect_call_like_model_arguments::<T>,
             exact_signature: indirect_call_like_model_signature::<T>,
         }
     }
@@ -480,6 +521,16 @@ impl IndirectCallLikeOps {
     /// Read an indirect transfer's exact callable signature, if it has one.
     pub fn exact_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
         Self::get(ctx, op).and_then(|interface| interface.exact_signature(ctx, op))
+    }
+
+    /// Read an indirect transfer's erased runtime callee or table-index value.
+    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+        Self::get(ctx, op).and_then(|interface| interface.callee(ctx, op))
+    }
+
+    /// Read arguments supplied to an indirect transfer, excluding its callee.
+    pub fn arguments(ctx: &IrContext, op: OpRef) -> Option<&[ValueRef]> {
+        Self::get(ctx, op).and_then(|interface| interface.arguments(ctx, op))
     }
 }
 

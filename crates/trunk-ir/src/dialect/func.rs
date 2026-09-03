@@ -420,6 +420,16 @@ mod tests {
         assert!(IndirectCallLikeOps::get(&ctx, tail_op).is_some());
         assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary_op).is_some());
         assert!(IndirectCallLikeOps::exact_signature(&ctx, tail_op).is_some());
+        for op in [ordinary_op, tail_op] {
+            let operands = ctx.op_operands(op);
+            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
+            assert_eq!(
+                IndirectCallLikeOps::arguments(&ctx, op),
+                Some(&operands[1..])
+            );
+        }
         assert!(IndirectCallLikeOps::get(&ctx, direct_op).is_none());
+        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
+        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
     }
 }

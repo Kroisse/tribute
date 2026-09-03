@@ -51,21 +51,18 @@ pub(crate) fn handle_call_indirect(
     module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = ctx.op_operands(op);
-
     // wasm.call_indirect: indirect function call via i32 table index
     // All indirect calls use table-based call_indirect (no call_ref).
     // Operands: [table_idx, arg1, arg2, ..., argN]
     // WebAssembly expects: [arg1, arg2, ..., argN, table_idx]
 
-    if operands.is_empty() {
-        return Err(CompilationError::invalid_module(
-            "wasm.call_indirect requires at least a table index operand",
-        ));
-    }
-
     // The callee (i32 table index) is the FIRST operand, followed by args.
-    let first_operand = operands[0];
+    let first_operand = IndirectCallLikeOps::callee(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.call_indirect requires a table index operand")
+    })?;
+    let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.call_indirect has malformed operands")
+    })?;
     let first_operand_ty = helpers::value_type(ctx, first_operand);
 
     // All call_indirect operations must use i32 table index
@@ -95,10 +92,10 @@ pub(crate) fn handle_call_indirect(
             .transpose()?
             .unwrap_or(0);
 
-        for &arg in operands.iter().skip(1) {
+        for &arg in args {
             emit_value(ctx, arg, emit_ctx, function)?;
         }
-        emit_value(ctx, operands[0], emit_ctx, function)?;
+        emit_value(ctx, first_operand, emit_ctx, function)?;
         function.instruction(&Instruction::CallIndirect {
             type_index,
             table_index,
@@ -157,9 +154,8 @@ pub(crate) fn handle_call_indirect(
             ty
         }
     };
-    let param_types: Vec<TypeRef> = operands
+    let param_types: Vec<TypeRef> = args
         .iter()
-        .skip(1)
         .map(|v| {
             let ty = helpers::value_type(ctx, *v);
             normalize_param_type(ty)
@@ -258,13 +254,12 @@ pub(crate) fn handle_call_indirect(
         None => 0,
     };
 
-    // Emit arguments first (operands[1..])
-    for &operand in operands.iter().skip(1) {
+    // Emit arguments before the runtime table index.
+    for &operand in args {
         emit_value(ctx, operand, emit_ctx, function)?;
     }
 
-    // Emit the table index (operands[0])
-    emit_value(ctx, operands[0], emit_ctx, function)?;
+    emit_value(ctx, first_operand, emit_ctx, function)?;
 
     function.instruction(&Instruction::CallIndirect {
         type_index: type_idx,
@@ -319,13 +314,18 @@ pub(crate) fn handle_return_call_indirect(
         .map(|_| attr_u32(&ctx.op(op).attributes, Symbol::new("table")))
         .transpose()?
         .unwrap_or(0);
-    let operands = ctx.op_operands(op);
+    let table_index_value = IndirectCallLikeOps::callee(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.return_call_indirect requires a table index operand")
+    })?;
+    let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.return_call_indirect has malformed operands")
+    })?;
 
     // WebAssembly evaluates arguments before the table index.
-    for &arg in operands.iter().skip(1) {
+    for &arg in args {
         emit_value(ctx, arg, emit_ctx, function)?;
     }
-    emit_value(ctx, operands[0], emit_ctx, function)?;
+    emit_value(ctx, table_index_value, emit_ctx, function)?;
     function.instruction(&Instruction::ReturnCallIndirect {
         type_index,
         table_index,
