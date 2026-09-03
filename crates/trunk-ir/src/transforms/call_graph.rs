@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use crate::analysis::{Analysis, AnalysisError};
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
@@ -53,10 +53,10 @@ pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
 /// `CallGraph` as an [`Analysis`]: expects `target` to be a `core.module` op
 /// and delegates to [`build_call_graph`].
 impl Analysis for CallGraph {
-    fn compute(ctx: &IrContext, target: OpRef) -> Result<Self, AnalysisError> {
-        let module =
-            Module::new(ctx, target).expect("CallGraph analysis target must be a `core.module` op");
-        Ok(build_call_graph(ctx, module))
+    fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+        let module = Module::new(ctx.ir(), target)
+            .expect("CallGraph analysis target must be a `core.module` op");
+        Ok(build_call_graph(ctx.ir(), module))
     }
 }
 
