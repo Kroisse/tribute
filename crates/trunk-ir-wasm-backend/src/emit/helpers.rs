@@ -146,6 +146,50 @@ fn is_wasm_physical_argument_assignable(
     argument_is_wasm_gc_ref && parameter_is_anyref
 }
 
+/// Read and validate an optional exact function type retained by an ordinary
+/// indirect call. When present, the attribute remains authoritative rather
+/// than being reconstructed from erased operands.
+pub(crate) fn exact_call_indirect_signature(
+    ctx: &IrContext,
+    op: OpRef,
+) -> CompilationResult<TypeRef> {
+    let signature = ctx
+        .op(op)
+        .attributes
+        .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
+        .ok_or_else(|| CompilationError::invalid_module("wasm.call_indirect lacks signature"))?;
+    exact_call_indirect_signature_with(ctx, op, signature)
+}
+
+/// Validate an exact ordinary indirect-call signature without mutating the
+/// operation that carries it.
+pub(crate) fn exact_call_indirect_signature_with(
+    ctx: &IrContext,
+    op: OpRef,
+    signature: TypeRef,
+) -> CompilationResult<TypeRef> {
+    let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.call_indirect signature must be core.func")
+    })?;
+    let operands = ctx.op_operands(op);
+    let Some((_table_index, args)) = operands.split_first() else {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect requires a table index operand",
+        ));
+    };
+    if params.len() != args.len()
+        || params.iter().zip(args).any(|(param, arg)| {
+            !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
+        })
+        || ctx.op_result_types(op) != [result]
+    {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect operands or result do not match its exact signature",
+        ));
+    }
+    Ok(signature)
+}
+
 /// Read and validate the exact physical function type required by an indirect
 /// proper tail transfer. This backend deliberately does not infer the type
 /// from the runtime table index and operands.

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
-use trunk_ir::dialect::func;
+use trunk_ir::dialect::func::{self, CallLike, IndirectCallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
@@ -260,17 +260,36 @@ impl RewritePattern for FuncCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_call_indirect) = func::CallIndirect::from_op(ctx, op) else {
+        let Ok(call) = func::CallIndirect::from_op(ctx, op) else {
             return false;
         };
 
         let loc = ctx.op(op).location;
-        let all_operands: Vec<_> = ctx.op_operands(op).to_vec();
-        let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+        let all_operands = std::iter::once(IndirectCallLike::callee(&call, ctx))
+            .chain(CallLike::call_args(&call, ctx).iter().copied())
+            .collect::<Vec<_>>();
+        let result_types = CallLike::call_result_types(&call, ctx).to_vec();
+        let mut attrs = ctx.op(op).attributes.clone();
 
-        // Build wasm.call_indirect with same operands
-        // The emit phase will resolve the type_idx and table attributes
+        if let Some(signature) = IndirectCallLike::exact_signature(&call, ctx) {
+            let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+            else {
+                return false;
+            };
+            if crate::emit::helpers::exact_call_indirect_signature_with(ctx, op, signature).is_err()
+            {
+                return false;
+            }
+            attrs.insert(
+                Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
+                Attribute::Type(signature),
+            );
+        }
+
+        // The emit phase resolves the type index and table attributes. An
+        // optional exact signature stays attached for authoritative indexing.
         let new_op = wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
+        ctx.op_mut(new_op.op_ref()).attributes.extend(attrs);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -338,19 +357,15 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::TailCallIndirect::from_op(ctx, op).is_err() {
+        let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
             return false;
-        }
+        };
 
         // The exact callable metadata is source-authoritative, but the
         // arguments have already reached their Wasm representations. Convert
         // the attribute with the shared signature converter before validating
         // it; never derive a replacement signature from the operands.
-        let Some(signature) = ctx
-            .op(op)
-            .attributes
-            .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
-        else {
+        let Some(signature) = IndirectCallLike::exact_signature(&tail, ctx) else {
             return false;
         };
         let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
@@ -374,8 +389,10 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
-        let operands: Vec<_> = ctx.op_operands(op).to_vec();
-        if operands.is_empty() || !ctx.op_result_types(op).is_empty() {
+        let operands = std::iter::once(IndirectCallLike::callee(&tail, ctx))
+            .chain(CallLike::call_args(&tail, ctx).iter().copied())
+            .collect::<Vec<_>>();
+        if !TailCallLike::is_resultless(&tail, ctx) {
             return false;
         }
 
@@ -697,6 +714,61 @@ mod tests {
         assert!(
             output.contains("func.tail_call_indirect %0, %1 {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}"),
             "the mismatched transfer must remain unchanged: {output}"
+        );
+    }
+
+    #[test]
+    fn converts_exact_indirect_signature_before_validating_physical_operands() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
+    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.anyref)} : core.i32
+    func.return %result
+  }
+  func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.float)} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+
+        let anyref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            (ctx.types
+                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
+            .then_some(anyref_ty)
+        });
+        type_converter.add_conversion(move |ctx, ty| {
+            (ctx.types
+                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
+            .then_some(f64_ty)
+        });
+        lower(&mut ctx, module, type_converter);
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains(
+                "wasm.call_indirect %0, %1 {signature = core.func(core.i32, wasm.anyref), table = 0, type_idx = 0}"
+            ),
+            "{output}"
+        );
+        assert!(
+            !output.contains("signature = core.func(core.i32, tribute_rt.anyref)"),
+            "{output}"
+        );
+        assert!(
+            output.contains(
+                "func.call_indirect %0, %1 {signature = core.func(core.i32, tribute_rt.float)} : core.i32"
+            ),
+            "the mismatched call must remain unchanged: {output}"
         );
     }
 

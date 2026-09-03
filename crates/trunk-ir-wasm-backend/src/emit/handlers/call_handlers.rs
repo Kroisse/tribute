@@ -8,7 +8,7 @@
 use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::{func, wasm as wasm_dialect};
 use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
 use wasm_encoder::{Function, Instruction};
 
@@ -74,6 +74,40 @@ pub(crate) fn handle_call_indirect(
             "call_indirect first operand must be i32 table index, got {}.{}",
             data.dialect, data.name
         )));
+    }
+
+    if ctx
+        .op(op)
+        .attributes
+        .contains_key(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR))
+    {
+        let signature = helpers::exact_call_indirect_signature(ctx, op)?;
+        let type_index = module_info
+            .type_idx_by_type
+            .get(&signature)
+            .copied()
+            .ok_or_else(|| {
+                CompilationError::invalid_module(
+                    "wasm.call_indirect function type not registered in type section",
+                )
+            })?;
+        let attrs = &ctx.op(op).attributes;
+        let table_index = attrs
+            .get("table")
+            .map(|_| attr_u32(attrs, Symbol::new("table")))
+            .transpose()?
+            .unwrap_or(0);
+
+        for &arg in operands.iter().skip(1) {
+            emit_value(ctx, arg, emit_ctx, function)?;
+        }
+        emit_value(ctx, operands[0], emit_ctx, function)?;
+        function.instruction(&Instruction::CallIndirect {
+            type_index,
+            table_index,
+        });
+        set_result_local(ctx, op, emit_ctx, function)?;
+        return Ok(());
     }
 
     debug!(

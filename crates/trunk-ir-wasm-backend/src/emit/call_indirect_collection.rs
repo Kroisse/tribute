@@ -148,6 +148,24 @@ pub(crate) fn collect_call_indirect_types(
 
                 // Check if this is a result-producing call_indirect.
                 if wasm_dialect::CallIndirect::matches(ctx, op) {
+                    // When source lowering retained an exact contract, use it
+                    // as the sole type-section key. It must not be recreated
+                    // from the erased table index and operands.
+                    if ctx.op(op).attributes.contains_key(trunk_ir::Symbol::new(
+                        trunk_ir::dialect::func::INDIRECT_CALL_SIGNATURE_ATTR,
+                    )) {
+                        let func_type = helpers::exact_call_indirect_signature(ctx, op)?;
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            type_idx_by_type.entry(func_type)
+                        {
+                            let index = *next_type_idx;
+                            *next_type_idx += 1;
+                            entry.insert(index);
+                            new_types.push((index, func_type));
+                        }
+                        continue;
+                    }
+
                     // Build function type from operands and results
                     let operands: Vec<_> = ctx.op_operands(op).to_vec();
 

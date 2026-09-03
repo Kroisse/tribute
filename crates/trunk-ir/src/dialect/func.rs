@@ -4,6 +4,40 @@
 /// becomes a runtime function or table index.
 pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
+/// Shared accessors for function calls with ordinary results or arguments.
+///
+/// This is a static Rust interface over the four `func.*call*` operations;
+/// it does not participate in dynamic operation dispatch.
+pub trait CallLike: crate::ops::DialectOp {
+    /// Arguments supplied to the callable, excluding an indirect callee.
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef];
+
+    /// Result types produced by this call.
+    fn call_result_types<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::TypeRef] {
+        ctx.op_result_types(self.op_ref())
+    }
+}
+
+/// Shared accessors for indirect calls with an erased runtime callee.
+pub trait IndirectCallLike: CallLike {
+    /// Runtime function or table-index operand.
+    fn callee(&self, ctx: &crate::IrContext) -> crate::ValueRef;
+
+    /// Optional exact callable contract retained through callee erasure.
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef>;
+}
+
+/// Marker and resultless query for proper-tail transfers.
+///
+/// Exact callable signatures belong only to [`IndirectCallLike`], keeping
+/// CPS/tail legality independent from indirect-call metadata.
+pub trait TailCallLike: CallLike {
+    /// Proper tail transfers cannot produce SSA results.
+    fn is_resultless(&self, ctx: &crate::IrContext) -> bool {
+        self.call_result_types(ctx).is_empty()
+    }
+}
+
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
 crate::register_isolated_op!(func.func);
@@ -35,6 +69,54 @@ mod func {
 
     fn unreachable() {}
 }
+
+impl CallLike for Call {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl CallLike for CallIndirect {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl IndirectCallLike for CallIndirect {
+    fn callee(&self, ctx: &crate::IrContext) -> crate::ValueRef {
+        CallIndirect::callee(self, ctx)
+    }
+
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        CallIndirect::signature(self, ctx)
+    }
+}
+
+impl CallLike for TailCall {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl TailCallLike for TailCall {}
+
+impl CallLike for TailCallIndirect {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl IndirectCallLike for TailCallIndirect {
+    fn callee(&self, ctx: &crate::IrContext) -> crate::ValueRef {
+        TailCallIndirect::callee(self, ctx)
+    }
+
+    fn exact_signature(&self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        TailCallIndirect::signature(self, ctx)
+    }
+}
+
+impl TailCallLike for TailCallIndirect {}
 
 impl Func {
     /// Return the function body when this declaration has one.
