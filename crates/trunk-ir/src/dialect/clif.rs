@@ -120,22 +120,18 @@ mod clif {
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "sig";
 
 impl IndirectCallLikeModel for CallIndirect {
+    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
+
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         Some(self.sig(ctx))
-    }
-
-    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
-        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
     }
 }
 
 impl IndirectCallLikeModel for ReturnCallIndirect {
+    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
+
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         Some(self.sig(ctx))
-    }
-
-    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
-        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
     }
 }
 

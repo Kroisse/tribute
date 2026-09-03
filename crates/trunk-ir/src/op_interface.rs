@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 
 use crate::Symbol;
 use crate::ops::DialectOp;
+use crate::types::{Attribute, AttributeMap};
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
@@ -411,11 +412,34 @@ pub trait IndirectCallLike: Sync {
 
     fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef>;
 
-    fn is_exact_signature_attribute(&self, ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool;
+    fn take_exact_signature(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        attributes: &mut AttributeMap,
+    ) -> Option<ExactSignatureSlot>;
+}
+
+/// Dialect-owned storage for an exact indirect-call signature.
+pub struct ExactSignatureSlot {
+    name: Symbol,
+    signature: TypeRef,
+}
+
+impl ExactSignatureSlot {
+    pub fn signature(&self) -> TypeRef {
+        self.signature
+    }
+
+    pub fn restore(self, attributes: &mut AttributeMap, signature: TypeRef) {
+        attributes.insert(self.name, Attribute::Type(signature));
+    }
 }
 
 /// Typed indirect-call semantics supplied by a generated operation wrapper.
 pub trait IndirectCallLikeModel: DialectOp {
+    const EXACT_SIGNATURE_ATTRIBUTE: &'static str;
+
     fn indirect_callee(self, ctx: &IrContext) -> Option<ValueRef> {
         ctx.op_operands(self.op_ref()).first().copied()
     }
@@ -426,7 +450,17 @@ pub trait IndirectCallLikeModel: DialectOp {
 
     fn exact_signature(self, ctx: &IrContext) -> Option<TypeRef>;
 
-    fn is_exact_signature_attribute(self, attribute: Symbol) -> bool;
+    fn take_exact_signature(self, attributes: &mut AttributeMap) -> Option<ExactSignatureSlot> {
+        let name = Symbol::new(Self::EXACT_SIGNATURE_ATTRIBUTE);
+        match attributes.remove(name) {
+            Some(Attribute::Type(signature)) => Some(ExactSignatureSlot { name, signature }),
+            Some(attribute) => {
+                attributes.insert(name, attribute);
+                None
+            }
+            None => None,
+        }
+    }
 }
 
 fn indirect_call_like_model_callee<T: IndirectCallLikeModel>(
@@ -456,14 +490,15 @@ fn indirect_call_like_model_signature<T: IndirectCallLikeModel>(
         .and_then(|model| model.exact_signature(ctx))
 }
 
-fn indirect_call_like_model_is_signature_attribute<T: IndirectCallLikeModel>(
+fn indirect_call_like_model_take_signature<T: IndirectCallLikeModel>(
     ctx: &IrContext,
     op: OpRef,
-    attribute: Symbol,
-) -> bool {
-    T::from_op(ctx, op)
-        .map(|model| model.is_exact_signature_attribute(attribute))
-        .unwrap_or(false)
+    attributes: &mut AttributeMap,
+) -> Option<ExactSignatureSlot> {
+    let Ok(model) = T::from_op(ctx, op) else {
+        return None;
+    };
+    model.take_exact_signature(attributes)
 }
 
 /// Registry entry for [`IndirectCallLike`].
@@ -473,7 +508,8 @@ pub struct IndirectCallLikeRegistration {
     pub callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
     pub arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
     pub exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
-    pub is_exact_signature_attribute: fn(&IrContext, OpRef, Symbol) -> bool,
+    pub take_exact_signature:
+        fn(&IrContext, OpRef, &mut AttributeMap) -> Option<ExactSignatureSlot>,
 }
 
 impl IndirectCallLike for IndirectCallLikeRegistration {
@@ -489,8 +525,13 @@ impl IndirectCallLike for IndirectCallLikeRegistration {
         (self.exact_signature)(ctx, op)
     }
 
-    fn is_exact_signature_attribute(&self, ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool {
-        (self.is_exact_signature_attribute)(ctx, op, attribute)
+    fn take_exact_signature(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        attributes: &mut AttributeMap,
+    ) -> Option<ExactSignatureSlot> {
+        (self.take_exact_signature)(ctx, op, attributes)
     }
 }
 
@@ -527,7 +568,7 @@ impl IndirectCallLikeOps {
             callee: indirect_call_like_model_callee::<T>,
             arguments: indirect_call_like_model_arguments::<T>,
             exact_signature: indirect_call_like_model_signature::<T>,
-            is_exact_signature_attribute: indirect_call_like_model_is_signature_attribute::<T>,
+            take_exact_signature: indirect_call_like_model_take_signature::<T>,
         }
     }
 
@@ -543,10 +584,13 @@ impl IndirectCallLikeOps {
         Self::get(ctx, op).and_then(|interface| interface.exact_signature(ctx, op))
     }
 
-    /// Whether an attribute belongs to this operation's exact callable contract.
-    pub fn is_exact_signature_attribute(ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool {
-        Self::get(ctx, op)
-            .is_some_and(|interface| interface.is_exact_signature_attribute(ctx, op, attribute))
+    /// Remove and return an exact signature from a copied attribute map.
+    pub fn take_exact_signature(
+        ctx: &IrContext,
+        op: OpRef,
+        attributes: &mut AttributeMap,
+    ) -> Option<ExactSignatureSlot> {
+        Self::get(ctx, op).and_then(|interface| interface.take_exact_signature(ctx, op, attributes))
     }
 
     /// Read an indirect transfer's erased runtime callee or table-index value.

@@ -163,11 +163,11 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let indirect_signature = IndirectCallLikeOps::exact_signature(converter.ctx, op);
-        let op_attributes: Vec<_> = converter
-            .ctx
-            .op(op)
-            .attributes
+        let original_attributes = converter.ctx.op(op).attributes.clone();
+        let mut converted_attributes = original_attributes.clone();
+        let indirect_signature =
+            IndirectCallLikeOps::take_exact_signature(converter.ctx, op, &mut converted_attributes);
+        let op_attributes: Vec<_> = converted_attributes
             .iter()
             .map(|(name, value)| (*name, value.clone()))
             .collect();
@@ -175,26 +175,21 @@ pub fn lower_cps_signatures_to_physical(
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
                 continue;
             }
-            let converted = if IndirectCallLikeOps::is_exact_signature_attribute(
-                converter.ctx,
-                op,
-                name,
-            ) && matches!(&value, Attribute::Type(signature) if Some(*signature) == indirect_signature)
-            {
-                let Attribute::Type(signature) = value else {
-                    unreachable!("matched indirect signature must be a type attribute");
-                };
-                let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
-                    TargetAbiError::new(
-                        "target ABI: indirect callable signature has no convention metadata",
-                    )
-                })?;
-                Attribute::Type(converter.convert_callable(signature, convention)?)
-            } else {
-                converter.convert_attribute(value.clone())?
-            };
-            if converted != value {
-                attributes.push((op, name, converted));
+            let converted = converter.convert_attribute(value)?;
+            converted_attributes.insert(name, converted);
+        }
+        if let Some(signature_slot) = indirect_signature {
+            let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
+                TargetAbiError::new(
+                    "target ABI: indirect callable signature has no convention metadata",
+                )
+            })?;
+            let signature = converter.convert_callable(signature_slot.signature(), convention)?;
+            signature_slot.restore(&mut converted_attributes, signature);
+        }
+        for (name, value) in converted_attributes {
+            if original_attributes.get(name) != Some(&value) {
+                attributes.push((op, name, value));
             }
         }
 
