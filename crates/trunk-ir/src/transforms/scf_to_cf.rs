@@ -376,9 +376,9 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
         let [arm_region] = arm_data.regions.as_slice() else {
             return None;
         };
-        let [_arm_block] = ctx.region(*arm_region).blocks.as_slice() else {
+        if ctx.region(*arm_region).blocks.is_empty() {
             return None;
-        };
+        }
         if scf::Case::matches(ctx, arm) {
             cases.push((arm_data.attributes.get("value")?.clone(), *arm_region));
         } else if scf::Default::matches(ctx, arm) {
@@ -1410,17 +1410,22 @@ mod tests {
     }
 
     #[test]
-    fn lower_terminal_scf_switch_with_multiblock_arm_fails_closed() {
+    fn lower_nonterminal_scf_switch_with_multiblock_arm_keeps_merge_continuation() {
         let input = r#"core.module @test {
-  func.func @main(%choice: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.default {
+      scf.case {value = 0} {
         ^first:
-          func.unreachable
+          cf.br [^second]
         ^second:
-          func.unreachable
+          scf.yield
+      }
+      scf.default {
+        scf.yield
       }
     }
+    %unit = arith.const {value = 0} : core.nil
+    func.return %unit
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1429,12 +1434,32 @@ mod tests {
 
         lower_scf_to_cf(&mut ctx, module);
 
-        let names = collect_op_names(&ctx, func_op.body(&ctx));
-        assert!(names.iter().any(|name| name == "scf.switch"));
+        let body = func_op.body(&ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        let continuation = *blocks.last().unwrap();
+        let names = collect_op_names(&ctx, body);
         assert!(
-            !names.iter().any(|name| name == "cf.cond_br"),
-            "malformed switch must not be partially lowered: {names:?}"
+            !names.iter().any(|name| name.starts_with("scf.")),
+            "nonterminal multiblock switch must be fully lowered: {names:?}"
         );
+        assert!(
+            ctx.block(continuation).ops.iter().any(|&op| {
+                ctx.op(op).dialect == Symbol::new("func")
+                    && ctx.op(op).name == Symbol::new("return")
+            }),
+            "ordinary switch continuation must remain in its merge block"
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .flat_map(|&block| ctx.block(block).ops.iter())
+                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .count(),
+            2,
+            "both yielding paths must branch to the merge continuation"
+        );
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+        assert!(crate::validation::validate_operation_verifiers(&ctx, module).is_ok());
     }
 
     #[test]
