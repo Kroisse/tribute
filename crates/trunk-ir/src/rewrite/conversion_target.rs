@@ -455,6 +455,7 @@ impl ConversionTarget {
                     dialect: data.dialect,
                     name: data.name,
                     legality,
+                    reason: None,
                 });
             }
             let action = if self.is_recursively_legal(ctx, op) {
@@ -482,6 +483,16 @@ pub struct IllegalOp {
     pub dialect: Symbol,
     pub name: Symbol,
     pub legality: LegalityCheck,
+    /// Optional conversion-specific explanation for this otherwise illegal operation.
+    pub reason: Option<String>,
+}
+
+impl IllegalOp {
+    /// Attach a conversion-specific explanation to this failed operation.
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
 }
 
 impl std::fmt::Display for IllegalOp {
@@ -490,7 +501,11 @@ impl std::fmt::Display for IllegalOp {
             f,
             "{}.{} ({}, {:?})",
             self.dialect, self.name, self.op, self.legality
-        )
+        )?;
+        if let Some(reason) = &self.reason {
+            write!(f, ": {reason}")?;
+        }
+        Ok(())
     }
 }
 

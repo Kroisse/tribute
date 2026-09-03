@@ -14,27 +14,60 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Attribute;
+
+const SCF_TO_WASM_BOUNDARY: &str = "scf-to-wasm";
+
+/// Require successful conversion to remove every SCF operation.
+pub fn scf_to_wasm_target() -> ConversionTarget {
+    ConversionTarget::new().illegal_dialect("scf")
+}
 
 /// Lower scf dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    if has_malformed_switch(ctx, module.op()) {
-        return;
-    }
-    let applicator = PatternApplicator::new(type_converter)
+pub fn lower(
+    ctx: &mut IrContext,
+    module: Module,
+    type_converter: TypeConverter,
+) -> Result<(), ConversionError> {
+    validate_lowerable_switches(ctx, module)?;
+    PatternApplicator::new(type_converter)
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfSwitchPattern)
         .add_pattern(ScfLoopPattern)
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
-        .add_pattern(ScfBreakPattern);
-    applicator.apply_partial(ctx, module);
+        .add_pattern(ScfBreakPattern)
+        .with_target(scf_to_wasm_target())
+        .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
+    Ok(())
+}
+
+/// Reject switches this target cannot lower without mutating the module.
+pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<(), ConversionError> {
+    if let Some((op, reason)) = find_nonlowerable_switch(ctx, module.op()) {
+        let data = ctx.op(op);
+        return Err(ConversionError::new(
+            SCF_TO_WASM_BOUNDARY,
+            vec![
+                IllegalOp {
+                    op,
+                    dialect: data.dialect,
+                    name: data.name,
+                    legality: LegalityCheck::Illegal,
+                    reason: None,
+                }
+                .with_reason(reason.to_string()),
+            ],
+        ));
+    }
+    Ok(())
 }
 
 /// Validated data for a resultless `scf.switch` that this target can lower.
@@ -52,6 +85,34 @@ struct ScfSwitchShape {
     discriminant: ValueRef,
     cases: Vec<(Attribute, RegionRef)>,
     default: Option<RegionRef>,
+}
+
+#[derive(Debug)]
+enum SwitchLoweringReason {
+    MalformedShape,
+    UnsupportedDiscriminantType(String),
+    NonIntegerCaseAttribute,
+    CaseValueOutsideI32Range,
+}
+
+impl std::fmt::Display for SwitchLoweringReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MalformedShape => write!(f, "malformed resultless switch shape"),
+            Self::UnsupportedDiscriminantType(ty) => {
+                write!(
+                    f,
+                    "unsupported discriminant type `{ty}`; expected `core.i32`"
+                )
+            }
+            Self::NonIntegerCaseAttribute => {
+                write!(f, "case attribute `value` must be an integer")
+            }
+            Self::CaseValueOutsideI32Range => {
+                write!(f, "case integer value is outside the i32 range")
+            }
+        }
+    }
 }
 
 fn is_i32(ctx: &IrContext, value: ValueRef) -> bool {
@@ -116,36 +177,48 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     })
 }
 
-fn switch_arms(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchArms> {
-    let shape = switch_shape(ctx, op)?;
+fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
+    let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
     if !is_i32(ctx, shape.discriminant) {
-        return None;
+        let ty = ctx.types.get(ctx.value_ty(shape.discriminant));
+        return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
+            "{}.{}",
+            ty.dialect, ty.name
+        )));
     }
     let mut cases = Vec::with_capacity(shape.cases.len());
     for (value, body) in shape.cases {
         let Attribute::Int(value) = value else {
-            return None;
+            return Err(SwitchLoweringReason::NonIntegerCaseAttribute);
         };
-        cases.push((i32::try_from(value).ok()?, body));
+        let value =
+            i32::try_from(value).map_err(|_| SwitchLoweringReason::CaseValueOutsideI32Range)?;
+        cases.push((value, body));
     }
-    Some(ScfSwitchArms {
+    Ok(ScfSwitchArms {
         discriminant: shape.discriminant,
         cases,
         default: shape.default,
     })
 }
 
-fn has_malformed_switch(ctx: &IrContext, op: OpRef) -> bool {
-    if scf::Switch::matches(ctx, op) && switch_shape(ctx, op).is_none() {
-        return true;
+/// Find the first switch rejected by the same acceptance contract as lowering.
+fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, SwitchLoweringReason)> {
+    if scf::Switch::matches(ctx, op)
+        && let Err(reason) = switch_arms(ctx, op)
+    {
+        return Some((op, reason));
     }
-    ctx.op(op)
-        .regions
-        .iter()
-        .copied()
-        .flat_map(|region| ctx.region(region).blocks.iter().copied())
-        .flat_map(|block| ctx.block(block).ops.iter().copied())
-        .any(|nested| has_malformed_switch(ctx, nested))
+    for region in ctx.op(op).regions.iter().copied() {
+        for block in ctx.region(region).blocks.iter().copied() {
+            for nested in ctx.block(block).ops.iter().copied() {
+                if let Some(rejected) = find_nonlowerable_switch(ctx, nested) {
+                    return Some(rejected);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn region_with_ops(
@@ -193,7 +266,7 @@ impl RewritePattern for ScfSwitchPattern {
         let Ok(_switch) = scf::Switch::from_op(ctx, op) else {
             return false;
         };
-        let Some(arms) = switch_arms(ctx, op) else {
+        let Ok(arms) = switch_arms(ctx, op) else {
             return false;
         };
         let loc = ctx.op(op).location;
@@ -493,12 +566,34 @@ mod tests {
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        lower(&mut ctx, module, TypeConverter::new());
+        lower(&mut ctx, module, TypeConverter::new()).expect("test module should lower to wasm");
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
         let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verifiers.is_ok(), "{verifiers}");
-        print_module(&ctx, module.op())
+        let output = print_module(&ctx, module.op());
+        assert!(
+            !output.contains("scf."),
+            "residual scf operation:\n{output}"
+        );
+        output
+    }
+
+    fn assert_switch_rejected_unchanged(input: &str, reason: &str) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let before = print_module(&ctx, module.op());
+
+        let error = lower(&mut ctx, module, TypeConverter::new())
+            .expect_err("nonlowerable switch should reject the entire conversion");
+
+        assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY);
+        assert_eq!(error.operations().len(), 1);
+        assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
+        assert_eq!(error.operations()[0].reason.as_deref(), Some(reason));
+        assert!(error.to_string().contains("scf.switch"), "{error}");
+        assert!(error.to_string().contains(reason), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     fn assert_no_scf_switch_wrappers(output: &str) {
@@ -623,12 +718,7 @@ mod tests {
     func.return
   }
 }"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
-        lower(&mut ctx, module, TypeConverter::new());
-
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_switch_rejected_unchanged(input, "malformed resultless switch shape");
     }
 
     #[test]
@@ -647,13 +737,59 @@ mod tests {
     func.return
   }
 }"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-        let before = print_module(&ctx, module.op());
+        assert_switch_rejected_unchanged(input, "malformed resultless switch shape");
+    }
 
-        lower(&mut ctx, module, TypeConverter::new());
+    #[test]
+    fn rejects_shape_valid_non_i32_switch_without_mutating() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1, %choice: core.i64) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        scf.if %cond : core.nil {
+          scf.yield
+        } {
+          scf.yield
+        }
+        scf.yield
+      }
+      scf.default { scf.yield }
+    }
+    func.return
+  }
+}"#;
+        assert_switch_rejected_unchanged(
+            input,
+            "unsupported discriminant type `core.i64`; expected `core.i32`",
+        );
+    }
 
-        assert_eq!(print_module(&ctx, module.op()), before);
+    #[test]
+    fn rejects_shape_valid_out_of_range_case_without_mutating() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 2147483648} { scf.yield }
+      scf.default { scf.yield }
+    }
+    func.return
+  }
+}"#;
+        assert_switch_rejected_unchanged(input, "case integer value is outside the i32 range");
+    }
+
+    #[test]
+    fn rejects_non_integer_case_attribute_without_mutating() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = @not_an_integer} { scf.yield }
+      scf.default { scf.yield }
+    }
+    func.return
+  }
+}"#;
+        assert_switch_rejected_unchanged(input, "case attribute `value` must be an integer");
     }
 
     #[test]
