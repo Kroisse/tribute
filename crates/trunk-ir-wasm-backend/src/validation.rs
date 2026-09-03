@@ -197,6 +197,9 @@ mod tests {
             r#"core.module @test {
   !Array = core.array(core.i32)
   !Struct = adt.struct() {fields = [[@value, core.i32]], name = @Struct}
+  wasm.func @typeref(%table_index: core.i32, %value: adt.typeref) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+  }
   wasm.func @struct(%table_index: core.i32, %value: !Struct) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
   }

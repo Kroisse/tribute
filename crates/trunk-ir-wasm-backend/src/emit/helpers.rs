@@ -122,7 +122,7 @@ fn is_wasm_physical_argument_assignable(
     let parameter_is_anyref = is_type(ctx, parameter, "wasm", "anyref");
 
     // `adt.typeref` is emitted as the abstract Wasm `structref` type.
-    if argument_is_typeref && parameter_is_structref {
+    if argument_is_typeref && (parameter_is_structref || parameter_is_anyref) {
         return true;
     }
 
