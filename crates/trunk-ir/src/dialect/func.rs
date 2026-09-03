@@ -80,6 +80,10 @@ impl IndirectCallLikeModel for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         CallIndirect::signature(&self, ctx)
     }
+
+    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
+        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
+    }
 }
 
 impl CallLike for TailCall {
@@ -99,6 +103,10 @@ impl CallLike for TailCallIndirect {
 impl IndirectCallLikeModel for TailCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         TailCallIndirect::signature(&self, ctx)
+    }
+
+    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
+        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
     }
 }
 

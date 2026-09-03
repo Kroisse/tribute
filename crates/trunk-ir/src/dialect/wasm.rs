@@ -389,11 +389,19 @@ impl IndirectCallLikeModel for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
     }
+
+    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
+        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
+    }
 }
 
 impl IndirectCallLikeModel for ReturnCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
+    }
+
+    fn is_exact_signature_attribute(self, attribute: crate::Symbol) -> bool {
+        attribute == crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR)
     }
 }
 

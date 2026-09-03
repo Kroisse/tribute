@@ -175,7 +175,11 @@ pub fn lower_cps_signatures_to_physical(
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
                 continue;
             }
-            let converted = if matches!(&value, Attribute::Type(signature) if Some(*signature) == indirect_signature)
+            let converted = if IndirectCallLikeOps::is_exact_signature_attribute(
+                converter.ctx,
+                op,
+                name,
+            ) && matches!(&value, Attribute::Type(signature) if Some(*signature) == indirect_signature)
             {
                 let Attribute::Type(signature) = value else {
                     unreachable!("matched indirect signature must be a type attribute");
@@ -1409,6 +1413,38 @@ mod tests {
             printed.contains("closure.closure(core.func(core.nil"),
             "{printed}"
         );
+    }
+
+    #[test]
+    fn unrelated_type_metadata_never_becomes_an_indirect_signature() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %value {signature = core.func(core.never, core.i32), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let run = function(&ctx, module, "run");
+        let body = run.body_if_present(&ctx).unwrap();
+        let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
+        ctx.op_mut(indirect).attributes.insert(
+            Symbol::new("unrelated_callable_metadata"),
+            Attribute::Type(signature),
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("untagged nested core.func<core.never, ...>"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     fn compose_promoted_root(export: CallingConvention) -> (IrContext, Module) {

@@ -410,6 +410,8 @@ pub trait IndirectCallLike: Sync {
     fn arguments<'a>(&self, ctx: &'a IrContext, op: OpRef) -> Option<&'a [ValueRef]>;
 
     fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef>;
+
+    fn is_exact_signature_attribute(&self, ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool;
 }
 
 /// Typed indirect-call semantics supplied by a generated operation wrapper.
@@ -423,6 +425,8 @@ pub trait IndirectCallLikeModel: DialectOp {
     }
 
     fn exact_signature(self, ctx: &IrContext) -> Option<TypeRef>;
+
+    fn is_exact_signature_attribute(self, attribute: Symbol) -> bool;
 }
 
 fn indirect_call_like_model_callee<T: IndirectCallLikeModel>(
@@ -452,6 +456,16 @@ fn indirect_call_like_model_signature<T: IndirectCallLikeModel>(
         .and_then(|model| model.exact_signature(ctx))
 }
 
+fn indirect_call_like_model_is_signature_attribute<T: IndirectCallLikeModel>(
+    ctx: &IrContext,
+    op: OpRef,
+    attribute: Symbol,
+) -> bool {
+    T::from_op(ctx, op)
+        .map(|model| model.is_exact_signature_attribute(attribute))
+        .unwrap_or(false)
+}
+
 /// Registry entry for [`IndirectCallLike`].
 pub struct IndirectCallLikeRegistration {
     pub dialect: &'static str,
@@ -459,6 +473,7 @@ pub struct IndirectCallLikeRegistration {
     pub callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
     pub arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
     pub exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
+    pub is_exact_signature_attribute: fn(&IrContext, OpRef, Symbol) -> bool,
 }
 
 impl IndirectCallLike for IndirectCallLikeRegistration {
@@ -472,6 +487,10 @@ impl IndirectCallLike for IndirectCallLikeRegistration {
 
     fn exact_signature(&self, ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
         (self.exact_signature)(ctx, op)
+    }
+
+    fn is_exact_signature_attribute(&self, ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool {
+        (self.is_exact_signature_attribute)(ctx, op, attribute)
     }
 }
 
@@ -508,6 +527,7 @@ impl IndirectCallLikeOps {
             callee: indirect_call_like_model_callee::<T>,
             arguments: indirect_call_like_model_arguments::<T>,
             exact_signature: indirect_call_like_model_signature::<T>,
+            is_exact_signature_attribute: indirect_call_like_model_is_signature_attribute::<T>,
         }
     }
 
@@ -521,6 +541,12 @@ impl IndirectCallLikeOps {
     /// Read an indirect transfer's exact callable signature, if it has one.
     pub fn exact_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
         Self::get(ctx, op).and_then(|interface| interface.exact_signature(ctx, op))
+    }
+
+    /// Whether an attribute belongs to this operation's exact callable contract.
+    pub fn is_exact_signature_attribute(ctx: &IrContext, op: OpRef, attribute: Symbol) -> bool {
+        Self::get(ctx, op)
+            .is_some_and(|interface| interface.is_exact_signature_attribute(ctx, op, attribute))
     }
 
     /// Read an indirect transfer's erased runtime callee or table-index value.
