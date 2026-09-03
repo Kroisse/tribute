@@ -196,6 +196,23 @@ Module or function analyses should be pure computations over IR. Passes may use
 analysis results, but should not accumulate hidden mutable state that affects
 rewrite behavior.
 
+Analyses query prerequisites through the computation-scoped analysis context,
+which provides read-only IR access and typed lookups through the same
+pipeline-scoped cache. Cache identity is the pair `(TypeId, OpRef)`, so an
+analysis may depend on a different analysis and/or a different operation
+target, including a target in another module or region. The context records
+each direct prerequisite whether it is already cached or newly computed.
+
+The cache detects direct and indirect construction cycles and reports a
+structured analysis failure. A computation publishes its result and its entire
+new direct-dependency set only after it succeeds; failed computations publish
+neither a cache result nor dependency metadata. Replacing a cached result
+replaces its dependency set, removing obsolete reverse edges. Invalidating a
+key invalidates every transitive dependent, while invalidating only a dependent
+does not invalidate its prerequisites. Invalidating all analyses rooted at one
+operation also follows reverse dependencies to other targets. Clearing a cache
+removes results, dependency metadata, and construction state.
+
 Planner-style data, such as data segments, WASI imports, memory layout, or
 native layout metadata, should be represented as immutable plans that can be
 computed before the pass that consumes them.
