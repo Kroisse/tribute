@@ -1337,7 +1337,7 @@ mod tests {
             .copied()
             .find(|op| func::TailCallIndirect::from_op(&ctx, *op).is_ok())
             .unwrap();
-        let signature = tribute_core::get_indirect_call_signature(&ctx, tail).unwrap();
+        let signature = func::indirect_call_signature(&ctx, tail).unwrap();
         let callable = core::Func::from_type_ref(&ctx, signature).unwrap();
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);

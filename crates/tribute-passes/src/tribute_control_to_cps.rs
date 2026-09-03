@@ -4979,7 +4979,7 @@ mod tests {
             "the dispatch adapter and separate handler paths must tail-transfer: {printed}"
         );
         for tail in tails {
-            let signature = tribute_core::get_indirect_call_signature(&ctx, tail)
+            let signature = func::indirect_call_signature(&ctx, tail)
                 .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");
@@ -5129,7 +5129,7 @@ mod tests {
             "the dispatch adapter and independent CPS exits must both tail-transfer: {printed}"
         );
         for tail in tails {
-            let signature = tribute_core::get_indirect_call_signature(&ctx, tail)
+            let signature = func::indirect_call_signature(&ctx, tail)
                 .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");

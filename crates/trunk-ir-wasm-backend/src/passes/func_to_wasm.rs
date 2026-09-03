@@ -270,7 +270,7 @@ impl RewritePattern for FuncCallIndirectPattern {
             .collect::<Vec<_>>();
         let result_types = CallLike::call_result_types(&call, ctx).to_vec();
 
-        let signature = if let Some(signature) = IndirectCallLike::exact_signature(&call, ctx) {
+        let signature = if let Some(signature) = call.exact_signature(ctx) {
             let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
             else {
                 return false;
@@ -368,7 +368,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         // arguments have already reached their Wasm representations. Convert
         // the attribute with the shared signature converter before validating
         // it; never derive a replacement signature from the operands.
-        let Some(signature) = IndirectCallLike::exact_signature(&tail, ctx) else {
+        let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
         let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())

@@ -3,8 +3,6 @@
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::func::{self, IndirectCallLike};
-use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -248,18 +246,6 @@ pub fn set_indirect_call_signature(ctx: &mut IrContext, op: OpRef, signature: Ty
         Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
         Attribute::Type(signature),
     );
-}
-
-/// Read the exact callable signature retained on an indirect transfer.
-pub fn get_indirect_call_signature(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    func::CallIndirect::from_op(ctx, op)
-        .ok()
-        .and_then(|call| IndirectCallLike::exact_signature(&call, ctx))
-        .or_else(|| {
-            func::TailCallIndirect::from_op(ctx, op)
-                .ok()
-                .and_then(|tail| IndirectCallLike::exact_signature(&tail, ctx))
-        })
 }
 
 /// Retain a typed closure contract on its canonical runtime pair.

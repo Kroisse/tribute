@@ -16,7 +16,7 @@ use tribute_core::calling_convention::{
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, INDIRECT_CALL_SIGNATURE_ATTR,
-    get_calling_convention, get_indirect_call_signature, get_physical_closure_convention,
+    get_calling_convention, get_physical_closure_convention,
 };
 use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
@@ -978,7 +978,7 @@ fn validate_transfers(
         if !func::CallIndirect::matches(ctx, op) && !func::TailCallIndirect::matches(ctx, op) {
             continue;
         }
-        let signature = get_indirect_call_signature(ctx, op);
+        let signature = func::indirect_call_signature(ctx, op);
         let convention = exact_convention(ctx, op)?;
         if signature.is_none() && convention.is_none() {
             continue;

@@ -770,7 +770,7 @@ impl ActionPlanner<'_> {
         let operands = self.ir.op_operands(op);
         let args = operands.get(usize::from(indirect)..).unwrap_or_default();
         let entries = if indirect {
-            let signature = get_indirect_call_signature(self.ir, op)
+            let signature = func::indirect_call_signature(self.ir, op)
                 .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
                 .ok_or_else(|| {
                     OwnershipPlanError::new(format!(

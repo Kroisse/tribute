@@ -926,7 +926,6 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
 mod tests {
     use super::*;
     use std::ops::ControlFlow;
-    use tribute_core::get_indirect_call_signature;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::parser::parse_test_module;
@@ -1197,7 +1196,7 @@ mod tests {
             .find(|&op| func::CallIndirect::matches(&ctx, op))
             .expect("lowered indirect dispatch");
         assert!(
-            get_indirect_call_signature(&ctx, inner_call).is_some(),
+            func::indirect_call_signature(&ctx, inner_call).is_some(),
             "native-generated indirect calls must carry an exact signature"
         );
     }

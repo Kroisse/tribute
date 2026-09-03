@@ -1,5 +1,7 @@
 //! Arena-based func dialect.
 
+use crate::ops::DialectOp;
+
 /// The optional exact callable signature retained after a typed indirect callee
 /// becomes a runtime function or table index.
 pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
@@ -36,6 +38,21 @@ pub trait TailCallLike: CallLike {
     fn is_resultless(&self, ctx: &crate::IrContext) -> bool {
         self.call_result_types(ctx).is_empty()
     }
+}
+
+/// Read the exact callable signature from a typed indirect-call operation.
+///
+/// This deliberately recognizes only the two `func` indirect-call forms;
+/// arbitrary operations do not implement [`IndirectCallLike`].
+pub fn indirect_call_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
+    CallIndirect::from_op(ctx, op)
+        .ok()
+        .and_then(|call| call.exact_signature(ctx))
+        .or_else(|| {
+            TailCallIndirect::from_op(ctx, op)
+                .ok()
+                .and_then(|tail| tail.exact_signature(ctx))
+        })
 }
 
 // === Operation registrations ===
@@ -360,5 +377,43 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
         assert!(!printed.contains("func.indirect_call_signature"));
+    }
+
+    #[test]
+    fn indirect_call_signature_recognizes_only_indirect_calls() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @ordinary(%callee: core.func(core.i32, core.i32), %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, core.i32)} : core.i32
+    func.return %result
+  }
+  func.func @tail(%callee: core.func(core.nil, core.i32), %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32)}
+  }
+  func.func @direct() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+
+        let functions = module.ops(&ctx);
+        let ordinary = Func::from_op(&ctx, functions[0]).expect("ordinary function");
+        let tail = Func::from_op(&ctx, functions[1]).expect("tail function");
+        let direct = Func::from_op(&ctx, functions[2]).expect("direct function");
+        let ordinary_op = ctx
+            .block(ctx.region(ordinary.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+        let tail_op = ctx
+            .block(ctx.region(tail.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+        let direct_op = ctx
+            .block(ctx.region(direct.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+
+        assert!(indirect_call_signature(&ctx, ordinary_op).is_some());
+        assert!(indirect_call_signature(&ctx, tail_op).is_some());
+        assert_eq!(indirect_call_signature(&ctx, direct_op), None);
     }
 }

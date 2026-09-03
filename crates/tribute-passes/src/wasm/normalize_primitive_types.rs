@@ -191,7 +191,7 @@ impl RewritePattern for NormalizeCallIndirectPattern {
             .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
         let args: Vec<_> = operands[1..].to_vec();
 
-        let signature = tribute_core::get_indirect_call_signature(ctx, op);
+        let signature = func::indirect_call_signature(ctx, op);
         let new_op = func::call_indirect(ctx, loc, callee, args, new_result_ty, signature);
         rewriter.replace_op(new_op.op_ref());
         true

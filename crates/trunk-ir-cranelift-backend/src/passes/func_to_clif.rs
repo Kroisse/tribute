@@ -270,7 +270,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         };
 
         let result_types = rewriter.result_types(ctx, op);
-        let sig_ty = if let Some(signature) = IndirectCallLike::exact_signature(&call, ctx) {
+        let sig_ty = if let Some(signature) = call.exact_signature(ctx) {
             let Some(signature) =
                 trunk_ir::rewrite::convert_function_type(ctx, signature, rewriter.type_converter())
             else {
@@ -398,7 +398,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
-        let Some(signature) = IndirectCallLike::exact_signature(&tail, ctx) else {
+        let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
         let Some(signature) =
