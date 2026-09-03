@@ -91,6 +91,8 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
+    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_switches(ctx, module)?;
+
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
     let io_analysis = IoAnalysis::analyze(ctx, module, const_analysis.total_size());
     {
@@ -107,7 +109,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     {
         let _span = tracing::info_span!("scf_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, module, tc);
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, module, tc)?;
     }
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
@@ -1225,6 +1227,39 @@ mod tests {
                 .contains("adt.string_const must produce wasm.anyref"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn lower_to_wasm_rejects_nonlowerable_switch_before_io_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i64) -> core.nil {
+    %write = tribute_io.write %bytes, %newline : core.nil
+    scf.switch %choice {
+      scf.case {value = 0} { scf.yield }
+      scf.default { scf.yield }
+    }
+    func.return
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+        assert!(before.contains("tribute_io.write"), "{before}");
+
+        let error = lower_to_wasm(&mut ctx, module)
+            .expect_err("nonlowerable switch must fail the wasm lowering boundary");
+
+        assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
+        assert!(error.to_string().contains("scf-to-wasm"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported discriminant type `core.i64`; expected `core.i32`"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
