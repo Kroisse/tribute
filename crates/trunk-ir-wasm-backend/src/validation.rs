@@ -113,6 +113,18 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
 
+    fn assert_rejects_tail_signature(source: &str) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, source);
+        let error = validate_wasm_ir(&ctx, module).expect_err("invalid physical relation");
+        assert!(
+            error
+                .to_string()
+                .contains("operands do not match its exact signature"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn rejects_invalid_return_call_indirect_exact_contracts() {
         let rejects = |source: &str, diagnostic: &str| {
@@ -174,6 +186,61 @@ mod tests {
   }
 }"#,
             "operands do not match its exact signature",
+        );
+    }
+
+    #[test]
+    fn accepts_physical_equivalence_and_gc_upcasts_in_return_call_indirect() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Array = core.array(core.i32)
+  !Struct = adt.struct() {fields = [[@value, core.i32]], name = @Struct}
+  wasm.func @typeref(%table_index: core.i32, %value: adt.typeref) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+  }
+  wasm.func @struct(%table_index: core.i32, %value: !Struct) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+  }
+  wasm.func @array(%table_index: core.i32, %value: !Array) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.arrayref), table = 0, type_idx = 0}
+  }
+  wasm.func @i31(%table_index: core.i32, %value: wasm.i31ref) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+  }
+}"#,
+        );
+
+        validate_wasm_ir(&ctx, module).expect("physical-compatible tail arguments must validate");
+    }
+
+    #[test]
+    fn rejects_downcasts_and_unrelated_reference_families_in_return_call_indirect() {
+        for (value_ty, parameter_ty) in [
+            ("wasm.anyref", "wasm.structref"),
+            ("wasm.arrayref", "wasm.structref"),
+            ("wasm.funcref", "wasm.anyref"),
+        ] {
+            assert_rejects_tail_signature(&format!(
+                r#"core.module @test {{
+  wasm.func @caller(%table_index: core.i32, %value: {value_ty}) -> core.nil {{
+    wasm.return_call_indirect %table_index, %value {{signature = core.func(core.nil, {parameter_ty}), table = 0, type_idx = 0}}
+  }}
+}}"#
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_unregistered_adt_struct_as_structref_tail_argument() {
+        assert_rejects_tail_signature(
+            r#"core.module @test {
+  !Struct = adt.struct() {fields = [[@value, core.i32]], name = @Struct}
+  wasm.func @caller(%table_index: core.i32, %value: !Struct) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.structref), table = 0, type_idx = 0}
+  }
+}"#,
         );
     }
 }

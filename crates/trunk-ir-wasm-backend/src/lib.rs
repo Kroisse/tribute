@@ -27,7 +27,6 @@ mod translate;
 mod validation;
 
 pub use data_registry::{DataEntry, DataRegistry};
-pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
 pub use plan::{MainExports, MemoryPlan};
 pub use translate::{WasmBinary, emit_module_to_wasm};

@@ -9,7 +9,8 @@ use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 
-use crate::{CompilationResult, emit_wasm, validate_wasm_ir};
+use crate::emit::emit_wasm;
+use crate::{CompilationResult, validate_wasm_ir};
 
 /// A compiled WebAssembly module with metadata.
 pub struct WasmBinary {

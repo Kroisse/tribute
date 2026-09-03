@@ -252,7 +252,7 @@ struct FunctionEmitContext {
     func_return_type: Option<TypeRef>,
 }
 
-pub fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
+pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
     debug!("emit_wasm: collecting module info...");
     let module_info = match collect_module_info(ctx, module) {
         Ok(info) => {
@@ -1242,6 +1242,25 @@ mod tests {
         )
     }
 
+    fn typeref_return_call_indirect_module(ctx: &mut IrContext) -> IrModule {
+        parse_test_module(
+            ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @target} : wasm.funcref
+  }
+  wasm.func @target(%value: wasm.structref) -> core.nil {
+    wasm.return
+  }
+  wasm.func @caller(%table_index: core.i32, %value: adt.typeref) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.structref), table = 0, type_idx = 0}
+  }
+  wasm.export_func {name = "caller", func = @caller}
+}"#,
+        )
+    }
+
     #[test]
     fn encodes_and_validates_return_call_indirect_with_exact_signature() {
         let mut ctx = IrContext::new();
@@ -1276,6 +1295,20 @@ mod tests {
             )),
             "missing return_call_indirect in {instructions:?}"
         );
+    }
+
+    #[test]
+    fn encodes_typeref_tail_argument_as_structref() {
+        let mut ctx = IrContext::new();
+        let module = typeref_return_call_indirect_module(&mut ctx);
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("typeref tail argument must be emission-ready")
+            .bytes;
+        let mut validator =
+            Validator::new_with_features(WasmFeatures::default() | WasmFeatures::TAIL_CALL);
+        validator
+            .validate_all(&bytes)
+            .expect("encoded typeref tail transfer must validate");
     }
 
     #[test]
