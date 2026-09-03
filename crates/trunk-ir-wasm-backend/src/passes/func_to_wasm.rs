@@ -269,9 +269,8 @@ impl RewritePattern for FuncCallIndirectPattern {
             .chain(CallLike::call_args(&call, ctx).iter().copied())
             .collect::<Vec<_>>();
         let result_types = CallLike::call_result_types(&call, ctx).to_vec();
-        let mut attrs = ctx.op(op).attributes.clone();
 
-        if let Some(signature) = IndirectCallLike::exact_signature(&call, ctx) {
+        let signature = if let Some(signature) = IndirectCallLike::exact_signature(&call, ctx) {
             let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
             else {
                 return false;
@@ -280,16 +279,20 @@ impl RewritePattern for FuncCallIndirectPattern {
             {
                 return false;
             }
-            attrs.insert(
-                Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
-                Attribute::Type(signature),
-            );
-        }
+            Some(signature)
+        } else {
+            None
+        };
 
         // The emit phase resolves the type index and table attributes. An
         // optional exact signature stays attached for authoritative indexing.
         let new_op = wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
-        ctx.op_mut(new_op.op_ref()).attributes.extend(attrs);
+        if let Some(signature) = signature {
+            ctx.op_mut(new_op.op_ref()).attributes.insert(
+                Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR),
+                Attribute::Type(signature),
+            );
+        }
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -724,7 +727,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.anyref)} : core.i32
+    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.anyref), table = 7, type_idx = 9} : core.i32
     func.return %result
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
@@ -759,6 +762,10 @@ mod tests {
                 "wasm.call_indirect %0, %1 {signature = core.func(core.i32, wasm.anyref), table = 0, type_idx = 0}"
             ),
             "{output}"
+        );
+        assert!(
+            !output.contains("table = 7") && !output.contains("type_idx = 9"),
+            "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
             !output.contains("signature = core.func(core.i32, tribute_rt.anyref)"),
