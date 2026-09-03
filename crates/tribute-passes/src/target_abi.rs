@@ -165,8 +165,25 @@ pub fn lower_cps_signatures_to_physical(
 
         let original_attributes = converter.ctx.op(op).attributes.clone();
         let mut converted_attributes = original_attributes.clone();
-        let indirect_signature =
-            IndirectCallLikeOps::take_exact_signature(converter.ctx, op, &mut converted_attributes);
+        let indirect_signature = IndirectCallLikeOps::exact_signature(converter.ctx, op);
+        if let Some(signature) = indirect_signature {
+            let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
+                TargetAbiError::new(
+                    "target ABI: indirect callable signature has no convention metadata",
+                )
+            })?;
+            let signature = converter.convert_callable(signature, convention)?;
+            if !IndirectCallLikeOps::set_exact_signature(
+                converter.ctx,
+                op,
+                &mut converted_attributes,
+                signature,
+            ) {
+                return Err(TargetAbiError::new(
+                    "target ABI: indirect callable signature cannot be set",
+                ));
+            }
+        }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
             .map(|(name, value)| (*name, value.clone()))
@@ -177,15 +194,6 @@ pub fn lower_cps_signatures_to_physical(
             }
             let converted = converter.convert_attribute(value)?;
             converted_attributes.insert(name, converted);
-        }
-        if let Some(signature_slot) = indirect_signature {
-            let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
-                TargetAbiError::new(
-                    "target ABI: indirect callable signature has no convention metadata",
-                )
-            })?;
-            let signature = converter.convert_callable(signature_slot.signature(), convention)?;
-            signature_slot.restore(&mut converted_attributes, signature);
         }
         for (name, value) in converted_attributes {
             if original_attributes.get(name) != Some(&value) {
