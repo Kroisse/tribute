@@ -24,6 +24,7 @@ use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
+use super::ops::DialectType;
 use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::walk;
@@ -319,6 +320,8 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
+    validate_core_func_types(ctx, &mut errors);
+
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
@@ -342,6 +345,21 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     });
 
     ValidationResult { errors }
+}
+
+fn validate_core_func_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+    for (ty, data) in ctx.types.iter() {
+        if data.dialect != crate::dialect::core::DIALECT_NAME()
+            || data.name != crate::dialect::core::FUNC()
+        {
+            continue;
+        }
+        if let Err(error) = crate::dialect::core::Func::validate(ctx, ty) {
+            errors.push(ValidationError::Operation {
+                message: format!("type verifier failed for core.func ({ty}): {error}"),
+            });
+        }
+    }
 }
 
 fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -376,19 +394,23 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
     } else {
         ctx.value_ty(callee)
     };
-    let func_ty = ctx.types.get(func_ty);
-    if func_ty.dialect != Symbol::new("core")
-        || func_ty.name != Symbol::new("func")
-        || func_ty.params.is_empty()
-    {
+    let Some(func_ty) = crate::dialect::core::Func::from_type_ref(ctx, func_ty) else {
         errors.push(operation_verifier_error(
             ctx,
             op,
             "callee must have core.func or closure.closure<core.func> type",
         ));
         return;
-    }
-    let return_ty = ctx.types.get(func_ty.params[0]);
+    };
+    let Some(result_ty) = func_ty.single_result(ctx) else {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "callee function must have one core.never result",
+        ));
+        return;
+    };
+    let return_ty = ctx.types.get(result_ty);
     if return_ty.dialect != Symbol::new("core") || return_ty.name != Symbol::new("never") {
         errors.push(operation_verifier_error(
             ctx,
@@ -396,7 +418,7 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
             "callee function result must be core.never",
         ));
     }
-    let expected = &func_ty.params[1..];
+    let expected = func_ty.inputs(ctx);
     if args.len() != expected.len() {
         errors.push(operation_verifier_error(
             ctx,
@@ -976,8 +998,6 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
     let wasm_dialect = Symbol::new("wasm");
     let clif_dialect = Symbol::new("clif");
 
-    let core_dialect = Symbol::new("core");
-    let core_func_name = Symbol::new("func");
     let sym_name_key = Symbol::new("sym_name");
     let type_key = Symbol::new("type");
 
@@ -1002,14 +1022,10 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             };
 
-            let ty_data = ctx.types.get(func_ty);
-            if ty_data.dialect != core_dialect || ty_data.name != core_func_name {
+            let Some(func_ty) = crate::dialect::core::Func::from_type_ref(ctx, func_ty) else {
                 continue;
-            }
-
-            // core.func layout: params[0] = Return, params[1..] = Params
-            let param_count = ty_data.params.len().saturating_sub(1);
-            signatures.insert(sym_name, param_count);
+            };
+            signatures.insert(sym_name, func_ty.inputs(ctx).len());
         }
     }
 
@@ -1163,7 +1179,7 @@ mod tests {
         params: &[super::super::refs::TypeRef],
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     fn stale_value_errors(result: &ValidationResult) -> Vec<(&str, &str, &str)> {
@@ -1202,6 +1218,75 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    fn empty_module(ctx: &mut IrContext) -> Module {
+        crate::parser::parse_test_module(ctx, "core.module @test {}")
+    }
+
+    #[test]
+    fn malformed_core_func_counts_are_rejected_by_typed_and_whole_ir_validation() {
+        let cases = [
+            (
+                "missing num_inputs",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "missing required `num_inputs`",
+            ),
+            (
+                "missing num_results",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0)),
+                "missing required `num_results`",
+            ),
+            (
+                "wrong num_inputs type",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::String("zero".to_string()))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "wrong num_results type",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0))
+                    .attr(
+                        core::NUM_RESULTS_ATTR,
+                        Attribute::String("zero".to_string()),
+                    ),
+                "`num_results` must be a u32",
+            ),
+            (
+                "count sum mismatch",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(1))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "must equal params length",
+            ),
+            (
+                "multiple results",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(2)),
+                "supports at most one result",
+            ),
+        ];
+
+        for (case, builder, expected) in cases {
+            let mut ctx = IrContext::new();
+            let module = empty_module(&mut ctx);
+            let malformed = ctx.types.intern(builder.build());
+            assert!(
+                core::Func::from_type_ref(&ctx, malformed).is_none(),
+                "{case} must fail typed validation"
+            );
+            let result = validate_operation_verifiers(&ctx, module);
+            let messages = operation_error_messages(&result);
+            assert!(
+                messages.iter().any(|message| message.contains(expected)),
+                "{case}: {result}"
+            );
+        }
     }
 
     fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {

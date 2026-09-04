@@ -3,6 +3,7 @@
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -88,7 +89,7 @@ pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConve
 /// Result-indexed CPS completion target `Done<R>`.
 pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
-    let function = core::func(ctx, never, [result]).as_type_ref();
+    let function = core::func(ctx, [result], [never]).as_type_ref();
     generated_cps_closure_type(ctx, function)
 }
 
@@ -154,7 +155,7 @@ pub fn cps_completion_type(
     frame: TypeRef,
 ) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
-    let function = core::func(ctx, never, [evidence, frame, value]).as_type_ref();
+    let function = core::func(ctx, [evidence, frame, value], [never]).as_type_ref();
     generated_cps_closure_type(ctx, function)
 }
 
@@ -190,8 +191,8 @@ pub fn cps_dispatch_type(
     let resume = cps_resume_type(ctx, evidence, frame, anyref);
     let function = core::func(
         ctx,
-        never,
         [evidence, resume, i32_type, i32_type, i32_type, anyref],
+        [never],
     )
     .as_type_ref();
     physical_closure_type(ctx, function, CallingConvention::Cps)
@@ -222,11 +223,8 @@ pub fn physical_closure_function_type(
     let [function] = ctx.types.get(closure).params.as_slice() else {
         return None;
     };
-    let data = ctx.types.get(*function);
-    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
-        return None;
-    }
-    let argument_count = data.params.len().checked_sub(1)?;
+    let callable = core::Func::from_type_ref(ctx, *function)?;
+    let argument_count = callable.inputs(ctx).len();
     (environment_index <= argument_count).then_some(*function)
 }
 
@@ -332,7 +330,7 @@ mod tests {
     fn physical_closure_convention_is_exact_type_identity() {
         let mut ctx = IrContext::new();
         let never = trunk_ir::dialect::core::never(&mut ctx).as_type_ref();
-        let function = trunk_ir::dialect::core::func(&mut ctx, never, []).as_type_ref();
+        let function = trunk_ir::dialect::core::func(&mut ctx, [], [never]).as_type_ref();
         let direct = physical_closure_type(&mut ctx, function, CallingConvention::Direct);
         let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
 
@@ -410,14 +408,14 @@ mod tests {
         );
 
         for (closure, environment_index, expected) in [
-            (done, 0, vec![never, i32_ty]),
-            (completion, 0, vec![never, evidence, frame, i32_ty]),
-            (resume_exact, 0, vec![never, evidence, frame, i32_ty]),
-            (resume, 0, vec![never, evidence, frame, anyref]),
+            (done, 0, vec![i32_ty, never]),
+            (completion, 0, vec![evidence, frame, i32_ty, never]),
+            (resume_exact, 0, vec![evidence, frame, i32_ty, never]),
+            (resume, 0, vec![evidence, frame, anyref, never]),
             (
                 dispatch,
                 1,
-                vec![never, evidence, resume, i32_ty, i32_ty, i32_ty, anyref],
+                vec![evidence, resume, i32_ty, i32_ty, i32_ty, anyref, never],
             ),
         ] {
             let function = cps_closure_function_type(&ctx, closure).expect("exact CPS closure");
@@ -436,7 +434,7 @@ mod tests {
     fn continuation_frame_and_cps_closure_readers_fail_closed_on_malformed_metadata() {
         let mut ctx = IrContext::new();
         let never = core::never(&mut ctx).as_type_ref();
-        let function = core::func(&mut ctx, never, []).as_type_ref();
+        let function = core::func(&mut ctx, [], [never]).as_type_ref();
         let missing_environment = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)

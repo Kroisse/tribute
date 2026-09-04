@@ -500,6 +500,6 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("wasm.call_indirect"));
-        assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
+        assert!(printed.contains("signature = core.func<(core.i32) -> core.i32>"));
     }
 }

@@ -37,6 +37,15 @@ Float 비교는 C/Rust 스타일 NaN 의미를 따른다:
 전체 ordered/unordered predicate 집합은 아직 surface language에 노출하지
 않는다.
 
+## Function Results
+
+Source-level functions have exactly one logical result. `Unit` and `Never` are
+ordinary logical result types rather than absence-of-result markers: a Unit
+function has the logical result list `[core.nil]`, and a CPS-transformed
+function has the logical result list `[core.never]`. An empty TrunkIR function
+result list is reserved for a later physical-ABI lowering boundary and must not
+be inferred from either logical type.
+
 ### Struct (Product Type)
 
 ```rust

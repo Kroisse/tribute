@@ -71,6 +71,12 @@ pub enum RawType<'a> {
         params: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
     },
+    /// Canonical `core.func<(inputs...) -> results>` syntax.
+    Function {
+        inputs: Vec<RawType<'a>>,
+        results: Vec<RawType<'a>>,
+        attrs: Vec<(&'a str, RawAttribute<'a>)>,
+    },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
 }
@@ -270,6 +276,40 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     }
 
     let (dialect, name) = qualified_name.parse_next(input)?;
+
+    if dialect == "core" && name == "func" && input.starts_with('<') {
+        '<'.parse_next(input)?;
+        ws.parse_next(input)?;
+        let inputs = delimited(
+            ('(', ws),
+            separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
+            (ws, ')'),
+        )
+        .parse_next(input)?;
+        ws.parse_next(input)?;
+        "->".parse_next(input)?;
+        ws.parse_next(input)?;
+        let results = if input.starts_with('(') {
+            delimited(
+                ('(', ws),
+                separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
+                (ws, ')'),
+            )
+            .parse_next(input)?
+        } else {
+            vec![raw_type.parse_next(input)?]
+        };
+        ws.parse_next(input)?;
+        '>'.parse_next(input)?;
+        let attrs = opt(preceded(ws, raw_attr_dict))
+            .parse_next(input)?
+            .unwrap_or_default();
+        return Ok(RawType::Function {
+            inputs,
+            results,
+            attrs,
+        });
+    }
 
     // Optional type parameters
     let opt_params = opt(delimited(
@@ -728,8 +768,53 @@ mod tests {
                 params,
                 ..
             } => (dialect, name, params),
+            RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type() {
+        let mut input = "core.func<(core.i32, core.i64) -> core.never>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function {
+            inputs,
+            results,
+            attrs,
+        } = raw
+        else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(results.len(), 1);
+        assert!(attrs.is_empty());
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type_with_empty_results() {
+        let mut input = "core.func<(core.i32) -> ()>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function {
+            inputs, results, ..
+        } = raw
+        else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(inputs.len(), 1);
+        assert!(results.is_empty());
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type_recognizes_multiple_results() {
+        let mut input = "core.func<() -> (core.i32, core.i64)>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function { results, .. } = raw else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(results.len(), 2);
+        assert!(input.is_empty());
     }
 
     #[test]
@@ -951,6 +1036,7 @@ mod tests {
                 assert_eq!(attrs.len(), 1);
                 assert_eq!(attrs[0].0, "effect");
             }
+            RawType::Function { .. } => panic!("expected legacy Concrete, got Function"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
     }

@@ -206,7 +206,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         blocks: smallvec![body],
         parent_op: None,
     });
-    let fn_ty = core::func(ctx, nil_ty, [bytes_ty, i32_ty]).as_type_ref();
+    let fn_ty = core::func(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
     func::func(ctx, loc, Symbol::new(WRITE_HELPER), fn_ty, body).op_ref()
 }
 

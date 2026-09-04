@@ -8,7 +8,7 @@ use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -58,13 +58,19 @@ impl Pass for LowerListIntrinsics {
                 && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
                     == Some(Symbol::new(PREPEND_INTRINSIC))
                 && {
-                    let data = ctx.types.get(function.r#type(ctx));
-                    matches!(data.params.as_slice(), [result, element, tail]
-                    if [result, element, tail].into_iter().all(|ty| {
-                        let data = ctx.types.get(*ty);
-                        data.dialect == Symbol::new("tribute_rt")
-                            && data.name == Symbol::new("anyref")
-                    }))
+                    core::Func::from_type_ref(ctx, function.r#type(ctx)).is_some_and(|signature| {
+                        let [element, tail] = signature.inputs(ctx) else {
+                            return false;
+                        };
+                        let Some(result) = signature.single_result(ctx) else {
+                            return false;
+                        };
+                        [result, *element, *tail].into_iter().all(|ty| {
+                            let data = ctx.types.get(ty);
+                            data.dialect == Symbol::new("tribute_rt")
+                                && data.name == Symbol::new("anyref")
+                        })
+                    })
                 }
             {
                 intrinsic_declarations.eligible.insert(name);

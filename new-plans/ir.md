@@ -790,6 +790,66 @@ opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
 
+### `core.func` function type
+
+`core.func` stores inputs and results as separate logical lists while keeping a
+flat interned parameter vector. Its canonical textual form follows MLIR
+FunctionType syntax:
+
+```text
+core.func<() -> ()>
+core.func<(core.i32) -> core.i64>
+core.func<(Evidence, Frame, core.i32) -> core.never>
+```
+
+The input list is always parenthesized. An empty result list is printed as
+`()`, while the single supported result is printed without parentheses.
+TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but
+currently rejects more than one result.
+
+The interned representation is:
+
+```text
+TypeData {
+  dialect: core,
+  name: func,
+  params: [input_0, ..., input_n, result_0?],
+  attrs: {
+    num_inputs: n,
+    num_results: 0 | 1,
+    ...other_type_attributes
+  }
+}
+```
+
+Both counts are mandatory `u32` delimiters and participate in type identity.
+They do not identify an ABI. Their sum must equal `params.len()`, and
+`num_results` must not exceed one. The generic recursive type walk continues to
+visit the entire flat `params` vector. The canonical printer hides only these
+two reserved attributes and preserves every other type attribute; textual type
+attribute dictionaries may not specify either reserved key.
+
+During the compatibility window the reader also accepts legacy
+`core.func(Return, Params...)`, immediately normalizes it to the new input-first
+storage, and never interns the legacy layout. The printer always emits the
+canonical form. Production code constructs function types only through the
+validated `core::func` API; direct `TypeData` construction is reserved for
+malformed-type verifier tests.
+
+The three result states have distinct meanings:
+
+```text
+logical Unit function: results = [core.nil]
+logical CPS function:  results = [core.never]
+physical CPS function: results = []
+```
+
+The physical proper-tail ABI is proven only by the combination of
+`tribute.calling_convention = Cps` and exact `results = []`. The stored counts
+are not an ABI marker. During the first representation migration, existing
+production functions remain one-result; zero-result operations and the
+`[core.never]` to `[]` target conversion are enabled in later atomic stages.
+
 ## Open Questions
 
 - Final closure environment representation for each backend.

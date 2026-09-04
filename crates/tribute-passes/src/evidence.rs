@@ -3,23 +3,20 @@
 //! Helpers for working with evidence parameters on function types.
 
 use tribute_ir::dialect::ability;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::dialect::{core, func};
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 
 /// Check if a `core.func` type has evidence as its first parameter.
 pub fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let data = ctx.types.get(func_ty);
-    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+    let Some(function) = core::Func::from_type_ref(ctx, func_ty) else {
         return false;
-    }
-    // params[0] = return, params[1..] = param types
-    if data.params.len() < 2 {
-        return false;
-    }
-    ability::is_evidence_type_ref(ctx, data.params[1])
+    };
+    function
+        .inputs(ctx)
+        .first()
+        .is_some_and(|&input| ability::is_evidence_type_ref(ctx, input))
 }
 
 /// Build a new `core.func` TypeRef with evidence prepended to params.
@@ -28,22 +25,19 @@ pub fn build_func_type_with_evidence(
     old_func_ty: TypeRef,
     ev_ty: TypeRef,
 ) -> TypeRef {
-    let data = ctx.types.get(old_func_ty);
-    debug_assert!(
-        data.dialect == Symbol::new("core") && data.name == Symbol::new("func"),
-        "build_func_type_with_evidence: expected core.func type, got {}.{} (ty={old_func_ty:?})",
-        data.dialect,
-        data.name,
-    );
-    // params[0] = return, params[1..] = param types
-    let result_ty = data.params[0];
-    let old_params = &data.params[1..];
+    let function = core::Func::from_type_ref(ctx, old_func_ty)
+        .expect("build_func_type_with_evidence requires a valid core.func type");
+    let result_ty = function.r#return(ctx);
+    let old_params = function.inputs(ctx);
+    let mut type_attrs = ctx.types.get(old_func_ty).attrs.clone();
+    type_attrs.remove(core::NUM_INPUTS_ATTR);
+    type_attrs.remove(core::NUM_RESULTS_ATTR);
 
     let mut new_params = Vec::with_capacity(old_params.len() + 1);
     new_params.push(ev_ty);
     new_params.extend_from_slice(old_params);
 
-    trunk_ir::dialect::core::func(ctx, result_ty, new_params).as_type_ref()
+    core::func_with_attrs(ctx, new_params, [result_ty], type_attrs).as_type_ref()
 }
 
 /// Find the evidence value from the enclosing `func.func`'s entry block.

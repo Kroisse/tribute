@@ -179,35 +179,10 @@ impl RewritePattern for FuncFuncPattern {
         let func_type_attr = data.attributes.get_type("type");
 
         let mut new_attrs = data.attributes.clone();
-        if let Some(func_ty) = func_type_attr {
-            let type_data = ctx.types.get(func_ty);
-            if type_data.dialect == Symbol::new("core") && type_data.name == Symbol::new("func") {
-                // The arena core.func type may use two layouts:
-                // - Layout A: params = [ret, arg1, arg2, ...] (translate_signature format)
-                // - Layout B: params = [arg1, arg2, ...], attrs.result = ret
-                // We read both and output in Layout A for translate_signature.
-                let (arg_params, ret_ty) = if let Some(r) = type_data.attrs.get_type("result") {
-                    // Layout B: return type in attrs
-                    (&type_data.params[..], Some(r))
-                } else if !type_data.params.is_empty() {
-                    // Layout A: params[0] = return type
-                    (&type_data.params[1..], Some(type_data.params[0]))
-                } else {
-                    (&type_data.params[..], None)
-                };
-
-                // Convert params and return type
-                let new_params: Vec<TypeRef> = arg_params
-                    .iter()
-                    .map(|&p| tc.convert_type_or_identity(ctx, p))
-                    .collect();
-                let new_ret = ret_ty.map(|r| tc.convert_type_or_identity(ctx, r));
-
-                // Build new func type in Layout A: params[0] = return type
-                let ret_ty = new_ret.unwrap_or_else(|| core::nil(ctx).as_type_ref());
-                let new_func_ty = core::func(ctx, ret_ty, new_params.iter().copied()).as_type_ref();
-                new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
-            }
+        if let Some(func_ty) = func_type_attr
+            && let Some(new_func_ty) = trunk_ir::rewrite::convert_function_type(ctx, func_ty, tc)
+        {
+            new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
         }
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -306,7 +281,7 @@ impl RewritePattern for FuncCallIndirectPattern {
                 .first()
                 .copied()
                 .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-            core::func(ctx, result, param_types).as_type_ref()
+            core::func(ctx, param_types, [result]).as_type_ref()
         };
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -656,7 +631,7 @@ mod tests {
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = core.func(core.nil)}"),
+            result.contains("clif.call_indirect %0 {sig = core.func<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
@@ -692,11 +667,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = core.func(core.nil, core.ptr)"),
+                && printed.contains("sig = core.func<(core.ptr) -> core.nil>"),
             "{printed}"
         );
         assert!(
-            !printed.contains("sig = core.func(core.nil, !evidence)"),
+            !printed.contains("sig = core.func<(!evidence) -> core.nil>"),
             "{printed}"
         );
     }
@@ -732,12 +707,12 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.call_indirect")
-                && printed.contains("sig = core.func(core.i32, core.ptr)"),
+                && printed.contains("sig = core.func<(core.ptr) -> core.i32>"),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "func.call_indirect %0, %1 {signature = core.func(core.i32, !evidence)} : core.i32"
+                "func.call_indirect %0, %1 {signature = core.func<(!evidence) -> core.i32>} : core.i32"
             ),
             "the mismatched call must remain unchanged: {printed}"
         );

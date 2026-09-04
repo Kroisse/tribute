@@ -484,15 +484,9 @@ mod mechanics {
     where
         F: FnOnce(&mut IrContext, BlockRef, &[ValueRef]),
     {
-        let fn_ty = {
-            let mut params = vec![ret_ty];
-            params.extend_from_slice(param_tys);
-            ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                    .params(params)
-                    .build(),
-            )
-        };
+        let fn_ty =
+            crate::dialect::core::func(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
+                .as_type_ref();
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: param_tys
@@ -852,15 +846,9 @@ mod pass {
     where
         F: FnOnce(&mut IrContext, BlockRef, &[ValueRef]),
     {
-        let fn_ty = {
-            let mut params = vec![ret_ty];
-            params.extend_from_slice(param_tys);
-            ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                    .params(params)
-                    .build(),
-            )
-        };
+        let fn_ty =
+            crate::dialect::core::func(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
+                .as_type_ref();
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: param_tys
@@ -1081,11 +1069,7 @@ mod pass {
             parent_op: None,
         });
 
-        let fn_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .params(vec![i32_ty])
-                .build(),
-        );
+        let fn_ty = crate::dialect::core::func(&mut ctx, [], [i32_ty]).as_type_ref();
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
             .attr("type", Attribute::Type(fn_ty))

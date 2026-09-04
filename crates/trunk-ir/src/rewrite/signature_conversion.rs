@@ -20,13 +20,12 @@ use crate::types::Attribute;
 struct ConvertedSignature {
     new_params: Vec<TypeRef>,
     new_result: TypeRef,
+    type_attrs: crate::AttributeMap,
     params_changed: bool,
     changed: bool,
 }
 
 /// Analyze a `core.func` TypeRef and convert params/result via the type converter.
-///
-/// `core.func` type layout: `params[0]` = return type, `params[1..]` = param types.
 ///
 /// Returns `None` when `func_type` is not a well-formed `core.func` type.
 fn convert_func_signature(
@@ -35,11 +34,19 @@ fn convert_func_signature(
     converter: &TypeConverter,
 ) -> Option<ConvertedSignature> {
     let func = core::Func::from_type_ref(ctx, func_type)?;
-
-    // Guard against malformed func type with no return type
-    if ctx.types.get(func_type).params.is_empty() {
-        return None;
-    }
+    let data = ctx.types.get(func_type);
+    let type_attrs = data
+        .attrs
+        .iter()
+        .filter(|(key, _)| {
+            **key != crate::Symbol::new(core::NUM_INPUTS_ATTR)
+                && **key != crate::Symbol::new(core::NUM_RESULTS_ATTR)
+        })
+        .map(|(key, value)| (*key, convert_attribute_types(ctx, converter, value)))
+        .collect::<crate::AttributeMap>();
+    let attrs_changed = type_attrs
+        .iter()
+        .any(|(key, value)| data.attrs.get(key) != Some(value));
 
     let old_result = func.r#return(ctx);
     let old_params = func.params(ctx);
@@ -59,14 +66,38 @@ fn convert_func_signature(
     Some(ConvertedSignature {
         new_params,
         new_result,
+        type_attrs,
         params_changed,
-        changed: params_changed || result_changed,
+        changed: params_changed || result_changed || attrs_changed,
     })
+}
+
+fn convert_attribute_types(
+    ctx: &IrContext,
+    converter: &TypeConverter,
+    attribute: &Attribute,
+) -> Attribute {
+    match attribute {
+        Attribute::Type(ty) => Attribute::Type(converter.convert_type_or_identity(ctx, *ty)),
+        Attribute::List(values) => Attribute::List(
+            values
+                .iter()
+                .map(|value| convert_attribute_types(ctx, converter, value))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Build a new `core.func` TypeRef from converted params/result.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    crate::dialect::core::func(ctx, sig.new_result, sig.new_params.iter().copied()).as_type_ref()
+    crate::dialect::core::func_with_attrs(
+        ctx,
+        sig.new_params.iter().copied(),
+        [sig.new_result],
+        sig.type_attrs.clone(),
+    )
+    .as_type_ref()
 }
 
 /// Convert the parameter and result types of a `core.func` type.
@@ -285,7 +316,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     fn make_module(ctx: &mut IrContext, loc: crate::types::Location, ops: Vec<OpRef>) -> Module {
@@ -393,7 +424,9 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let i64_ty = i64_type(&mut ctx);
 
-        let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let mut type_attrs = crate::AttributeMap::new();
+        type_attrs.insert(Symbol::new("metadata_type"), Attribute::Type(i32_ty));
+        let func_ty = core::func_with_attrs(&mut ctx, [i32_ty], [i32_ty], type_attrs).as_type_ref();
         let func_op = make_func_op(&mut ctx, loc, "test_fn", func_ty, &[i32_ty]);
         let module = make_module(&mut ctx, loc, vec![func_op]);
 
@@ -414,12 +447,14 @@ mod tests {
         assert_eq!(ops.len(), 1);
         let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
-        let td = ctx.types.get(new_type);
-        assert_eq!(td.dialect, Symbol::new("core"));
-        assert_eq!(td.name, Symbol::new("func"));
-        // params[0] = return type, params[1..] = param types
-        assert_eq!(td.params[0], i64_ty, "return type should be i64");
-        assert_eq!(td.params[1], i64_ty, "param type should be i64");
+        let function = core::Func::from_type_ref(&ctx, new_type).unwrap();
+        assert_eq!(function.inputs(&ctx), &[i64_ty]);
+        assert_eq!(function.single_result(&ctx), Some(i64_ty));
+        assert_eq!(
+            ctx.types.get(new_type).attrs.get_type("metadata_type"),
+            Some(i64_ty),
+            "nested type attributes should be converted and preserved"
+        );
 
         // Verify entry block args are updated
         let body = new_func.body(&ctx);
@@ -480,10 +515,9 @@ mod tests {
         let ops = module.ops(&ctx);
         let new_func = wasm::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
-        let td = ctx.types.get(new_type);
-        assert_eq!(td.params[0], i64_ty, "return type should be i64");
-        assert_eq!(td.params[1], i64_ty, "first param should be i64");
-        assert_eq!(td.params[2], i64_ty, "second param should be i64");
+        let function = core::Func::from_type_ref(&ctx, new_type).unwrap();
+        assert_eq!(function.inputs(&ctx), &[i64_ty, i64_ty]);
+        assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
             ctx.op(ops[0]).attributes.get("custom"),
             Some(&Attribute::Int(7)),
@@ -544,16 +578,21 @@ mod tests {
             let data = ctx.op(ops[index]);
             assert_eq!(data.regions.len(), expected_regions);
             let func_ty = data.attributes.get_type("type").unwrap();
-            let params = &ctx.types.get(func_ty).params;
-            assert_eq!(params[0], i64_ty);
-            assert_eq!(params[1], i64_ty);
+            let function = core::Func::from_type_ref(&ctx, func_ty).unwrap();
+            assert_eq!(function.inputs(&ctx), [i64_ty]);
+            assert_eq!(function.single_result(&ctx), Some(i64_ty));
         }
 
         let text = print_module(&ctx, module.op());
         assert!(text.contains("func.func @external(%arg0: core.i64) -> core.i64\n"));
-        assert!(text.contains(
-            "wasm.func {sym_name = @wasm_external, type = core.func(core.i64, core.i64)}\n"
-        ));
+        assert!(
+            text.contains("!t0 = core.func<(core.i64) -> core.i64>"),
+            "{text}"
+        );
+        assert!(
+            text.contains("wasm.func {sym_name = @wasm_external, type = !t0}\n"),
+            "{text}"
+        );
         assert!(text.contains("func.func @defined(%0: core.i64) -> core.i64 {"));
     }
 
@@ -581,9 +620,9 @@ mod tests {
 
         let ops = module.ops(&ctx);
         let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
-        let td = ctx.types.get(new_func.r#type(&ctx));
-        assert_eq!(td.params[0], i64_ty, "return stays i64");
-        assert_eq!(td.params[1], i64_ty, "param converted to i64");
+        let function = core::Func::from_type_ref(&ctx, new_func.r#type(&ctx)).unwrap();
+        assert_eq!(function.inputs(&ctx), &[i64_ty]);
+        assert_eq!(function.single_result(&ctx), Some(i64_ty));
     }
 
     #[test]

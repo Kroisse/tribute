@@ -42,6 +42,7 @@ fn print_closure_lambda(
     indent: usize,
 ) -> std::fmt::Result {
     use std::fmt::Write;
+    use trunk_ir::ops::DialectType;
 
     let indent_str = " ".repeat(indent);
 
@@ -81,8 +82,8 @@ fn print_closure_lambda(
         let closure_ty_data = h.ctx().types.get(result_ty);
         if !closure_ty_data.params.is_empty() {
             let func_ty = closure_ty_data.params[0];
-            let func_ty_data = h.ctx().types.get(func_ty);
-            func_ty_data.params.first().copied()
+            trunk_ir::dialect::core::Func::from_type_ref(h.ctx(), func_ty)
+                .and_then(|function| function.single_result(h.ctx()))
         } else {
             None
         }

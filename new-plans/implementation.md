@@ -38,6 +38,23 @@ TrunkIR validation follows the layered model in `new-plans/ir.md`:
 Do not add a separate semantic-contract DSL unless these existing mechanisms
 cannot express a required invariant.
 
+### Function type representation
+
+The physical callable type remains `core.func`; no separate ABI dialect or
+marker type is introduced. `core.func` flattens its independently modeled input
+and result lists as `[inputs..., results...]` in `TypeData.params` and stores
+mandatory `num_inputs: u32` and `num_results: u32` attributes. The counts are
+interning delimiters, not ABI state. Construction and typed access validate
+that both counts exist, their sum is the flat parameter length, and the result
+count is at most one before slicing.
+
+Generic type traversal and conversion continue over every flat parameter, so
+nested input and result types cannot be skipped. Conversion preserves the
+input/result cardinalities and all non-reserved type attributes. Only the
+target ABI conversion may later change logical CPS `[core.never]` into the
+physical empty result list. Malformed raw `core.func` types are permitted only
+in verifier tests and are rejected by whole-IR validation.
+
 ## 직접형 제어 소유권
 
 구조와 의미의 source of truth는

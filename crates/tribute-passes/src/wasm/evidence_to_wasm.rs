@@ -513,7 +513,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
     let result = core::nil(ctx).as_type_ref();
-    let signature = core::func(ctx, result, parameters).as_type_ref();
+    let signature = core::func(ctx, parameters, [result]).as_type_ref();
     let _ = wasm_dialect::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -1390,7 +1390,7 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.func` type with the given parameter and return types.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-    trunk_ir::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+    trunk_ir::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
 }
 
 /// Compute a stable ability ID as a WASM i32 immediate.

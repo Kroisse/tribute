@@ -172,9 +172,12 @@ fn lower_single_lambda(
         (None, None) => 1,
         _ => return false,
     };
-    let Some(callable) = closure::Closure::from_type_ref(ctx, result_ty)
-        .and_then(|closure| core::Func::from_type_ref(ctx, closure.func_type(ctx)))
+    let Some(function_ty) =
+        closure::Closure::from_type_ref(ctx, result_ty).map(|closure| closure.func_type(ctx))
     else {
+        return false;
+    };
+    let Some(callable) = core::Func::from_type_ref(ctx, function_ty) else {
         return false;
     };
     let func_result_ty = callable.r#return(ctx);
@@ -227,7 +230,16 @@ fn lower_single_lambda(
     if legacy_compatibility {
         all_param_tys.insert(0, ability::evidence_adt_type_ref(ctx));
     }
-    let func_ty = core::func(ctx, func_result_ty, all_param_tys.iter().copied()).as_type_ref();
+    let mut type_attrs = ctx.types.get(function_ty).attrs.clone();
+    type_attrs.remove(core::NUM_INPUTS_ATTR);
+    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    let func_ty = core::func_with_attrs(
+        ctx,
+        all_param_tys.iter().copied(),
+        [func_result_ty],
+        type_attrs,
+    )
+    .as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
     if let Some(convention) = convention {
@@ -605,7 +617,7 @@ mod tests {
         });
 
         // closure type: closure.closure<core.func<i32, i32>>
-        let func_ty = core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
+        let func_ty = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -634,7 +646,7 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty =
-            core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>()).as_type_ref();
+            core::func(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,
@@ -674,9 +686,9 @@ mod tests {
 
         // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);
-        let lifted_ty_data = ctx.types.get(lifted_ty);
-        // params[0] = return, params[1..] = param types
-        assert_eq!(lifted_ty_data.params.len(), 3); // return + env + x
+        let lifted_type = core::Func::from_type_ref(&ctx, lifted_ty).unwrap();
+        assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
+        assert!(lifted_type.single_result(&ctx).is_some());
     }
 
     #[test]
@@ -716,7 +728,7 @@ mod tests {
             parent_op: None,
         });
 
-        let lambda_func_ty = core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>());
+        let lambda_func_ty = core::func(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
         let lambda_ty = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(lambda_func_ty.as_type_ref())
@@ -741,7 +753,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_ty = core::func(&mut ctx, anyref_ty, [evidence_ty]).as_type_ref();
+        let outer_ty = core::func(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
         let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
         ctx.push_op(module_block, outer.op_ref());
 
@@ -803,7 +815,7 @@ mod tests {
             parent_op: None,
         });
 
-        let func_ty = core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
+        let func_ty = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -817,7 +829,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_func_ty = core::func(&mut ctx, anyref_ty, [i32_ty]).as_type_ref();
+        let outer_func_ty = core::func(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,

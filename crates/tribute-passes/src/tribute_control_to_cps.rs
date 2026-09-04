@@ -239,26 +239,24 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             && closure_ty.name == Symbol::new("closure")
             && closure_ty.params.len() == 1
         {
-            let func_ty = ctx.types.get(closure_ty.params[0]);
-            let params = &func_ty.params;
-            if general {
-                func_ty.dialect == Symbol::new("core")
-                    && func_ty.name == Symbol::new("func")
-                    && params.len() == 5
-                    && type_is(ctx, params[0], "core", "never")
-                    && params[1] == evidence
-                    && type_is(ctx, params[2], "tribute_rt", "anyref")
-                    && type_is(ctx, params[3], "core", "i32")
-                    && type_is(ctx, params[4], "tribute_rt", "anyref")
-            } else {
-                func_ty.dialect == Symbol::new("core")
-                    && func_ty.name == Symbol::new("func")
-                    && params.len() == 4
-                    && type_is(ctx, params[0], "tribute_rt", "anyref")
-                    && params[1] == evidence
-                    && type_is(ctx, params[2], "core", "i32")
-                    && type_is(ctx, params[3], "tribute_rt", "anyref")
-            }
+            core::Func::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
+                let params = function.inputs(ctx);
+                let result = function.single_result(ctx);
+                if general {
+                    result.is_some_and(|result| type_is(ctx, result, "core", "never"))
+                        && params.len() == 4
+                        && params[0] == evidence
+                        && type_is(ctx, params[1], "tribute_rt", "anyref")
+                        && type_is(ctx, params[2], "core", "i32")
+                        && type_is(ctx, params[3], "tribute_rt", "anyref")
+                } else {
+                    result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
+                        && params.len() == 3
+                        && params[0] == evidence
+                        && type_is(ctx, params[1], "core", "i32")
+                        && type_is(ctx, params[2], "tribute_rt", "anyref")
+                }
+            })
         } else {
             false
         };
@@ -411,13 +409,10 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                 });
                 return;
             };
-            let ty = ctx.types.get(*func_ty);
-            let valid_never = ty.dialect == Symbol::new("core")
-                && ty.name == Symbol::new("func")
-                && ty
-                    .params
-                    .first()
-                    .is_some_and(|result| type_is(ctx, *result, "core", "never"));
+            let function = core::Func::from_type_ref(ctx, *func_ty);
+            let valid_never = function
+                .and_then(|function| function.single_result(ctx))
+                .is_some_and(|result| type_is(ctx, result, "core", "never"));
             if !valid_never {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -425,7 +420,9 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                     message: "func.tail_call target must have core.never result".into(),
                 });
             }
-            let expected = ty.params.get(1..).unwrap_or_default();
+            let expected = function
+                .map(|function| function.inputs(ctx))
+                .unwrap_or_default();
             let operands = ctx.op_operands(op);
             if operands.len() != expected.len()
                 || operands
@@ -1072,8 +1069,8 @@ impl<'a> Converter<'a> {
         let dispatch_type = self.frame_types(value_type).dispatch;
         let factory_type = core::func(
             self.ctx,
-            dispatch_type,
             [completion_type, outer_dispatch_type],
+            [dispatch_type],
         )
         .as_type_ref();
         let factory_block = self.make_block(location, &[completion_type, outer_dispatch_type]);
@@ -1243,12 +1240,38 @@ impl<'a> Converter<'a> {
             } else {
                 result
             };
-            let function = core::func(self.ctx, lowered_result, lowered_params).as_type_ref();
+            let function = core::func(self.ctx, lowered_params, [lowered_result]).as_type_ref();
             let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
         }
         let data = self.ctx.types.get(ty).clone();
+        if data.dialect == core::DIALECT_NAME() && data.name == core::FUNC() {
+            let function = core::Func::from_type_ref(self.ctx, ty)
+                .expect("pre-CPS validation must reject malformed core.func types");
+            let source_inputs = function.inputs(self.ctx).to_vec();
+            let source_results = function.results(self.ctx).to_vec();
+            let inputs = source_inputs
+                .into_iter()
+                .map(|input| self.convert_type(input))
+                .collect::<Vec<_>>();
+            let results = source_results
+                .into_iter()
+                .map(|result| self.convert_type(result))
+                .collect::<Vec<_>>();
+            let attrs = data
+                .attrs
+                .iter()
+                .filter(|(key, _)| {
+                    **key != Symbol::new(core::NUM_INPUTS_ATTR)
+                        && **key != Symbol::new(core::NUM_RESULTS_ATTR)
+                })
+                .map(|(key, value)| (*key, self.convert_attribute(value)))
+                .collect::<AttributeMap>();
+            let converted = core::func_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
         if data.dialect == Symbol::new("tribute_control")
             && data.name == Symbol::new("resume_token")
             && data.params.len() == 2
@@ -1310,7 +1333,7 @@ impl<'a> Converter<'a> {
         } else {
             result
         };
-        core::func(self.ctx, result, params).as_type_ref()
+        core::func(self.ctx, params, [result]).as_type_ref()
     }
 
     fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
@@ -1916,7 +1939,7 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
-        let function = core::func(self.ctx, never, [evidence_type, frame_type]).as_type_ref();
+        let function = core::func(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
@@ -2116,7 +2139,7 @@ impl<'a> Converter<'a> {
             result
         };
         let adapter_ty =
-            core::func(self.ctx, physical_result, physical_params.clone()).as_type_ref();
+            core::func(self.ctx, physical_params.clone(), [physical_result]).as_type_ref();
         let block = self.make_block(location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
@@ -2342,7 +2365,7 @@ impl<'a> Converter<'a> {
         let dispatch_type = self.frame_types(body_type).dispatch;
         let mut params = vec![completion_type, parent_dispatch_type, i32_type];
         params.extend(arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
-        let factory_type = core::func(self.ctx, dispatch_type, params.clone()).as_type_ref();
+        let factory_type = core::func(self.ctx, params.clone(), [dispatch_type]).as_type_ref();
         let factory_block = self.make_block(location, &params);
         let factory_args = self.ctx.block_args(factory_block).to_vec();
         let mut factory_arms = arms.to_vec();
@@ -2964,7 +2987,7 @@ impl<'a> Converter<'a> {
         } else {
             self.convert_type(operation_result)
         };
-        let function = core::func(self.ctx, result, params).as_type_ref();
+        let function = core::func(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
@@ -3131,7 +3154,7 @@ impl<'a> Converter<'a> {
 
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
-        let function = core::func(self.ctx, result, params).as_type_ref();
+        let function = core::func(self.ctx, params, [result]).as_type_ref();
         let convention = if general {
             CallingConvention::Cps
         } else {
@@ -4251,7 +4274,7 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
-        assert!(printed.contains("closure.closure(core.func(core.i32, core.i32))"));
+        assert!(printed.contains("closure.closure(core.func<(core.i32) -> core.i32>)"));
         assert!(!printed.contains("tribute_control."));
 
         let mut reparsed = IrContext::new();
@@ -5195,7 +5218,7 @@ mod tests {
         let module_block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
         let location = ctx.op(module.op()).location;
         let never = core::never(&mut ctx).as_type_ref();
-        let raw_type = core::func(&mut ctx, never, []).as_type_ref();
+        let raw_type = core::func(&mut ctx, [], [never]).as_type_ref();
         let raw = func::constant(&mut ctx, location, raw_type, Symbol::new("raw"));
         let before = ctx.block(module_block).ops.to_vec();
         let mut converter = Converter::new(&mut ctx, module_block, HashMap::new(), module.op());

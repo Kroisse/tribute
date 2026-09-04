@@ -907,9 +907,9 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create a `core.func` type with params and result.
     ///
-    /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
+    /// Construct an input-first, one-result `core.func`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        core::func(ir, result, params.iter().copied()).as_type_ref()
+        core::func(ir, params.iter().copied(), [result]).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.

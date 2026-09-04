@@ -17,6 +17,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
+use super::ops::DialectType;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -101,6 +102,9 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
+        if let Some(func) = crate::dialect::core::Func::from_type_ref(self.ctx, ty) {
+            return self.write_func_type(f, func);
+        }
         let data = self.ctx.types.get(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
         if !data.params.is_empty() {
@@ -123,6 +127,39 @@ impl<'a> PrintState<'a> {
                 }
                 write!(f, "{} = ", key)?;
                 self.write_attribute(f, val)?;
+            }
+            f.write_char('}')?;
+        }
+        Ok(())
+    }
+
+    fn write_func_type(&self, f: &mut dyn Write, func: crate::dialect::core::Func) -> fmt::Result {
+        f.write_str("core.func<(")?;
+        for (index, &input) in func.inputs(self.ctx).iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            self.write_type(f, input)?;
+        }
+        f.write_str(") -> ")?;
+        if let Some(result) = func.single_result(self.ctx) {
+            self.write_type(f, result)?;
+        } else {
+            f.write_str("()")?;
+        }
+        f.write_char('>')?;
+
+        let attrs = &self.ctx.types.get(func.as_type_ref()).attrs;
+        let mut visible = attrs.iter().filter(|(key, _)| {
+            **key != crate::Symbol::new(crate::dialect::core::NUM_INPUTS_ATTR)
+                && **key != crate::Symbol::new(crate::dialect::core::NUM_RESULTS_ATTR)
+        });
+        if let Some((key, value)) = visible.next() {
+            write!(f, " {{{key} = ")?;
+            self.write_attribute(f, value)?;
+            for (key, value) in visible {
+                write!(f, ", {key} = ")?;
+                self.write_attribute(f, value)?;
             }
             f.write_char('}')?;
         }
@@ -323,6 +360,10 @@ pub fn print_module(ctx: &IrContext, root: OpRef) -> String {
 // ============================================================================
 
 fn write_type(ctx: &IrContext, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
+    if let Some(func) = crate::dialect::core::Func::from_type_ref(ctx, ty) {
+        return write_func_type(ctx, f, func);
+    }
+
     let data = ctx.types.get(ty);
     write!(f, "{}.{}", data.dialect, data.name)?;
     if !data.params.is_empty() {
@@ -346,6 +387,43 @@ fn write_type(ctx: &IrContext, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
             }
             write!(f, "{} = ", key)?;
             write_attribute(ctx, f, val)?;
+        }
+        f.write_char('}')?;
+    }
+    Ok(())
+}
+
+fn write_func_type(
+    ctx: &IrContext,
+    f: &mut impl Write,
+    func: crate::dialect::core::Func,
+) -> fmt::Result {
+    f.write_str("core.func<(")?;
+    for (index, &input) in func.inputs(ctx).iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
+        }
+        write_type(ctx, f, input)?;
+    }
+    f.write_str(") -> ")?;
+    if let Some(result) = func.single_result(ctx) {
+        write_type(ctx, f, result)?;
+    } else {
+        f.write_str("()")?;
+    }
+    f.write_char('>')?;
+
+    let attrs = &ctx.types.get(func.as_type_ref()).attrs;
+    let mut visible = attrs.iter().filter(|(key, _)| {
+        **key != crate::Symbol::new(crate::dialect::core::NUM_INPUTS_ATTR)
+            && **key != crate::Symbol::new(crate::dialect::core::NUM_RESULTS_ATTR)
+    });
+    if let Some((key, value)) = visible.next() {
+        write!(f, " {{{key} = ")?;
+        write_attribute(ctx, f, value)?;
+        for (key, value) in visible {
+            write!(f, ", {key} = ")?;
+            write_attribute(ctx, f, value)?;
         }
         f.write_char('}')?;
     }
@@ -994,10 +1072,9 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
-    /// in `TypeData.params`, matching the convention used by `core::Func`.
+    /// Create a one-result `core.func` type.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     #[test]
@@ -1013,6 +1090,27 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let tuple_ty = crate::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
+    }
+
+    #[test]
+    fn test_print_func_type_uses_canonical_result_list_syntax() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx);
+        let zero_zero = core::func(&mut ctx, [], []).as_type_ref();
+        let many_zero = core::func(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
+        let zero_one = core::func(&mut ctx, [], [i32_ty]).as_type_ref();
+        let many_one = core::func(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
+
+        assert_eq!(print_type(&ctx, zero_zero), "core.func<() -> ()>");
+        assert_eq!(
+            print_type(&ctx, many_zero),
+            "core.func<(core.i32, core.i32) -> ()>"
+        );
+        assert_eq!(print_type(&ctx, zero_one), "core.func<() -> core.i32>");
+        assert_eq!(
+            print_type(&ctx, many_one),
+            "core.func<(core.i32, core.i32) -> core.i32>"
+        );
     }
 
     #[test]

@@ -380,8 +380,8 @@ pub fn compose_root_entry_bridge(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let done_callable_ty = core::func(ctx, nil_ty, [source_result]).as_type_ref();
-    let done_function_ty = core::func(ctx, nil_ty, [anyref_ty, source_result]).as_type_ref();
+    let done_callable_ty = core::func(ctx, [source_result], [nil_ty]).as_type_ref();
+    let done_function_ty = core::func(ctx, [anyref_ty, source_result], [nil_ty]).as_type_ref();
     let done_entry = ctx.create_block(BlockData {
         location,
         args: vec![
@@ -562,7 +562,7 @@ pub fn compose_root_entry_bridge(
         blocks: smallvec![wrapper_entry],
         parent_op: None,
     });
-    let wrapper_ty = core::func(ctx, source_result, wrapper_params.iter().copied()).as_type_ref();
+    let wrapper_ty = core::func(ctx, wrapper_params.iter().copied(), [source_result]).as_type_ref();
     let wrapper = func::func(
         ctx,
         location,
@@ -785,13 +785,17 @@ fn dispatch_entry_function_type(
     dispatch: TypeRef,
     anyref: TypeRef,
 ) -> Result<TypeRef, TargetAbiError> {
-    let callable = dispatch_callable_function_type(ctx, dispatch)?;
-    let callable = core::Func::from_type_ref(ctx, callable).ok_or_else(|| {
+    let callable_ty = dispatch_callable_function_type(ctx, dispatch)?;
+    let callable = core::Func::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not core.func")
     })?;
     let mut params = callable.params(ctx).to_vec();
     params.insert(1, anyref);
-    Ok(core::func(ctx, callable.r#return(ctx), params).as_type_ref())
+    let result = callable.r#return(ctx);
+    let mut type_attrs = ctx.types.get(callable_ty).attrs.clone();
+    type_attrs.remove(core::NUM_INPUTS_ATTR);
+    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    Ok(core::func_with_attrs(ctx, params, [result], type_attrs).as_type_ref())
 }
 
 fn is_parameterless_dialect_type(
@@ -1102,7 +1106,11 @@ fn validate_constant(
         }
         params.remove(index);
     }
-    let expected = core::func(ctx, target.r#return(ctx), params).as_type_ref();
+    let result = target.r#return(ctx);
+    let mut type_attrs = ctx.types.get(identity.signature).attrs.clone();
+    type_attrs.remove(core::NUM_INPUTS_ATTR);
+    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    let expected = core::func_with_attrs(ctx, params, [result], type_attrs).as_type_ref();
     if ctx.op_result_types(constant.op_ref()) != [expected] {
         return Err(TargetAbiError::new(
             "target ABI: function reference differs from target signature",
@@ -1244,30 +1252,29 @@ impl<'a> PhysicalTypeConverter<'a> {
         if let Some(&converted) = self.callable.get(&(ty, convention)) {
             return Ok(converted);
         }
-        let mut data = self.ctx.types.get(ty).clone();
-        if data.dialect != Symbol::new("core")
-            || data.name != Symbol::new("func")
-            || data.params.is_empty()
-        {
-            return Err(TargetAbiError::new(
-                "target ABI: proven callable is not core.func",
-            ));
-        }
-        if convention == CallingConvention::Cps && data.params[0] != self.never {
+        let callable = core::Func::from_type_ref(self.ctx, ty).ok_or_else(|| {
+            TargetAbiError::new("target ABI: proven callable is not a valid core.func")
+        })?;
+        let result = callable.single_result(self.ctx).ok_or_else(|| {
+            TargetAbiError::new("target ABI: proven callable has no logical result")
+        })?;
+        if convention == CallingConvention::Cps && result != self.never {
             return Err(TargetAbiError::new(
                 "target ABI: Cps callable must have logical core.never result",
             ));
         }
-        data.params[0] = if convention == CallingConvention::Cps {
+        let source_inputs = callable.inputs(self.ctx).to_vec();
+        let inputs = source_inputs
+            .into_iter()
+            .map(|input| self.convert_embedded(input))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = if convention == CallingConvention::Cps {
             self.nil
         } else {
-            self.convert_embedded(data.params[0])?
+            self.convert_embedded(result)?
         };
-        for parameter in &mut data.params[1..] {
-            *parameter = self.convert_embedded(*parameter)?;
-        }
-        self.convert_type_attributes(&mut data)?;
-        let converted = self.intern_if_changed(ty, data);
+        let attrs = self.convert_func_attributes(ty)?;
+        let converted = core::func_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
         self.callable.insert((ty, convention), converted);
         Ok(converted)
     }
@@ -1293,18 +1300,28 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
-        if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
-            if data.params.is_empty() {
+        if data.dialect == core::DIALECT_NAME() && data.name == core::FUNC() {
+            let callable = core::Func::from_type_ref(self.ctx, ty).ok_or_else(|| {
+                TargetAbiError::new("target ABI: malformed nested core.func type")
+            })?;
+            let result = callable.single_result(self.ctx).ok_or_else(|| {
+                TargetAbiError::new("target ABI: nested core.func type has no logical result")
+            })?;
+            if result == self.never {
                 return Err(TargetAbiError::new(
-                    "target ABI: core.func type has no result parameter",
+                    "target ABI: untagged nested core.func<(...)->core.never>",
                 ));
             }
-            let callable = core::Func::from_type_ref(self.ctx, ty).unwrap();
-            if callable.r#return(self.ctx) == self.never {
-                return Err(TargetAbiError::new(
-                    "target ABI: untagged nested core.func<core.never, ...>",
-                ));
-            }
+            let source_inputs = callable.inputs(self.ctx).to_vec();
+            let inputs = source_inputs
+                .into_iter()
+                .map(|input| self.convert_embedded(input))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result = self.convert_embedded(result)?;
+            let attrs = self.convert_func_attributes(ty)?;
+            let converted = core::func_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
+            self.embedded.insert(ty, converted);
+            return Ok(converted);
         }
         let mut converted = data.clone();
         for parameter in &mut converted.params {
@@ -1314,6 +1331,25 @@ impl<'a> PhysicalTypeConverter<'a> {
         let converted = self.intern_if_changed(ty, converted);
         self.embedded.insert(ty, converted);
         Ok(converted)
+    }
+
+    fn convert_func_attributes(&mut self, ty: TypeRef) -> Result<AttributeMap, TargetAbiError> {
+        let attributes = self
+            .ctx
+            .types
+            .get(ty)
+            .attrs
+            .iter()
+            .filter(|(name, _)| {
+                **name != Symbol::new(core::NUM_INPUTS_ATTR)
+                    && **name != Symbol::new(core::NUM_RESULTS_ATTR)
+            })
+            .map(|(name, value)| (*name, value.clone()))
+            .collect::<Vec<_>>();
+        attributes
+            .into_iter()
+            .map(|(name, value)| Ok((name, self.convert_attribute(value)?)))
+            .collect()
     }
 
     fn convert_type_attributes(&mut self, data: &mut TypeData) -> Result<(), TargetAbiError> {
@@ -1412,11 +1448,15 @@ mod tests {
         }
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("signature = core.func(core.nil"),
+            printed.contains(
+                "signature = core.func<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.nil>"
+            ),
             "{printed}"
         );
         assert!(
-            printed.contains("closure.closure(core.func(core.nil"),
+            printed.contains(
+                "closure.closure(core.func<(core.i32, core.i32, core.i32, core.i32) -> core.nil>)"
+            ),
             "{printed}"
         );
     }
@@ -1447,7 +1487,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("untagged nested core.func<core.never, ...>"),
+                .contains("untagged nested core.func<(...)->core.never>"),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);
@@ -1467,7 +1507,7 @@ mod tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let never = core::never(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let done_callable = core::func(&mut ctx, never, [nil]).as_type_ref();
+        let done_callable = core::func(&mut ctx, [nil], [never]).as_type_ref();
         let done = tribute_core::calling_convention::physical_closure_type_with_environment_index(
             &mut ctx,
             done_callable,
@@ -1489,7 +1529,7 @@ mod tests {
             &mut ctx, frame_name, nil, done, dispatch,
         );
         ctx.register_type_alias(frame_name, layout);
-        let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+        let worker = core::func(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(worker));
@@ -1723,7 +1763,7 @@ mod tests {
                 );
                 ctx.register_type_alias(frame_name, wrong);
             }
-            let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+            let worker = core::func(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_mut(main.op_ref())
                 .attributes
                 .insert(Symbol::new("type"), Attribute::Type(worker));
@@ -1784,7 +1824,7 @@ mod tests {
             &mut ctx, frame_name, nil, done, dispatch,
         );
         ctx.register_type_alias(frame_name, layout);
-        let worker = core::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+        let worker = core::func(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(worker));
@@ -1913,10 +1953,8 @@ mod tests {
         assert!(
             printed.contains("func.func @defined")
                 && printed.matches("func.constant").count() == 2
-                && printed
-                    .matches("core.func(core.nil, core.i32, core.i32)")
-                    .count()
-                    == 2,
+                && printed.contains("!t0 = core.func<(core.i32, core.i32) -> core.nil>")
+                && printed.matches(": !t0").count() == 2,
             "{printed}"
         );
     }
@@ -1953,9 +1991,9 @@ mod tests {
             assert_eq!(signature.params(&ctx)[0], anyref);
         }
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains(": core.func(core.nil)"), "{printed}");
+        assert!(printed.contains(": core.func<() -> core.nil>"), "{printed}");
         assert!(
-            printed.contains(": core.func(core.nil, core.i32)"),
+            printed.contains(": core.func<(core.i32) -> core.nil>"),
             "{printed}"
         );
     }
@@ -2054,7 +2092,7 @@ mod tests {
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
 
         assert!(
-            error.to_string().contains("has no result parameter"),
+            error.to_string().contains("malformed nested core.func"),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);

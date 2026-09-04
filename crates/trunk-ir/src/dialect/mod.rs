@@ -34,7 +34,7 @@ mod tests {
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
         let nil_ty = super::core::nil(ctx).as_type_ref();
-        super::core::func(ctx, nil_ty, []).as_type_ref()
+        super::core::func(ctx, [], [nil_ty]).as_type_ref()
     }
 
     // ================================================================
@@ -514,11 +514,11 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // func(i32, i32) -> i32  (no effect)
-        let f = super::core::func(&mut ctx, i32_ty, [i32_ty, i32_ty]);
+        let f = super::core::func(&mut ctx, [i32_ty, i32_ty], [i32_ty]);
 
         assert!(super::core::Func::matches(&ctx, f.as_type_ref()));
-        assert_eq!(f.r#return(&ctx), i32_ty);
-        assert_eq!(f.params(&ctx), &[i32_ty, i32_ty]);
+        assert_eq!(f.results(&ctx), &[i32_ty]);
+        assert_eq!(f.inputs(&ctx), &[i32_ty, i32_ty]);
     }
 
     #[test]
@@ -526,10 +526,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let f = super::core::func(&mut ctx, i32_ty, [i32_ty]);
+        let f = super::core::func(&mut ctx, [i32_ty], [i32_ty]);
 
-        assert_eq!(f.r#return(&ctx), i32_ty);
-        assert_eq!(f.params(&ctx), &[i32_ty]);
+        assert_eq!(f.single_result(&ctx), Some(i32_ty));
+        assert_eq!(f.inputs(&ctx), &[i32_ty]);
     }
 
     #[test]
@@ -537,10 +537,70 @@ mod tests {
         let mut ctx = IrContext::new();
         let nil_ty = super::core::nil(&mut ctx);
 
-        let f = super::core::func(&mut ctx, nil_ty.as_type_ref(), []);
+        let f = super::core::func(&mut ctx, [], [nil_ty.as_type_ref()]);
 
-        assert_eq!(f.r#return(&ctx), nil_ty.as_type_ref());
-        assert!(f.params(&ctx).is_empty());
+        assert_eq!(f.results(&ctx), &[nil_ty.as_type_ref()]);
+        assert!(f.inputs(&ctx).is_empty());
+    }
+
+    #[test]
+    fn test_func_type_result_lists_are_distinct() {
+        let mut ctx = IrContext::new();
+        let nil_ty = super::core::nil(&mut ctx).as_type_ref();
+        let resultless = super::core::func(&mut ctx, [], []);
+        let unit = super::core::func(&mut ctx, [], [nil_ty]);
+
+        assert_ne!(resultless.as_type_ref(), unit.as_type_ref());
+        assert!(resultless.is_resultless(&ctx));
+        assert_eq!(resultless.single_result(&ctx), None);
+        assert_eq!(unit.single_result(&ctx), Some(nil_ty));
+    }
+
+    #[test]
+    fn test_func_type_counts_distinguish_the_same_flat_params() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let one_input = super::core::func(&mut ctx, [i32_ty], []);
+        let one_result = super::core::func(&mut ctx, [], [i32_ty]);
+
+        assert_ne!(one_input.as_type_ref(), one_result.as_type_ref());
+        assert_eq!(
+            ctx.types.get(one_input.as_type_ref()).params.as_slice(),
+            [i32_ty]
+        );
+        assert_eq!(
+            ctx.types.get(one_result.as_type_ref()).params.as_slice(),
+            [i32_ty]
+        );
+        assert_eq!(one_input.inputs(&ctx), [i32_ty]);
+        assert!(one_input.results(&ctx).is_empty());
+        assert!(one_result.inputs(&ctx).is_empty());
+        assert_eq!(one_result.results(&ctx), [i32_ty]);
+    }
+
+    #[test]
+    fn test_func_type_zero_input_zero_result() {
+        let mut ctx = IrContext::new();
+        let function = super::core::func(&mut ctx, [], []);
+        assert!(function.inputs(&ctx).is_empty());
+        assert!(function.results(&ctx).is_empty());
+    }
+
+    #[test]
+    fn test_func_type_inputs_zero_one_result() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let function = super::core::func(&mut ctx, [], [i32_ty]);
+        assert!(function.inputs(&ctx).is_empty());
+        assert_eq!(function.results(&ctx), [i32_ty]);
+    }
+
+    #[test]
+    #[should_panic(expected = "core.func currently supports at most one result")]
+    fn test_func_type_constructor_rejects_multiple_results() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let _ = super::core::func(&mut ctx, [], [i32_ty, i32_ty]);
     }
 
     #[test]

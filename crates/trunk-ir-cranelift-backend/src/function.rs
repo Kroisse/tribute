@@ -11,8 +11,8 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::dialect::{clif, core};
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use crate::{CompilationError, CompilationResult};
@@ -38,15 +38,9 @@ pub(crate) fn call_conv_for_cps_signature(
 }
 
 fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
-    let signature = ctx.types.get(signature);
-    if signature.dialect != Symbol::new("core") || signature.name != Symbol::new("func") {
-        return false;
-    }
-
-    let Some(&result) = signature.params.first() else {
-        return false;
-    };
-    is_nil_type(ctx, result)
+    core::Func::from_type_ref(ctx, signature)
+        .and_then(|function| function.single_result(ctx))
+        .is_some_and(|result| is_nil_type(ctx, result))
 }
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -151,24 +145,18 @@ pub(crate) fn translate_signature(
     call_conv: CallConv,
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_ir::Signature> {
-    let td = ctx.types.get(func_ty_ref);
-    if td.dialect != Symbol::new("core") || td.name != Symbol::new("func") {
-        return Err(CompilationError::type_error(
-            "expected core.func type for signature translation",
-        ));
-    }
+    let function = core::Func::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
+        CompilationError::type_error("expected valid core.func type for signature translation")
+    })?;
 
     let mut sig = cl_ir::Signature::new(call_conv);
 
-    // core.func type layout: params[0] = return type, params[1..] = parameter types
-    if td.params.is_empty() {
-        return Err(CompilationError::type_error(
-            "core.func type must have at least a return type param",
-        ));
-    }
-
-    let ret_type = td.params[0];
-    let param_types = &td.params[1..];
+    let ret_type = function.single_result(ctx).ok_or_else(|| {
+        CompilationError::type_error(
+            "Cranelift signature translation currently requires one core.func result",
+        )
+    })?;
+    let param_types = function.inputs(ctx);
 
     for &param_ty in param_types {
         if is_nil_type(ctx, param_ty) {
@@ -806,13 +794,7 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        // core.func type layout: params[0] = return type, params[1..] = parameter types
-        let func_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![i64_ty, i32_ty, i32_ty],
-            attrs: Default::default(),
-        });
+        let func_ty = core::func(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 2);
@@ -828,12 +810,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![nil_ty, i64_ty],
-            attrs: Default::default(),
-        });
+        let func_ty = core::func(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 1);
@@ -848,12 +825,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![i32_ty, i32_ty, nil_ty, i64_ty],
-            attrs: Default::default(),
-        });
+        let func_ty = core::func(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(
@@ -872,12 +844,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        let func_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![i64_ty],
-            attrs: Default::default(),
-        });
+        let func_ty = core::func(&mut ctx, [], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 0);
@@ -890,18 +857,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_core_type(&mut ctx, "i32");
         let nil_ty = make_core_type(&mut ctx, "nil");
-        let logical_signature = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![i32_ty, i32_ty],
-            attrs: Default::default(),
-        });
-        let physical_signature = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("func"),
-            params: trunk_ir::smallvec::smallvec![nil_ty, i32_ty],
-            attrs: Default::default(),
-        });
+        let logical_signature = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let physical_signature = core::func(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
 
         assert_eq!(
             call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),

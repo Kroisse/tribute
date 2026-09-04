@@ -99,24 +99,18 @@ impl RewritePattern for UpdateFuncSignatureArena {
         };
 
         let func_ty = func_op.r#type(ctx);
-        let func_data = ctx.types.get(func_ty);
-        if func_data.dialect != Symbol::new("core") || func_data.name != Symbol::new("func") {
+        let Some(signature) = core::Func::from_type_ref(ctx, func_ty) else {
             return false;
-        }
-
-        // params[0] = return, params[1..] = param types
-        if func_data.params.is_empty() {
+        };
+        let Some(return_ty) = signature.single_result(ctx) else {
             return false;
-        }
-
-        // Clone data we need before mutating ctx.types
-        let params: Vec<TypeRef> = func_data.params.to_vec();
+        };
+        let params = signature.inputs(ctx).to_vec();
 
         let mut needs_update = false;
         let mut new_params = Vec::with_capacity(params.len());
-        new_params.push(params[0]); // return type
 
-        for &param_ty in &params[1..] {
+        for &param_ty in &params {
             if core::Func::matches(ctx, param_ty) {
                 // Convert core.func to closure.closure wrapping the func type
                 let closure_ty = closure::closure(ctx, param_ty).as_type_ref();
@@ -132,8 +126,12 @@ impl RewritePattern for UpdateFuncSignatureArena {
         }
 
         // Build new func type
-        let return_ty = new_params[0];
-        let new_func_ty = core::func(ctx, return_ty, new_params[1..].iter().copied()).as_type_ref();
+        let mut type_attrs = ctx.types.get(func_ty).attrs.clone();
+        type_attrs.remove(core::NUM_INPUTS_ATTR);
+        type_attrs.remove(core::NUM_RESULTS_ATTR);
+        let new_func_ty =
+            core::func_with_attrs(ctx, new_params.iter().copied(), [return_ty], type_attrs)
+                .as_type_ref();
 
         // Rebuild the function with new type
         let func_name = func_op.sym_name(ctx);
@@ -141,7 +139,7 @@ impl RewritePattern for UpdateFuncSignatureArena {
         let loc = ctx.op(op).location;
         if let Some(entry) = ctx.region(body).blocks.first().copied() {
             let arg_count = ctx.block_args(entry).len();
-            for (idx, &new_ty) in new_params[1..].iter().enumerate().take(arg_count) {
+            for (idx, &new_ty) in new_params.iter().enumerate().take(arg_count) {
                 ctx.set_block_arg_type(entry, idx as u32, new_ty);
             }
         }
@@ -327,11 +325,11 @@ impl RewritePattern for LowerClosureCallArena {
             .unwrap_or_else(|| {
                 core::func(
                     ctx,
-                    callee_return_ty,
                     new_args
                         .iter()
                         .map(|&value| ctx.value_ty(value))
                         .collect::<Vec<_>>(),
+                    [callee_return_ty],
                 )
                 .as_type_ref()
             });
@@ -525,9 +523,12 @@ fn exact_physical_call_contract(
     }
     let mut params = callable.params(ctx).to_vec();
     params.insert(environment_index, environment);
+    let mut type_attrs = ctx.types.get(function).attrs.clone();
+    type_attrs.remove(core::NUM_INPUTS_ATTR);
+    type_attrs.remove(core::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
         environment_index,
-        signature: core::func(ctx, result, params).as_type_ref(),
+        signature: core::func_with_attrs(ctx, params, [result], type_attrs).as_type_ref(),
         argument_casts: casts,
     })
 }
@@ -592,22 +593,15 @@ impl RewritePattern for LowerClosureEnvArena {
     }
 }
 
-/// Extract the return type from a callee type (closure.closure or core.func).
+/// Extract the single result type from a callee type (closure.closure or core.func).
 fn extract_return_type_from_callee(ctx: &IrContext, callee_ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.types.get(callee_ty);
-    // closure.closure<core.func<Return, Params...>>
+    // closure.closure<core.func<(Inputs...) -> Result>>
     if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
         let func_ty = *data.params.first()?;
-        let func_data = ctx.types.get(func_ty);
-        if func_data.dialect == Symbol::new("core") && func_data.name == Symbol::new("func") {
-            return func_data.params.first().copied();
-        }
+        return core::Func::from_type_ref(ctx, func_ty)?.single_result(ctx);
     }
-    // core.func<Return, Params...>
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
-        return data.params.first().copied();
-    }
-    None
+    core::Func::from_type_ref(ctx, callee_ty)?.single_result(ctx)
 }
 
 fn evidence_param_for_func(ctx: &IrContext, func_op: func::Func) -> Option<ValueRef> {
@@ -1105,7 +1099,7 @@ mod tests {
 
         let ir = print_module(&ctx, module.op());
         assert!(
-            ir.contains("closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))"),
+            ir.contains("closure.closure(core.func<(tribute_rt.anyref) -> tribute_rt.anyref>)"),
             "function-typed params should be prepared as closure params:\n{ir}"
         );
     }

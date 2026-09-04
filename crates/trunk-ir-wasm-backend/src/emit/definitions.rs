@@ -8,9 +8,10 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::Attribute;
 use wasm_encoder::{ExportKind, RefType, ValType};
@@ -98,20 +99,16 @@ pub(crate) fn extract_function_def(
     let name = func_op.sym_name(ctx);
     let ty = func_op.r#type(ctx);
 
-    let ty_data = ctx.types.get(ty);
-    if !(ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("func")) {
-        return Err(CompilationError::type_error(
-            "wasm.func requires core.func type",
-        ));
-    }
+    let function = core::Func::from_type_ref(ctx, ty)
+        .ok_or_else(|| CompilationError::type_error("wasm.func requires valid core.func type"))?;
 
-    if !ty_data.params.is_empty() {
-        let result_ty = *ty_data.params.last().unwrap();
+    if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.types.get(result_ty);
         debug!(
             "extract_function_def: {} fn_params={:?}, result={}.{}",
             name,
-            ty_data.params[..ty_data.params.len() - 1]
+            function
+                .inputs(ctx)
                 .iter()
                 .map(|p| {
                     let d = ctx.types.get(*p);

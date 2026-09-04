@@ -370,7 +370,7 @@ mod tests {
     ) -> String {
         // Keep the test at the typed pre-erasure boundary consumed by the
         // ownership plan. The ADT lowering later selects `core.ptr`.
-        let func_ty = core::func(ctx, struct_ty, field_types.iter().copied()).as_type_ref();
+        let func_ty = core::func(ctx, field_types.iter().copied(), [struct_ty]).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -444,7 +444,7 @@ mod tests {
         // planning in the production pipeline, keeping the historical ADT
         // lowering snapshot focused on this pass.
         let ptr_ty = intern_ty(ctx, "core", "ptr");
-        let erased_func_ty = core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
+        let erased_func_ty = core::func(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
         ctx.op_mut(func_op.op_ref())
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(erased_func_ty));

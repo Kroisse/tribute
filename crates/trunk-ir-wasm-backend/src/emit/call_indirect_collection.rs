@@ -9,6 +9,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -23,15 +24,7 @@ use super::helpers::{self, intern_named_adt_struct};
 
 /// Intern a core.func type from params and result type.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
-    let mut all_params = SmallVec::with_capacity(params.len() + 1);
-    all_params.push(result_ty);
-    all_params.extend_from_slice(params);
-    ctx.types.intern(TypeData {
-        dialect: Symbol::new("core"),
-        name: Symbol::new("func"),
-        params: all_params,
-        attrs: Default::default(),
-    })
+    core::func(ctx, params.iter().copied(), [result_ty]).as_type_ref()
 }
 
 /// Intern a simple wasm type with no params or attrs.
@@ -380,7 +373,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn indirect_function_type_uses_result_first_layout() {
+    fn indirect_function_type_uses_input_and_result_accessors() {
         let mut ctx = IrContext::new();
         let result = intern_simple_wasm_type(&mut ctx, "i32");
         let first = intern_simple_wasm_type(&mut ctx, "i64");

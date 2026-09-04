@@ -1760,7 +1760,7 @@ mod tests {
         let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
         let layout = cps_continuation_frame_layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(frame_name, layout);
-        let worker = core_dialect::func(&mut ctx, never, [evidence, frame]).as_type_ref();
+        let worker = core_dialect::func(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref()).attributes.insert(
             trunk_ir::Symbol::new("type"),
             trunk_ir::Attribute::Type(worker),

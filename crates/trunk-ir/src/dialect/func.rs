@@ -211,24 +211,13 @@ fn print_func(
         data.regions.first().copied()
     };
 
-    // Extract type decomposition: return type from core.func type attribute
+    // Extract the validated input/result lists from the core.func type attribute.
     let type_info = {
         let data = h.ctx().op(op);
-        if let Some(func_ty) = data.attributes.get_type("type") {
-            let ty_data = h.ctx().types.get(func_ty);
-            let is_core_func = ty_data.dialect == crate::Symbol::new("core")
-                && ty_data.name == crate::Symbol::new("func");
-            if is_core_func && !ty_data.params.is_empty() {
-                let result_ty = ty_data.params[0];
-                let param_tys: Vec<crate::TypeRef> = ty_data.params[1..].to_vec();
-                Some((result_ty, param_tys))
-            } else {
-                // Non-standard or empty core.func type — skip signature
-                None
-            }
-        } else {
-            None
-        }
+        data.attributes
+            .get_type("type")
+            .and_then(|ty| crate::dialect::core::Func::from_type_ref(h.ctx(), ty))
+            .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
     };
 
     if let Some(region) = region {
@@ -267,7 +256,7 @@ fn print_func(
         write!(h, "()")?;
     }
 
-    if let Some((result_ty, _)) = type_info {
+    if let Some((Some(result_ty), _)) = type_info {
         write!(h, " -> ")?;
         h.write_type(result_ty)?;
     }
@@ -394,7 +383,11 @@ mod tests {
         assert!(call.signature(&ctx).is_some(), "declared signature");
 
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
+        assert!(
+            printed.contains("!t0 = core.func<(core.i32) -> core.i32>"),
+            "{printed}"
+        );
+        assert!(printed.contains("signature = !t0"), "{printed}");
         assert!(!printed.contains("func.indirect_call_signature"));
     }
 

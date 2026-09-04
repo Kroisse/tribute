@@ -9,7 +9,7 @@ core.module @test {
       %2 = adt.struct_new %0, %1 {type = !t0} : !t0
       func.return %2
   }
-  clif.func {sym_name = @__tribute_release_32, type = core.func(core.nil, core.ptr)} {
+  clif.func {sym_name = @__tribute_release_32, type = core.func<(core.ptr) -> core.nil>} {
     ^bb0(%0: core.ptr):
       %1 = clif.load %0 {offset = 8} : core.ptr
       %2 = clif.iconst {value = 0} : core.ptr
