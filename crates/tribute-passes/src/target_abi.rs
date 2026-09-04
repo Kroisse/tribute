@@ -92,6 +92,7 @@ pub fn lower_cps_signatures_to_physical(
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
+    let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
 
     for (name, ty) in aliases {
@@ -173,16 +174,15 @@ pub fn lower_cps_signatures_to_physical(
                 )
             })?;
             let signature = converter.convert_callable(signature, convention)?;
-            if !IndirectCallLikeOps::set_exact_signature(
-                converter.ctx,
-                op,
-                &mut converted_attributes,
-                signature,
-            ) {
+            if !func::CallIndirect::matches(converter.ctx, op)
+                && !func::TailCallIndirect::matches(converter.ctx, op)
+            {
                 return Err(TargetAbiError::new(
                     "target ABI: indirect callable signature cannot be set",
                 ));
             }
+            func::remove_indirect_call_signature(&mut converted_attributes);
+            indirect_signatures.push((op, signature));
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
@@ -237,6 +237,9 @@ pub fn lower_cps_signatures_to_physical(
     }
     for (op, name, value) in attributes {
         ctx.op_mut(op).attributes.insert(name, value);
+    }
+    for (op, signature) in indirect_signatures {
+        assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
     }
     for (block, index, ty) in block_args {
         ctx.set_block_arg_type(block, index, ty);

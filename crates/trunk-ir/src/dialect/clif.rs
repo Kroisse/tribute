@@ -124,8 +124,8 @@ impl IndirectCallLikeModel for CallIndirect {
         Some(self.sig(ctx))
     }
 
-    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
-        set_indirect_call_signature_attribute(attributes, signature);
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
@@ -134,8 +134,8 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
         Some(self.sig(ctx))
     }
 
-    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
-        set_indirect_call_signature_attribute(attributes, signature);
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
 }
 
