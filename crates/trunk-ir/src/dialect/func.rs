@@ -77,10 +77,12 @@ impl CallLike for CallIndirect {
 }
 
 impl IndirectCallLikeModel for CallIndirect {
-    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
-
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         CallIndirect::signature(&self, ctx)
+    }
+
+    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
+        set_indirect_call_signature_attribute(attributes, signature);
     }
 }
 
@@ -99,10 +101,12 @@ impl CallLike for TailCallIndirect {
 }
 
 impl IndirectCallLikeModel for TailCallIndirect {
-    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
-
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         TailCallIndirect::signature(&self, ctx)
+    }
+
+    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
+        set_indirect_call_signature_attribute(attributes, signature);
     }
 }
 
@@ -130,11 +134,18 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.op_mut(op).attributes.insert(
+    set_indirect_call_signature_attribute(&mut ctx.op_mut(op).attributes, signature);
+    true
+}
+
+fn set_indirect_call_signature_attribute(
+    attributes: &mut crate::AttributeMap,
+    signature: crate::TypeRef,
+) {
+    attributes.insert(
         crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
         crate::Attribute::Type(signature),
     );
-    true
 }
 
 /// Remove the `func`-owned exact-signature attribute from copied metadata.

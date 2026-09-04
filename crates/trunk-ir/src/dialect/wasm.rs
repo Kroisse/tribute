@@ -386,18 +386,22 @@ mod wasm {
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
 impl IndirectCallLikeModel for CallIndirect {
-    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
-
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
+    }
+
+    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
+        set_indirect_call_signature_attribute(attributes, signature);
     }
 }
 
 impl IndirectCallLikeModel for ReturnCallIndirect {
-    const EXACT_SIGNATURE_ATTRIBUTE: &'static str = INDIRECT_CALL_SIGNATURE_ATTR;
-
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
         self.signature(ctx)
+    }
+
+    fn set_exact_signature(self, attributes: &mut crate::AttributeMap, signature: crate::TypeRef) {
+        set_indirect_call_signature_attribute(attributes, signature);
     }
 }
 
@@ -424,11 +428,18 @@ pub fn set_indirect_call_signature(
     {
         return false;
     }
-    ctx.op_mut(op).attributes.insert(
+    set_indirect_call_signature_attribute(&mut ctx.op_mut(op).attributes, signature);
+    true
+}
+
+fn set_indirect_call_signature_attribute(
+    attributes: &mut crate::AttributeMap,
+    signature: crate::TypeRef,
+) {
+    attributes.insert(
         crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
         crate::Attribute::Type(signature),
     );
-    true
 }
 
 #[cfg(test)]

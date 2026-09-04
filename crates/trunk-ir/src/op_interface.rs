@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::Symbol;
 use crate::ops::DialectOp;
-use crate::types::{Attribute, AttributeMap};
+use crate::types::AttributeMap;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
@@ -423,8 +423,6 @@ pub trait IndirectCallLike: Sync {
 
 /// Typed indirect-call semantics supplied by a generated operation wrapper.
 pub trait IndirectCallLikeModel: DialectOp {
-    const EXACT_SIGNATURE_ATTRIBUTE: &'static str;
-
     fn indirect_callee(self, ctx: &IrContext) -> Option<ValueRef> {
         ctx.op_operands(self.op_ref()).first().copied()
     }
@@ -435,12 +433,7 @@ pub trait IndirectCallLikeModel: DialectOp {
 
     fn exact_signature(self, ctx: &IrContext) -> Option<TypeRef>;
 
-    fn set_exact_signature(self, attributes: &mut AttributeMap, signature: TypeRef) {
-        attributes.insert(
-            Symbol::new(Self::EXACT_SIGNATURE_ATTRIBUTE),
-            Attribute::Type(signature),
-        );
-    }
+    fn set_exact_signature(self, attributes: &mut AttributeMap, signature: TypeRef);
 }
 
 fn indirect_call_like_model_callee<T: IndirectCallLikeModel>(
