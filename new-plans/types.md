@@ -42,7 +42,8 @@ Float 비교는 C/Rust 스타일 NaN 의미를 따른다:
 Source-level functions have exactly one logical result. `Unit` and `Never` are
 ordinary logical result types rather than absence-of-result markers: a Unit
 function has the logical result list `[core.nil]`, and a CPS-transformed
-function has the logical result list `[core.never]`. General TrunkIR also supports empty function result lists, distinct from both
+function has the logical result list `[core.never]`. General TrunkIR also supports
+empty function result lists, distinct from both
 logical types. An empty list alone does not prove physical CPS: that requires
 the Cps calling convention together with the exact empty result list.
 
