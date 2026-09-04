@@ -492,6 +492,7 @@ fn collect_and_validate_managed_layouts(
     let mut layouts = HashSet::new();
     let mut nominal_layouts: HashMap<Symbol, Vec<TypeRef>> = HashMap::new();
     let mut typerefs = HashSet::new();
+    let mut pending_typerefs = Vec::new();
     for &(_, ty) in ctx.type_aliases() {
         index_nominal_layout(ctx, ty, &mut nominal_layouts);
     }
@@ -502,6 +503,7 @@ fn collect_and_validate_managed_layouts(
                 ctx,
                 ty,
                 &mut typerefs,
+                &mut pending_typerefs,
                 &mut nominal_layouts,
                 &mut layouts,
                 &mut visited_types,
@@ -512,6 +514,7 @@ fn collect_and_validate_managed_layouts(
                 ctx,
                 ctx.value_ty(operand),
                 &mut typerefs,
+                &mut pending_typerefs,
                 &mut nominal_layouts,
                 &mut layouts,
                 &mut visited_types,
@@ -522,6 +525,7 @@ fn collect_and_validate_managed_layouts(
                 ctx,
                 attribute,
                 &mut typerefs,
+                &mut pending_typerefs,
                 &mut nominal_layouts,
                 &mut layouts,
                 &mut visited_types,
@@ -534,6 +538,7 @@ fn collect_and_validate_managed_layouts(
                         ctx,
                         ctx.value_ty(argument),
                         &mut typerefs,
+                        &mut pending_typerefs,
                         &mut nominal_layouts,
                         &mut layouts,
                         &mut visited_types,
@@ -554,12 +559,7 @@ fn collect_and_validate_managed_layouts(
         }
     });
 
-    let mut visited_typerefs = HashSet::new();
-    while let Some(typeref) = typerefs
-        .iter()
-        .copied()
-        .find(|typeref| visited_typerefs.insert(*typeref))
-    {
+    while let Some(typeref) = pending_typerefs.pop() {
         let Some(name) = ctx.types.get(typeref).attrs.get_symbol("name") else {
             return Err(OwnershipPlanError::new(
                 "adt.typeref lacks nominal identity",
@@ -584,6 +584,7 @@ fn collect_and_validate_managed_layouts(
             ctx,
             layout,
             &mut typerefs,
+            &mut pending_typerefs,
             &mut nominal_layouts,
             &mut layouts,
             &mut visited_types,
@@ -613,6 +614,7 @@ fn collect_reachable_type_contract(
     ctx: &IrContext,
     ty: TypeRef,
     typerefs: &mut HashSet<TypeRef>,
+    pending_typerefs: &mut Vec<TypeRef>,
     nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
@@ -627,14 +629,18 @@ fn collect_reachable_type_contract(
     {
         layouts.insert(ty);
     }
-    if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
-        typerefs.insert(ty);
+    if data.dialect == Symbol::new("adt")
+        && data.name == Symbol::new("typeref")
+        && typerefs.insert(ty)
+    {
+        pending_typerefs.push(ty);
     }
     for &parameter in &data.params {
         collect_reachable_type_contract(
             ctx,
             parameter,
             typerefs,
+            pending_typerefs,
             nominal_layouts,
             layouts,
             visited_types,
@@ -645,6 +651,7 @@ fn collect_reachable_type_contract(
             ctx,
             attribute,
             typerefs,
+            pending_typerefs,
             nominal_layouts,
             layouts,
             visited_types,
@@ -656,6 +663,7 @@ fn collect_reachable_attribute_type_contract(
     ctx: &IrContext,
     attribute: &trunk_ir::Attribute,
     typerefs: &mut HashSet<TypeRef>,
+    pending_typerefs: &mut Vec<TypeRef>,
     nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
@@ -666,6 +674,7 @@ fn collect_reachable_attribute_type_contract(
                 ctx,
                 *ty,
                 typerefs,
+                pending_typerefs,
                 nominal_layouts,
                 layouts,
                 visited_types,
@@ -677,6 +686,7 @@ fn collect_reachable_attribute_type_contract(
                     ctx,
                     value,
                     typerefs,
+                    pending_typerefs,
                     nominal_layouts,
                     layouts,
                     visited_types,
