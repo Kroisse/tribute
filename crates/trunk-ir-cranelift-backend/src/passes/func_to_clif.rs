@@ -17,7 +17,8 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::func;
+use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
+use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -265,26 +266,48 @@ impl RewritePattern for FuncCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::CallIndirect::from_op(ctx, op).is_err() {
+        let Ok(call) = func::CallIndirect::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let operands = ctx.op_operands(op).to_vec();
-        if operands.is_empty() {
-            return false;
-        }
-
-        // Collect arg types (skip operand 0 = callee).
-        // Operand types are already converted by the applicator's cast insertion.
-        let param_types: Vec<TypeRef> = operands[1..].iter().map(|&v| ctx.value_ty(v)).collect();
-
-        // Result type with conversion applied
-        let result_ty = rewriter.result_type(ctx, op, 0);
-
-        // Build sig type matching translate_signature layout:
-        // params[0] = return type, params[1..] = parameter types
-        let ret_ty = result_ty.unwrap_or_else(|| core::nil(ctx).as_type_ref());
-        let sig_ty = core::func(ctx, ret_ty, param_types.iter().copied()).as_type_ref();
+        let result_types = rewriter.result_types(ctx, op);
+        let sig_ty = if let Some(signature) = call.exact_signature(ctx) {
+            let Some(signature) =
+                trunk_ir::rewrite::convert_function_type(ctx, signature, rewriter.type_converter())
+            else {
+                return false;
+            };
+            let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
+                return false;
+            };
+            let callable_result = callable.r#return(ctx);
+            let results_match = if crate::function::is_nil_type(ctx, callable_result) {
+                result_types.is_empty()
+            } else {
+                result_types == [callable_result]
+            };
+            if callable.params(ctx).len() != CallLike::call_args(&call, ctx).len()
+                || callable
+                    .params(ctx)
+                    .iter()
+                    .zip(CallLike::call_args(&call, ctx))
+                    .any(|(&param, &arg)| param != ctx.value_ty(arg))
+                || !results_match
+            {
+                return false;
+            }
+            signature
+        } else {
+            let param_types: Vec<TypeRef> = CallLike::call_args(&call, ctx)
+                .iter()
+                .map(|&value| ctx.value_ty(value))
+                .collect();
+            let result = result_types
+                .first()
+                .copied()
+                .unwrap_or_else(|| core::nil(ctx).as_type_ref());
+            core::func(ctx, result, param_types).as_type_ref()
+        };
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -292,9 +315,13 @@ impl RewritePattern for FuncCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("call_indirect"),
         );
-        ctx.op_mut(new_op)
-            .attributes
-            .insert(Symbol::new("sig"), Attribute::Type(sig_ty));
+        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        if !clif::set_indirect_call_signature(ctx, new_op, sig_ty) {
+            return false;
+        }
+        for (index, result_ty) in result_types.into_iter().enumerate() {
+            ctx.set_op_result_type(new_op, index as u32, result_ty);
+        }
         rewriter.replace_op(new_op);
         true
     }
@@ -367,9 +394,9 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if func::TailCallIndirect::from_op(ctx, op).is_err() {
+        let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
             return false;
-        }
+        };
         if ctx
             .op(op)
             .attributes
@@ -379,18 +406,26 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             return false;
         }
 
-        let signature = match ctx
-            .op(op)
-            .attributes
-            .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
-        {
-            Some(signature) => signature,
-            None => return false,
+        let Some(signature) = tail.exact_signature(ctx) else {
+            return false;
+        };
+        let Some(signature) =
+            trunk_ir::rewrite::convert_function_type(ctx, signature, rewriter.type_converter())
+        else {
+            return false;
         };
         let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
             return false;
         };
-        if callable.r#return(ctx) != core::nil(ctx).as_type_ref() {
+        if callable.r#return(ctx) != core::nil(ctx).as_type_ref()
+            || !TailCallLike::is_resultless(&tail, ctx)
+            || callable.params(ctx).len() != CallLike::call_args(&tail, ctx).len()
+            || callable
+                .params(ctx)
+                .iter()
+                .zip(CallLike::call_args(&tail, ctx))
+                .any(|(&param, &arg)| param != ctx.value_ty(arg))
+        {
             return false;
         }
 
@@ -400,9 +435,10 @@ impl RewritePattern for FuncTailCallIndirectPattern {
             Symbol::new("clif"),
             Symbol::new("return_call_indirect"),
         );
-        let attributes = &mut ctx.op_mut(new_op).attributes;
-        attributes.remove(Symbol::new(func::INDIRECT_CALL_SIGNATURE_ATTR));
-        attributes.insert(Symbol::new("sig"), Attribute::Type(signature));
+        func::remove_indirect_call_signature(&mut ctx.op_mut(new_op).attributes);
+        if !clif::set_indirect_call_signature(ctx, new_op, signature) {
+            return false;
+        }
         rewriter.replace_op(new_op);
         true
     }
@@ -609,9 +645,124 @@ mod tests {
     }
 
     #[test]
+    fn exact_unit_call_indirect_has_no_ssa_result() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn(%callee: core.ptr) -> core.nil {
+    func.call_indirect %callee {signature = core.func(core.nil)}
+    func.return
+  }
+}"#,
+        );
+
+        assert!(
+            result.contains("clif.call_indirect %0 {sig = core.func(core.nil)}"),
+            "{result}"
+        );
+        assert!(!result.contains("func.call_indirect"), "{result}");
+    }
+
+    #[test]
     fn test_tail_transfers_to_clif() {
         let result = run_pass(TAIL_TRANSFERS);
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn tail_call_indirect_signature_converts_array_to_ptr() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !evidence = core.array(core.i32)
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) -> core.nil attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %evidence {signature = core.func(core.nil, !evidence), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let caller = module.ops(&ctx)[0];
+        let entry = ctx.region(ctx.op(caller).regions[0]).blocks[0];
+        let evidence_ty = ctx.value_ty(ctx.block_args(entry)[1]);
+        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |_, ty| (ty == evidence_ty).then_some(ptr_ty));
+
+        super::lower(&mut ctx, module, type_converter).expect("func-to-clif lowering");
+
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed.contains("clif.return_call_indirect")
+                && printed.contains("sig = core.func(core.nil, core.ptr)"),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains("sig = core.func(core.nil, !evidence)"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn indirect_call_signature_converts_before_physical_validation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !evidence = core.array(core.i32)
+  func.func @physical(%callee: core.ptr, %evidence: core.ptr) -> core.i32 {
+    %result = func.call_indirect %callee, %evidence {signature = core.func(core.i32, !evidence)} : core.i32
+    func.return %result
+  }
+  func.func @mismatch(%callee: core.ptr, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, !evidence)} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        let ptr_ty = core::ptr(&mut ctx).as_type_ref();
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            ctx.types
+                .is_dialect(ty, Symbol::new("core"), Symbol::new("array"))
+                .then_some(ptr_ty)
+        });
+
+        let error = super::lower(&mut ctx, module, type_converter).unwrap_err();
+        assert!(error.to_string().contains("func.call_indirect"), "{error}");
+
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed.contains("clif.call_indirect")
+                && printed.contains("sig = core.func(core.i32, core.ptr)"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "func.call_indirect %0, %1 {signature = core.func(core.i32, !evidence)} : core.i32"
+            ),
+            "the mismatched call must remain unchanged: {printed}"
+        );
+    }
+
+    #[test]
+    fn tail_call_indirect_with_mismatched_signature_params_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i64), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(
+            error.to_string().contains("func.tail_call_indirect"),
+            "{error}"
+        );
+        let after = print_module(&ctx, module.op());
+        assert!(after.contains("func.tail_call_indirect"), "{after}");
+        assert!(!after.contains("clif.return_call_indirect"), "{after}");
     }
 
     #[test]

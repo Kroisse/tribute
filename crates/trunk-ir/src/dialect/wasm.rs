@@ -1,5 +1,8 @@
 //! Arena-based wasm dialect.
 
+use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::ops::{DialectOp, DialectType};
+
 crate::register_isolated_op!(wasm.func);
 
 #[trunk_ir::dialect]
@@ -46,14 +49,14 @@ mod wasm {
     #[rest_results]
     fn call(#[rest] args: ()) -> results {}
 
-    #[attr(type_idx: u32, table: u32)]
+    #[attr(type_idx: u32, table: u32, signature?: Type)]
     #[rest_results]
     fn call_indirect(#[rest] args: ()) -> results {}
 
     #[attr(callee: Symbol)]
     fn return_call(#[rest] args: ()) {}
 
-    #[attr(type_idx: u32, table: u32)]
+    #[attr(type_idx: u32, table: u32, signature?: Type)]
     fn return_call_indirect(#[rest] args: ()) {}
 
     fn unreachable() {}
@@ -378,4 +381,125 @@ mod wasm {
 
     #[attr(offset: u32, align: u32, memory: u32)]
     fn i64_store32(addr: (), value: ()) {}
+}
+
+const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
+
+impl IndirectCallLikeModel for CallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        self.signature(ctx)
+    }
+
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
+    }
+}
+
+impl IndirectCallLikeModel for ReturnCallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        self.signature(ctx)
+    }
+
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
+    }
+}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<CallIndirect>()
+}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<ReturnCallIndirect>()
+}
+
+/// Attach an exact callable contract to a `wasm` indirect transfer.
+///
+/// Returns `false` without mutation when the operation is not a `wasm`
+/// indirect call or the supplied type is not a `core.func` contract.
+pub fn set_indirect_call_signature(
+    ctx: &mut crate::IrContext,
+    op: crate::OpRef,
+    signature: crate::TypeRef,
+) -> bool {
+    if crate::dialect::core::Func::from_type_ref(ctx, signature).is_none()
+        || (CallIndirect::from_op(ctx, op).is_err()
+            && ReturnCallIndirect::from_op(ctx, op).is_err())
+    {
+        return false;
+    }
+    set_indirect_call_signature_attribute(&mut ctx.op_mut(op).attributes, signature);
+    true
+}
+
+fn set_indirect_call_signature_attribute(
+    attributes: &mut crate::AttributeMap,
+    signature: crate::TypeRef,
+) {
+    attributes.insert(
+        crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+        crate::Attribute::Type(signature),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::op_interface::IndirectCallLikeOps;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    #[test]
+    fn indirect_call_interface_uses_wasm_owned_signature() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
+    %result = wasm.call_indirect %table, %value {signature = core.func(core.i32, core.i32), table = 0, type_idx = 0} : core.i32
+    wasm.return %result
+  }
+  wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
+    %result = wasm.call_indirect %table, %value {table = 0, type_idx = 0} : core.i32
+    wasm.return %result
+  }
+  wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+  }
+  wasm.func @direct() -> core.nil {
+    wasm.return
+  }
+}"#,
+        );
+        let functions = module.ops(&ctx);
+        let body_op = |index| {
+            let body = ctx.op(functions[index]).regions[0];
+            ctx.block(ctx.region(body).blocks[0]).ops[0]
+        };
+        let ordinary = body_op(0);
+        let plain = body_op(1);
+        let tail = body_op(2);
+        let direct = body_op(3);
+
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary).is_some());
+        assert!(IndirectCallLikeOps::get(&ctx, plain).is_some());
+        assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, plain), None);
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail).is_some());
+        for op in [ordinary, tail] {
+            let operands = ctx.op_operands(op);
+            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
+            assert_eq!(
+                IndirectCallLikeOps::arguments(&ctx, op),
+                Some(&operands[1..])
+            );
+        }
+        assert!(IndirectCallLikeOps::callee(&ctx, plain).is_some());
+        assert!(IndirectCallLikeOps::arguments(&ctx, plain).is_some());
+        assert!(IndirectCallLikeOps::get(&ctx, direct).is_none());
+        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct), None);
+        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct), None);
+
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("wasm.call_indirect"));
+        assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
+    }
 }

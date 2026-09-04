@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::func;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -146,6 +146,57 @@ fn is_wasm_physical_argument_assignable(
     argument_is_wasm_gc_ref && parameter_is_anyref
 }
 
+/// Read and validate an optional exact function type retained by an ordinary
+/// indirect call. When present, the attribute remains authoritative rather
+/// than being reconstructed from erased operands.
+pub(crate) fn exact_call_indirect_signature(
+    ctx: &IrContext,
+    op: OpRef,
+) -> CompilationResult<TypeRef> {
+    let signature = IndirectCallLikeOps::exact_signature(ctx, op)
+        .ok_or_else(|| CompilationError::invalid_module("wasm.call_indirect lacks signature"))?;
+    exact_call_indirect_signature_with(ctx, op, signature)
+}
+
+/// Validate an exact ordinary indirect-call signature without mutating the
+/// operation that carries it.
+pub(crate) fn exact_call_indirect_signature_with(
+    ctx: &IrContext,
+    op: OpRef,
+    signature: TypeRef,
+) -> CompilationResult<TypeRef> {
+    let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.call_indirect signature must be core.func")
+    })?;
+    let Some(_table_index) = IndirectCallLikeOps::callee(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect requires a table index operand",
+        ));
+    };
+    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect has malformed operands",
+        ));
+    };
+    let results = ctx.op_result_types(op);
+    let results_match = if is_nil_type(ctx, result) {
+        results.is_empty()
+    } else {
+        results == [result]
+    };
+    if params.len() != args.len()
+        || params.iter().zip(args).any(|(param, arg)| {
+            !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
+        })
+        || !results_match
+    {
+        return Err(CompilationError::invalid_module(
+            "wasm.call_indirect operands or result do not match its exact signature",
+        ));
+    }
+    Ok(signature)
+}
+
 /// Read and validate the exact physical function type required by an indirect
 /// proper tail transfer. This backend deliberately does not infer the type
 /// from the runtime table index and operands.
@@ -153,13 +204,19 @@ pub(crate) fn exact_return_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
 ) -> CompilationResult<TypeRef> {
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type(func::INDIRECT_CALL_SIGNATURE_ATTR)
-        .ok_or_else(|| {
-            CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
-        })?;
+    let signature = IndirectCallLikeOps::exact_signature(ctx, op).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
+    })?;
+    exact_return_call_indirect_signature_with(ctx, op, signature)
+}
+
+/// Validate an exact callable signature against an indirect proper tail
+/// transfer without reading or mutating its attribute map.
+pub(crate) fn exact_return_call_indirect_signature_with(
+    ctx: &IrContext,
+    op: OpRef,
+    signature: TypeRef,
+) -> CompilationResult<TypeRef> {
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.return_call_indirect signature must be core.func")
     })?;
@@ -168,10 +225,14 @@ pub(crate) fn exact_return_call_indirect_signature(
             "wasm.return_call_indirect signature must have an empty result",
         ));
     }
-    let operands = ctx.op_operands(op);
-    let Some((&table_index, args)) = operands.split_first() else {
+    let Some(table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect requires a table index operand",
+        ));
+    };
+    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+        return Err(CompilationError::invalid_module(
+            "wasm.return_call_indirect has malformed operands",
         ));
     };
     if !is_type(ctx, value_type(ctx, table_index), "core", "i32") {

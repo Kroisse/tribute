@@ -11,6 +11,7 @@ use trunk_ir::Module;
 use trunk_ir::Symbol;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
@@ -148,16 +149,29 @@ pub(crate) fn collect_call_indirect_types(
 
                 // Check if this is a result-producing call_indirect.
                 if wasm_dialect::CallIndirect::matches(ctx, op) {
-                    // Build function type from operands and results
-                    let operands: Vec<_> = ctx.op_operands(op).to_vec();
-
-                    if operands.is_empty() {
-                        continue; // Skip invalid call_indirect
+                    // When source lowering retained an exact contract, use it
+                    // as the sole type-section key. It must not be recreated
+                    // from the erased table index and operands.
+                    if IndirectCallLikeOps::exact_signature(ctx, op).is_some() {
+                        let func_type = helpers::exact_call_indirect_signature(ctx, op)?;
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            type_idx_by_type.entry(func_type)
+                        {
+                            let index = *next_type_idx;
+                            *next_type_idx += 1;
+                            entry.insert(index);
+                            new_types.push((index, func_type));
+                        }
+                        continue;
                     }
 
+                    // Build function type from the interface's callee and
+                    // argument accessors when no exact contract was retained.
+                    let Some(first_operand) = IndirectCallLikeOps::callee(ctx, op) else {
+                        continue;
+                    };
                     // The callee (i32 table index) is the FIRST operand, followed by args.
                     // All indirect calls use table-based call_indirect.
-                    let first_operand = operands[0];
                     let first_operand_ty = helpers::value_type(ctx, first_operand);
                     let callee_is_first = {
                         // First operand should be i32 table index or closure struct
@@ -170,6 +184,9 @@ pub(crate) fn collect_call_indirect_types(
                     // Types that are already anyref (after normalize_primitive_types pass)
                     // should remain anyref in the signature.
                     let anyref_ty = intern_simple_wasm_type(ctx, "anyref");
+                    let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
+                        continue; // Skip invalid call_indirect
+                    };
 
                     // Callee (i32 table index) is FIRST operand, params are operands[1..]
                     assert!(
@@ -177,9 +194,8 @@ pub(crate) fn collect_call_indirect_types(
                         "call_indirect first operand must be i32 table index or closure struct, got {:?}",
                         fmt_type(ctx, first_operand_ty)
                     );
-                    let param_types: Vec<TypeRef> = operands
+                    let param_types: Vec<TypeRef> = args
                         .iter()
-                        .skip(1)
                         .map(|v| {
                             let ty = helpers::value_type(ctx, *v);
                             // After normalize_primitive_types pass:

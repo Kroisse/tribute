@@ -1353,6 +1353,38 @@ mod tests {
     }
 
     #[test]
+    fn collects_ordinary_call_indirect_exact_signature() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.func @caller(%table_index: core.i32, %value: wasm.structref) -> core.i32 {
+    %result = wasm.call_indirect %table_index, %value {signature = core.func(core.i32, wasm.anyref), table = 0, type_idx = 0} : core.i32
+    wasm.return %result
+  }
+}"#,
+        );
+
+        let info = collect_module_info(&mut ctx, module).expect("collect module info");
+        let [(_, signature)] = info.call_indirect_types.as_slice() else {
+            panic!("expected one collected exact signature")
+        };
+        let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
+            panic!("expected core.func signature")
+        };
+        assert_eq!(ctx.types.get(params[0]).name, Symbol::new("anyref"));
+        assert_eq!(ctx.types.get(result).name, Symbol::new("i32"));
+
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("exact ordinary indirect call must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("encoded ordinary indirect call must validate");
+    }
+
+    #[test]
     fn region_contains_call_indirect_recognizes_return_call_indirect() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(

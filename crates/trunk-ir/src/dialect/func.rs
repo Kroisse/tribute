@@ -1,8 +1,36 @@
 //! Arena-based func dialect.
 
+use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::ops::{DialectOp, DialectType};
+
 /// The optional exact callable signature retained after a typed indirect callee
 /// becomes a runtime function or table index.
-pub const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
+const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
+
+/// Shared accessors for function calls with ordinary results or arguments.
+///
+/// This is a static Rust interface over the four `func.*call*` operations;
+/// it does not participate in dynamic operation dispatch.
+pub trait CallLike: crate::ops::DialectOp {
+    /// Arguments supplied to the callable, excluding an indirect callee.
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef];
+
+    /// Result types produced by this call.
+    fn call_result_types<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::TypeRef] {
+        ctx.op_result_types(self.op_ref())
+    }
+}
+
+/// Marker and resultless query for proper-tail transfers.
+///
+/// Exact callable signatures belong only to `IndirectCallLike`, keeping
+/// CPS/tail legality independent from indirect-call metadata.
+pub trait TailCallLike: CallLike {
+    /// Proper tail transfers cannot produce SSA results.
+    fn is_resultless(&self, ctx: &crate::IrContext) -> bool {
+        self.call_result_types(ctx).is_empty()
+    }
+}
 
 // === Operation registrations ===
 crate::register_pure_op!(func.constant);
@@ -34,6 +62,95 @@ mod func {
     fn constant() -> result {}
 
     fn unreachable() {}
+}
+
+impl CallLike for Call {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl CallLike for CallIndirect {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl IndirectCallLikeModel for CallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        CallIndirect::signature(&self, ctx)
+    }
+
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
+    }
+}
+
+impl CallLike for TailCall {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl TailCallLike for TailCall {}
+
+impl CallLike for TailCallIndirect {
+    fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
+        self.args(ctx)
+    }
+}
+
+impl IndirectCallLikeModel for TailCallIndirect {
+    fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
+        TailCallIndirect::signature(&self, ctx)
+    }
+
+    fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
+        set_indirect_call_signature(ctx, self.op_ref(), signature)
+    }
+}
+
+impl TailCallLike for TailCallIndirect {}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<CallIndirect>()
+}
+
+inventory::submit! {
+    IndirectCallLikeOps::register::<TailCallIndirect>()
+}
+
+/// Attach an exact callable contract to a `func` indirect transfer.
+///
+/// Returns `false` without mutation when the operation is not a `func`
+/// indirect call or the supplied type is not a `core.func` contract.
+pub fn set_indirect_call_signature(
+    ctx: &mut crate::IrContext,
+    op: crate::OpRef,
+    signature: crate::TypeRef,
+) -> bool {
+    if crate::dialect::core::Func::from_type_ref(ctx, signature).is_none()
+        || (CallIndirect::from_op(ctx, op).is_err() && TailCallIndirect::from_op(ctx, op).is_err())
+    {
+        return false;
+    }
+    set_indirect_call_signature_attribute(&mut ctx.op_mut(op).attributes, signature);
+    true
+}
+
+fn set_indirect_call_signature_attribute(
+    attributes: &mut crate::AttributeMap,
+    signature: crate::TypeRef,
+) {
+    attributes.insert(
+        crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
+        crate::Attribute::Type(signature),
+    );
+}
+
+/// Remove the `func`-owned exact-signature attribute from copied metadata.
+pub fn remove_indirect_call_signature(attributes: &mut crate::AttributeMap) {
+    attributes.remove(INDIRECT_CALL_SIGNATURE_ATTR);
 }
 
 impl Func {
@@ -254,6 +371,7 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::op_interface::IndirectCallLikeOps;
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -278,5 +396,55 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
         assert!(!printed.contains("func.indirect_call_signature"));
+    }
+
+    #[test]
+    fn indirect_call_signature_recognizes_only_indirect_calls() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @ordinary(%callee: core.func(core.i32, core.i32), %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, core.i32)} : core.i32
+    func.return %result
+  }
+  func.func @tail(%callee: core.func(core.nil, core.i32), %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32)}
+  }
+  func.func @direct() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+
+        let functions = module.ops(&ctx);
+        let ordinary = Func::from_op(&ctx, functions[0]).expect("ordinary function");
+        let tail = Func::from_op(&ctx, functions[1]).expect("tail function");
+        let direct = Func::from_op(&ctx, functions[2]).expect("direct function");
+        let ordinary_op = ctx
+            .block(ctx.region(ordinary.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+        let tail_op = ctx
+            .block(ctx.region(tail.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+        let direct_op = ctx
+            .block(ctx.region(direct.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops[0];
+
+        assert!(IndirectCallLikeOps::get(&ctx, ordinary_op).is_some());
+        assert!(IndirectCallLikeOps::get(&ctx, tail_op).is_some());
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, ordinary_op).is_some());
+        assert!(IndirectCallLikeOps::exact_signature(&ctx, tail_op).is_some());
+        for op in [ordinary_op, tail_op] {
+            let operands = ctx.op_operands(op);
+            assert_eq!(IndirectCallLikeOps::callee(&ctx, op), Some(operands[0]));
+            assert_eq!(
+                IndirectCallLikeOps::arguments(&ctx, op),
+                Some(&operands[1..])
+            );
+        }
+        assert!(IndirectCallLikeOps::get(&ctx, direct_op).is_none());
+        assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
+        assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
     }
 }

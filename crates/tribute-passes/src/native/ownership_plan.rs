@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_core::{CallingConvention, get_calling_convention, get_indirect_call_signature};
+use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;

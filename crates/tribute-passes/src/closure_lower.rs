@@ -438,7 +438,7 @@ impl RewritePattern for LowerClosureTailCallArena {
 /// Copy source metadata without replacing the physical indirect-call contract.
 fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination: OpRef) {
     let mut attributes = ctx.op(source).attributes.clone();
-    attributes.remove(func::INDIRECT_CALL_SIGNATURE_ATTR);
+    func::remove_indirect_call_signature(&mut attributes);
     ctx.op_mut(destination).attributes.extend(attributes);
 }
 
@@ -1337,7 +1337,8 @@ mod tests {
             .copied()
             .find(|op| func::TailCallIndirect::from_op(&ctx, *op).is_ok())
             .unwrap();
-        let signature = tribute_core::get_indirect_call_signature(&ctx, tail).unwrap();
+        let signature =
+            trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail).unwrap();
         let callable = core::Func::from_type_ref(&ctx, signature).unwrap();
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);

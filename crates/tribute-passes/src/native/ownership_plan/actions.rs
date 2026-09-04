@@ -768,9 +768,14 @@ impl ActionPlanner<'_> {
         let tail =
             func::TailCall::matches(self.ir, op) || func::TailCallIndirect::matches(self.ir, op);
         let operands = self.ir.op_operands(op);
-        let args = operands.get(usize::from(indirect)..).unwrap_or_default();
+        let args = if indirect {
+            trunk_ir::op_interface::IndirectCallLikeOps::arguments(self.ir, op)
+                .ok_or_else(|| OwnershipPlanError::new("indirect call has malformed operands"))?
+        } else {
+            operands
+        };
         let entries = if indirect {
-            let signature = get_indirect_call_signature(self.ir, op)
+            let signature = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(self.ir, op)
                 .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
                 .ok_or_else(|| {
                     OwnershipPlanError::new(format!(

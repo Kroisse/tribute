@@ -21,13 +21,14 @@ struct ConvertedSignature {
     new_params: Vec<TypeRef>,
     new_result: TypeRef,
     params_changed: bool,
+    changed: bool,
 }
 
 /// Analyze a `core.func` TypeRef and convert params/result via the type converter.
 ///
 /// `core.func` type layout: `params[0]` = return type, `params[1..]` = param types.
 ///
-/// Returns `None` if no types changed.
+/// Returns `None` when `func_type` is not a well-formed `core.func` type.
 fn convert_func_signature(
     ctx: &IrContext,
     func_type: TypeRef,
@@ -55,20 +56,31 @@ fn convert_func_signature(
         .any(|(new, old)| new != old);
     let result_changed = new_result != old_result;
 
-    if !params_changed && !result_changed {
-        return None;
-    }
-
     Some(ConvertedSignature {
         new_params,
         new_result,
         params_changed,
+        changed: params_changed || result_changed,
     })
 }
 
 /// Build a new `core.func` TypeRef from converted params/result.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
     crate::dialect::core::func(ctx, sig.new_result, sig.new_params.iter().copied()).as_type_ref()
+}
+
+/// Convert the parameter and result types of a `core.func` type.
+///
+/// This is the type-only counterpart to the function-signature rewrite
+/// patterns. It is for exact callable attributes whose source operation does
+/// not own a function body or block arguments to rewrite.
+pub fn convert_function_type(
+    ctx: &mut IrContext,
+    func_type: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    let signature = convert_func_signature(ctx, func_type, converter)?;
+    Some(rebuild_func_type(ctx, &signature))
 }
 
 /// Update entry block argument types in-place to match converted params.
@@ -134,6 +146,9 @@ fn rewrite_function_signature(
     let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
         return false;
     };
+    if !sig.changed {
+        return false;
+    }
 
     // Update entry block args in-place
     if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {

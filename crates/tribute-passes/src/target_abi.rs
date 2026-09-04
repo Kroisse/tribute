@@ -15,13 +15,14 @@ use tribute_core::calling_convention::{
     get_physical_closure_environment_index,
 };
 use tribute_core::{
-    CALLING_CONVENTION_ATTR, CallingConvention, INDIRECT_CALL_SIGNATURE_ATTR,
-    get_calling_convention, get_indirect_call_signature, get_physical_closure_convention,
+    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
+    get_physical_closure_convention,
 };
 use tribute_ir::dialect::{ability, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -91,6 +92,7 @@ pub fn lower_cps_signatures_to_physical(
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
+    let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
 
     for (name, ty) in aliases {
@@ -162,10 +164,27 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let op_attributes: Vec<_> = converter
-            .ctx
-            .op(op)
-            .attributes
+        let original_attributes = converter.ctx.op(op).attributes.clone();
+        let mut converted_attributes = original_attributes.clone();
+        let indirect_signature = IndirectCallLikeOps::exact_signature(converter.ctx, op);
+        if let Some(signature) = indirect_signature {
+            let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
+                TargetAbiError::new(
+                    "target ABI: indirect callable signature has no convention metadata",
+                )
+            })?;
+            let signature = converter.convert_callable(signature, convention)?;
+            if !func::CallIndirect::matches(converter.ctx, op)
+                && !func::TailCallIndirect::matches(converter.ctx, op)
+            {
+                return Err(TargetAbiError::new(
+                    "target ABI: indirect callable signature cannot be set",
+                ));
+            }
+            func::remove_indirect_call_signature(&mut converted_attributes);
+            indirect_signatures.push((op, signature));
+        }
+        let op_attributes: Vec<_> = converted_attributes
             .iter()
             .map(|(name, value)| (*name, value.clone()))
             .collect();
@@ -173,23 +192,12 @@ pub fn lower_cps_signatures_to_physical(
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
                 continue;
             }
-            let converted = if name == Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR) {
-                let Attribute::Type(signature) = value else {
-                    return Err(TargetAbiError::new(
-                        "target ABI: indirect callable signature must be a type attribute",
-                    ));
-                };
-                let convention = exact_convention(converter.ctx, op)?.ok_or_else(|| {
-                    TargetAbiError::new(
-                        "target ABI: indirect callable signature has no convention metadata",
-                    )
-                })?;
-                Attribute::Type(converter.convert_callable(signature, convention)?)
-            } else {
-                converter.convert_attribute(value.clone())?
-            };
-            if converted != value {
-                attributes.push((op, name, converted));
+            let converted = converter.convert_attribute(value)?;
+            converted_attributes.insert(name, converted);
+        }
+        for (name, value) in converted_attributes {
+            if original_attributes.get(name) != Some(&value) {
+                attributes.push((op, name, value));
             }
         }
 
@@ -229,6 +237,9 @@ pub fn lower_cps_signatures_to_physical(
     }
     for (op, name, value) in attributes {
         ctx.op_mut(op).attributes.insert(name, value);
+    }
+    for (op, signature) in indirect_signatures {
+        assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
     }
     for (block, index, ty) in block_args {
         ctx.set_block_arg_type(block, index, ty);
@@ -978,7 +989,7 @@ fn validate_transfers(
         if !func::CallIndirect::matches(ctx, op) && !func::TailCallIndirect::matches(ctx, op) {
             continue;
         }
-        let signature = get_indirect_call_signature(ctx, op);
+        let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let convention = exact_convention(ctx, op)?;
         if signature.is_none() && convention.is_none() {
             continue;
@@ -992,7 +1003,9 @@ fn validate_transfers(
         let callable = core::Func::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect callable signature is not core.func")
         })?;
-        let args = ctx.op_operands(op).get(1..).unwrap_or_default();
+        let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
+            TargetAbiError::new("target ABI: indirect transfer has malformed operands")
+        })?;
         if !operands_match(ctx, args, callable.params(ctx)) {
             return Err(TargetAbiError::new(
                 "target ABI: indirect transfer operands differ from exact callable signature",
@@ -1406,6 +1419,38 @@ mod tests {
             printed.contains("closure.closure(core.func(core.nil"),
             "{printed}"
         );
+    }
+
+    #[test]
+    fn unrelated_type_metadata_never_becomes_an_indirect_signature() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%callee: core.i32, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %value {signature = core.func(core.never, core.i32), tribute.calling_convention = 2}
+  }
+}"#,
+        );
+        let run = function(&ctx, module, "run");
+        let body = run.body_if_present(&ctx).unwrap();
+        let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
+        let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
+        ctx.op_mut(indirect).attributes.insert(
+            Symbol::new("unrelated_callable_metadata"),
+            Attribute::Type(signature),
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("untagged nested core.func<core.never, ...>"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     fn compose_promoted_root(export: CallingConvention) -> (IrContext, Module) {
