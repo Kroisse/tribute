@@ -230,12 +230,12 @@ fn build_entrypoint(
 
     // Initialize ASan before anything else
     if sanitize {
-        let asan_call = func::call(ctx, loc, [], nil_ty, Symbol::new("__asan_init"));
+        let asan_call = func::call(ctx, loc, [], [nil_ty], Symbol::new("__asan_init"));
         ctx.push_op(entry_block, asan_call.op_ref());
     }
 
     // Initialize runtime TLS before any ability use
-    let init_call = func::call(ctx, loc, [], nil_ty, Symbol::new("__tribute_init"));
+    let init_call = func::call(ctx, loc, [], [nil_ty], Symbol::new("__tribute_init"));
     ctx.push_op(entry_block, init_call.op_ref());
 
     let main_args = match tribute_main.convention {
@@ -256,7 +256,7 @@ fn build_entrypoint(
                 ctx,
                 loc,
                 [],
-                tribute_main.parameter_types[0],
+                [tribute_main.parameter_types[0]],
                 Symbol::new(evidence_abi::EMPTY),
             );
             ctx.push_op(entry_block, empty_evidence.op_ref());
@@ -274,7 +274,7 @@ fn build_entrypoint(
         ctx,
         loc,
         main_args,
-        tribute_main.return_type,
+        [tribute_main.return_type],
         Symbol::new("_tribute_main"),
     );
     set_calling_convention(ctx, main_call.op_ref(), tribute_main.convention);

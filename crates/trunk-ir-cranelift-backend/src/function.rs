@@ -870,3 +870,20 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod result_list_tests {
+    use super::*;
+    #[test]
+    fn unsupported_resultless_signature_is_rejected_without_panicking() {
+        let mut ctx = IrContext::new();
+        let signature = core::func(&mut ctx, [], []).as_type_ref();
+        let error =
+            translate_signature(&ctx, signature, CallConv::SystemV, cl_types::I64).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("currently requires one core.func result")
+        );
+    }
+}

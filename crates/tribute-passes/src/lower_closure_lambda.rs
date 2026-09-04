@@ -180,8 +180,10 @@ fn lower_single_lambda(
     let Some(callable) = core::Func::from_type_ref(ctx, function_ty) else {
         return false;
     };
-    let func_result_ty = callable.r#return(ctx);
-    if callable.params(ctx) != orig_param_types.as_slice() {
+    let Some(func_result_ty) = callable.single_result(ctx) else {
+        return false;
+    };
+    if callable.inputs(ctx) != orig_param_types.as_slice() {
         return false;
     }
     if !legacy_compatibility && environment_index > orig_param_count {

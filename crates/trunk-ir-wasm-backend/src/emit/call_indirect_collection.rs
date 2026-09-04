@@ -18,7 +18,7 @@ use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
 use trunk_ir::types::TypeData;
 
-use crate::errors::CompilationResult;
+use crate::errors::{CompilationError, CompilationResult};
 
 use super::helpers::{self, intern_named_adt_struct};
 
@@ -88,20 +88,21 @@ pub(crate) fn collect_call_indirect_types(
                         "collect_call_indirect_types: found wasm.func, type={}",
                         fmt_type(ctx, func_type)
                     );
-                    if let Some((_, ret_ty)) = helpers::func_type_parts(ctx, func_type) {
-                        debug!(
-                            "collect_call_indirect_types: wasm.func return type={}",
-                            fmt_type(ctx, ret_ty)
-                        );
-                        Some(ret_ty)
-                    } else {
-                        debug!("collect_call_indirect_types: wasm.func r#type is not core.func");
-                        None
-                    }
+                    let (_, ret_ty) =
+                        helpers::func_type_parts(ctx, func_type).ok_or_else(|| {
+                            CompilationError::type_error(
+                                "Wasm indirect-call collection requires valid one-result core.func",
+                            )
+                        })?;
+                    Some(ret_ty)
                 } else if let Ok(func) = func::Func::from_op(ctx, op) {
-                    // Also check for func.func (in case IR isn't fully lowered)
-                    let func_type = func.r#type(ctx);
-                    helpers::func_type_parts(ctx, func_type).map(|(_, ret_ty)| ret_ty)
+                    let (_, ret_ty) =
+                        helpers::func_type_parts(ctx, func.r#type(ctx)).ok_or_else(|| {
+                            CompilationError::type_error(
+                                "Wasm indirect-call collection requires valid one-result core.func",
+                            )
+                        })?;
+                    Some(ret_ty)
                 } else {
                     None
                 };
@@ -385,5 +386,24 @@ mod tests {
             helpers::func_type_parts(&ctx, func_ty),
             Some((&[first, second][..], result))
         );
+    }
+}
+
+#[cfg(test)]
+mod result_list_tests {
+    use super::*;
+    #[test]
+    fn unsupported_resultless_function_is_rejected_before_collection() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m { wasm.func {sym_name = @f, type = core.func<() -> ()>} { wasm.return } }",
+        );
+        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let mut indices = HashMap::new();
+        let error = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap_err();
+        assert!(error.to_string().contains("one-result core.func"));
+        assert!(indices.is_empty());
+        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
     }
 }

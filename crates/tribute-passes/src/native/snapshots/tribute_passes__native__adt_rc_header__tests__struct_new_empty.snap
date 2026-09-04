@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-passes/src/native/adt_rc_header.rs
+assertion_line: 472
 expression: output
 ---
 core.module @test {

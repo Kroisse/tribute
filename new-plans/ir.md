@@ -703,9 +703,10 @@ Generic consumer는 다른 dialect의 attribute key 대신 interface를 query한
 Interface를 구현하지 않는 operation에는 exact signature가 없으며, erased callee나
 result operand로 이를 추론해서는 안 된다.
 `func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
-terminator다. Shared verifier는 callee `core.func`와 enclosing caller의 result가
-모두 `core.never`인지 검사한다. Native/Wasm signature lowering은 이를 empty result
-vector로 바꾸고 각각 indirect return-call로 낮춘다.
+terminator다. Shared verifier checks complete caller/callee result-list agreement;
+logical CPS callables both retain `[core.never]` despite the resultless transfer
+operation. Final Native/Wasm signature lowering will change these to empty
+result lists; the current target ABI still uses temporary `[core.nil]` encoding.
 
 `scf.*` represents structured control flow, including pattern/case regions and
 region yields. Loop-like forms may be introduced by optimization passes such as
@@ -846,9 +847,32 @@ physical CPS function: results = []
 
 The physical proper-tail ABI is proven only by the combination of
 `tribute.calling_convention = Cps` and exact `results = []`. The stored counts
-are not an ABI marker. During the first representation migration, existing
-production functions remain one-result; zero-result operations and the
-`[core.never]` to `[]` target conversion are enabled in later atomic stages.
+are not an ABI marker, and general resultless IR need not be CPS.
+
+Shared `func.call` and `func.call_indirect` support zero or one SSA result.
+Calls match complete input/result lists; returns match the enclosing function's
+result list. Proper-tail operations themselves remain resultless, including
+when transferring to a logical `[core.never]` callable, and require matching
+caller/callee result lists. Exact indirect signatures must agree with a typed
+callee when both are present.
+
+Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
+for one result. Absent arrow means zero IR results, never implicit Unit.
+Generic operation syntax preserves its explicit `type` attribute; custom
+assembly retains an explicit type when needed to preserve type attributes and
+validates its agreement with the decomposed signature. Shared conversion maps
+every input/result and nested type attribute, preserving cardinality, and
+checks entry argument arity before changing the signature or entry arguments.
+`validate_function_contracts` provides the closed-module check for complete
+call/return/tail contracts, separate from local operation verification. It
+requires uniquely resolvable declarations, including runtime callees; adopting
+that gate in compatibility pipelines with undeclared runtime symbols is deferred
+to their integration.
+
+Existing source producers remain one-result. Backend zero-result readiness and
+the `[core.never]` to `[]` target switch follow in later atomic changes. Current
+target ABI lowering still uses temporary `[core.nil]` encoding for physical CPS;
+this migration state is not the final physical contract.
 
 ## Open Questions
 

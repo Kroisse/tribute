@@ -394,7 +394,29 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
     } else {
         ctx.value_ty(callee)
     };
-    let Some(func_ty) = crate::dialect::core::Func::from_type_ref(ctx, func_ty) else {
+    let typed = crate::dialect::core::Func::from_type_ref(ctx, func_ty);
+    let exact = data
+        .attributes
+        .get_type("signature")
+        .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty));
+    if data.attributes.contains_key("signature") && exact.is_none() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "invalid exact indirect signature",
+        ));
+        return;
+    }
+    if let (Some(typed), Some(exact)) = (typed, exact)
+        && typed != exact
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "exact indirect signature differs from typed callee",
+        ));
+    }
+    let Some(func_ty) = exact.or(typed) else {
         errors.push(operation_verifier_error(
             ctx,
             op,
@@ -402,20 +424,13 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
         ));
         return;
     };
-    let Some(result_ty) = func_ty.single_result(ctx) else {
+    if enclosing_func_signature(ctx, op)
+        .is_some_and(|caller| caller.results(ctx) != func_ty.results(ctx))
+    {
         errors.push(operation_verifier_error(
             ctx,
             op,
-            "callee function must have one core.never result",
-        ));
-        return;
-    };
-    let return_ty = ctx.types.get(result_ty);
-    if return_ty.dialect != Symbol::new("core") || return_ty.name != Symbol::new("never") {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "callee function result must be core.never",
+            "tail caller/callee result lists differ",
         ));
     }
     let expected = func_ty.inputs(ctx);
@@ -440,6 +455,278 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
             ));
         }
     }
+}
+
+/// Find the nearest enclosing function without crossing another callable owner.
+fn enclosing_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<crate::dialect::core::Func> {
+    loop {
+        let block = ctx.op(op).parent_block?;
+        let region = ctx.block(block).parent_region?;
+        op = ctx.region(region).parent_op?;
+        let data = ctx.op(op);
+        if data.name == Symbol::new("func") || data.name == Symbol::new("lambda") {
+            return data
+                .attributes
+                .get_type("type")
+                .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty));
+        }
+    }
+}
+
+fn typed_callee_signature(ctx: &IrContext, value: ValueRef) -> Option<crate::dialect::core::Func> {
+    let ty = ctx.value_ty(value);
+    let data = ctx.types.get(ty);
+    let ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        let [ty] = data.params.as_slice() else {
+            return None;
+        };
+        *ty
+    } else {
+        ty
+    };
+    crate::dialect::core::Func::from_type_ref(ctx, ty)
+}
+
+fn check_value_types(
+    ctx: &IrContext,
+    op: OpRef,
+    values: &[ValueRef],
+    expected: &[crate::TypeRef],
+    role: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if values.len() != expected.len() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            format!(
+                "{role} count mismatch: expected {}, found {}",
+                expected.len(),
+                values.len()
+            ),
+        ));
+    } else {
+        for (index, (&value, &ty)) in values.iter().zip(expected).enumerate() {
+            if ctx.value_ty(value) != ty {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    format!("{role} #{index} type mismatch"),
+                ));
+            }
+        }
+    }
+}
+
+/// Validate complete shared func contracts at a closed, typed module boundary.
+///
+/// Unlike local operation validation, this resolves direct symbols and checks
+/// enclosing return/tail contracts. Compatibility pipelines with undeclared
+/// runtime symbols must establish these contracts before using this check.
+pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> ValidationResult {
+    use crate::dialect::{core, func};
+    use crate::ops::DialectOp;
+    let mut errors = Vec::new();
+    validate_core_func_types(ctx, &mut errors);
+    let Some(body) = module.body(ctx) else {
+        return ValidationResult { errors };
+    };
+    // Symbols are resolved in their nearest module scope, never globally by name.
+    fn resolve(ctx: &IrContext, mut op: OpRef, name: Symbol) -> Option<core::Func> {
+        loop {
+            let region = ctx.block(ctx.op(op).parent_block?).parent_region?;
+            let parent = ctx.region(region).parent_op?;
+            if core::Module::matches(ctx, parent) {
+                let mut matches = ctx
+                    .region(region)
+                    .blocks
+                    .iter()
+                    .flat_map(|&b| ctx.block(b).ops.iter().copied())
+                    .filter(|&candidate| {
+                        ctx.op(candidate).attributes.get_symbol("sym_name") == Some(name)
+                    });
+                if let Some(found) = matches.next() {
+                    if matches.next().is_some() || !func::Func::matches(ctx, found) {
+                        return None;
+                    }
+                    return ctx
+                        .op(found)
+                        .attributes
+                        .get_type("type")
+                        .and_then(|ty| core::Func::from_type_ref(ctx, ty));
+                }
+            }
+            op = parent;
+        }
+    }
+    walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        let data = ctx.op(op);
+        if data.dialect != func::DIALECT_NAME() {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        }
+        let mut verify = || {
+            if func::Func::matches(ctx, op) {
+                let Some(signature) = data
+                    .attributes
+                    .get_type("type")
+                    .and_then(|ty| core::Func::from_type_ref(ctx, ty))
+                else {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "requires valid core.func type",
+                    ));
+                    return;
+                };
+                if data.regions.len() > 1 {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "expects at most one body",
+                    ));
+                }
+                if let Some(&region) = data.regions.first() {
+                    if let Some(&entry) = ctx.region(region).blocks.first() {
+                        check_value_types(
+                            ctx,
+                            op,
+                            ctx.block_args(entry),
+                            signature.inputs(ctx),
+                            "entry argument",
+                            &mut errors,
+                        );
+                    } else {
+                        errors.push(operation_verifier_error(
+                            ctx,
+                            op,
+                            "body requires an entry block",
+                        ));
+                    }
+                }
+                return;
+            }
+            let tail = func::TailCall::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
+            if func::Return::matches(ctx, op) || tail {
+                if !ctx.op_results(op).is_empty() {
+                    errors.push(operation_verifier_error(ctx, op, "must be resultless"));
+                }
+                if data
+                    .parent_block
+                    .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
+                {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "must terminate its block",
+                    ));
+                }
+            }
+            if func::Return::matches(ctx, op) {
+                if let Some(caller) = enclosing_func_signature(ctx, op) {
+                    check_value_types(
+                        ctx,
+                        op,
+                        ctx.op_operands(op),
+                        caller.results(ctx),
+                        "return",
+                        &mut errors,
+                    );
+                } else {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "requires enclosing function signature",
+                    ));
+                }
+                return;
+            }
+            let direct = func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op);
+            let indirect =
+                func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
+            if !direct && !indirect {
+                return;
+            }
+            if ctx.op_results(op).len() > 1 {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "multiple call results are unsupported",
+                ));
+            }
+            let operands = ctx.op_operands(op);
+            let (signature, args) = if direct {
+                let signature = data
+                    .attributes
+                    .get_symbol("callee")
+                    .and_then(|name| resolve(ctx, op, name));
+                (signature, operands)
+            } else {
+                let Some((&callee, args)) = operands.split_first() else {
+                    errors.push(operation_verifier_error(ctx, op, "requires callee operand"));
+                    return;
+                };
+                let typed = typed_callee_signature(ctx, callee);
+                let exact = data
+                    .attributes
+                    .get_type("signature")
+                    .and_then(|ty| core::Func::from_type_ref(ctx, ty));
+                if data.attributes.contains_key("signature") && exact.is_none() {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "invalid exact indirect signature",
+                    ));
+                    return;
+                }
+                if let (Some(typed), Some(exact)) = (typed, exact)
+                    && typed != exact
+                {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "exact indirect signature differs from typed callee",
+                    ));
+                }
+                (exact.or(typed), args)
+            };
+            let Some(signature) = signature else {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "requires uniquely resolved valid callable signature",
+                ));
+                return;
+            };
+            check_value_types(
+                ctx,
+                op,
+                args,
+                signature.inputs(ctx),
+                "call argument",
+                &mut errors,
+            );
+            if tail {
+                if enclosing_func_signature(ctx, op)
+                    .is_none_or(|caller| caller.results(ctx) != signature.results(ctx))
+                {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "tail caller/callee result lists differ",
+                    ));
+                }
+            } else if ctx.op_result_types(op) != signature.results(ctx) {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "call result list mismatch",
+                ));
+            }
+        };
+        verify();
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    ValidationResult { errors }
 }
 
 /// Validate operation-level semantic constraints that are independent of
@@ -1264,6 +1551,34 @@ mod tests {
                 "must equal params length",
             ),
             (
+                "negative input",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_inputs", Attribute::Int(-1))
+                    .attr("num_results", Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "negative result",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_results", Attribute::Int(-1))
+                    .attr("num_inputs", Attribute::Int(0)),
+                "`num_results` must be a u32",
+            ),
+            (
+                "input outside u32",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_inputs", Attribute::Int(u32::MAX as i128 + 1))
+                    .attr("num_results", Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "result outside u32",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_results", Attribute::Int(u32::MAX as i128 + 1))
+                    .attr("num_inputs", Attribute::Int(0)),
+                "`num_results` must be a u32",
+            ),
+            (
                 "multiple results",
                 TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                     .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0))
@@ -2048,7 +2363,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let result = validate_operation_verifiers(&ctx, module);
         let text = result.to_string();
-        assert!(text.contains("result must be core.never"), "{text}");
+        assert!(text.contains("caller/callee result lists differ"), "{text}");
         assert!(text.contains("argument #0 type"), "{text}");
     }
 

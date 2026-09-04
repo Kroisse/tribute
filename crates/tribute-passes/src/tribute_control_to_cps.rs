@@ -854,10 +854,11 @@ impl<'a> Converter<'a> {
                 "CPS indirect tail callee contract is not core.func",
             )
         })?;
-        if callable.r#return(self.ctx) != self.never_type()
-            || callable.params(self.ctx).len() != args.len()
+        let never = self.never_type();
+        if callable.results(self.ctx) != [never]
+            || callable.inputs(self.ctx).len() != args.len()
             || callable
-                .params(self.ctx)
+                .inputs(self.ctx)
                 .iter()
                 .zip(&args)
                 .any(|(expected, actual)| *expected != self.ctx.value_ty(*actual))
@@ -1029,7 +1030,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             factory_args,
-            dispatch_type,
+            [dispatch_type],
             dispatch_factory,
         );
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -1184,7 +1185,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             [typed_completion.result(self.ctx), outer_dispatch],
-            dispatch_type,
+            [dispatch_type],
             dispatch_factory,
         );
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -2053,7 +2054,7 @@ impl<'a> Converter<'a> {
                 .map(|value| mapping.get(value).copied().unwrap_or(*value)),
         );
         let result_ty = self.convert_type(target.source_result);
-        let call = func::call(self.ctx, location, args, result_ty, target.symbol);
+        let call = func::call(self.ctx, location, args, [result_ty], target.symbol);
         set_calling_convention(self.ctx, call.op_ref(), target.convention);
         Ok(call)
     }
@@ -2167,7 +2168,7 @@ impl<'a> Converter<'a> {
                 self.ctx,
                 location,
                 target_args,
-                target_result,
+                [target_result],
                 target.symbol,
             );
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
@@ -2534,7 +2535,7 @@ impl<'a> Converter<'a> {
                 let input_type = *arm.params.last().expect("resumptive arm has a token");
                 let token_input = cps_closure_function_type(self.ctx, input_type)
                     .and_then(|function| core::Func::from_type_ref(self.ctx, function))
-                    .and_then(|function| function.params(self.ctx).get(2).copied())
+                    .and_then(|function| function.inputs(self.ctx).get(2).copied())
                     .ok_or_else(|| {
                         TributeControlToCpsError::one(
                             POST_CPS_BOUNDARY,
@@ -3114,7 +3115,7 @@ impl<'a> Converter<'a> {
                     location,
                     arm.value,
                     call_args,
-                    arm.operation_result,
+                    [arm.operation_result],
                     Some(signature),
                 );
                 set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
@@ -3294,7 +3295,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             local_dispatch_args,
-            local_dispatch_type,
+            [local_dispatch_type],
             local_dispatch_factory,
         );
         set_calling_convention(
@@ -3536,7 +3537,7 @@ impl<'a> Converter<'a> {
                     );
                     let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
                     let call =
-                        func::call_indirect(self.ctx, location, callee, args, result_type, None);
+                        func::call_indirect(self.ctx, location, callee, args, [result_type], None);
                     set_calling_convention(self.ctx, call.op_ref(), convention);
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -4184,7 +4185,7 @@ mod tests {
             tribute_core::get_calling_convention(&ctx, *lambda) == Some(CallingConvention::Cps)
                 && closure::Closure::from_type_ref(&ctx, closure_ty)
                     .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
-                    .is_some_and(|callable| callable.params(&ctx).len() == 1)
+                    .is_some_and(|callable| callable.inputs(&ctx).len() == 1)
         });
         let lambda =
             one_parameter_cps.expect("conversion should produce a one-parameter CPS continuation");
@@ -4832,9 +4833,9 @@ mod tests {
             .expect("ability.perform resume has CPS callable provenance");
         let erased = core::Func::from_type_ref(&ctx, erased_function)
             .expect("ability.perform resume has a function signature");
-        assert_eq!(erased.params(&ctx).len(), 3);
+        assert_eq!(erased.inputs(&ctx).len(), 3);
         assert!(
-            type_is(&ctx, erased.params(&ctx)[2], "tribute_rt", "anyref"),
+            type_is(&ctx, erased.inputs(&ctx)[2], "tribute_rt", "anyref"),
             "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
             print_module(&ctx, module.op())
         );
@@ -4847,8 +4848,8 @@ mod tests {
                 cps_closure_function_type(&ctx, ctx.value_ty(capture))
                     .and_then(|function| core::Func::from_type_ref(&ctx, function))
                     .is_some_and(|function| {
-                        function.params(&ctx).len() == 3
-                            && type_is(&ctx, function.params(&ctx)[2], "core", "i32")
+                        function.inputs(&ctx).len() == 3
+                            && type_is(&ctx, function.inputs(&ctx)[2], "core", "i32")
                     })
             }),
             "the erased adapter must capture the declared ResumeExact<I, R>: {}",
@@ -5007,9 +5008,12 @@ mod tests {
                     .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");
-            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
             assert_eq!(
-                callable.params(&ctx).len() + 1,
+                callable.single_result(&ctx).unwrap(),
+                core::never(&mut ctx).as_type_ref()
+            );
+            assert_eq!(
+                callable.inputs(&ctx).len() + 1,
                 ctx.op_operands(tail).len(),
                 "the exact signature covers every tail operand: {printed}"
             );
@@ -5158,15 +5162,18 @@ mod tests {
                     .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");
-            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
             assert_eq!(
-                callable.params(&ctx).len() + 1,
+                callable.single_result(&ctx).unwrap(),
+                core::never(&mut ctx).as_type_ref()
+            );
+            assert_eq!(
+                callable.inputs(&ctx).len() + 1,
                 ctx.op_operands(tail).len(),
                 "the exact signature covers every tail operand: {printed}"
             );
             assert!(
                 callable
-                    .params(&ctx)
+                    .inputs(&ctx)
                     .iter()
                     .zip(&ctx.op_operands(tail)[1..])
                     .all(|(expected, actual)| *expected == ctx.value_ty(*actual)),
@@ -5189,7 +5196,7 @@ mod tests {
             let callable = closure::Closure::from_type_ref(&ctx, closure_ty)
                 .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
                 .unwrap();
-            generated_param_counts.push(callable.params(&ctx).len());
+            generated_param_counts.push(callable.inputs(&ctx).len());
         }
         assert!(generated_param_counts.contains(&2), "{printed}");
 

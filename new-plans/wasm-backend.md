@@ -107,8 +107,8 @@ CPS root가 필요한 export는
 Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계약만
 보존한다. Wasm signature lowering이 CPS signature를 empty-result signature로
 내린 뒤 nil/void machinery에 맞는 wrapper와 ordinary call을 합성한다. Wrapper는 root
-`done_k`가 typed cell을 쓴 뒤 call이 돌아오면 이를 읽는다. Shared `func.call`에
-zero-result 형상을 추가하지 않으며, 이 bridge는 trampoline이나 `anyref` control
+`done_k`가 typed cell을 쓴 뒤 call이 돌아오면 이를 읽는다. Shared `func.call`은
+zero-result 형상을 지원하며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
 
 ### 올바른 꼬리 호출 계약

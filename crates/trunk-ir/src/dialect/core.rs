@@ -137,19 +137,6 @@ impl Func {
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
         self.results(ctx).is_empty()
     }
-
-    /// Compatibility accessor for the one-result code migrated in stage 2.
-    #[doc(hidden)]
-    pub fn r#return(&self, ctx: &IrContext) -> TypeRef {
-        self.single_result(ctx)
-            .expect("one-result core.func expected during staged migration")
-    }
-
-    /// Compatibility accessor for the input list, migrated in stage 2.
-    #[doc(hidden)]
-    pub fn params<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
-        self.inputs(ctx)
-    }
 }
 
 impl DialectType for Func {

@@ -12,6 +12,7 @@ use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType as _;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
@@ -1090,19 +1091,14 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Check if a type is a `core.func` type.
     pub fn is_func_type(&self, ir: &IrContext, ty: TypeRef) -> bool {
-        ir.types
-            .is_dialect(ty, Symbol::new("core"), Symbol::new("func"))
+        core::Func::from_type_ref(ir, ty).is_some()
     }
 
-    /// Get the param count from a core.func type.
-    /// core.func stores params as: [result, param1, param2, ...] (result first).
+    /// Get the input count from a validated `core.func` type.
     pub fn func_type_param_count(&self, ir: &IrContext, ty: TypeRef) -> usize {
-        let td = ir.types.get(ty);
-        if !td.params.is_empty() {
-            td.params.len() - 1 // first param is the result type, rest are param types
-        } else {
-            0
-        }
+        core::Func::from_type_ref(ir, ty)
+            .map(|function| function.inputs(ir).len())
+            .unwrap_or(0)
     }
 }
 
@@ -1176,6 +1172,27 @@ mod tests {
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    #[test]
+    fn resultless_function_param_count_uses_validated_input_list() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("test.trb".to_owned());
+        let ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+        let i32_ty = ctx.i32_type(&mut ir);
+        let resultless = core::func(&mut ir, [i32_ty, i32_ty], []).as_type_ref();
+
+        assert!(ctx.is_func_type(&ir, resultless));
+        assert_eq!(ctx.func_type_param_count(&ir, resultless), 2);
     }
 
     #[test]

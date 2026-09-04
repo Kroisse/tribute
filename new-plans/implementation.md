@@ -455,8 +455,9 @@ completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
 전달한다. `done_k`가 cell을 쓴 뒤 target call이 돌아오면 wrapper가 cell을 읽는다.
 worker frame 계약은 명시적 frame result/layout provenance로 검사하며 closure 이름,
 arity, raw storage, `anyref`에서 추론하지 않는다.
-Shared `func.call`에 zero-result 형상을 추가하지 않으며 nested-module `main`은
-특별하지 않다.
+Shared `func.call` supports zero or one result independently of CPS. Nested-module
+`main` remains ordinary. Target ABI still uses temporary `[core.nil]` encoding
+until the later atomic physical CPS switch.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와

@@ -39,6 +39,7 @@ pub struct RawOperation<'a> {
     /// Optional symbol name parsed from `@name` after `dialect.op`.
     pub sym_name: Option<String>,
     /// Optional function-style parameters: `(%arg: type, ...)`.
+    pub has_func_signature: bool,
     pub func_params: Vec<(&'a str, RawType<'a>)>,
     /// Optional return type from `-> type`.
     pub return_type: Option<RawType<'a>>,
@@ -557,21 +558,28 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     // Optional @symbol (e.g., core.module @test, func.func @main)
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
 
+    ws.parse_next(input)?;
+    // A bare attribute dictionary is generic syntax, even for func.func.
+    let generic_func = dialect == "func" && op_name == "func" && input.starts_with('{');
     // Check custom assembly format registry
     if let Some(fmt) = crate::op_interface::lookup_asm_format(
         crate::Symbol::from_dynamic(dialect),
         crate::Symbol::from_dynamic(op_name),
-    ) {
+    )
+    .filter(|_| !generic_func)
+    {
         return (fmt.parse_fn)(input, results, sym_name);
     }
 
     // Parse either func-style params (%arg: type, ...) or operands (%val, %val)
     // or empty parens ()
+    let mut has_func_signature = false;
     let mut func_params_parsed = Vec::new();
     let mut operands = Vec::new();
 
     ws.parse_next(input)?;
     if input.starts_with('(') {
+        has_func_signature = true;
         // Try func_params first (which includes empty parens)
         if let Ok(params) = func_params.parse_next(input) {
             func_params_parsed = params;
@@ -617,6 +625,7 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         dialect,
         op_name,
         sym_name,
+        has_func_signature,
         func_params: func_params_parsed,
         return_type: return_ty,
         operands,

@@ -1,5 +1,6 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+assertion_line: 471
 expression: result
 ---
 core.module @test {

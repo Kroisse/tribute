@@ -27,7 +27,7 @@ pub fn build_func_type_with_evidence(
 ) -> TypeRef {
     let function = core::Func::from_type_ref(ctx, old_func_ty)
         .expect("build_func_type_with_evidence requires a valid core.func type");
-    let result_ty = function.r#return(ctx);
+    let results = function.results(ctx).to_vec();
     let old_params = function.inputs(ctx);
     let mut type_attrs = ctx.types.get(old_func_ty).attrs.clone();
     type_attrs.remove(core::NUM_INPUTS_ATTR);
@@ -37,7 +37,7 @@ pub fn build_func_type_with_evidence(
     new_params.push(ev_ty);
     new_params.extend_from_slice(old_params);
 
-    core::func_with_attrs(ctx, new_params, [result_ty], type_attrs).as_type_ref()
+    core::func_with_attrs(ctx, new_params, results, type_attrs).as_type_ref()
 }
 
 /// Find the evidence value from the enclosing `func.func`'s entry block.

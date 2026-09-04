@@ -76,7 +76,7 @@ fn print_closure_lambda(
     write!(h, ")")?;
 
     // "-> return_type"
-    // Decompose: result type = closure.closure<core.func<ret, params...>>
+    // Decompose: result type = closure.closure<core.func<(inputs...) -> result>>
     let return_ty = {
         let result_ty = h.ctx().op_result_types(op)[0];
         let closure_ty_data = h.ctx().types.get(result_ty);
@@ -214,7 +214,7 @@ fn parse_closure_lambda<'a>(
         regions.push(region);
     }
 
-    // Reconstruct closure.closure<core.func<return_ty, param_types...>> type
+    // Reconstruct closure.closure<core.func<(param_types...) -> return_ty>> type.
     let return_raw = ret_ty.unwrap_or(RawType::Concrete {
         dialect: "core",
         name: "nil",
@@ -224,13 +224,9 @@ fn parse_closure_lambda<'a>(
 
     let param_raw_types: Vec<RawType<'a>> = params.iter().map(|(_, ty)| ty.clone()).collect();
 
-    // core.func<return_ty, param_types...>
-    let mut func_params_list = vec![return_raw];
-    func_params_list.extend(param_raw_types);
-    let func_raw_ty = RawType::Concrete {
-        dialect: "core",
-        name: "func",
-        params: func_params_list,
+    let func_raw_ty = RawType::Function {
+        inputs: param_raw_types,
+        results: vec![return_raw],
         attrs: vec![],
     };
 
@@ -247,6 +243,7 @@ fn parse_closure_lambda<'a>(
         dialect: "closure",
         op_name: "lambda",
         sym_name,
+        has_func_signature: false,
         func_params: vec![],
         return_type: None,
         operands: captures,

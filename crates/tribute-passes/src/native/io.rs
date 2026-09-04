@@ -115,7 +115,7 @@ impl RewritePattern for NativeWritePattern {
             ctx,
             loc,
             [write.bytes(ctx), write.newline(ctx)],
-            result_ty,
+            [result_ty],
             Symbol::new(WRITE_FN),
         );
         rewriter.replace_op(call.op_ref());
@@ -149,7 +149,7 @@ impl RewritePattern for NativeReadLinePattern {
         let i1_ty = intern_type(ctx, "core", "i1");
         let nil_ty = core::nil(ctx).as_type_ref();
 
-        let descriptor = func::call(ctx, loc, [], ptr_ty, Symbol::new(READ_LINE_FN));
+        let descriptor = func::call(ctx, loc, [], [ptr_ty], Symbol::new(READ_LINE_FN));
         let descriptor_value = descriptor.result(ctx);
         let tag = mem::load(ctx, loc, descriptor_value, i32_ty, TAG_OFFSET);
         let code = mem::load(ctx, loc, descriptor_value, i32_ty, CODE_OFFSET);
@@ -159,7 +159,7 @@ impl RewritePattern for NativeReadLinePattern {
             ctx,
             loc,
             [descriptor_value],
-            nil_ty,
+            [nil_ty],
             Symbol::new(DEALLOC_RESULT_FN),
         );
 

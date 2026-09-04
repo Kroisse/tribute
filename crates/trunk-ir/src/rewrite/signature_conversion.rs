@@ -19,9 +19,8 @@ use crate::types::Attribute;
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
     new_params: Vec<TypeRef>,
-    new_result: TypeRef,
+    new_results: Vec<TypeRef>,
     type_attrs: crate::AttributeMap,
-    params_changed: bool,
     changed: bool,
 }
 
@@ -48,10 +47,13 @@ fn convert_func_signature(
         .iter()
         .any(|(key, value)| data.attrs.get(key) != Some(value));
 
-    let old_result = func.r#return(ctx);
-    let old_params = func.params(ctx);
+    let old_results = func.results(ctx);
+    let old_params = func.inputs(ctx);
 
-    let new_result = converter.convert_type_or_identity(ctx, old_result);
+    let new_results: Vec<_> = old_results
+        .iter()
+        .map(|&ty| converter.convert_type_or_identity(ctx, ty))
+        .collect();
     let new_params: Vec<TypeRef> = old_params
         .iter()
         .map(|&ty| converter.convert_type_or_identity(ctx, ty))
@@ -61,13 +63,12 @@ fn convert_func_signature(
         .iter()
         .zip(old_params.iter())
         .any(|(new, old)| new != old);
-    let result_changed = new_result != old_result;
+    let result_changed = new_results != old_results;
 
     Some(ConvertedSignature {
         new_params,
-        new_result,
+        new_results,
         type_attrs,
-        params_changed,
         changed: params_changed || result_changed || attrs_changed,
     })
 }
@@ -94,7 +95,7 @@ fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
     crate::dialect::core::func_with_attrs(
         ctx,
         sig.new_params.iter().copied(),
-        [sig.new_result],
+        sig.new_results.iter().copied(),
         sig.type_attrs.clone(),
     )
     .as_type_ref()
@@ -182,7 +183,7 @@ fn rewrite_function_signature(
     }
 
     // Update entry block args in-place
-    if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
+    if !update_entry_block_args(ctx, op, &sig.new_params) {
         return false;
     }
 
@@ -487,6 +488,22 @@ mod tests {
     }
 
     #[test]
+    fn resultless_function_type_conversion_preserves_cardinality() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+        let resultless = core::func(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
+        let before = ctx.types.get(resultless).clone();
+        let converter = i32_to_i64_converter(i32_ty, i64_ty);
+
+        let converted = convert_function_type(&mut ctx, resultless, &converter).unwrap();
+        assert_eq!(ctx.types.get(resultless), &before);
+        let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+        assert_eq!(function.inputs(&ctx), [i64_ty, i64_ty]);
+        assert!(function.is_resultless(&ctx));
+    }
+
+    #[test]
     fn wasm_func_signature_conversion() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
@@ -534,66 +551,79 @@ mod tests {
 
     #[test]
     fn bodyless_signatures_convert_without_inventing_bodies() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let i64_ty = i64_type(&mut ctx);
-        let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        for result_count in [0, 1] {
+            let (mut ctx, loc) = test_ctx();
+            let i32_ty = i32_type(&mut ctx);
+            let i64_ty = i64_type(&mut ctx);
+            let results = if result_count == 0 {
+                vec![]
+            } else {
+                vec![i32_ty]
+            };
+            let func_ty = core::func(&mut ctx, [i32_ty], results).as_type_ref();
 
-        let func_decl = make_bodyless_function_op(
-            &mut ctx,
-            loc,
-            Symbol::new("func"),
-            Symbol::new("external"),
-            func_ty,
-        );
-        let wasm_decl = make_bodyless_function_op(
-            &mut ctx,
-            loc,
-            Symbol::new("wasm"),
-            Symbol::new("wasm_external"),
-            func_ty,
-        );
-        let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
-        let wasm_def = make_wasm_func_op(&mut ctx, loc, "wasm_defined", func_ty, &[i32_ty]);
-        let module = make_module(
-            &mut ctx,
-            loc,
-            vec![func_decl, wasm_decl, func_def, wasm_def],
-        );
+            let func_decl = make_bodyless_function_op(
+                &mut ctx,
+                loc,
+                Symbol::new("func"),
+                Symbol::new("external"),
+                func_ty,
+            );
+            let wasm_decl = make_bodyless_function_op(
+                &mut ctx,
+                loc,
+                Symbol::new("wasm"),
+                Symbol::new("wasm_external"),
+                func_ty,
+            );
+            let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
+            let wasm_def = make_wasm_func_op(&mut ctx, loc, "wasm_defined", func_ty, &[i32_ty]);
+            let module = make_module(
+                &mut ctx,
+                loc,
+                vec![func_decl, wasm_decl, func_def, wasm_def],
+            );
 
-        let tc = i32_to_i64_converter(i32_ty, i64_ty);
-        let applicator = PatternApplicator::new(tc)
-            .add_pattern(FuncSignatureConversionPattern)
-            .add_pattern(WasmFuncSignatureConversionPattern);
-        let result = applicator
-            .with_target(ConversionTarget::new())
-            .apply_partial_conversion(&mut ctx, module, "test-boundary")
-            .unwrap();
+            let tc = i32_to_i64_converter(i32_ty, i64_ty);
+            let applicator = PatternApplicator::new(tc)
+                .add_pattern(FuncSignatureConversionPattern)
+                .add_pattern(WasmFuncSignatureConversionPattern);
+            let result = applicator
+                .with_target(ConversionTarget::new())
+                .apply_partial_conversion(&mut ctx, module, "test-boundary")
+                .unwrap();
 
-        assert!(result.reached_fixpoint);
-        assert!(result.total_changes >= 4);
+            assert!(result.reached_fixpoint);
+            assert!(result.total_changes >= 4);
 
-        let ops = module.ops(&ctx);
-        for (index, expected_regions) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
-            let data = ctx.op(ops[index]);
-            assert_eq!(data.regions.len(), expected_regions);
-            let func_ty = data.attributes.get_type("type").unwrap();
-            let function = core::Func::from_type_ref(&ctx, func_ty).unwrap();
-            assert_eq!(function.inputs(&ctx), [i64_ty]);
-            assert_eq!(function.single_result(&ctx), Some(i64_ty));
+            let ops = module.ops(&ctx);
+            for (index, expected_regions) in [(0, 0), (1, 0), (2, 1), (3, 1)] {
+                let data = ctx.op(ops[index]);
+                assert_eq!(data.regions.len(), expected_regions);
+                let func_ty = data.attributes.get_type("type").unwrap();
+                let function = core::Func::from_type_ref(&ctx, func_ty).unwrap();
+                assert_eq!(function.inputs(&ctx), [i64_ty]);
+                assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
+            }
+
+            let text = print_module(&ctx, module.op());
+            let arrow = if result_count == 0 {
+                ""
+            } else {
+                " -> core.i64"
+            };
+            let result = if result_count == 0 { "()" } else { "core.i64" };
+            assert!(text.contains(&format!("func.func @external(%arg0: core.i64){arrow}\n")));
+            assert!(
+                text.contains(&format!("!t0 = core.func<(core.i64) -> {result}>")),
+                "{text}"
+            );
+            assert!(
+                text.contains("wasm.func {sym_name = @wasm_external, type = !t0}\n"),
+                "{text}"
+            );
+            assert!(text.contains(&format!("func.func @defined(%0: core.i64){arrow} {{")));
         }
-
-        let text = print_module(&ctx, module.op());
-        assert!(text.contains("func.func @external(%arg0: core.i64) -> core.i64\n"));
-        assert!(
-            text.contains("!t0 = core.func<(core.i64) -> core.i64>"),
-            "{text}"
-        );
-        assert!(
-            text.contains("wasm.func {sym_name = @wasm_external, type = !t0}\n"),
-            "{text}"
-        );
-        assert!(text.contains("func.func @defined(%0: core.i64) -> core.i64 {"));
     }
 
     #[test]
@@ -645,13 +675,15 @@ mod tests {
             .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
         // Pattern should not match due to arity mismatch.
-        // Block arg type still gets converted by the applicator.
+        // Default shared signature conversion leaves entry arguments unchanged.
         assert!(result.reached_fixpoint);
 
         // Verify original func type attribute is preserved (pattern didn't match)
         let ops = module.ops(&ctx);
         let original_func = wasm::Func::from_op(&ctx, ops[0]).unwrap();
         assert_eq!(original_func.r#type(&ctx), func_ty);
+        let entry = ctx.region(original_func.body(&ctx)).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i32_ty);
     }
 
     #[test]
@@ -674,12 +706,82 @@ mod tests {
             .apply_partial_conversion(&mut ctx, module, "test-boundary")
             .unwrap();
         // Pattern should not match due to arity mismatch.
-        // Block arg type still gets converted by the applicator.
+        // Default shared signature conversion leaves entry arguments unchanged.
         assert!(result.reached_fixpoint);
 
         // Verify original func type attribute is preserved (pattern didn't match)
         let ops = module.ops(&ctx);
         let original_func = func::Func::from_op(&ctx, ops[0]).unwrap();
         assert_eq!(original_func.r#type(&ctx), func_ty);
+        let entry = ctx.region(original_func.body(&ctx)).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i32_ty);
+    }
+}
+
+#[cfg(test)]
+mod result_list_tests {
+    use super::*;
+    use crate::{Symbol, ops::DialectOp, parser::parse_test_module};
+
+    #[test]
+    fn conversion_preserves_all_cardinalities_and_nested_attributes() {
+        for inputs in [0, 2] {
+            for results in [0, 1] {
+                let mut ctx = IrContext::new();
+                let nil = core::nil(&mut ctx).as_type_ref();
+                let ptr = core::ptr(&mut ctx).as_type_ref();
+                let mut attrs = crate::AttributeMap::new();
+                attrs.insert(
+                    Symbol::new("nested"),
+                    Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
+                );
+                attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
+                let signature =
+                    core::func_with_attrs(&mut ctx, vec![nil; inputs], vec![nil; results], attrs)
+                        .as_type_ref();
+                let mut converter = TypeConverter::new();
+                converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
+                let converted = convert_function_type(&mut ctx, signature, &converter).unwrap();
+                let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+                assert_eq!(function.inputs(&ctx), vec![ptr; inputs]);
+                assert_eq!(function.results(&ctx), vec![ptr; results]);
+                assert_eq!(
+                    ctx.types.get(converted).attrs.get("nested"),
+                    Some(&Attribute::List(vec![Attribute::List(vec![
+                        Attribute::Type(ptr)
+                    ])]))
+                );
+                assert_eq!(
+                    ctx.types.get(converted).attrs.get_symbol("tag"),
+                    Some(Symbol::new("keep"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signature_rewrite_rejects_entry_mismatch_atomically() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @m { func.func @f(%x: core.nil) { func.return } }",
+        );
+        let op = module.ops(&ctx)[0];
+        let function = func::Func::from_op(&ctx, op).unwrap();
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let bad_signature = core::func(&mut ctx, [nil, nil], []).as_type_ref();
+        ctx.op_mut(op)
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(bad_signature));
+        let before = crate::printer::print_module(&ctx, module.op());
+        let mut converter = TypeConverter::new();
+        converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
+        let mut rewriter = PatternRewriter::new(&converter);
+        assert!(!FuncSignatureConversionPattern.match_and_rewrite(&mut ctx, op, &mut rewriter));
+        assert_eq!(ctx.op(op).attributes.get_type("type"), Some(bad_signature));
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), nil);
+        assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
     }
 }

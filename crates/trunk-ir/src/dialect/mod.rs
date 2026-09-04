@@ -77,7 +77,7 @@ mod tests {
         let v2 = c2.result(&ctx);
 
         // Create func.call with variadic args
-        let call = super::func::call(&mut ctx, loc, [v1, v2], i32_ty, Symbol::new("add"));
+        let call = super::func::call(&mut ctx, loc, [v1, v2], [i32_ty], Symbol::new("add"));
 
         // Verify from_op
         let call2 =
@@ -341,10 +341,13 @@ mod tests {
         let call = super::func::call_indirect(
             &mut ctx,
             loc,
-            v1,     // callee
-            [v2],   // args
-            i32_ty, // result type
-            None,   // exact signature
+            v1, // callee
+            [v2],
+            [
+                // args
+                i32_ty,
+            ], // result type
+            None, // exact signature
         );
 
         assert_eq!(call.callee(&ctx), v1);

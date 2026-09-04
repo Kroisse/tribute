@@ -374,7 +374,7 @@ mod tests {
                 ctx,
                 loc,
                 std::iter::empty(),
-                i32_ty,
+                [i32_ty],
                 Symbol::from_dynamic(callee),
             );
             ctx.push_op(entry, call.op_ref());

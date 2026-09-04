@@ -291,7 +291,9 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         // This will panic if a non-binary intrinsic is ever added to the map.
         let function = core::Func::from_type_ref(ctx, func_ty)
             .expect("mapped intrinsic declaration must have a valid core.func type");
-        let return_ty = function.r#return(ctx);
+        let Some(return_ty) = function.single_result(ctx) else {
+            return false;
+        };
         let param_tys: Vec<TypeRef> = function.inputs(ctx).to_vec();
 
         // Build a new body: entry block with params → arith op → func.return

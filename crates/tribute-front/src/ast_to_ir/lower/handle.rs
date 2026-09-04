@@ -326,7 +326,7 @@ fn build_cps_body<'db>(
         location,
         body_closure,
         vec![super::control::continuation_abi(done_k)],
-        result_ty,
+        [result_ty],
         None,
     );
     builder.ir.push_op(builder.block, call_op.op_ref());

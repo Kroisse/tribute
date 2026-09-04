@@ -113,7 +113,7 @@ impl RewritePattern for WritePattern {
             ctx,
             ctx.op(op).location,
             [write.bytes(ctx), write.newline(ctx)],
-            ctx.op_result_types(op)[0],
+            [ctx.op_result_types(op)[0]],
             Symbol::new(WRITE_HELPER),
         );
         rewriter.replace_op(call.op_ref());

@@ -18,6 +18,7 @@ use winnow::prelude::*;
 use super::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
 use crate::Symbol;
 use crate::context::{IrContext, OperationDataBuilder};
+use crate::ops::DialectType;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -432,14 +433,12 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Handle func-style signature → core.func type
-        let is_func_op = raw.dialect == "func" && raw.op_name == "func";
         let has_func_signature =
-            is_func_op || raw.return_type.is_some() || !raw.func_params.is_empty();
+            raw.has_func_signature || raw.return_type.is_some() || !raw.func_params.is_empty();
         if has_func_signature {
             let results = match raw.return_type.as_ref() {
                 Some(t) => vec![self.build_type(t)?],
-                None if is_func_op => vec![],
-                None => vec![crate::dialect::core::nil(self.ctx).as_type_ref()],
+                None => vec![],
             };
 
             let param_types: Vec<TypeRef> = raw
@@ -449,7 +448,22 @@ impl<'a> ArenaIrBuilder<'a> {
                 .collect::<Result<_, _>>()?;
 
             let func_ty = crate::dialect::core::func(self.ctx, param_types, results).as_type_ref();
-            attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+            if let Some(explicit) = attributes.get_type("type") {
+                let signature = crate::dialect::core::Func::from_type_ref(self.ctx, explicit);
+                let synthesized =
+                    crate::dialect::core::Func::from_type_ref(self.ctx, func_ty).unwrap();
+                if signature.is_none_or(|signature| {
+                    signature.inputs(self.ctx) != synthesized.inputs(self.ctx)
+                        || signature.results(self.ctx) != synthesized.results(self.ctx)
+                }) {
+                    return Err(ParseError {
+                        message: "explicit function type does not match custom signature".into(),
+                        offset: 0,
+                    });
+                }
+            } else {
+                attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+            }
         }
 
         // Resolve successors
@@ -925,7 +939,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let call = func::call(&mut ctx, loc, [], i32_ty, Symbol::new("callee"));
+        let call = func::call(&mut ctx, loc, [], [i32_ty], Symbol::new("callee"));
         ctx.push_op(entry2, call.op_ref());
         let call_val = call.result(&ctx);
         let ret2 = func::r#return(&mut ctx, loc, [call_val]);
@@ -1254,11 +1268,13 @@ core.module @test {
     #[test]
     fn test_func_type_rejects_reserved_textual_attributes() {
         for reserved in [core::NUM_INPUTS_ATTR, core::NUM_RESULTS_ATTR] {
-            let input =
-                format!("core.module @test {{ !bad = core.func<() -> ()> {{{reserved} = 0}} }}");
-            let mut ctx = IrContext::new();
-            let error = parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
-            assert!(error.message.contains("reserved by core.func"), "{error}");
+            for form in ["core.func<() -> ()>", "core.func(core.nil)"] {
+                let input = format!("core.module @test {{ !bad = {form} {{{reserved} = 0}} }}");
+                let mut ctx = IrContext::new();
+                let error =
+                    parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
+                assert!(error.message.contains("reserved by core.func"), "{error}");
+            }
         }
     }
 
@@ -1271,20 +1287,19 @@ core.module @test {
     }
 
     #[test]
-    fn test_resultless_func_op_omits_arrow_and_keeps_empty_results() {
+    fn test_no_arrow_func_op_preserves_zero_results() {
         let input = r#"core.module @test {
   func.func @consume(%value: core.i32) {
     func.return
   }
 }"#;
         let mut ctx = IrContext::new();
-        let module = parse_module(&mut ctx, input).expect("resultless function should parse");
+        let module = parse_module(&mut ctx, input).expect("Unit function should parse");
         let printed = print_module(&ctx, module);
         assert!(
             printed.contains("func.func @consume(%0: core.i32) {"),
             "{printed}"
         );
-        assert!(!printed.contains("@consume(%0: core.i32) ->"), "{printed}");
 
         let module_view = crate::rewrite::Module::new(&ctx, module).unwrap();
         let function = func::Func::from_op(&ctx, module_view.ops(&ctx)[0]).unwrap();

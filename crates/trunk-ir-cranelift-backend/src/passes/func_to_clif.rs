@@ -255,15 +255,17 @@ impl RewritePattern for FuncCallIndirectPattern {
             let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
                 return false;
             };
-            let callable_result = callable.r#return(ctx);
+            let Some(callable_result) = callable.single_result(ctx) else {
+                return false;
+            };
             let results_match = if crate::function::is_nil_type(ctx, callable_result) {
                 result_types.is_empty()
             } else {
                 result_types == [callable_result]
             };
-            if callable.params(ctx).len() != CallLike::call_args(&call, ctx).len()
+            if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
                 || callable
-                    .params(ctx)
+                    .inputs(ctx)
                     .iter()
                     .zip(CallLike::call_args(&call, ctx))
                     .any(|(&param, &arg)| param != ctx.value_ty(arg))
@@ -392,11 +394,11 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
             return false;
         };
-        if callable.r#return(ctx) != core::nil(ctx).as_type_ref()
+        if callable.single_result(ctx) != Some(core::nil(ctx).as_type_ref())
             || !TailCallLike::is_resultless(&tail, ctx)
-            || callable.params(ctx).len() != CallLike::call_args(&tail, ctx).len()
+            || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
             || callable
-                .params(ctx)
+                .inputs(ctx)
                 .iter()
                 .zip(CallLike::call_args(&tail, ctx))
                 .any(|(&param, &arg)| param != ctx.value_ty(arg))

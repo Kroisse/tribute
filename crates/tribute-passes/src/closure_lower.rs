@@ -338,7 +338,7 @@ impl RewritePattern for LowerClosureCallArena {
             loc,
             table_idx,
             new_args,
-            callee_return_ty,
+            [callee_return_ty],
             Some(signature),
         );
         if exact_contract.is_some() {
@@ -497,11 +497,11 @@ fn exact_physical_call_contract(
     (get_physical_closure_convention(ctx, closure_ty) == Some(convention)).then_some(())?;
     let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
     let callable = core::Func::from_type_ref(ctx, function)?;
-    if callable.r#return(ctx) != result || callable.params(ctx).len() != args.len() {
+    if callable.results(ctx) != [result] || callable.inputs(ctx).len() != args.len() {
         return None;
     }
     let mut casts = Vec::new();
-    for (index, (argument, expected)) in args.iter().zip(callable.params(ctx)).enumerate() {
+    for (index, (argument, expected)) in args.iter().zip(callable.inputs(ctx)).enumerate() {
         let actual = ctx.value_ty(*argument);
         if actual != *expected {
             if !is_closure_struct_type_ref(ctx, actual) {
@@ -521,7 +521,7 @@ fn exact_physical_call_contract(
     if environment_index > args.len() {
         return None;
     }
-    let mut params = callable.params(ctx).to_vec();
+    let mut params = callable.inputs(ctx).to_vec();
     params.insert(environment_index, environment);
     let mut type_attrs = ctx.types.get(function).attrs.clone();
     type_attrs.remove(core::NUM_INPUTS_ATTR);
@@ -1250,7 +1250,7 @@ mod tests {
 
         let physical = closure_struct_type_ref(&mut ctx);
         let signature = core::Func::from_type_ref(&ctx, run.r#type(&ctx)).unwrap();
-        assert_eq!(signature.params(&ctx), [physical]);
+        assert_eq!(signature.inputs(&ctx), [physical]);
         assert_eq!(
             ctx.value_ty(ctx.block_args(ctx.region(run.body(&ctx)).blocks[0])[0]),
             physical
@@ -1344,7 +1344,7 @@ mod tests {
         assert_eq!(ctx.op_operands(tail)[4], dispatch);
         assert_eq!(ctx.op_operands(tail)[5], value);
         assert_eq!(
-            callable.params(&ctx),
+            callable.inputs(&ctx),
             ctx.op_operands(tail)[1..]
                 .iter()
                 .map(|&operand| ctx.value_ty(operand))

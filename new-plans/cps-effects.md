@@ -343,10 +343,9 @@ signature로 바꾼 뒤 실제 wrapper와 ordinary call을 합성한다. Wasm은
 machinery처럼 target이 지원하는 표현을 사용한다. Root `done_k`는 source result를
 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
-전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다. Shared
-`core.func<Return, ...>`와 `func.call`의 단일 logical result 계약을 유지하고 새
-zero-result call 형상을 요구하지 않으며 두 번째 control carrier도 도입하지
-않는다. 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
+전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다. Shared `core.func` and `func.call` support zero or one result. Logical CPS
+producers retain `[core.never]`; current target ABI uses temporary `[core.nil]`
+until the later atomic empty-result switch. No second control carrier is introduced. 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
 control carrier가 아니다.
 
 ### `handle`: evidence extension + handler closures

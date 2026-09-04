@@ -449,7 +449,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let call = func::call(ctx, loc, std::iter::empty(), i32_ty, sym_callee);
+        let call = func::call(ctx, loc, std::iter::empty(), [i32_ty], sym_callee);
         let call_result = call.result(ctx);
         ctx.push_op(entry, call.op_ref());
         let ret = func::r#return(ctx, loc, [call_result]);
@@ -672,7 +672,7 @@ mod tests {
             &mut ctx,
             loc,
             std::iter::empty(),
-            i32_ty,
+            [i32_ty],
             Symbol::new("helper"),
         );
         ctx.push_op(entry, call.op_ref());
