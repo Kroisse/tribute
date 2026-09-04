@@ -215,18 +215,11 @@ fn parse_closure_lambda<'a>(
     }
 
     // Reconstruct closure.closure<core.func<(param_types...) -> return_ty>> type.
-    let return_raw = ret_ty.unwrap_or(RawType::Concrete {
-        dialect: "core",
-        name: "nil",
-        params: vec![],
-        attrs: vec![],
-    });
-
     let param_raw_types: Vec<RawType<'a>> = params.iter().map(|(_, ty)| ty.clone()).collect();
 
     let func_raw_ty = RawType::Function {
         inputs: param_raw_types,
-        results: vec![return_raw],
+        results: ret_ty.into_iter().collect(),
         attrs: vec![],
     };
 
@@ -524,6 +517,32 @@ mod tests {
         });
         let reprinted = trunk_ir::printer::print_module(&ctx2, op2);
         assert_eq!(printed, reprinted, "Round-trip mismatch:\n{printed}");
+    }
+
+    #[test]
+    fn review_lambda_result_cardinality_roundtrip() {
+        for result in [None, Some("core.nil"), Some("core.never"), Some("core.i32")] {
+            let arrow = result.map(|ty| format!(" -> {ty}")).unwrap_or_default();
+            let text = format!(
+                "core.module @test {{ %f = closure.lambda(){arrow} {{ func.unreachable }} }}"
+            );
+            let mut ctx = IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
+            let lambda = module.ops(&ctx)[0];
+            let signature = trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda)
+                .flatten()
+                .expect("lambda signature");
+            assert_eq!(signature.results(&ctx).len(), usize::from(result.is_some()));
+            if let Some(name) = result {
+                assert_eq!(
+                    ctx.types.get(signature.results(&ctx)[0]).name.to_string(),
+                    name.strip_prefix("core.").unwrap()
+                );
+            }
+            let printed = trunk_ir::printer::print_module(&ctx, module.op());
+            assert_roundtrip(&printed);
+            assert_eq!(printed.contains(" -> "), result.is_some());
+        }
     }
 
     #[test]

@@ -338,8 +338,9 @@ CPS entry와 `done_k`의 result는 `core.never`이며,
 `func.tail_call`과 `func.tail_call_indirect` verifier도 caller/callee의
 `core.never` 일치를 검사한다.
 
-Target signature lowering은 이 CPS signature를 native/Wasm empty-result
-signature로 바꾼 뒤 실제 wrapper와 ordinary call을 합성한다. Wasm은 nil/void
+최종 계약에서는 atomic physical CPS switch 이후 target signature lowering이
+이 CPS signature를 native/Wasm empty-result signature로 바꾼 뒤 실제 wrapper와
+ordinary call을 합성한다. 현재 구현은 임시 `[core.nil]` target encoding을 쓴다. Wasm은 nil/void
 machinery처럼 target이 지원하는 표현을 사용한다. Root `done_k`는 source result를
 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에

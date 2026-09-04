@@ -296,12 +296,13 @@ pub(crate) fn collect_call_indirect_types(
     // call_indirect types should start after that
     let mut next_type_idx = (gc_type_count + func_type_count) as u32;
     let mut new_types = Vec::new();
+    let mut staged_indices = type_idx_by_type.clone();
 
     let body = module.body(ctx).unwrap();
     collect_from_region(
         ctx,
         body,
-        type_idx_by_type,
+        &mut staged_indices,
         &mut next_type_idx,
         &mut new_types,
         None, // No enclosing function at module level
@@ -310,6 +311,7 @@ pub(crate) fn collect_call_indirect_types(
     // Sort by type index to ensure they are emitted in order
     new_types.sort_by_key(|(idx, _)| *idx);
 
+    *type_idx_by_type = staged_indices;
     Ok(new_types)
 }
 
@@ -392,6 +394,41 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    #[test]
+    fn review_late_signature_error_preserves_seeded_indices() {
+        for dialect in ["wasm", "func"] {
+            let mut ctx = IrContext::new();
+            let text = format!(
+                "core.module @m {{
+                wasm.func {{sym_name = @good, type = core.func<() -> core.i32>}} {{
+                    %callee = wasm.i32_const {{value = 0}} : core.i32
+                    %value = wasm.call_indirect %callee : core.i32
+                    wasm.return %value
+                }}
+                {dialect}.func {{sym_name = @bad, type = core.func<() -> ()>}} {{}}
+            }}"
+            );
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
+            let seed = core::func(&mut ctx, [], []).as_type_ref();
+            let mut indices = HashMap::from([(seed, 7)]);
+            let before = indices.clone();
+            let error =
+                collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap_err();
+            assert!(error.to_string().contains("one-result core.func"));
+            assert_eq!(indices, before);
+            let bad = module.ops(&ctx)[1];
+            trunk_ir::rewrite::erase_op(&mut ctx, bad);
+            let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
+            assert_eq!(
+                added.len(),
+                1,
+                "the earlier call must register a new signature"
+            );
+            assert_eq!(indices.len(), 2);
+            assert_eq!(indices[&seed], 7);
+        }
+    }
+
     #[test]
     fn unsupported_resultless_function_is_rejected_before_collection() {
         let mut ctx = IrContext::new();

@@ -302,9 +302,14 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         };
         ws.parse_next(input)?;
         '>'.parse_next(input)?;
-        let attrs = opt(preceded(ws, raw_attr_dict))
-            .parse_next(input)?
-            .unwrap_or_default();
+        // An empty dictionary is indistinguishable from an empty operation body.
+        // Only consume nonempty type attributes, leaving `{}` for the region parser.
+        let attrs = opt(preceded(
+            ws,
+            raw_attr_dict.verify(|attrs: &Vec<_>| !attrs.is_empty()),
+        ))
+        .parse_next(input)?
+        .unwrap_or_default();
         return Ok(RawType::Function {
             inputs,
             results,

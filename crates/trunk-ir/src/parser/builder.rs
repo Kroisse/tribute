@@ -1204,6 +1204,34 @@ core.module @test {
     // ================================================================
 
     #[test]
+    fn review_function_result_type_preserves_empty_body() {
+        for attrs in ["", " {effect = core.nil}"] {
+            let input = format!(
+                "core.module @test {{ func.func @f() -> core.func<() -> ()>{attrs} {{}} }}"
+            );
+            let mut ctx = IrContext::new();
+            let module = parse_module(&mut ctx, &input).unwrap();
+            let function = ctx
+                .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+                .ops[0];
+            assert_eq!(
+                ctx.op(function).regions.len(),
+                1,
+                "empty body must not become a declaration"
+            );
+            assert_roundtrip(&ctx, module);
+            let printed = print_module(&ctx, module);
+            let mut reparsed = IrContext::new();
+            let module2 = parse_module(&mut reparsed, &printed).unwrap();
+            let function2 = reparsed
+                .block(reparsed.region(reparsed.op(module2).regions[0]).blocks[0])
+                .ops[0];
+            assert_eq!(reparsed.op(function2).regions.len(), 1);
+            assert_eq!(printed.contains("effect = core.nil"), !attrs.is_empty());
+        }
+    }
+
+    #[test]
     fn test_canonical_func_type_roundtrips_all_supported_arities() {
         let input = r#"core.module @test {
   !zero_zero = core.func<() -> ()>

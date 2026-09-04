@@ -179,11 +179,13 @@ impl RewritePattern for FuncFuncPattern {
         let func_type_attr = data.attributes.get_type("type");
 
         let mut new_attrs = data.attributes.clone();
-        if let Some(func_ty) = func_type_attr
-            && let Some(new_func_ty) = trunk_ir::rewrite::convert_function_type(ctx, func_ty, tc)
-        {
-            new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
-        }
+        let Some(func_ty) = func_type_attr else {
+            return false;
+        };
+        let Some(new_func_ty) = trunk_ir::rewrite::convert_function_type(ctx, func_ty, tc) else {
+            return false;
+        };
+        new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -561,6 +563,37 @@ mod tests {
         let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter).unwrap();
         print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn review_invalid_function_signature_does_not_move_body() {
+        use trunk_ir::rewrite::PatternApplicator;
+        for malformed in [false, true] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                "core.module @m { func.func @f(%x: core.i32) -> core.i32 { func.return %x } }",
+            );
+            let op = module.ops(&ctx)[0];
+            if malformed {
+                let ty = ctx
+                    .types
+                    .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+                ctx.op_mut(op)
+                    .attributes
+                    .insert(Symbol::new("type"), trunk_ir::Attribute::Type(ty));
+            } else {
+                ctx.op_mut(op).attributes.remove("type");
+            }
+            let before = print_module(&ctx, module.op());
+            let regions = ctx.op(op).regions.clone();
+            PatternApplicator::new(TypeConverter::new())
+                .add_pattern(super::FuncFuncPattern)
+                .apply_partial(&mut ctx, module);
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.ops(&ctx)[0], op);
+            assert_eq!(ctx.op(op).regions, regions);
+        }
     }
 
     #[test]
