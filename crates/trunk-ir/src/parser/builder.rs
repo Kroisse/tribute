@@ -448,6 +448,12 @@ impl<'a> ArenaIrBuilder<'a> {
                 .collect::<Result<_, _>>()?;
 
             let func_ty = crate::dialect::core::func(self.ctx, param_types, results).as_type_ref();
+            if attributes.contains_key("type") && attributes.get_type("type").is_none() {
+                return Err(ParseError {
+                    message: "explicit function type attribute must be a type".into(),
+                    offset: 0,
+                });
+            }
             if let Some(explicit) = attributes.get_type("type") {
                 let signature = crate::dialect::core::Func::from_type_ref(self.ctx, explicit);
                 let synthesized =

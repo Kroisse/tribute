@@ -863,11 +863,20 @@ assembly retains an explicit type when needed to preserve type attributes and
 validates its agreement with the decomposed signature. Shared conversion maps
 every input/result and nested type attribute, preserving cardinality, and
 checks entry argument arity before changing the signature or entry arguments.
-`validate_function_contracts` provides the closed-module check for complete
-call/return/tail contracts, separate from local operation verification. It
-requires uniquely resolvable declarations, including runtime callees; adopting
-that gate in compatibility pipelines with undeclared runtime symbols is deferred
-to their integration.
+Normal `validate_all` combines local operation checks with contextual shared
+function-contract checks. Local checks enforce zero/one ordinary-call results,
+resultless terminators, and exact typed indirect operand/result agreement.
+Contextual checks verify returns, caller/callee tail result lists, and direct
+calls whose declarations are available. An undeclared runtime callee has no
+inferred signature; it does not exempt other known contracts from validation.
+Duplicate, malformed, or non-callable declarations are errors.
+
+Callable region ownership comes from a dialect-registered operation interface,
+not unqualified operation names. `func.func` exposes its explicit function type;
+`closure.lambda` exposes the function type inside its result closure type. The
+nearest registered owner is authoritative, including when its signature is
+malformed. Shared validation does not infer a lambda signature from an attribute
+or an outer function, and does not select a physical CPS ABI.
 
 Existing source producers remain one-result. Backend zero-result readiness and
 the `[core.never]` to `[]` target switch follow in later atomic changes. Current

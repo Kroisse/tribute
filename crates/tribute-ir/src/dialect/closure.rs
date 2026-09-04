@@ -263,6 +263,24 @@ inventory::submit! {
     }
 }
 
+impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
+    fn callable_signature(
+        self,
+        ctx: &trunk_ir::IrContext,
+    ) -> Option<trunk_ir::dialect::core::Func> {
+        use trunk_ir::ops::DialectType;
+        let [result] = ctx.op_result_types(self.op_ref()) else {
+            return None;
+        };
+        let closure = Closure::from_type_ref(ctx, *result)?;
+        let [function] = ctx.types.get(closure.as_type_ref()).params.as_slice() else {
+            return None;
+        };
+        trunk_ir::dialect::core::Func::from_type_ref(ctx, *function)
+    }
+}
+inventory::submit! { trunk_ir::op_interface::CallableOwnerOps::register::<Lambda>() }
+
 #[cfg(test)]
 mod tests {
     use trunk_ir::Span;
@@ -584,5 +602,85 @@ mod tests {
   }
 }"#,
         );
+    }
+}
+
+#[cfg(test)]
+mod malformed_owner_tests {
+    use trunk_ir::{
+        dialect::{core, func},
+        ops::DialectOp,
+    };
+    #[test]
+    fn malformed_lambda_owner_never_falls_back_to_outer_function() {
+        for transfer in [
+            "func.tail_call_indirect %k",
+            "func.tail_call {callee = @runtime}",
+        ] {
+            let mut ctx = trunk_ir::IrContext::new();
+            let input = "core.module @m {
+          func.func @host() -> core.never {
+            %lambda = closure.lambda(%k: core.func<() -> core.never>) -> core.never [] {
+              func.tail_call_indirect %k
+            }
+            func.unreachable
+          }
+        }";
+            let input = input.replace("func.tail_call_indirect %k", transfer);
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
+            assert!(trunk_ir::validation::validate_all(&ctx, module).is_ok());
+            let host = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+            let lambda = ctx.block(ctx.region(host.body(&ctx)).blocks[0]).ops[0];
+            assert!(super::Lambda::matches(&ctx, lambda));
+            let nil = core::nil(&mut ctx).as_type_ref();
+            ctx.set_op_result_type(lambda, 0, nil);
+            assert_eq!(
+                trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda),
+                Some(None)
+            );
+            let result = trunk_ir::validation::validate_all(&ctx, module);
+            assert!(
+                result
+                    .to_string()
+                    .contains("requires registered enclosing callable signature"),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod callable_owner_regressions {
+    #[test]
+    fn normal_validation_checks_nearest_lambda_tail_results() {
+        for (callee_result, succeeds) in [("core.never", true), ("core.nil", false)] {
+            let mut ctx = trunk_ir::IrContext::new();
+            let input = format!(
+                "core.module @m {{
+              func.func @host() {{
+                %outer = closure.lambda() -> core.i32 [] {{
+                  %inner = closure.lambda(%k: core.func<() -> {callee_result}>) -> core.never [] {{
+                    func.tail_call_indirect %k
+                  }}
+                  %v = arith.const {{value = 0}} : core.i32
+                  func.return %v
+                }}
+                func.return
+              }}
+            }}"
+            );
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
+            let result = trunk_ir::validation::validate_all(&ctx, module);
+            if succeeds {
+                assert!(result.is_ok(), "{result}");
+            } else {
+                assert!(
+                    result
+                        .to_string()
+                        .contains("tail caller/callee result lists differ"),
+                    "{result}"
+                );
+            }
+        }
     }
 }

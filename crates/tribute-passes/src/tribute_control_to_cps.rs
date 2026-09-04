@@ -5710,3 +5710,32 @@ mod tests {
         assert!(!printed.contains("tribute_control."));
     }
 }
+
+#[cfg(test)]
+mod shared_contract_boundary_regressions {
+    use super::verify_tribute_control_post_cps;
+    #[test]
+    fn post_cps_boundary_checks_known_ordinary_calls_and_returns() {
+        let valid = "core.module @m {
+          func.func @identity(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+            func.return %x
+          }
+          func.func @caller(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+            %r = func.call %x {callee = @identity, tribute.calling_convention = 0} : core.i32
+            func.return %r
+          }
+        }";
+        let mut ctx = trunk_ir::IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
+        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        for (from, to, expected) in [
+            ("} : core.i32", "} : core.nil", "call result list mismatch"),
+            ("func.return %x", "func.return", "return count mismatch"),
+        ] {
+            let mut ctx = trunk_ir::IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &valid.replace(from, to));
+            let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+}

@@ -396,6 +396,16 @@ inventory::submit! {
     }
 }
 
+impl crate::op_interface::CallableOwnerModel for Func {
+    fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::core::Func> {
+        ctx.op(self.op_ref())
+            .attributes
+            .get_type("type")
+            .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty))
+    }
+}
+inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,7 +498,7 @@ mod result_list_tests {
     use crate::parser::parse_module;
     use crate::printer::print_module;
     use crate::rewrite::Module;
-    use crate::validation::validate_function_contracts;
+    use crate::validation::validate_all;
     use crate::{IrContext, Symbol};
 
     #[test]
@@ -558,7 +568,7 @@ mod result_list_tests {
     fn verify(input: &str) -> String {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        validate_function_contracts(&ctx, module).to_string()
+        validate_all(&ctx, module).to_string()
     }
 
     #[test]
@@ -609,7 +619,11 @@ mod result_list_tests {
                 "signature = core.func<(core.i64) -> ()>",
                 "exact indirect signature differs",
             ),
-            ("callee = @sink", "callee = @unknown", "uniquely resolved"),
+            (
+                "callee = @sink",
+                "callee = 1",
+                "requires symbol callee attribute",
+            ),
         ] {
             let text = verify(&valid.replace(old, new));
             assert!(text.contains(expected), "{expected}: {text}");
@@ -624,5 +638,93 @@ mod result_list_tests {
             errors.contains("call argument #1 type mismatch"),
             "{errors}"
         );
+    }
+}
+
+#[cfg(test)]
+mod owner_identity_tests {
+    #[test]
+    fn operation_name_and_type_attribute_do_not_establish_ownership() {
+        let mut ctx = crate::IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m {
+          func.func @f(%k: core.func<() -> core.never>) -> core.never {
+            test.lambda {type = core.func<() -> core.nil>} { func.tail_call_indirect %k }
+            func.unreachable
+          }
+        }",
+        );
+        let result = crate::validation::validate_all(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn missing_runtime_symbols_do_not_hide_known_invalid_declarations() {
+        for declaration in [
+            "func.func @f() func.func @f()",
+            "test.object {sym_name = @f}",
+        ] {
+            let mut ctx = crate::IrContext::new();
+            let input = format!(
+                "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
+            );
+            let module = crate::parser::parse_test_module(&mut ctx, &input);
+            let result = crate::validation::validate_all(&ctx, module);
+            assert!(
+                result
+                    .to_string()
+                    .contains("uniquely resolved valid callable"),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod normal_validation_regressions {
+    #[test]
+    fn normal_validation_rejects_known_contract_mismatches() {
+        for (body, expected) in [
+            (
+                "%a, %b = func.call {callee = @runtime} : core.i32, core.i32\nfunc.return",
+                "multiple call results",
+            ),
+            (
+                "%a, %b = func.call_indirect %k : core.i32, core.i32\nfunc.return",
+                "multiple call results",
+            ),
+            (
+                "%a = func.call {callee = @sink} : core.i32\nfunc.return",
+                "call result list mismatch",
+            ),
+            (
+                "%a = func.call_indirect %k : core.i32\nfunc.return",
+                "call result list mismatch",
+            ),
+            ("func.return %k", "return count mismatch"),
+        ] {
+            let mut ctx = crate::IrContext::new();
+            let input = format!(
+                "core.module @m {{ func.func @sink() func.func @run(%k: core.func<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+            );
+            let module = crate::parser::parse_test_module(&mut ctx, &input);
+            let result = crate::validation::validate_all(&ctx, module);
+            assert!(
+                result.to_string().contains(expected),
+                "{expected}: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_explicit_custom_function_type_is_rejected() {
+        let mut ctx = crate::IrContext::new();
+        let error = crate::parser::parse_module(
+            &mut ctx,
+            "core.module @m { func.func @f() attributes {type = 1} }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("type attribute"), "{error}");
     }
 }
