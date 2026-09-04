@@ -1238,6 +1238,7 @@ fn lower_constructor<'db>(
         &ctor.resolved,
         ctor.ty,
     );
+    let values = super::expr::cast_variant_args(builder, location, values, type_attr, variant);
     let variant = adt::variant_new(builder.ir, location, values, result_ty, type_attr, variant);
     builder.ir.push_op(builder.block, variant.op_ref());
     Some(variant.result(builder.ir))
