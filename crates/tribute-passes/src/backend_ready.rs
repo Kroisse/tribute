@@ -415,6 +415,39 @@ mod tests {
     }
 
     #[test]
+    fn malformed_function_counts_are_rejected_at_each_backend_boundary() {
+        for (dialect, backend) in [
+            ("clif", TributeBackend::Native),
+            ("wasm", TributeBackend::Wasm),
+        ] {
+            let mut ctx = IrContext::new();
+            let text = format!(
+                "core.module @m {{ {dialect}.func @f() -> core.nil {{ {dialect}.return }} }}"
+            );
+            let module = parse_test_module(&mut ctx, &text);
+            let op = module.ops(&ctx)[0];
+            let ty = ctx.op(op).attributes.get_type("type").unwrap();
+            let mut malformed = ctx.types.get(ty).clone();
+            malformed.attrs.remove(core::NUM_RESULTS_ATTR);
+            let malformed = ctx.types.intern(malformed);
+            ctx.op_mut(op)
+                .attributes
+                .insert(Symbol::new("type"), Attribute::Type(malformed));
+            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let error = match backend {
+                TributeBackend::Native => verify_native_backend_ready(&ctx, module),
+                TributeBackend::Wasm => verify_wasm_backend_ready(&ctx, module),
+            }
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("malformed `core.func`"),
+                "{error}"
+            );
+            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
     fn accepts_textual_backend_functions() {
         for (ir, backend) in [
             (

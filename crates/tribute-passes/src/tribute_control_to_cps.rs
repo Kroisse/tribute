@@ -3985,6 +3985,50 @@ mod tests {
         (ctx, module)
     }
 
+    #[test]
+    fn shared_function_conversion_preserves_lists_and_nested_attributes() {
+        let (mut ctx, module) =
+            parse("core.module @m { func.func @placeholder() { func.return } }");
+        let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let i32_ty = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+        );
+        let source_callable = tribute_control::callable(
+            &mut ctx,
+            i32_ty,
+            vec![i32_ty],
+            tribute_control::CallingConvention::Direct,
+        )
+        .as_type_ref();
+        for results in [vec![], vec![source_callable]] {
+            let attrs = AttributeMap::from_iter([(
+                Symbol::new("nested"),
+                Attribute::Type(source_callable),
+            )]);
+            let source = core::func_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
+                .as_type_ref();
+            let mut converter = Converter::new(&mut ctx, block, HashMap::new(), module.op());
+            let converted = converter.convert_type(source);
+            assert_eq!(
+                converter.convert_type(source),
+                converted,
+                "cached conversion must be stable"
+            );
+            let converted_callable = converter.convert_type(source_callable);
+            let function = core::Func::from_type_ref(converter.ctx, converted).unwrap();
+            assert_ne!(converted_callable, source_callable);
+            assert_eq!(function.inputs(converter.ctx), [converted_callable]);
+            assert_eq!(function.results(converter.ctx).len(), results.len());
+            if !results.is_empty() {
+                assert_eq!(function.results(converter.ctx), [converted_callable]);
+            }
+            assert_eq!(
+                converter.ctx.types.get(converted).attrs.get_type("nested"),
+                Some(converted_callable)
+            );
+        }
+    }
+
     fn operation_declarations(
         ctx: &IrContext,
         operations: &[(&str, &str)],

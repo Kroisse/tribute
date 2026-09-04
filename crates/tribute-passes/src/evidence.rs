@@ -62,3 +62,35 @@ pub fn find_enclosing_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
         current = parent_op;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::{Attribute, AttributeMap, Symbol};
+
+    #[test]
+    fn evidence_prefix_preserves_result_cardinality_and_type_attributes() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+        );
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        for results in [vec![], vec![nil], vec![i32_ty]] {
+            let attrs =
+                AttributeMap::from_iter([(Symbol::new("metadata"), Attribute::Type(i32_ty))]);
+            let source =
+                core::func_with_attrs(&mut ctx, [i32_ty], results.clone(), attrs).as_type_ref();
+            assert!(!has_evidence_first_param(&ctx, source));
+            let converted = build_func_type_with_evidence(&mut ctx, source, evidence);
+            let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+            assert_eq!(function.inputs(&ctx), [evidence, i32_ty]);
+            assert_eq!(function.results(&ctx), results);
+            assert_eq!(
+                ctx.types.get(converted).attrs.get_type("metadata"),
+                Some(i32_ty)
+            );
+            assert!(has_evidence_first_param(&ctx, converted));
+        }
+    }
+}
