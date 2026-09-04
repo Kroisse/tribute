@@ -1319,6 +1319,83 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
 }
 
 #[test]
+fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Missing = adt.typeref() {name = @Missing}
+  !DeadFrame = adt.struct() {name = @ContinuationFrame, fields = [[@result, !Missing]]}
+  func.func @live() -> core.nil { func.return }
+}"#,
+    );
+
+    let plan = build_native_ownership_plan(&ctx, module)
+        .expect("unused continuation-frame aliases must not affect ownership planning");
+    let dead_frame = ctx
+        .type_alias_by_name(Symbol::new("DeadFrame"))
+        .expect("parsed dead frame alias");
+    assert!(!plan.is_managed_type(&ctx, dead_frame));
+    assert!(plan.rtti_types().is_empty());
+}
+
+#[test]
+fn reachable_missing_nominal_typeref_still_fails_before_planning() {
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+  !Missing = adt.typeref() {name = @Missing}
+  !DeadFrame = adt.struct() {name = @ContinuationFrame, fields = [[@result, !Missing]]}
+  func.func @live() -> core.nil {
+    ^entry:
+      func.return
+    ^unreachable(%value: !Missing):
+      func.unreachable
+  }
+}"#,
+        "adt.typeref @Missing has no unique native layout",
+    );
+}
+
+#[test]
+fn reachable_recursive_nominal_layout_is_validated_once() {
+    let (_ctx, _module, plan) = build(
+        r#"core.module @test {
+  !CursorRef = adt.typeref() {name = @Cursor}
+  !Cursor = adt.struct() {name = @Cursor, fields = [[@next, !CursorRef]]}
+  func.func @make(%next: !CursorRef) -> !CursorRef {
+    %cursor = adt.struct_new %next {type = !Cursor} : !CursorRef
+    func.return %cursor
+  }
+}"#,
+    );
+
+    assert_eq!(plan.rtti_types().len(), 1);
+    assert!(matches!(
+        &plan.rtti_types()[0].fields,
+        ManagedFieldBitmap::Struct(fields) if fields == &[true]
+    ));
+}
+
+#[test]
+fn direct_layout_in_live_null_metadata_is_managed() {
+    let (ctx, _module, plan) = build(
+        r#"core.module @test {
+  !Node = adt.struct() {name = @__native_node, fields = [[@value, core.i32]]}
+  func.func @empty() -> tribute_rt.anyref {
+    %null = adt.ref_null {type = !Node} : tribute_rt.anyref
+    func.return %null
+  }
+}"#,
+    );
+
+    let node = ctx
+        .type_alias_by_name(Symbol::new("Node"))
+        .expect("parsed native node alias");
+    assert!(plan.is_managed_type(&ctx, node));
+    assert!(plan.rtti_types().is_empty());
+}
+
+#[test]
 fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(

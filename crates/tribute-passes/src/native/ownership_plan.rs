@@ -493,22 +493,53 @@ fn collect_and_validate_managed_layouts(
     let mut nominal_layouts: HashMap<Symbol, Vec<TypeRef>> = HashMap::new();
     let mut typerefs = HashSet::new();
     for &(_, ty) in ctx.type_aliases() {
-        collect_type_contract(ctx, ty, &mut typerefs, &mut nominal_layouts);
+        index_nominal_layout(ctx, ty, &mut nominal_layouts);
     }
+    let mut visited_types = HashSet::new();
     walk_module(ctx, module, |op| {
         for &ty in ctx.op_result_types(op) {
-            collect_type_contract(ctx, ty, &mut typerefs, &mut nominal_layouts);
+            collect_reachable_type_contract(
+                ctx,
+                ty,
+                &mut typerefs,
+                &mut nominal_layouts,
+                &mut layouts,
+                &mut visited_types,
+            );
         }
         for &operand in ctx.op_operands(op) {
-            collect_type_contract(
+            collect_reachable_type_contract(
                 ctx,
                 ctx.value_ty(operand),
                 &mut typerefs,
                 &mut nominal_layouts,
+                &mut layouts,
+                &mut visited_types,
             );
         }
         for attribute in ctx.op(op).attributes.values() {
-            collect_attribute_type_contract(ctx, attribute, &mut typerefs, &mut nominal_layouts);
+            collect_reachable_attribute_type_contract(
+                ctx,
+                attribute,
+                &mut typerefs,
+                &mut nominal_layouts,
+                &mut layouts,
+                &mut visited_types,
+            );
+        }
+        for region in ctx.op(op).regions.iter().copied() {
+            for block in ctx.region(region).blocks.iter().copied() {
+                for &argument in ctx.block_args(block) {
+                    collect_reachable_type_contract(
+                        ctx,
+                        ctx.value_ty(argument),
+                        &mut typerefs,
+                        &mut nominal_layouts,
+                        &mut layouts,
+                        &mut visited_types,
+                    );
+                }
+            }
         }
         if let Ok(new) = adt::StructNew::from_op(ctx, op) {
             let layout = new.r#type(ctx);
@@ -523,7 +554,12 @@ fn collect_and_validate_managed_layouts(
         }
     });
 
-    for typeref in typerefs {
+    let mut visited_typerefs = HashSet::new();
+    while let Some(typeref) = typerefs
+        .iter()
+        .copied()
+        .find(|typeref| visited_typerefs.insert(*typeref))
+    {
         let Some(name) = ctx.types.get(typeref).attrs.get_symbol("name") else {
             return Err(OwnershipPlanError::new(
                 "adt.typeref lacks nominal identity",
@@ -542,25 +578,27 @@ fn collect_and_validate_managed_layouts(
                 "adt.typeref @{name} has no unique native layout"
             )));
         }
-    }
-    for nominal in nominal_layouts.values() {
-        for &layout in nominal {
-            layouts.insert(layout);
-        }
+        let layout = nominal_layouts[&name][0];
+        layouts.insert(layout);
+        collect_reachable_type_contract(
+            ctx,
+            layout,
+            &mut typerefs,
+            &mut nominal_layouts,
+            &mut layouts,
+            &mut visited_types,
+        );
     }
     Ok(layouts)
 }
 
-fn collect_type_contract(
+fn index_nominal_layout(
     ctx: &IrContext,
     ty: TypeRef,
-    typerefs: &mut HashSet<TypeRef>,
     nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
 ) {
     let data = ctx.types.get(ty);
-    if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
-        typerefs.insert(ty);
-    } else if data.dialect == Symbol::new("adt")
+    if data.dialect == Symbol::new("adt")
         && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
         && let Some(name) = data.attrs.get_symbol("name")
     {
@@ -569,27 +607,80 @@ fn collect_type_contract(
             layouts.push(ty);
         }
     }
+}
+
+fn collect_reachable_type_contract(
+    ctx: &IrContext,
+    ty: TypeRef,
+    typerefs: &mut HashSet<TypeRef>,
+    nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
+    layouts: &mut HashSet<TypeRef>,
+    visited_types: &mut HashSet<TypeRef>,
+) {
+    if !visited_types.insert(ty) {
+        return;
+    }
+    let data = ctx.types.get(ty);
+    index_nominal_layout(ctx, ty, nominal_layouts);
+    if (data.dialect == Symbol::new("adt"))
+        && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
+    {
+        layouts.insert(ty);
+    }
+    if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
+        typerefs.insert(ty);
+    }
     for &parameter in &data.params {
-        collect_type_contract(ctx, parameter, typerefs, nominal_layouts);
+        collect_reachable_type_contract(
+            ctx,
+            parameter,
+            typerefs,
+            nominal_layouts,
+            layouts,
+            visited_types,
+        );
     }
     for attribute in data.attrs.values() {
-        collect_attribute_type_contract(ctx, attribute, typerefs, nominal_layouts);
+        collect_reachable_attribute_type_contract(
+            ctx,
+            attribute,
+            typerefs,
+            nominal_layouts,
+            layouts,
+            visited_types,
+        );
     }
 }
 
-fn collect_attribute_type_contract(
+fn collect_reachable_attribute_type_contract(
     ctx: &IrContext,
     attribute: &trunk_ir::Attribute,
     typerefs: &mut HashSet<TypeRef>,
     nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
+    layouts: &mut HashSet<TypeRef>,
+    visited_types: &mut HashSet<TypeRef>,
 ) {
     match attribute {
         trunk_ir::Attribute::Type(ty) => {
-            collect_type_contract(ctx, *ty, typerefs, nominal_layouts);
+            collect_reachable_type_contract(
+                ctx,
+                *ty,
+                typerefs,
+                nominal_layouts,
+                layouts,
+                visited_types,
+            );
         }
         trunk_ir::Attribute::List(values) => {
             for value in values {
-                collect_attribute_type_contract(ctx, value, typerefs, nominal_layouts);
+                collect_reachable_attribute_type_contract(
+                    ctx,
+                    value,
+                    typerefs,
+                    nominal_layouts,
+                    layouts,
+                    visited_types,
+                );
             }
         }
         _ => {}
