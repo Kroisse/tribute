@@ -4345,41 +4345,29 @@ mod tests {
     }
 
     #[test]
-    fn source_func_signature_metadata_survives_function_conversion() {
-        let (mut ctx, module) = parse(
-            r#"core.module @test {
-  tribute_control.func @identity(%value: core.i32) -> core.i32 convention(direct) {
-    tribute_control.return %value
+    fn source_signature_metadata_roundtrips_before_conversion() {
+        let source = r#"core.module @test {
+  !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  tribute_control.func @outer() -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @function]]} {
+    %lambda = tribute_control.lambda() -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [] {
+      %inner = arith.const {value = 1} : core.i32
+      tribute_control.return %inner
+    }
+    %result = arith.const {value = 2} : core.i32
+    tribute_control.return %result
   }
-}"#,
+}"#;
+        let (ctx, module) = parse(source);
+        let printed_source = print_module(&ctx, module.op());
+        assert!(
+            printed_source.contains("signature_attributes {metadata = [[!inner, @function]]}"),
+            "{printed_source}"
         );
-        let i32_ty = ctx
-            .types
-            .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
-                    .then_some(ty)
-            })
-            .unwrap();
-        let metadata = Attribute::List(vec![
-            Attribute::Type(i32_ty),
-            Attribute::List(vec![
-                Attribute::Int(7),
-                Attribute::Symbol(Symbol::new("Tag")),
-            ]),
-        ]);
-        let logical = tribute_control::func_sig_with_attrs(
-            &mut ctx,
-            i32_ty,
-            [i32_ty],
-            tribute_control::CallingConvention::Direct,
-            AttributeMap::from_iter([(Symbol::new("metadata"), metadata.clone())]),
-        )
-        .as_type_ref();
-        let source = module.ops(&ctx)[0];
-        ctx.op_mut(source)
-            .attributes
-            .insert(Symbol::new("type"), Attribute::Type(logical));
+        assert!(
+            printed_source.contains("signature_attributes {metadata = [[!inner, @lambda]]}"),
+            "{printed_source}"
+        );
+        let (mut ctx, module) = parse(&printed_source);
 
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
         let lowered = module
@@ -4389,10 +4377,27 @@ mod tests {
             .unwrap();
         let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
         let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
-        assert_eq!(
-            ctx.types.get(physical.as_type_ref()).attrs.get("metadata"),
-            Some(&metadata)
-        );
+        let Attribute::List(function_metadata) = ctx
+            .types
+            .get(physical.as_type_ref())
+            .attrs
+            .get("metadata")
+            .unwrap()
+        else {
+            panic!("function metadata must remain a list");
+        };
+        let [Attribute::List(function_pair)] = function_metadata.as_slice() else {
+            panic!("function metadata must preserve its nested pair");
+        };
+        let [
+            Attribute::Type(function_nested),
+            Attribute::Symbol(function_tag),
+        ] = function_pair.as_slice()
+        else {
+            panic!("function metadata must preserve its nested source signature");
+        };
+        assert_eq!(*function_tag, Symbol::new("function"));
+        assert!(closure::Closure::matches(&ctx, *function_nested));
         assert!(
             ctx.types
                 .get(physical.as_type_ref())
@@ -4403,6 +4408,33 @@ mod tests {
         assert_eq!(
             ctx.op(lowered).attributes.get_i128(CALLING_CONVENTION_ATTR),
             Some(CallingConvention::Direct as i128)
+        );
+
+        let mut lambdas = Vec::new();
+        collect_lambdas(&ctx, module.op(), &mut lambdas);
+        let lambda_metadata = lambdas.into_iter().find_map(|lambda| {
+            let closure_ty = ctx.op_result_types(lambda)[0];
+            let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
+            let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
+            let Attribute::List(metadata) = ctx
+                .types
+                .get(signature.as_type_ref())
+                .attrs
+                .get("metadata")?
+            else {
+                return None;
+            };
+            let [Attribute::List(pair)] = metadata.as_slice() else {
+                return None;
+            };
+            let [Attribute::Type(nested), Attribute::Symbol(tag)] = pair.as_slice() else {
+                return None;
+            };
+            (*tag == Symbol::new("lambda")).then_some(*nested)
+        });
+        assert!(
+            lambda_metadata.is_some_and(|nested| closure::Closure::matches(&ctx, nested)),
+            "lambda metadata must retain a converted nested source signature"
         );
     }
 

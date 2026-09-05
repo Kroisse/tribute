@@ -390,6 +390,42 @@ fn print_extra_attributes(
     write!(h, "}}")
 }
 
+fn print_signature_attributes(
+    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> fmt::Result {
+    use fmt::Write;
+
+    if FuncSig::from_type_ref(h.ctx(), ty).is_none() {
+        return Ok(());
+    }
+    let attrs: Vec<_> = h
+        .ctx()
+        .types
+        .get(ty)
+        .attrs
+        .iter()
+        .filter(|(key, _)| {
+            **key != Symbol::new(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
+                && **key != Symbol::new(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
+                && **key != Symbol::new(CALLING_CONVENTION_ATTR)
+        })
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
+    if attrs.is_empty() {
+        return Ok(());
+    }
+    write!(h, " signature_attributes {{")?;
+    for (index, (key, value)) in attrs.iter().enumerate() {
+        if index > 0 {
+            write!(h, ", ")?;
+        }
+        write!(h, "{key} = ")?;
+        h.write_attribute(value)?;
+    }
+    write!(h, "}}")
+}
+
 fn print_signature_params(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     region: Option<RegionRef>,
@@ -457,6 +493,9 @@ fn print_func(
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
     }
+    if let Some(callable_ty) = callable_ty {
+        print_signature_attributes(h, callable_ty)?;
+    }
     print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
 
     if let Some(region) = region {
@@ -492,17 +531,19 @@ fn func_sig_raw_type<'a>(
     result: trunk_ir::parser::raw::RawType<'a>,
     params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
     convention: CallingConvention,
+    mut attrs: Vec<(&'a str, trunk_ir::parser::raw::RawAttribute<'a>)>,
 ) -> trunk_ir::parser::raw::RawType<'a> {
     use trunk_ir::parser::raw::{RawAttribute, RawType};
+    attrs.push((
+        CALLING_CONVENTION_ATTR,
+        RawAttribute::Int(convention as i128),
+    ));
     RawType::Function {
         dialect: "tribute_control",
         name: "func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone()).collect(),
         results: vec![result],
-        attrs: vec![(
-            CALLING_CONVENTION_ATTR,
-            RawAttribute::Int(convention as i128),
-        )],
+        attrs,
     }
 }
 
@@ -510,6 +551,17 @@ fn has_duplicate_convention_attr(
     attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)],
 ) -> bool {
     attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
+}
+
+fn has_reserved_signature_attr(attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)]) -> bool {
+    attrs.iter().any(|(key, _)| {
+        matches!(
+            *key,
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR
+                | trunk_ir::dialect::func::NUM_RESULTS_ATTR
+                | CALLING_CONVENTION_ATTR
+        )
+    })
 }
 
 fn parse_func<'a>(
@@ -531,11 +583,16 @@ fn parse_func<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
+    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
+        .parse_next(input)?
+        .map(|(_, _, _, attrs)| attrs)
+        .unwrap_or_default();
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes)
+    if has_reserved_signature_attr(&signature_attributes)
+        || has_duplicate_convention_attr(&attributes)
         || attributes
             .iter()
             .any(|(key, _)| *key == "sym_name" || *key == "type")
@@ -557,7 +614,7 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let signature = func_sig_raw_type(result, &params, convention);
+    let signature = func_sig_raw_type(result, &params, convention, signature_attributes);
     let mut attributes = attributes;
     attributes.push(("type", RawAttribute::Type(signature)));
 
@@ -616,6 +673,9 @@ fn print_lambda(
         write!(h, " -> ")?;
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
+    }
+    if let Some(callable_ty) = callable_ty {
+        print_signature_attributes(h, callable_ty)?;
     }
 
     write!(h, " captures [")?;
@@ -678,12 +738,18 @@ fn parse_lambda<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
+    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
+        .parse_next(input)?
+        .map(|(_, _, _, attrs)| attrs)
+        .unwrap_or_default();
     let captures = parse_captures(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes) {
+    if has_reserved_signature_attr(&signature_attributes)
+        || has_duplicate_convention_attr(&attributes)
+    {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
         ));
@@ -707,7 +773,12 @@ fn parse_lambda<'a>(
         return_type: None,
         operands: captures,
         attributes,
-        result_types: vec![func_sig_raw_type(result, &params, convention)],
+        result_types: vec![func_sig_raw_type(
+            result,
+            &params,
+            convention,
+            signature_attributes,
+        )],
         regions: vec![region],
         successors: vec![],
     })
@@ -3725,12 +3796,13 @@ mod tests {
     #[test]
     fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
         let input = r#"core.module @test {
-  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}
+  !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}
   tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
     tribute_control.return %value
   }
   tribute_control.func @outer(%first: core.i32, %second: core.i32) -> core.i32 convention(direct) {
-    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
+    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
       tribute_control.return %first
     }
     %empty = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
@@ -3743,11 +3815,15 @@ mod tests {
         let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
         assert!(printed.contains(
-            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}"
+            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}"
         ));
         assert!(printed.contains("convention(evidence_direct)"));
         assert!(printed.contains("convention(cps) captures []"));
-        assert!(printed.contains("convention(direct) captures [%0, %1] attributes {"));
+        assert!(printed.contains("signature_attributes {metadata = [[!inner, @decl]]}"));
+        assert!(printed.contains("signature_attributes {metadata = [[!inner, @lambda]]}"));
+        assert!(printed.contains(
+            "convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%0, %1] attributes {"
+        ));
         assert!(printed.contains("debug_name = \"apply\""));
         assert!(printed.contains("inline_hint = true"));
         assert!(!printed.contains("^bb"));
@@ -3786,6 +3862,15 @@ mod tests {
 }"#,
             r#"core.module @test {
   %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] attributes {tribute.calling_convention = 2} {
+    %1 = arith.const {value = 1} : core.i32
+    tribute_control.return %1
+  }
+}"#,
+            r#"core.module @test {
+  tribute_control.func @bad() -> core.i32 convention(direct) signature_attributes {num_inputs = 0}
+}"#,
+            r#"core.module @test {
+  %0 = tribute_control.lambda() -> core.i32 convention(cps) signature_attributes {tribute.calling_convention = 2} captures [] {
     %1 = arith.const {value = 1} : core.i32
     tribute_control.return %1
   }

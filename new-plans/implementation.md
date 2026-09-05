@@ -62,6 +62,10 @@ result (including `core.nil` and `core.never`) and owns the Direct,
 EvidenceDirect, and Cps convention metadata. Its codec retains the qualified
 type identity, so source arrow text is never interned as `func.func_sig`;
 malformed raw source signatures are rejected before conversion mutates IR.
+Custom `tribute_control.func` and `tribute_control.lambda` assembly writes
+non-reserved source-signature metadata in an explicit
+`signature_attributes { ... }` clause, distinct from operation `attributes`;
+the codec reconstructs that metadata before source-to-shared conversion.
 
 ## 직접형 제어 소유권
 
