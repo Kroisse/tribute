@@ -182,7 +182,7 @@ pub(crate) fn handle_call_indirect(
     if let Some(func_ret_ty) = emit_ctx.func_return_type {
         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
         let func_returns_funcref = helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
-            || helpers::is_type(ctx, func_ret_ty, "core", "func");
+            || helpers::is_type(ctx, func_ret_ty, "func", "func_sig");
         // Check for Step type (trampoline-based effect system)
         let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
         if is_anyref_result && func_returns_funcref {
@@ -339,10 +339,10 @@ pub(crate) fn handle_return_call_indirect(
 
 use super::super::helpers::attr_u32;
 
-/// Find a core.func type in the `type_idx_by_type` / `func_types` registries by
+/// Find a func.func_sig type in the `type_idx_by_type` / `func_types` registries by
 /// matching params and result.
 ///
-/// `core.func` stores inputs followed by its single result in `TypeData.params`;
+/// `func.func_sig` stores inputs followed by its single result in `TypeData.params`;
 /// callers use the validated accessor rather than depending on that flat layout.
 ///
 /// This performs a linear O(n) scan over the registries to avoid requiring

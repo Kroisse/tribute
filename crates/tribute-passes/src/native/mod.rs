@@ -29,7 +29,6 @@ pub mod type_converter;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::smallvec::smallvec;
@@ -46,7 +45,7 @@ pub(crate) fn build_extern_func(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    let func_ty = core::func(ctx, params.iter().copied(), [result]).as_type_ref();
+    let func_ty = func::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
 
     let args: Vec<BlockArgData> = params
         .iter()

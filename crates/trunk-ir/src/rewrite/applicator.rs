@@ -481,7 +481,7 @@ mod tests {
             parent_op: None,
         });
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        let func_ty = crate::dialect::core::func(ctx, [], [nil_ty]).as_type_ref();
+        let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
             .attr("type", Attribute::Type(func_ty))
@@ -512,7 +512,7 @@ mod tests {
             parent_op: None,
         });
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        let func_ty = crate::dialect::core::func(ctx, [], [nil_ty]).as_type_ref();
+        let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         wasm::func(ctx, loc, Symbol::new(name), func_ty, region)
     }
 
@@ -523,7 +523,7 @@ mod tests {
         name: &'static str,
     ) -> OpRef {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        let func_ty = crate::dialect::core::func(ctx, [], [nil_ty]).as_type_ref();
+        let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
             .attr("type", Attribute::Type(func_ty))

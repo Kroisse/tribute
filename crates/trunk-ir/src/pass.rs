@@ -527,7 +527,7 @@ mod tests {
         name: &'static str,
     ) -> OpRef {
         let nil_ty = core::nil(ctx).as_type_ref();
-        let func_ty = core::func(ctx, [], [nil_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
             .attr("type", Attribute::Type(func_ty))

@@ -52,8 +52,8 @@ operations.
 
 | 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
-| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
-| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `core.func`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
+| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
+| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
 | `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
 | `tribute-backend-ready-wasm` | emission-ready full 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, `wasm_gc`, `core.unrealized_conversion_cast`가 없다. 명시적으로 열거한 Wasm infrastructure와 `wasm.*` operation만 legal이며 unknown operation은 illegal이다. |
 
@@ -63,7 +63,7 @@ verification을 조합한다. Full mode에서는
 unknown operation이 legal하지 않으므로 frontend 적합성 target과 backend full
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
-`core.func`/`closure.closure`와 post-CPS의
+`func.func_sig`/`closure.closure`와 post-CPS의
 `tribute_control.callable`/`resume_token`을 별도로 거부한다. 같은 walk는
 `tribute-backend-ready-native`와 `tribute-backend-ready-wasm`에서도 필수이며
 남은 두 `tribute_control` type을 거부한다. 함수·호출 signature, operand/result,
@@ -171,7 +171,7 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 이 dialect는 CPS legalization 전의 Tribute 고유 callable과 effect-control
 의미를 함께 소유한다. ANF는 input invariant이지 dialect의 정체성이 아니다.
 산술, ADT/list/tuple/record 구성과 structured selection은 기존 dialect에 남지만,
-`func.*`, `closure.*`, `core.func`는 physical 표현이므로 이 경계에 나타나지
+`func.*`, `closure.*`, `func.func_sig`는 physical 표현이므로 이 경계에 나타나지
 않는다.
 
 논리 callable type은
@@ -179,10 +179,10 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
 `EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. 이 metadata는 typechecking
 결과를 복사한 것으로 body에서 추론하지 않는다. Legalization은 이를 기존
-`CallableAbi`와 physical `core.func`, `closure.closure` 및
+`CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
 `tribute.calling_convention` operation attribute로 바꾼다. Type verifier는
 result 하나와 parameter 0개 이상, convention domain, 모든 component type의
-resolution을 검사하며 physical `core.func`나 `closure.closure`를 component로
+resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 component로
 허용하지 않는다. 전체 규칙은
 [cps-effects.md](cps-effects.md#pre-cps-callable-shape)에 있다.
 
@@ -691,7 +691,7 @@ make these attributes round-trip explicitly.
 `func.*` represents function definitions, direct calls, indirect calls, function
 references, returns, tail calls, and unreachable control flow.
 `func.call_indirect`와 `func.tail_call_indirect`는 선택적 `signature: TypeRef`
-attribute로 erased callee/table index 이전의 exact `core.func` contract를 보존할 수
+attribute로 erased callee/table index 이전의 exact `func.func_sig` contract를 보존할 수
 있다. 일반 pre-contract indirect call은 이 attribute 없이 존재할 수 있지만,
 `tribute.calling_convention`이 붙은 indirect transfer는 exact `signature`를 반드시
 가지며 verifier가 operand/result 및 convention과 대조한다. Physical operand type,
@@ -791,16 +791,16 @@ opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
 
-### `core.func` function type
+### `func.func_sig` function type
 
-`core.func` stores inputs and results as separate logical lists while keeping a
-flat interned parameter vector. Its canonical textual form follows MLIR
+`func.func_sig` stores inputs and results as separate logical lists. It keeps a
+flat interned parameter vector, and its canonical textual form follows MLIR
 FunctionType syntax:
 
 ```text
-core.func<() -> ()>
-core.func<(core.i32) -> core.i64>
-core.func<(Evidence, Frame, core.i32) -> core.never>
+func.func_sig<() -> ()>
+func.func_sig<(core.i32) -> core.i64>
+func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 ```
 
 The input list is always parenthesized. An empty result list is printed as
@@ -812,8 +812,8 @@ The interned representation is:
 
 ```text
 TypeData {
-  dialect: core,
-  name: func,
+  dialect: func,
+  name: func_sig,
   params: [input_0, ..., input_n, result_0?],
   attrs: {
     num_inputs: n,
@@ -831,10 +831,11 @@ two reserved attributes and preserves every other type attribute; textual type
 attribute dictionaries may not specify either reserved key.
 
 During the compatibility window the reader also accepts legacy
-`core.func(Return, Params...)`, immediately normalizes it to the new input-first
+`core.func(Return, Params...)`, immediately normalizes it to the new `func.func_sig`
+identity and input-first
 storage, and never interns the legacy layout. The printer always emits the
 canonical form. Production code constructs function types only through the
-validated `core::func` API; direct `TypeData` construction is reserved for
+validated `func::func_sig` API; direct `TypeData` construction is reserved for
 malformed-type verifier tests.
 
 The three result states have distinct meanings:

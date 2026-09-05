@@ -177,7 +177,7 @@ fn lower_single_lambda(
     else {
         return false;
     };
-    let Some(callable) = core::Func::from_type_ref(ctx, function_ty) else {
+    let Some(callable) = func::FuncSig::from_type_ref(ctx, function_ty) else {
         return false;
     };
     let Some(func_result_ty) = callable.single_result(ctx) else {
@@ -233,9 +233,9 @@ fn lower_single_lambda(
         all_param_tys.insert(0, ability::evidence_adt_type_ref(ctx));
     }
     let mut type_attrs = ctx.types.get(function_ty).attrs.clone();
-    type_attrs.remove(core::NUM_INPUTS_ATTR);
-    type_attrs.remove(core::NUM_RESULTS_ATTR);
-    let func_ty = core::func_with_attrs(
+    type_attrs.remove(func::NUM_INPUTS_ATTR);
+    type_attrs.remove(func::NUM_RESULTS_ATTR);
+    let func_ty = func::func_sig_with_attrs(
         ctx,
         all_param_tys.iter().copied(),
         [func_result_ty],
@@ -618,8 +618,8 @@ mod tests {
             parent_op: None,
         });
 
-        // closure type: closure.closure<core.func<i32, i32>>
-        let func_ty = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        // closure type: closure.closure<func.func_sig<i32, i32>>
+        let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -648,7 +648,7 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty =
-            core::func(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
+            func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,
@@ -688,7 +688,7 @@ mod tests {
 
         // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);
-        let lifted_type = core::Func::from_type_ref(&ctx, lifted_ty).unwrap();
+        let lifted_type = func::FuncSig::from_type_ref(&ctx, lifted_ty).unwrap();
         assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
         assert!(lifted_type.single_result(&ctx).is_some());
     }
@@ -730,7 +730,7 @@ mod tests {
             parent_op: None,
         });
 
-        let lambda_func_ty = core::func(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
+        let lambda_func_ty = func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
         let lambda_ty = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(lambda_func_ty.as_type_ref())
@@ -755,7 +755,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_ty = core::func(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
+        let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
         let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
         ctx.push_op(module_block, outer.op_ref());
 
@@ -817,7 +817,7 @@ mod tests {
             parent_op: None,
         });
 
-        let func_ty = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -831,7 +831,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_func_ty = core::func(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
+        let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,

@@ -56,7 +56,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
                 found_main = true;
                 // Extract return type from func type
                 let func_ty = func_op.r#type(ctx);
-                if let Some(function) = core::Func::from_type_ref(ctx, func_ty) {
+                if let Some(function) = func::FuncSig::from_type_ref(ctx, func_ty) {
                     main_return_ty = function.single_result(ctx);
                     main_param_types = function.inputs(ctx).to_vec();
                 }
@@ -93,7 +93,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     let tribute_main_return_ty = main_return_ty.unwrap_or_else(|| {
         panic!(
             "entrypoint: `func.func @main` has no return type in its signature; \
-             expected a valid `core.func` type with at least a return type parameter"
+             expected a valid `func.func_sig` type with at least a return type parameter"
         )
     });
 
@@ -218,7 +218,7 @@ fn build_entrypoint(
     let nil_ty = core::nil(ctx).as_type_ref();
 
     // Build func type: () -> i32
-    let func_ty = core::func(ctx, [], [i32_ty]).as_type_ref();
+    let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
 
     // Create entry block
     let entry_block = ctx.create_block(BlockData {
@@ -334,7 +334,7 @@ mod tests {
     /// Build an arena module with a single main function returning i32.
     fn make_main_module(ctx: &mut IrContext, loc: Location) -> Module {
         let i32_ty = i32_type(ctx);
-        let func_ty = core::func(ctx, [], [i32_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
 
         // Build main function: const 42, return
         let entry = ctx.create_block(BlockData {
@@ -386,7 +386,7 @@ mod tests {
     fn make_evidence_main_module(ctx: &mut IrContext, loc: Location) -> Module {
         let nil_ty = nil_type(ctx);
         let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-        let func_ty = core::func(ctx, [evidence_ty], [nil_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, [evidence_ty], [nil_ty]).as_type_ref();
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
@@ -472,7 +472,7 @@ mod tests {
     fn entrypoint_no_main() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        let func_ty = core::func(&mut ctx, [], [i32_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
 
         // Build helper function (not main)
         let entry = ctx.create_block(BlockData {
@@ -535,7 +535,7 @@ mod tests {
 
         // Build module with main returning nil
         let nil_ty = nil_type(&mut ctx);
-        let func_ty = core::func(&mut ctx, [], [nil_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [], [nil_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -588,7 +588,7 @@ mod tests {
                 && f.sym_name(&ctx) == Symbol::new("main")
             {
                 let func_ty_ref = f.r#type(&ctx);
-                let function = core::Func::from_type_ref(&ctx, func_ty_ref).unwrap();
+                let function = func::FuncSig::from_type_ref(&ctx, func_ty_ref).unwrap();
                 assert_eq!(function.single_result(&ctx), Some(i32_ty));
                 return;
             }

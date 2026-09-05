@@ -221,14 +221,14 @@ struct ModuleInfo {
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<TypeRef, u32>,
-    /// Function type lookup map (core.func TypeRef).
+    /// Function type lookup map (func.func_sig TypeRef).
     func_types: HashMap<Symbol, TypeRef>,
     /// Function index lookup map (import index or func index).
     func_indices: HashMap<Symbol, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<Symbol>,
     /// Additional function types from call_indirect that need to be added to type section.
-    /// Stored as (type_idx, core.func TypeRef) pairs.
+    /// Stored as (type_idx, func.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
     /// Pre-interned common types for use in handlers.
     common_types: CommonTypes,
@@ -314,7 +314,7 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
 
     for import_def in module_info.imports.iter() {
         let (params_refs, result_ref) = func_type_parts(ctx, import_def.func_type)
-            .ok_or_else(|| CompilationError::type_error("import func type is not core.func"))?;
+            .ok_or_else(|| CompilationError::type_error("import func type is not func.func_sig"))?;
         let params = params_refs
             .iter()
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
@@ -333,7 +333,7 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     for func_def in module_info.funcs.iter() {
         debug!("Processing function type for: {:?}", func_def.name);
         let (params_refs, declared_result) = func_type_parts(ctx, func_def.func_type)
-            .ok_or_else(|| CompilationError::type_error("func type is not core.func"))?;
+            .ok_or_else(|| CompilationError::type_error("func type is not func.func_sig"))?;
         let params = params_refs
             .iter()
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
@@ -348,7 +348,7 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
         let effective_result = {
             let regions = &ctx.op(func_def.op).regions;
             if let Some(&body_region) = regions.first() {
-                if is_type(ctx, declared_result, "core", "func")
+                if is_type(ctx, declared_result, "func", "func_sig")
                     || is_type(ctx, declared_result, "wasm", "funcref")
                 {
                     debug!("  checking funcref function for handler dispatch...");
@@ -388,8 +388,9 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
 
     // Emit call_indirect function types
     for (type_idx, func_ty) in &module_info.call_indirect_types {
-        let (params_refs, result_ref) = func_type_parts(ctx, *func_ty)
-            .ok_or_else(|| CompilationError::type_error("call_indirect type is not core.func"))?;
+        let (params_refs, result_ref) = func_type_parts(ctx, *func_ty).ok_or_else(|| {
+            CompilationError::type_error("call_indirect type is not func.func_sig")
+        })?;
         debug!(
             "Emitting call_indirect type idx={}: params={:?}, result={}.{}",
             type_idx,
@@ -724,7 +725,7 @@ fn emit_function(
         .ok_or_else(|| CompilationError::invalid_module("wasm.func has no entry block"))?;
 
     let (params_refs, result_ref) = func_type_parts(ctx, func_def.func_type)
-        .ok_or_else(|| CompilationError::type_error("func type is not core.func"))?;
+        .ok_or_else(|| CompilationError::type_error("func type is not func.func_sig"))?;
     let block_args = ctx.block_args(block);
     if params_refs.len() != block_args.len() {
         return Err(CompilationError::invalid_module(
@@ -940,7 +941,8 @@ fn emit_op_nested(
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.types.get(result_ty);
             debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
-            if is_type(ctx, result_ty, "core", "func") || is_type(ctx, result_ty, "wasm", "funcref")
+            if is_type(ctx, result_ty, "func", "func_sig")
+                || is_type(ctx, result_ty, "wasm", "funcref")
             {
                 debug!("wasm.nop: emitting ref.null func");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
@@ -1235,7 +1237,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1254,7 +1256,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: adt.typeref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.structref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1312,13 +1314,34 @@ mod tests {
     }
 
     #[test]
+    fn emits_signature_valued_nop_as_null_funcref() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> func.func_sig<() -> core.nil> {
+    %null = wasm.nop : func.func_sig<() -> core.nil>
+    wasm.return %null
+  }
+}"#,
+        );
+
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("signature-valued wasm.nop must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("signature-valued wasm.nop must validate");
+    }
+
+    #[test]
     fn collects_and_encodes_tableless_return_call_indirect_exact_signature() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
         );
@@ -1360,7 +1383,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32, %value: wasm.structref) -> core.i32 {
-    %result = wasm.call_indirect %table_index, %value {signature = core.func(core.i32, wasm.anyref), table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table_index, %value {signature = func.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0} : core.i32
     wasm.return %result
   }
 }"#,
@@ -1371,7 +1394,7 @@ mod tests {
             panic!("expected one collected exact signature")
         };
         let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
-            panic!("expected core.func signature")
+            panic!("expected func.func_sig signature")
         };
         assert_eq!(ctx.types.get(params[0]).name, Symbol::new("anyref"));
         assert_eq!(ctx.types.get(result).name, Symbol::new("i32"));
@@ -1385,6 +1408,53 @@ mod tests {
     }
 
     #[test]
+    fn signature_valued_enclosing_result_upgrades_indirect_anyref_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.func @caller(%table_index: core.i32) -> func.func_sig<() -> core.nil> {
+    %result = wasm.call_indirect %table_index : wasm.anyref
+    wasm.return %result
+  }
+}"#,
+        );
+
+        let info = collect_module_info(&mut ctx, module).expect("collect module info");
+        let [(_, signature)] = info.call_indirect_types.as_slice() else {
+            panic!("expected one collected exact signature")
+        };
+        let Some((_, result)) = helpers::func_type_parts(&ctx, *signature) else {
+            panic!("expected func.func_sig signature")
+        };
+        assert!(helpers::is_type(&ctx, result, "wasm", "funcref"));
+    }
+
+    #[test]
+    fn exact_anyref_indirect_result_is_not_overridden_by_funcref_context() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.func @caller(%table_index: core.i32) -> wasm.funcref {
+    %ignored = wasm.call_indirect %table_index {signature = func.func_sig<() -> wasm.anyref>, table = 0, type_idx = 0} : wasm.anyref
+    %result = wasm.nop : wasm.funcref
+    wasm.return %result
+  }
+}"#,
+        );
+
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("exact anyref result must not inherit its enclosing funcref return type")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("exact anyref call result must remain a valid local");
+    }
+
+    #[test]
     fn region_contains_call_indirect_recognizes_return_call_indirect() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -1392,7 +1462,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.block {
-      wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+      wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
     }
   }
   wasm.func @tail_direct(%value: core.i32) -> core.nil {

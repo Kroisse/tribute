@@ -58,19 +58,21 @@ impl Pass for LowerListIntrinsics {
                 && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
                     == Some(Symbol::new(PREPEND_INTRINSIC))
                 && {
-                    core::Func::from_type_ref(ctx, function.r#type(ctx)).is_some_and(|signature| {
-                        let [element, tail] = signature.inputs(ctx) else {
-                            return false;
-                        };
-                        let Some(result) = signature.single_result(ctx) else {
-                            return false;
-                        };
-                        [result, *element, *tail].into_iter().all(|ty| {
-                            let data = ctx.types.get(ty);
-                            data.dialect == Symbol::new("tribute_rt")
-                                && data.name == Symbol::new("anyref")
-                        })
-                    })
+                    func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(
+                        |signature| {
+                            let [element, tail] = signature.inputs(ctx) else {
+                                return false;
+                            };
+                            let Some(result) = signature.single_result(ctx) else {
+                                return false;
+                            };
+                            [result, *element, *tail].into_iter().all(|ty| {
+                                let data = ctx.types.get(ty);
+                                data.dialect == Symbol::new("tribute_rt")
+                                    && data.name == Symbol::new("anyref")
+                            })
+                        },
+                    )
                 }
             {
                 intrinsic_declarations.eligible.insert(name);

@@ -55,9 +55,9 @@ Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref
 direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
 계산한 뒤 함께 rewrite한다:
 
-- `tribute_control.func`는 `func.func`와 physical `core.func`를 만든다.
+- `tribute_control.func`는 `func.func`와 physical `func.func_sig`를 만든다.
 - `tribute_control.lambda`는 physical `closure.lambda`와
-  `closure.closure<core.func<...>>`를 만든다. 이 단계의 signature에는
+  `closure.closure<func.func_sig<...>>`를 만든다. 이 단계의 signature에는
   `CallableAbi` hidden parameter가 있지만 environment는 없으며, 기존 closure
   lowering이 environment를 interpose한다.
 - `tribute_control.func_ref`는 빈 environment의 `closure.new`와 env-bearing
@@ -193,7 +193,7 @@ sentinel, 임의의 `anyref`는 대체할 수 없으며 호출되면 trap한다.
 
 `tribute-control-pre-cps` named boundary는 검증된 `tribute_control.*`과 일반
 value/structured dialect만 허용한다. Frontend 적합성 검사는 `func.*`,
-`closure.*`, `core.func`, `closure.closure`, 기존 `ability.*`, `effect.*`,
+`closure.*`, `func.func_sig`, `closure.closure`, 기존 `ability.*`, `effect.*`,
 legacy CPS-dispatch operation을 모두 거부한다. Partial rewrite
 도중에는 logical/physical operation이 일시적으로 공존할 수 있지만 이 상태는
 named pre-CPS boundary가 아니다.
@@ -203,7 +203,7 @@ named pre-CPS boundary가 아니다.
 `tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
 `tribute_control` operation 또는 `callable`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
-`func.*`/`closure.*`/`core.func` graph와 logical `ability.*` dispatch 표면만
+`func.*`/`closure.*`/`func.func_sig` graph와 logical `ability.*` dispatch 표면만
 남는다. `lower_closure_lambda`와 `prepare_closure_lowering`은 이 shared graph를
 준비하지만 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure
 type은 target ABI validation까지 유지한다. `lower_ability_perform`,
@@ -345,7 +345,7 @@ machinery처럼 target이 지원하는 표현을 사용한다. Root `done_k`는 
 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
 전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다.
-Shared `core.func` and `func.call` support zero or one result. Logical CPS
+Shared `func.func_sig` and `func.call` support zero or one result. Logical CPS
 producers retain `[core.never]`; current target ABI uses temporary `[core.nil]`
 until the later atomic empty-result switch. No second control carrier is
 introduced. 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는

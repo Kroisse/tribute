@@ -215,7 +215,7 @@ fn build_aliases(
             // unit live through the callable use. This is a typed pre-erasure
             // handoff, not a `core.ptr` provenance rule.
             let callable_handoff = core::UnrealizedConversionCast::matches(ctx, op)
-                && core::Func::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
+                && func::FuncSig::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
             if input_managed
                 && is_internal_closure_layout(ctx, ctx.value_ty(*input), managed_layouts)
                 && is_core_ptr_type(ctx, ctx.value_ty(*output))
@@ -776,7 +776,7 @@ impl ActionPlanner<'_> {
         };
         let entries = if indirect {
             let signature = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(self.ir, op)
-                .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
+                .and_then(|ty| func::FuncSig::from_type_ref(self.ir, ty))
                 .ok_or_else(|| {
                     OwnershipPlanError::new(format!(
                         "indirect call {op:?} lacks exact signature; attrs = {:?}, operand types = {:?}",
@@ -831,7 +831,7 @@ impl ActionPlanner<'_> {
                 .op(callee_op)
                 .attributes
                 .get_type("type")
-                .and_then(|ty| core::Func::from_type_ref(self.ir, ty))
+                .and_then(|ty| func::FuncSig::from_type_ref(self.ir, ty))
                 .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
             self.entry_contracts
@@ -911,7 +911,7 @@ fn validate_allocation_result(
 fn validate_call_contract(
     ctx: &IrContext,
     op: OpRef,
-    signature: core::Func,
+    signature: func::FuncSig,
     args: &[ValueRef],
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {

@@ -559,7 +559,7 @@ pub(super) fn emit_pattern_check<'db>(
 ///
 /// This intentionally does not call the physical tuple/list helpers above:
 /// their layouts use `convert_type`, which represents callable values as
-/// `core.func`.  Keep legacy lowering on those helpers and make the logical
+/// `func.func_sig`.  Keep legacy lowering on those helpers and make the logical
 /// boundary select its own recursively converted aggregate layouts.
 pub(super) fn emit_logical_pattern_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -1495,7 +1495,7 @@ pub(super) fn bind_pattern_fields<'db>(
 
 /// Logical counterpart to [`bind_pattern_fields`].  Tuple and list extraction
 /// must preserve recursively logical element types; using the legacy helper
-/// would create `core.func` fields before the shared CPS boundary.
+/// would create `func.func_sig` fields before the shared CPS boundary.
 pub(super) fn bind_logical_pattern_fields<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,

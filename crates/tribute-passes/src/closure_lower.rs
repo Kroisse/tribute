@@ -84,7 +84,7 @@ pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 // Rewrite Patterns
 // ============================================================================
 
-/// Update function signatures to convert `core.func` params to `closure.closure`.
+/// Update function signatures to convert `func.func_sig` params to `closure.closure`.
 struct UpdateFuncSignatureArena;
 
 impl RewritePattern for UpdateFuncSignatureArena {
@@ -99,7 +99,7 @@ impl RewritePattern for UpdateFuncSignatureArena {
         };
 
         let func_ty = func_op.r#type(ctx);
-        let Some(signature) = core::Func::from_type_ref(ctx, func_ty) else {
+        let Some(signature) = func::FuncSig::from_type_ref(ctx, func_ty) else {
             return false;
         };
         let Some(return_ty) = signature.single_result(ctx) else {
@@ -111,8 +111,8 @@ impl RewritePattern for UpdateFuncSignatureArena {
         let mut new_params = Vec::with_capacity(params.len());
 
         for &param_ty in &params {
-            if core::Func::matches(ctx, param_ty) {
-                // Convert core.func to closure.closure wrapping the func type
+            if func::FuncSig::matches(ctx, param_ty) {
+                // Convert func.func_sig to closure.closure wrapping the func type
                 let closure_ty = closure::closure(ctx, param_ty).as_type_ref();
                 new_params.push(closure_ty);
                 needs_update = true;
@@ -127,10 +127,10 @@ impl RewritePattern for UpdateFuncSignatureArena {
 
         // Build new func type
         let mut type_attrs = ctx.types.get(func_ty).attrs.clone();
-        type_attrs.remove(core::NUM_INPUTS_ATTR);
-        type_attrs.remove(core::NUM_RESULTS_ATTR);
+        type_attrs.remove(func::NUM_INPUTS_ATTR);
+        type_attrs.remove(func::NUM_RESULTS_ATTR);
         let new_func_ty =
-            core::func_with_attrs(ctx, new_params.iter().copied(), [return_ty], type_attrs)
+            func::func_sig_with_attrs(ctx, new_params.iter().copied(), [return_ty], type_attrs)
                 .as_type_ref();
 
         // Rebuild the function with new type
@@ -228,7 +228,7 @@ impl RewritePattern for LowerClosureCallArena {
         } else if is_closure_struct_type_ref(ctx, callee_ty) {
             // Already lowered closure struct
             true
-        } else if core::Func::matches(ctx, callee_ty) {
+        } else if func::FuncSig::matches(ctx, callee_ty) {
             !matches!(
                 ctx.value_def(callee),
                 trunk_ir::refs::ValueDef::OpResult(defining_op, _)
@@ -323,7 +323,7 @@ impl RewritePattern for LowerClosureCallArena {
             .as_ref()
             .map(|contract| contract.signature)
             .unwrap_or_else(|| {
-                core::func(
+                func::func_sig(
                     ctx,
                     new_args
                         .iter()
@@ -496,7 +496,7 @@ fn exact_physical_call_contract(
     let closure_ty = physical_closure_type_for_callee(ctx, callee)?;
     (get_physical_closure_convention(ctx, closure_ty) == Some(convention)).then_some(())?;
     let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
-    let callable = core::Func::from_type_ref(ctx, function)?;
+    let callable = func::FuncSig::from_type_ref(ctx, function)?;
     if callable.results(ctx) != [result] || callable.inputs(ctx).len() != args.len() {
         return None;
     }
@@ -524,11 +524,11 @@ fn exact_physical_call_contract(
     let mut params = callable.inputs(ctx).to_vec();
     params.insert(environment_index, environment);
     let mut type_attrs = ctx.types.get(function).attrs.clone();
-    type_attrs.remove(core::NUM_INPUTS_ATTR);
-    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    type_attrs.remove(func::NUM_INPUTS_ATTR);
+    type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
         environment_index,
-        signature: core::func_with_attrs(ctx, params, [result], type_attrs).as_type_ref(),
+        signature: func::func_sig_with_attrs(ctx, params, [result], type_attrs).as_type_ref(),
         argument_casts: casts,
     })
 }
@@ -593,15 +593,15 @@ impl RewritePattern for LowerClosureEnvArena {
     }
 }
 
-/// Extract the single result type from a callee type (closure.closure or core.func).
+/// Extract the single result type from a callee type (closure.closure or func.func_sig).
 fn extract_return_type_from_callee(ctx: &IrContext, callee_ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.types.get(callee_ty);
-    // closure.closure<core.func<(Inputs...) -> Result>>
+    // closure.closure<func.func_sig<(Inputs...) -> Result>>
     if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
         let func_ty = *data.params.first()?;
-        return core::Func::from_type_ref(ctx, func_ty)?.single_result(ctx);
+        return func::FuncSig::from_type_ref(ctx, func_ty)?.single_result(ctx);
     }
-    core::Func::from_type_ref(ctx, callee_ty)?.single_result(ctx)
+    func::FuncSig::from_type_ref(ctx, callee_ty)?.single_result(ctx)
 }
 
 fn evidence_param_for_func(ctx: &IrContext, func_op: func::Func) -> Option<ValueRef> {
@@ -698,7 +698,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) {
 
 /// Prepare module-level closure lowering state.
 ///
-/// This updates function signatures (`core.func` params → `closure.closure`) and
+/// This updates function signatures (`func.func_sig` params → `closure.closure`) and
 /// remains module-scoped because function signatures are interprocedural
 /// contracts.
 pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
@@ -974,7 +974,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !closure = closure.closure(func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>)
 
   func.func @callee(%ev: {ev_ty}, %env: tribute_rt.anyref, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -1046,7 +1046,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+  !closure = closure.closure(func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>)
 
   func.func @callee(%ev: {ev_ty}, %env: tribute_rt.anyref, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -1086,7 +1086,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @apply(%f: core.func(tribute_rt.anyref, tribute_rt.anyref), %arg: tribute_rt.anyref) -> tribute_rt.anyref {
+  func.func @apply(%f: func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>, %arg: tribute_rt.anyref) -> tribute_rt.anyref {
       %result = func.call_indirect %f, %arg : tribute_rt.anyref
       func.return %result
   }
@@ -1099,7 +1099,7 @@ mod tests {
 
         let ir = print_module(&ctx, module.op());
         assert!(
-            ir.contains("closure.closure(core.func<(tribute_rt.anyref) -> tribute_rt.anyref>)"),
+            ir.contains("closure.closure(func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>)"),
             "function-typed params should be prepared as closure params:\n{ir}"
         );
     }
@@ -1217,7 +1217,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !closure = closure.closure(core.func(core.i32, core.i32)) {tribute.calling_convention = 0}
+  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {tribute.calling_convention = 0}
   !nested = core.tuple(!closure)
   func.func @run(%callback: !closure) -> !nested {
     %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -1249,7 +1249,7 @@ mod tests {
         finalize_closure_storage_layout(&mut ctx, module);
 
         let physical = closure_struct_type_ref(&mut ctx);
-        let signature = core::Func::from_type_ref(&ctx, run.r#type(&ctx)).unwrap();
+        let signature = func::FuncSig::from_type_ref(&ctx, run.r#type(&ctx)).unwrap();
         assert_eq!(signature.inputs(&ctx), [physical]);
         assert_eq!(
             ctx.value_ty(ctx.block_args(ctx.region(run.body(&ctx)).blocks[0])[0]),
@@ -1308,9 +1308,9 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure(core.func(core.never, {ev}, core.i32, core.i32, core.i32)) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
+  !cps = closure.closure(func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
-    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2, signature = core.func(core.never, {ev}, core.i32, core.i32, core.i32)}}
+    func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2, signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
   }}
 }}"#
             ),
@@ -1333,7 +1333,7 @@ mod tests {
             .unwrap();
         let signature =
             trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail).unwrap();
-        let callable = core::Func::from_type_ref(&ctx, signature).unwrap();
+        let callable = func::FuncSig::from_type_ref(&ctx, signature).unwrap();
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
         assert_eq!(
@@ -1361,7 +1361,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure(core.func(core.never, {evidence}, core.i32)) {{tribute.calling_convention = 2}}
+  !cps = closure.closure(func.func_sig<({evidence}, core.i32) -> core.never>) {{tribute.calling_convention = 2}}
   func.func @callee(%evidence: {evidence}, %env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.unreachable
   }}
@@ -1406,7 +1406,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.i32
   func.func @caller(%value: core.i32) -> core.i32 {
-    %callee = func.constant {func_ref = @external} : core.func(core.i32, core.i32)
+    %callee = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
     %result = func.call_indirect %callee, %value : core.i32
     func.return %result
   }
@@ -1429,15 +1429,15 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {{name = @_closure}}
-  !expected = closure.closure(core.func(core.never, {evidence}, core.i32, core.i32)) {{tribute.calling_convention = 2}}
-  !actual = closure.closure(core.func(core.never, {evidence}, core.i32, core.bool)) {{tribute.calling_convention = 2}}
-  !outer = closure.closure(core.func(core.never, {evidence}, core.i32, !expected)) {{tribute.calling_convention = 2}}
+  !expected = closure.closure(func.func_sig<({evidence}, core.i32, core.i32) -> core.never>) {{tribute.calling_convention = 2}}
+  !actual = closure.closure(func.func_sig<({evidence}, core.i32, core.bool) -> core.never>) {{tribute.calling_convention = 2}}
+  !outer = closure.closure(func.func_sig<({evidence}, core.i32, !expected) -> core.never>) {{tribute.calling_convention = 2}}
 
   func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.bool) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.unreachable
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
-    %function = func.constant {{func_ref = @actual_fn}} : core.func(core.never, {evidence}, core.i32, core.bool)
+    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.bool) -> core.never>
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %argument = adt.struct_new %function, %environment {{type = !_closure, tribute.closure_callable_type = !actual}} : !_closure
     func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = 2}}

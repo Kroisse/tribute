@@ -2,7 +2,7 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -89,7 +89,7 @@ pub fn get_calling_convention(ctx: &IrContext, op: OpRef) -> Option<CallingConve
 /// Result-indexed CPS completion target `Done<R>`.
 pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
-    let function = core::func(ctx, [result], [never]).as_type_ref();
+    let function = func::func_sig(ctx, [result], [never]).as_type_ref();
     generated_cps_closure_type(ctx, function)
 }
 
@@ -155,7 +155,7 @@ pub fn cps_completion_type(
     frame: TypeRef,
 ) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
-    let function = core::func(ctx, [evidence, frame, value], [never]).as_type_ref();
+    let function = func::func_sig(ctx, [evidence, frame, value], [never]).as_type_ref();
     generated_cps_closure_type(ctx, function)
 }
 
@@ -189,7 +189,7 @@ pub fn cps_dispatch_type(
 ) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
     let resume = cps_resume_type(ctx, evidence, frame, anyref);
-    let function = core::func(
+    let function = func::func_sig(
         ctx,
         [evidence, resume, i32_type, i32_type, i32_type, anyref],
         [never],
@@ -198,7 +198,7 @@ pub fn cps_dispatch_type(
     physical_closure_type(ctx, function, CallingConvention::Cps)
 }
 
-/// Return the underlying exact `core.func` only for a provenance-bearing CPS closure.
+/// Return the underlying exact `func.func_sig` only for a provenance-bearing CPS closure.
 ///
 /// Callers must reject absent or malformed outer closure provenance rather than infer a
 /// callable contract from a structurally similar type.
@@ -206,7 +206,7 @@ pub fn cps_closure_function_type(ctx: &IrContext, closure: TypeRef) -> Option<Ty
     physical_closure_function_type(ctx, closure, CallingConvention::Cps)
 }
 
-/// Return the exact `core.func` contract only for a provenance-bearing physical closure
+/// Return the exact `func.func_sig` contract only for a provenance-bearing physical closure
 /// with the requested convention.
 ///
 /// The result comes from the closure type's explicit callable contract, never from
@@ -223,7 +223,7 @@ pub fn physical_closure_function_type(
     let [function] = ctx.types.get(closure).params.as_slice() else {
         return None;
     };
-    let callable = core::Func::from_type_ref(ctx, *function)?;
+    let callable = func::FuncSig::from_type_ref(ctx, *function)?;
     let argument_count = callable.inputs(ctx).len();
     (environment_index <= argument_count).then_some(*function)
 }
@@ -330,7 +330,7 @@ mod tests {
     fn physical_closure_convention_is_exact_type_identity() {
         let mut ctx = IrContext::new();
         let never = trunk_ir::dialect::core::never(&mut ctx).as_type_ref();
-        let function = trunk_ir::dialect::core::func(&mut ctx, [], [never]).as_type_ref();
+        let function = trunk_ir::dialect::func::func_sig(&mut ctx, [], [never]).as_type_ref();
         let direct = physical_closure_type(&mut ctx, function, CallingConvention::Direct);
         let cps = physical_closure_type(&mut ctx, function, CallingConvention::Cps);
 
@@ -434,7 +434,7 @@ mod tests {
     fn continuation_frame_and_cps_closure_readers_fail_closed_on_malformed_metadata() {
         let mut ctx = IrContext::new();
         let never = core::never(&mut ctx).as_type_ref();
-        let function = core::func(&mut ctx, [], [never]).as_type_ref();
+        let function = func::func_sig(&mut ctx, [], [never]).as_type_ref();
         let missing_environment = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)

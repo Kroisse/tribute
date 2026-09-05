@@ -40,8 +40,8 @@ cannot express a required invariant.
 
 ### Function type representation
 
-The physical callable type remains `core.func`; no separate ABI dialect or
-marker type is introduced. `core.func` flattens its independently modeled input
+The shared callable type is `func.func_sig`; no separate ABI dialect or
+marker type is introduced. `func.func_sig` flattens its independently modeled input
 and result lists as `[inputs..., results...]` in `TypeData.params` and stores
 mandatory `num_inputs: u32` and `num_results: u32` attributes. The counts are
 interning delimiters, not ABI state. Construction and typed access validate
@@ -52,7 +52,7 @@ Generic type traversal and conversion continue over every flat parameter, so
 nested input and result types cannot be skipped. Conversion preserves the
 input/result cardinalities and all non-reserved type attributes. Only the
 target ABI conversion may later change logical CPS `[core.never]` into the
-physical empty result list. Malformed raw `core.func` types are permitted only
+physical empty result list. Malformed raw `func.func_sig` types are permitted only
 in verifier tests and are rejected by whole-IR validation.
 
 ## 직접형 제어 소유권
@@ -73,7 +73,7 @@ tribute        -> tribute-front + tribute-passes
 같다:
 
 - `tribute-front`는 [논리 callable/control 계약](ir.md#direct-style-control)을
-  emit하고 `func.*`, `closure.*`, `core.func` 또는 dispatch representation을
+  emit하고 `func.*`, `closure.*`, `func.func_sig` 또는 dispatch representation을
   만들지 않는다.
 - `tribute-ir`는 callable/control type과 operation, custom assembly, local
   verifier와 Tribute-specific whole-IR verifier를 소유한다.
@@ -995,7 +995,7 @@ flowchart TB
 | **직접형 제어** | `ast_to_ir` | typed AST | 검증된 `tribute_control` callable/control + 일반 value IR | frontend |
 | | `tribute_control_to_cps` | logical callable/control + typechecked metadata | physical func/closure/tail-call + logical `ability.*`; `effect.*` 없음 | shared |
 | **Closure (공유 후속)** | `lower_closure_lambda` | closure.lambda | func.func + closure.new | module-wide |
-| | `prepare_closure_lowering` | core.func params | closure signatures | module-wide |
+| | `prepare_closure_lowering` | func.func_sig params | closure signatures | module-wide |
 | **Closure (target storage)** | `lower_closures_in_func` | closure.new/func/env after target ABI validation | indirect transfer + `_closure` storage ops | function-anchored |
 | | `finalize_closure_storage_layout` | remaining closure type surfaces | canonical `_closure` layout in aliases, signatures, values, and type attributes | module-wide |
 | **Ability/evidence (공유 후속)** | `lower_ability_perform` | ability.perform/call | effect.dispatch_* + evidence lookup | function-anchored |

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -93,10 +93,10 @@ pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
 // Type conversion
 // ============================================================================
 
-/// Get the params and return type of a core.func TypeRef.
-/// Returns (param_types, return_type) or None if not a core.func.
+/// Get the params and return type of a func.func_sig TypeRef.
+/// Returns (param_types, return_type) or None if not a func.func_sig.
 pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], TypeRef)> {
-    let function = core::Func::from_type_ref(ctx, ty)?;
+    let function = func::FuncSig::from_type_ref(ctx, ty)?;
     Some((function.inputs(ctx), function.single_result(ctx)?))
 }
 
@@ -161,7 +161,7 @@ pub(crate) fn exact_call_indirect_signature_with(
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect signature must be core.func")
+        CompilationError::invalid_module("wasm.call_indirect signature must be func.func_sig")
     })?;
     let Some(_table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
@@ -213,7 +213,9 @@ pub(crate) fn exact_return_call_indirect_signature_with(
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
     let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.return_call_indirect signature must be core.func")
+        CompilationError::invalid_module(
+            "wasm.return_call_indirect signature must be func.func_sig",
+        )
     })?;
     if !is_nil_type(ctx, result) {
         return Err(CompilationError::invalid_module(
@@ -323,7 +325,7 @@ pub(crate) fn type_to_valtype(
                 ty: AbstractHeapType::Array,
             },
         }))
-    } else if is_type(ctx, ty, "core", "func") {
+    } else if is_type(ctx, ty, "func", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
     } else if is_closure_struct_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
@@ -520,6 +522,21 @@ mod tests {
                     ty: AbstractHeapType::Array,
                 },
             })
+        );
+    }
+
+    #[test]
+    fn func_sig_uses_nullable_funcref_value_type() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let signature = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+
+        assert_eq!(
+            type_to_valtype(&ctx, signature, &HashMap::new())
+                .expect("func.func_sig is a supported Wasm value type"),
+            ValType::Ref(RefType::FUNCREF)
         );
     }
 }

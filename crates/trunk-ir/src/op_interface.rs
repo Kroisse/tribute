@@ -402,19 +402,19 @@ pub struct RegionValueTransfer {
 /// Exact callable region signature supplied by the owning dialect.
 /// A registered owner with an invalid signature is still an ownership boundary.
 pub trait CallableOwnerModel: DialectOp {
-    fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::core::Func>;
+    fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::func::FuncSig>;
 }
 
 pub struct CallableOwnerRegistration {
     dialect: &'static str,
     op_name: &'static str,
-    signature: fn(&IrContext, OpRef) -> Option<crate::dialect::core::Func>,
+    signature: fn(&IrContext, OpRef) -> Option<crate::dialect::func::FuncSig>,
 }
 
 fn callable_owner_signature<T: CallableOwnerModel>(
     ctx: &IrContext,
     op: OpRef,
-) -> Option<crate::dialect::core::Func> {
+) -> Option<crate::dialect::func::FuncSig> {
     T::from_op(ctx, op).ok()?.callable_signature(ctx)
 }
 
@@ -448,7 +448,7 @@ impl CallableOwnerOps {
     }
 
     /// Outer None means unregistered; Some(None) means a malformed owner.
-    pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::core::Func>> {
+    pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
         let data = ctx.op(op);
         CALLABLE_OWNER_REGISTRY
             .get(&(data.dialect, data.name))

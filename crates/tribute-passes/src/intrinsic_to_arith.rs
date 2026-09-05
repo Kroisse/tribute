@@ -289,8 +289,8 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // All mapped intrinsics are binary (lhs, rhs) -> result.
         // This will panic if a non-binary intrinsic is ever added to the map.
-        let function = core::Func::from_type_ref(ctx, func_ty)
-            .expect("mapped intrinsic declaration must have a valid core.func type");
+        let function = func::FuncSig::from_type_ref(ctx, func_ty)
+            .expect("mapped intrinsic declaration must have a valid func.func_sig type");
         let Some(return_ty) = function.single_result(ctx) else {
             return false;
         };
@@ -345,7 +345,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 }
 
 fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &ArithMapping) -> bool {
-    let Some(function) = core::Func::from_type_ref(ctx, ty) else {
+    let Some(function) = func::FuncSig::from_type_ref(ctx, ty) else {
         return false;
     };
     let [left, right] = function.inputs(ctx) else {

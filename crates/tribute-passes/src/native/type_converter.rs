@@ -151,7 +151,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_closure_type(ctx, ty) {
             return Some(r.core_ptr);
         }
-        // core.func → ptr
+        // func.func_sig → ptr
         if is_func_type(ctx, ty) {
             return Some(r.core_ptr);
         }
@@ -421,8 +421,8 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         return true;
     }
 
-    // core.func (function pointers)
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
+    // func.func_sig (function pointers)
+    if data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig") {
         return true;
     }
 
@@ -448,10 +448,10 @@ fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure")
 }
 
-/// Helper: Check if a type is core.func.
+/// Helper: Check if a type is func.func_sig.
 fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("func")
+    data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig")
 }
 
 /// Helper: Check if a type is core.array.
@@ -514,7 +514,7 @@ struct NativeTypeRefsCopy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::dialect::clif;
+    use trunk_ir::dialect::{clif, func};
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -562,10 +562,11 @@ mod tests {
             .expect("bodied definition");
 
         assert_eq!(ctx.op(declaration.op_ref()).regions.len(), 0);
-        let declaration_type = core::Func::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
+        let declaration_type =
+            func::FuncSig::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
         assert_eq!(declaration_type.inputs(&ctx), [refs.core_ptr]);
         assert_eq!(declaration_type.single_result(&ctx), Some(refs.core_ptr));
-        let definition_type = core::Func::from_type_ref(&ctx, definition.r#type(&ctx)).unwrap();
+        let definition_type = func::FuncSig::from_type_ref(&ctx, definition.r#type(&ctx)).unwrap();
         assert_eq!(definition_type.inputs(&ctx), [refs.core_ptr]);
         assert_eq!(definition_type.single_result(&ctx), Some(refs.core_ptr));
 

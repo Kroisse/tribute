@@ -72,7 +72,7 @@ pub enum RawType<'a> {
         params: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
     },
-    /// Canonical `core.func<(inputs...) -> results>` syntax.
+    /// Canonical `func.func_sig<(inputs...) -> results>` syntax.
     Function {
         inputs: Vec<RawType<'a>>,
         results: Vec<RawType<'a>>,
@@ -278,7 +278,9 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 
     let (dialect, name) = qualified_name.parse_next(input)?;
 
-    if dialect == "core" && name == "func" && input.starts_with('<') {
+    if ((dialect == "func" && name == "func_sig") || (dialect == "core" && name == "func"))
+        && input.starts_with('<')
+    {
         '<'.parse_next(input)?;
         ws.parse_next(input)?;
         let inputs = delimited(
@@ -789,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_parse_canonical_function_type() {
-        let mut input = "core.func<(core.i32, core.i64) -> core.never>";
+        let mut input = "func.func_sig<(core.i32, core.i64) -> core.never>";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
         let RawType::Function {
             inputs,
@@ -807,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_parse_canonical_function_type_with_empty_results() {
-        let mut input = "core.func<(core.i32) -> ()>";
+        let mut input = "func.func_sig<(core.i32) -> ()>";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
         let RawType::Function {
             inputs, results, ..
@@ -822,7 +824,7 @@ mod tests {
 
     #[test]
     fn test_parse_canonical_function_type_recognizes_multiple_results() {
-        let mut input = "core.func<() -> (core.i32, core.i64)>";
+        let mut input = "func.func_sig<() -> (core.i32, core.i64)>";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
         let RawType::Function { results, .. } = raw else {
             panic!("expected canonical Function")

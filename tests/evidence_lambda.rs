@@ -12,7 +12,7 @@ use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
 use tribute_passes::evidence::has_evidence_first_param;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 
@@ -56,7 +56,8 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     let func_ty = func_op.r#type(ctx);
-    let function = core::Func::from_type_ref(ctx, func_ty).expect("valid core.func signature");
+    let function =
+        func::FuncSig::from_type_ref(ctx, func_ty).expect("valid func.func_sig signature");
     let params = function.inputs(ctx);
     let has_evidence = params
         .first()

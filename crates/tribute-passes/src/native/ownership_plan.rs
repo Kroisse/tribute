@@ -887,7 +887,7 @@ fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
     let Some(signature) = ctx.op(op).attributes.get_type("type") else {
         return false;
     };
-    core::Func::from_type_ref(ctx, signature).is_some_and(|callable| {
+    func::FuncSig::from_type_ref(ctx, signature).is_some_and(|callable| {
         let Some(result) = callable.single_result(ctx) else {
             return false;
         };
@@ -950,7 +950,7 @@ fn validate_bodyless_signature(
         .op(op)
         .attributes
         .get_type("type")
-        .and_then(|ty| core::Func::from_type_ref(ctx, ty))
+        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
     if signature
         .inputs(ctx)
@@ -975,7 +975,7 @@ fn validate_function_contract(
         .op(function_op)
         .attributes
         .get_type("type")
-        .and_then(|ty| core::Func::from_type_ref(ctx, ty))
+        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("defined function lacks exact signature"))?;
     let entry_args = ctx.block_args(cfg.entry());
     if entry_args.len() != signature.inputs(ctx).len()

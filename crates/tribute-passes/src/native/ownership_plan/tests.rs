@@ -194,8 +194,8 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
         r#"core.module @test {
   !Frame = adt.struct() {name = @ContinuationFrame, fields = [[@value, core.i32]]}
   !FrameRef = adt.typeref() {name = @ContinuationFrame}
-  !Env = adt.struct() {name = @continuation_env, fields = [[@frame, !FrameRef], [@code, core.func(core.nil)]]}
-  func.func @capture(%frame: !FrameRef, %code: core.func(core.nil)) -> core.nil {
+  !Env = adt.struct() {name = @continuation_env, fields = [[@frame, !FrameRef], [@code, func.func_sig<() -> core.nil>]]}
+  func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
     %env = adt.struct_new %frame, %code {type = !Env} : !Env
     func.return
   }
@@ -220,8 +220,8 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     let ir = r#"core.module @test {
   !Frame = adt.struct() {name = @ContinuationFrame, fields = [[@value, core.i32]]}
   !FrameRef = adt.typeref() {name = @ContinuationFrame}
-  !Env = adt.struct() {name = @continuation_env, fields = [[@frame, !FrameRef], [@code, core.func(core.nil)]]}
-  func.func @capture(%frame: !FrameRef, %code: core.func(core.nil)) -> core.nil {
+  !Env = adt.struct() {name = @continuation_env, fields = [[@frame, !FrameRef], [@code, func.func_sig<() -> core.nil>]]}
+  func.func @capture(%frame: !FrameRef, %code: func.func_sig<() -> core.nil>) -> core.nil {
     %env = adt.struct_new %frame, %code {type = !Env} : !Env
     func.return
   }
@@ -1101,7 +1101,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
         r#"core.module @test {
   !Marker = adt.struct() {name = @EvidenceMarker, fields = [[@code, core.ptr]]}
   !Evidence = core.array(!Marker)
-  func.func @raw(%raw: core.ptr, %bytes: core.bytes, %array: core.array(core.i32), %evidence: !Evidence, %code: core.func(core.nil)) -> core.ptr {
+  func.func @raw(%raw: core.ptr, %bytes: core.bytes, %array: core.array(core.i32), %evidence: !Evidence, %code: func.func_sig<() -> core.nil>) -> core.ptr {
     func.return %raw
   }
 }"#,
@@ -1113,7 +1113,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
         .op(function.operation())
         .attributes
         .get_type("type")
-        .and_then(|ty| core::Func::from_type_ref(&ctx, ty))
+        .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
         .unwrap()
         .inputs(&ctx)
     {
@@ -1125,7 +1125,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
 fn semantic_closure_values_are_managed_by_the_typed_contract() {
     let (ctx, _module, plan) = build(
         r#"core.module @test {
-  !Closure = closure.closure(core.func(core.i32, core.i32))
+  !Closure = closure.closure(func.func_sig<(core.i32) -> core.i32>)
   func.func @identity(%closure: !Closure) -> !Closure {
     func.return %closure
   }
@@ -1146,7 +1146,7 @@ fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Closure = closure.closure(core.func(core.nil, tribute_rt.anyref))
+  !Closure = closure.closure(func.func_sig<(tribute_rt.anyref) -> core.nil>)
   func.func @target(%environment: tribute_rt.anyref) -> core.nil {
     func.return
   }
@@ -1185,10 +1185,10 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
-  func.func @caller(%value: !R, %callee: core.func(!R, !R)) -> !R {
+  func.func @caller(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
     %seen = func.call %value {callee = @observe} : core.i32
     %direct = func.call %value {callee = @ordinary} : !R
-    %indirect = func.call_indirect %callee, %direct {signature = core.func(!R, !R)} : !R
+    %indirect = func.call_indirect %callee, %direct {signature = func.func_sig<(!R) -> !R>} : !R
     func.return %indirect
   }
   func.func @tail(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
@@ -1231,8 +1231,8 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
-  func.func @f(%value: !R, %callee: core.func(!R, !R)) -> !R {
-    %x = func.call_indirect %callee {signature = core.func(!R, !R)} : !R
+  func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
+    %x = func.call_indirect %callee {signature = func.func_sig<(!R) -> !R>} : !R
     func.return %x
   }
 }"#,
@@ -1287,7 +1287,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
-  func.func @f(%value: !R, %callee: core.func(!R, !R)) -> !R {
+  func.func @f(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> !R {
     %result = func.call_indirect %callee, %value : !R
     func.return %result
   }

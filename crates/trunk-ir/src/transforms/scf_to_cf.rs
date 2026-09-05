@@ -760,7 +760,7 @@ mod tests {
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        crate::dialect::core::func(ctx, [], [nil_ty]).as_type_ref()
+        crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> Module {
@@ -1141,7 +1141,7 @@ mod tests {
 
         let printed = crate::printer::print_module(&ctx, module.op());
         assert!(
-            printed.contains("!t0 = core.func<(core.nil) -> core.never>"),
+            printed.contains("!t0 = func.func_sig<(core.nil) -> core.never>"),
             "{printed}"
         );
         assert!(printed.contains("signature = !t0"), "{printed}");
@@ -1152,13 +1152,13 @@ mod tests {
     fn lower_scf_if_preserves_used_nil_result_for_tail_transfer() {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
-  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     %selected = scf.if %cond : core.nil {
       scf.yield %unit
     } {
       scf.yield %unit
     }
-    func.tail_call_indirect %callee, %selected {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %selected {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
   }
 }"#,
             1,
@@ -1168,11 +1168,11 @@ mod tests {
     #[test]
     fn lower_scf_if_drops_unused_never_result_for_tail_transfers() {
         let input = r#"core.module @test {
-  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     %discarded = scf.if %cond : core.never {
       func.unreachable
     } {
-      func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+      func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
     }
   }
 }"#;
@@ -1225,13 +1225,13 @@ mod tests {
     #[test]
     fn lower_terminal_scf_switch_without_empty_merge_block() {
         let input = r#"core.module @test {
-  func.func @main(%choice: core.i32, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     scf.switch %choice {
       scf.case {value = 0} {
         func.unreachable
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
       }
     }
   }
@@ -1272,17 +1272,17 @@ mod tests {
     #[test]
     fn lower_terminal_scf_switch_with_nested_never_if_has_no_merge_block() {
         let input = r#"core.module @test {
-  func.func @main(%choice: core.i32, %cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     scf.switch %choice {
       scf.case {value = 0} {
         %discarded = scf.if %cond : core.never {
           func.unreachable
         } {
-          func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+          func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
         }
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
       }
     }
   }
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn lower_terminal_scf_switch_with_nested_terminal_switch_has_no_empty_merge_block() {
         let input = r#"core.module @test {
-  func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32, %nested_choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     scf.switch %choice {
       scf.case {value = 0} {
         scf.switch %nested_choice {
@@ -1328,12 +1328,12 @@ mod tests {
             func.unreachable
           }
           scf.default {
-            func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+            func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
           }
         }
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
       }
     }
   }
@@ -1470,7 +1470,7 @@ mod tests {
     fn lower_nested_nil_results_preserves_each_merge_value() {
         assert_lowered_unit_tail_transfer(
             r#"core.module @test {
-  func.func @main(%cond: core.i1, %callee: core.func(core.never, core.nil), %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
     %inner = scf.if %cond : core.nil {
       scf.yield %unit
     } {
@@ -1481,7 +1481,7 @@ mod tests {
     } {
       scf.yield %inner
     }
-    func.tail_call_indirect %callee, %outer {signature = core.func(core.never, core.nil), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %outer {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
   }
 }"#,
             2,

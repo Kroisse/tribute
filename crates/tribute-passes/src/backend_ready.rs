@@ -12,7 +12,7 @@ use std::ops::ControlFlow;
 use tribute_core::{CallingConvention, get_calling_convention};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
@@ -193,13 +193,14 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
                 data.dialect, data.name
             )));
         }
-        let is_function = data.dialect == Symbol::new("core") && data.name == Symbol::new("func");
+        let is_function =
+            data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig");
         if is_function {
-            let Some(function) = core::Func::from_type_ref(self.ctx, ty) else {
-                return Err(self.error(format!("malformed `core.func` type in {where_}")));
+            let Some(function) = func::FuncSig::from_type_ref(self.ctx, ty) else {
+                return Err(self.error(format!("malformed `func.func_sig` type in {where_}")));
             };
             let Some(result) = function.single_result(self.ctx) else {
-                return Err(self.error(format!("`core.func` has no result type in {where_}")));
+                return Err(self.error(format!("`func.func_sig` has no result type in {where_}")));
             };
             self.verify_type(result, TypeSurface::Result, "function result")?;
             for &parameter in function.inputs(self.ctx) {
@@ -271,7 +272,7 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
                 .attributes
                 .get_type("type")
                 .ok_or_else(|| self.error("Cps function has no signature"))?;
-            let signature = core::Func::from_type_ref(self.ctx, signature);
+            let signature = func::FuncSig::from_type_ref(self.ctx, signature);
             if signature
                 .and_then(|function| function.single_result(self.ctx))
                 .is_none_or(|result| !is_core_type(self.ctx, result, "nil"))
@@ -320,7 +321,7 @@ fn type_is_legal(
 ) -> bool {
     match surface {
         TypeSurface::Signature => {
-            data.dialect == Symbol::new("core") && data.name == Symbol::new("func")
+            data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig")
         }
         TypeSurface::Value => target_value_type(backend, data),
         TypeSurface::Result => {
@@ -343,9 +344,10 @@ fn target_value_type(backend: TributeBackend, data: &trunk_ir::types::TypeData) 
                 data.dialect,
                 data.name,
                 &[
-                    "nil", "i1", "i32", "i64", "f32", "f64", "bytes", "ptr", "array", "func",
+                    "nil", "i1", "i32", "i64", "f32", "f64", "bytes", "ptr", "array",
                 ],
-            ) || adt_type_is(data)
+            ) || func_sig_type_is(data)
+                || adt_type_is(data)
                 || wasm_reference_type(data.dialect, data.name)
         }
     }
@@ -356,11 +358,15 @@ fn target_metadata_type(backend: TributeBackend, data: &trunk_ir::types::TypeDat
         data.dialect,
         data.name,
         &[
-            "func", "nil", "i1", "i8", "i16", "i32", "i64", "f32", "f64", "ptr", "bytes", "ref",
-            "array",
+            "nil", "i1", "i8", "i16", "i32", "i64", "f32", "f64", "ptr", "bytes", "ref", "array",
         ],
-    ) || adt_type_is(data)
+    ) || func_sig_type_is(data)
+        || adt_type_is(data)
         || (backend == TributeBackend::Wasm && wasm_reference_type(data.dialect, data.name))
+}
+
+fn func_sig_type_is(data: &trunk_ir::types::TypeData) -> bool {
+    data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig")
 }
 
 fn core_type_is(dialect: Symbol, name: Symbol, names: &[&str]) -> bool {
@@ -403,6 +409,7 @@ fn is_core_type(ctx: &IrContext, ty: TypeRef, expected: &str) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::types::TypeDataBuilder;
 
     fn verify(ir: &str, backend: TributeBackend) -> Result<(), String> {
         let mut ctx = IrContext::new();
@@ -428,7 +435,7 @@ mod tests {
             let op = module.ops(&ctx)[0];
             let ty = ctx.op(op).attributes.get_type("type").unwrap();
             let mut malformed = ctx.types.get(ty).clone();
-            malformed.attrs.remove(core::NUM_RESULTS_ATTR);
+            malformed.attrs.remove(func::NUM_RESULTS_ATTR);
             let malformed = ctx.types.intern(malformed);
             ctx.op_mut(op)
                 .attributes
@@ -440,11 +447,68 @@ mod tests {
             }
             .unwrap_err();
             assert!(
-                error.to_string().contains("malformed `core.func`"),
+                error.to_string().contains("malformed `func.func_sig`"),
                 "{error}"
             );
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
         }
+    }
+
+    #[test]
+    fn shared_func_sig_replaces_core_func_on_value_and_metadata_surfaces() {
+        let mut ctx = IrContext::new();
+        let shared = func::func_sig(&mut ctx, [], []).as_type_ref();
+        let retired = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+
+        assert!(type_is_legal(
+            TributeBackend::Wasm,
+            TypeSurface::Value,
+            ctx.types.get(shared)
+        ));
+        assert!(!type_is_legal(
+            TributeBackend::Wasm,
+            TypeSurface::Value,
+            ctx.types.get(retired)
+        ));
+        for backend in [TributeBackend::Native, TributeBackend::Wasm] {
+            assert!(type_is_legal(
+                backend,
+                TypeSurface::Metadata,
+                ctx.types.get(shared)
+            ));
+            assert!(!type_is_legal(
+                backend,
+                TypeSurface::Metadata,
+                ctx.types.get(retired)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_retired_core_func_nested_in_reachable_metadata() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @m { wasm.func @main() -> core.nil { wasm.return } }",
+        );
+        let retired = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+        let nested = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+                .params([retired])
+                .build(),
+        );
+        ctx.op_mut(module.op())
+            .attributes
+            .insert(Symbol::new("metadata"), Attribute::Type(nested));
+
+        let error = verify_wasm_backend_ready(&ctx, module)
+            .expect_err("retired core.func must not cross the backend boundary")
+            .to_string();
+        assert!(error.contains("core.func"), "{error}");
     }
 
     #[test]
@@ -517,8 +581,8 @@ mod tests {
     #[test]
     fn rejects_illegal_types_nested_in_callable_signatures() {
         for signature in [
-            "core.func(core.ref(core.ptr))",
-            "core.func(core.nil, core.ref(core.ptr))",
+            "func.func_sig<() -> core.ref(core.ptr)>",
+            "func.func_sig<(core.ref(core.ptr)) -> core.nil>",
         ] {
             let ir = format!(
                 r#"core.module @test {{
@@ -613,7 +677,7 @@ mod tests {
         ] {
             let ir = format!(
                 r#"core.module @test {{
-  clif.func {{sym_name = @main, tribute.calling_convention = {convention}, type = core.func(core.i32)}} {{
+  clif.func {{sym_name = @main, tribute.calling_convention = {convention}, type = func.func_sig<() -> core.i32>}} {{
     ^entry:
     %zero = clif.iconst {{value = 0}} : core.i32
     clif.return %zero

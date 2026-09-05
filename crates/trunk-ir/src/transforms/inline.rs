@@ -485,7 +485,7 @@ mod mechanics {
         F: FnOnce(&mut IrContext, BlockRef, &[ValueRef]),
     {
         let fn_ty =
-            crate::dialect::core::func(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
+            crate::dialect::func::func_sig(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
                 .as_type_ref();
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -853,7 +853,7 @@ mod pass {
         F: FnOnce(&mut IrContext, BlockRef, &[ValueRef]),
     {
         let fn_ty =
-            crate::dialect::core::func(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
+            crate::dialect::func::func_sig(ctx, param_tys.iter().copied(), std::iter::once(ret_ty))
                 .as_type_ref();
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -1099,7 +1099,7 @@ mod pass {
             parent_op: None,
         });
 
-        let fn_ty = crate::dialect::core::func(&mut ctx, [], [i32_ty]).as_type_ref();
+        let fn_ty = crate::dialect::func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
             .attr("type", Attribute::Type(fn_ty))

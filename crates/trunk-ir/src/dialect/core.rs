@@ -1,5 +1,7 @@
 //! Arena-based core dialect.
 
+use crate::IrContext;
+
 // === Operation registrations ===
 crate::register_isolated_op!(core.module);
 
@@ -21,215 +23,6 @@ mod core {
     #[attr(nullable: bool)]
     struct Ref<Pointee>;
     struct Tuple<#[rest] Elements>;
-}
-
-use crate::ops::DialectType;
-use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
-
-/// Reserved delimiter attribute for the number of function inputs.
-pub const NUM_INPUTS_ATTR: &str = "num_inputs";
-
-/// Reserved delimiter attribute for the number of function results.
-pub const NUM_RESULTS_ATTR: &str = "num_results";
-
-/// Return the interned name of the `core.func` type.
-#[allow(non_snake_case)]
-#[inline]
-pub fn FUNC() -> Symbol {
-    Symbol::new("func")
-}
-
-/// Why a name-matching `core.func` does not satisfy its storage invariant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FuncTypeError {
-    MissingCount(&'static str),
-    InvalidCount(&'static str),
-    CountOverflow,
-    LengthMismatch {
-        num_inputs: u32,
-        num_results: u32,
-        params: usize,
-    },
-    UnsupportedResultCount(u32),
-}
-
-impl std::fmt::Display for FuncTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingCount(name) => write!(f, "missing required `{name}` u32 attribute"),
-            Self::InvalidCount(name) => write!(f, "`{name}` must be a u32 attribute"),
-            Self::CountOverflow => write!(f, "input and result counts overflow u32"),
-            Self::LengthMismatch {
-                num_inputs,
-                num_results,
-                params,
-            } => write!(
-                f,
-                "num_inputs ({num_inputs}) + num_results ({num_results}) must equal params length ({params})"
-            ),
-            Self::UnsupportedResultCount(count) => {
-                write!(f, "currently supports at most one result, found {count}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for FuncTypeError {}
-
-/// Validated wrapper for an input-first, zero-or-one-result `core.func` type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Func(TypeRef);
-
-impl Func {
-    /// Validate a name-matching `core.func`, including both delimiter counts.
-    pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncTypeError> {
-        let data = ctx.types.get(ty);
-        debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC());
-
-        let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
-        let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)?;
-        if num_results > 1 {
-            return Err(FuncTypeError::UnsupportedResultCount(num_results));
-        }
-        let total = num_inputs
-            .checked_add(num_results)
-            .ok_or(FuncTypeError::CountOverflow)?;
-        if usize::try_from(total).ok() != Some(data.params.len()) {
-            return Err(FuncTypeError::LengthMismatch {
-                num_inputs,
-                num_results,
-                params: data.params.len(),
-            });
-        }
-        Ok(Self(ty))
-    }
-
-    fn counts(self, ctx: &IrContext) -> (usize, usize) {
-        let data = ctx.types.get(self.0);
-        let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)
-            .expect("validated core.func must retain a valid num_inputs attribute");
-        let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)
-            .expect("validated core.func must retain a valid num_results attribute");
-        (
-            usize::try_from(num_inputs).expect("u32 must fit usize"),
-            usize::try_from(num_results).expect("u32 must fit usize"),
-        )
-    }
-
-    pub fn as_type_ref(&self) -> TypeRef {
-        self.0
-    }
-
-    pub fn inputs<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
-        let (num_inputs, _) = self.counts(ctx);
-        &ctx.types.get(self.0).params[..num_inputs]
-    }
-
-    pub fn results<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
-        let (num_inputs, num_results) = self.counts(ctx);
-        &ctx.types.get(self.0).params[num_inputs..num_inputs + num_results]
-    }
-
-    pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
-        self.results(ctx).first().copied()
-    }
-
-    /// Iterate function metadata without the input/result count delimiters.
-    pub fn non_reserved_attrs<'a>(
-        &self,
-        ctx: &'a IrContext,
-    ) -> impl Iterator<Item = (&'a Symbol, &'a Attribute)> {
-        ctx.types.get(self.0).attrs.iter().filter(|(key, _)| {
-            **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
-        })
-    }
-
-    /// Remove input/result count delimiters from owned function metadata before rebuilding it.
-    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
-        attrs.remove(NUM_INPUTS_ATTR);
-        attrs.remove(NUM_RESULTS_ATTR);
-    }
-
-    pub fn is_resultless(&self, ctx: &IrContext) -> bool {
-        self.results(ctx).is_empty()
-    }
-}
-
-impl DialectType for Func {
-    const DIALECT_NAME: &'static str = "core";
-    const TYPE_NAME: &'static str = "func";
-
-    fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
-        if !Self::matches(ctx, ty) {
-            return None;
-        }
-        Self::validate(ctx, ty).ok()
-    }
-
-    fn as_type_ref(&self) -> TypeRef {
-        self.0
-    }
-}
-
-impl From<Func> for TypeRef {
-    fn from(ty: Func) -> Self {
-        ty.0
-    }
-}
-
-fn read_count(attrs: &AttributeMap, name: &'static str) -> Result<u32, FuncTypeError> {
-    match attrs.get(name) {
-        None => Err(FuncTypeError::MissingCount(name)),
-        Some(Attribute::Int(value)) => {
-            u32::try_from(*value).map_err(|_| FuncTypeError::InvalidCount(name))
-        }
-        Some(_) => Err(FuncTypeError::InvalidCount(name)),
-    }
-}
-
-/// Construct a canonical `core.func` with zero or one result.
-pub fn func(
-    ctx: &mut IrContext,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    results: impl IntoIterator<Item = TypeRef>,
-) -> Func {
-    func_with_attrs(ctx, inputs, results, AttributeMap::new())
-}
-
-/// Construct a canonical `core.func` while preserving non-reserved attributes.
-pub fn func_with_attrs(
-    ctx: &mut IrContext,
-    inputs: impl IntoIterator<Item = TypeRef>,
-    results: impl IntoIterator<Item = TypeRef>,
-    attrs: AttributeMap,
-) -> Func {
-    assert!(
-        !attrs.contains_key(NUM_INPUTS_ATTR) && !attrs.contains_key(NUM_RESULTS_ATTR),
-        "core.func count attributes are reserved"
-    );
-
-    let inputs: Vec<_> = inputs.into_iter().collect();
-    let results: Vec<_> = results.into_iter().collect();
-    assert!(
-        results.len() <= 1,
-        "core.func currently supports at most one result"
-    );
-    let num_inputs = u32::try_from(inputs.len()).expect("core.func input count exceeds u32");
-    let num_results = u32::try_from(results.len()).expect("core.func result count exceeds u32");
-
-    let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC())
-        .params(inputs)
-        .params(results);
-    for (key, value) in attrs {
-        builder = builder.attr(key, value);
-    }
-    let ty = ctx.types.intern(
-        builder
-            .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
-            .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
-            .build(),
-    );
-    Func::validate(ctx, ty).expect("core.func constructor must produce a valid type")
 }
 
 // =========================================================================
@@ -292,11 +85,12 @@ pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Opt
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
+    use crate::dialect::func::{FuncSig, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR};
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
-    use crate::symbol::Symbol;
     use crate::walk::{WalkAction, walk_op};
+    use crate::{Attribute, AttributeMap, Symbol};
     use std::ops::ControlFlow;
 
     use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
@@ -325,7 +119,7 @@ mod canonicalize_tests {
     #[test]
     fn remove_reserved_attrs_preserves_metadata_and_is_idempotent() {
         let mut attrs = AttributeMap::new();
-        Func::remove_reserved_attrs(&mut attrs);
+        FuncSig::remove_reserved_attrs(&mut attrs);
         assert!(attrs.is_empty());
 
         let mut ctx = IrContext::new();
@@ -340,9 +134,9 @@ mod canonicalize_tests {
         attrs = metadata.clone();
         attrs.insert(Symbol::new(NUM_INPUTS_ATTR), Attribute::from(2u32));
         attrs.insert(Symbol::new(NUM_RESULTS_ATTR), Attribute::from(1u32));
-        Func::remove_reserved_attrs(&mut attrs);
+        FuncSig::remove_reserved_attrs(&mut attrs);
         assert_eq!(attrs, metadata);
-        Func::remove_reserved_attrs(&mut attrs);
+        FuncSig::remove_reserved_attrs(&mut attrs);
         assert_eq!(attrs, metadata);
     }
 

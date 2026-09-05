@@ -150,13 +150,13 @@ inventory::submit! {
 /// Attach the required exact callable contract to a `clif` indirect transfer.
 ///
 /// Returns `false` without mutation when the operation is not a `clif`
-/// indirect call or the supplied type is not a `core.func` contract.
+/// indirect call or the supplied type is not a `func.func_sig` contract.
 pub fn set_indirect_call_signature(
     ctx: &mut crate::IrContext,
     op: crate::OpRef,
     signature: crate::TypeRef,
 ) -> bool {
-    if crate::dialect::core::Func::from_type_ref(ctx, signature).is_none()
+    if crate::dialect::func::FuncSig::from_type_ref(ctx, signature).is_none()
         || (CallIndirect::from_op(ctx, op).is_err()
             && ReturnCallIndirect::from_op(ctx, op).is_err())
     {
@@ -189,11 +189,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   clif.func @ordinary(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = clif.call_indirect %callee, %value {sig = core.func(core.i32, core.i32)} : core.i32
+    %result = clif.call_indirect %callee, %value {sig = func.func_sig<(core.i32) -> core.i32>} : core.i32
     clif.return %result
   }
   clif.func @tail(%callee: core.ptr, %value: core.i32) -> core.nil {
-    clif.return_call_indirect %callee, %value {sig = core.func(core.nil, core.i32)}
+    clif.return_call_indirect %callee, %value {sig = func.func_sig<(core.i32) -> core.nil>}
   }
   clif.func @direct() -> core.nil {
     clif.return
@@ -225,6 +225,6 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.call_indirect"));
-        assert!(printed.contains("sig = core.func<(core.i32) -> core.i32>"));
+        assert!(printed.contains("sig = func.func_sig<(core.i32) -> core.i32>"));
     }
 }

@@ -18,7 +18,7 @@ core.module @test {
       %9 = clif.iadd %7, %8 : core.ptr
       func.return %9
   }
-  clif.func {sym_name = @__tribute_release_32, type = core.func<(core.ptr) -> core.nil>} {
+  clif.func {sym_name = @__tribute_release_32, type = func.func_sig<(core.ptr) -> core.nil>} {
     ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 8} : core.i64
       %2 = clif.isub %0, %1 : core.ptr
