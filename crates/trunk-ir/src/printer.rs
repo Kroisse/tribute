@@ -17,6 +17,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
+use super::ops::DialectType;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -236,6 +237,11 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
     if data.name != crate::Symbol::new("func_sig") {
         return None;
     }
+    if data.dialect == crate::Symbol::new("func")
+        && crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
+    {
+        return None;
+    }
     let num_inputs = match data.attrs.get(crate::dialect::func::NUM_INPUTS_ATTR) {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,
@@ -245,7 +251,10 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
         _ => return None,
     };
     let end = num_inputs.checked_add(num_results)?;
-    (end == data.params.len()).then_some((&data.params[..num_inputs], &data.params[num_inputs..]))
+    if end != data.params.len() {
+        return None;
+    }
+    Some((&data.params[..num_inputs], &data.params[num_inputs..]))
 }
 
 // ============================================================================
@@ -1059,6 +1068,37 @@ mod tests {
         assert_eq!(
             print_type(&ctx, many_one),
             "func.func_sig<(core.i32, core.i32) -> core.i32>"
+        );
+    }
+
+    #[test]
+    fn malformed_func_sig_storage_prints_as_concrete_type() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx);
+        let foreign = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
+                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
+                .build(),
+        );
+        assert_eq!(
+            print_type(&ctx, foreign),
+            "foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+        );
+
+        // Shared signatures have a stricter one-result contract, so raw
+        // multi-result storage must not be printed in arrow syntax either.
+        let shared = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                .params([i32_ty, i32_ty, i32_ty])
+                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
+                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
+                .build(),
+        );
+        assert_eq!(
+            print_type(&ctx, shared),
+            "func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
         );
     }
 

@@ -212,6 +212,16 @@ impl FuncSig {
         )
         .expect("validated source func_sig retains convention domain")
     }
+
+    /// Remove the storage delimiters and source-only convention metadata.
+    ///
+    /// Consumers rebuilding an equivalent signature in another dialect retain
+    /// every other attribute through their owning typed constructor.
+    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
+        attrs.remove(trunk_ir::dialect::func::NUM_INPUTS_ATTR);
+        attrs.remove(trunk_ir::dialect::func::NUM_RESULTS_ATTR);
+        attrs.remove(CALLING_CONVENTION_ATTR);
+    }
 }
 
 fn read_count(attrs: &AttributeMap, key: &'static str) -> Result<u32, FuncSigTypeError> {

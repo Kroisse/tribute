@@ -1462,6 +1462,30 @@ core.module @test {
     }
 
     #[test]
+    fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
+        let input = r#"core.module @test {
+  !foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}
+  !shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("raw storage should remain parseable");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains(
+                "!foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+            ),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "!shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
+            ),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
     fn test_no_arrow_func_op_preserves_zero_results() {
         let input = r#"core.module @test {
   func.func @consume(%value: core.i32) {

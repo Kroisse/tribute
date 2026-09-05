@@ -1241,7 +1241,14 @@ impl<'a> Converter<'a> {
             } else {
                 result
             };
-            let function = func::func_sig(self.ctx, lowered_params, [lowered_result]).as_type_ref();
+            let mut attrs = self.ctx.types.get(ty).attrs.clone();
+            tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
+            for value in attrs.values_mut() {
+                *value = self.convert_attribute(value);
+            }
+            let function =
+                func::func_sig_with_attrs(self.ctx, lowered_params, [lowered_result], attrs)
+                    .as_type_ref();
             let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
@@ -1331,7 +1338,12 @@ impl<'a> Converter<'a> {
         } else {
             result
         };
-        func::func_sig(self.ctx, params, [result]).as_type_ref()
+        let mut attrs = self.ctx.types.get(logical).attrs.clone();
+        tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
+        for value in attrs.values_mut() {
+            *value = self.convert_attribute(value);
+        }
+        func::func_sig_with_attrs(self.ctx, params, [result], attrs).as_type_ref()
     }
 
     fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
@@ -4307,7 +4319,7 @@ mod tests {
     #[test]
     fn textual_nested_attribute_types_convert_atomically() {
         let input = r#"core.module @test {
-  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {metadata = [core.array(core.i32), [7, @Callback]], tribute.calling_convention = 0}
   !record = adt.struct() {fields = [[@callback, !callback]], name = @CallbackRecord}
   tribute_control.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
@@ -4317,12 +4329,81 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
-        assert!(printed.contains("closure.closure(func.func_sig<(core.i32) -> core.i32>)"));
+        assert!(
+            printed.contains("closure.closure(func.func_sig<(core.i32) -> core.i32> {metadata"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("metadata = [core.array(core.i32), [7, @Callback]]"),
+            "{printed}"
+        );
         assert!(!printed.contains("tribute_control."));
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
         verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+    }
+
+    #[test]
+    fn source_func_signature_metadata_survives_function_conversion() {
+        let (mut ctx, module) = parse(
+            r#"core.module @test {
+  tribute_control.func @identity(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+}"#,
+        );
+        let i32_ty = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                    .then_some(ty)
+            })
+            .unwrap();
+        let metadata = Attribute::List(vec![
+            Attribute::Type(i32_ty),
+            Attribute::List(vec![
+                Attribute::Int(7),
+                Attribute::Symbol(Symbol::new("Tag")),
+            ]),
+        ]);
+        let logical = tribute_control::func_sig_with_attrs(
+            &mut ctx,
+            i32_ty,
+            [i32_ty],
+            tribute_control::CallingConvention::Direct,
+            AttributeMap::from_iter([(Symbol::new("metadata"), metadata.clone())]),
+        )
+        .as_type_ref();
+        let source = module.ops(&ctx)[0];
+        ctx.op_mut(source)
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(logical));
+
+        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        let lowered = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|op| func::Func::matches(&ctx, *op))
+            .unwrap();
+        let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
+        let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
+        assert_eq!(
+            ctx.types.get(physical.as_type_ref()).attrs.get("metadata"),
+            Some(&metadata)
+        );
+        assert!(
+            ctx.types
+                .get(physical.as_type_ref())
+                .attrs
+                .get(CALLING_CONVENTION_ATTR)
+                .is_none()
+        );
+        assert_eq!(
+            ctx.op(lowered).attributes.get_i128(CALLING_CONVENTION_ATTR),
+            Some(CallingConvention::Direct as i128)
+        );
     }
 
     #[test]
@@ -4339,6 +4420,63 @@ mod tests {
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("func.call"));
         assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn malformed_or_retired_source_signatures_fail_before_conversion() {
+        for (name, attrs, expected) in [
+            (
+                "func_sig",
+                vec![
+                    (func::NUM_INPUTS_ATTR, Attribute::Int(2)),
+                    (func::NUM_RESULTS_ATTR, Attribute::Int(1)),
+                    (CALLING_CONVENTION_ATTR, Attribute::Int(0)),
+                ],
+                "malformed tribute_control.func_sig",
+            ),
+            (
+                "callable",
+                vec![
+                    (func::NUM_INPUTS_ATTR, Attribute::Int(1)),
+                    (func::NUM_RESULTS_ATTR, Attribute::Int(1)),
+                    (CALLING_CONVENTION_ATTR, Attribute::Int(0)),
+                ],
+                "unsupported tribute_control type 'callable'",
+            ),
+        ] {
+            let (mut ctx, module) = parse(
+                r#"core.module @test {
+  tribute_control.func @identity(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+}"#,
+            );
+            let i32_ty = ctx
+                .types
+                .iter()
+                .find_map(|(ty, data)| {
+                    (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
+                        .then_some(ty)
+                })
+                .unwrap();
+            let mut builder =
+                TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new(name))
+                    .params([i32_ty]);
+            for (key, value) in attrs {
+                builder = builder.attr(key, value);
+            }
+            let malformed = ctx.types.intern(builder.build());
+            let function = module.ops(&ctx)[0];
+            ctx.op_mut(function)
+                .attributes
+                .insert(Symbol::new("type"), Attribute::Type(malformed));
+
+            let before = print_module(&ctx, module.op());
+            let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+            assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
+            assert!(error.to_string().contains(expected), "{name}: {error}");
+            assert_eq!(print_module(&ctx, module.op()), before, "{name}");
+        }
     }
 
     #[test]
