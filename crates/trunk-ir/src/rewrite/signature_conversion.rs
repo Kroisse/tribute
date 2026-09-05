@@ -34,13 +34,8 @@ fn convert_func_signature(
 ) -> Option<ConvertedSignature> {
     let func = core::Func::from_type_ref(ctx, func_type)?;
     let data = ctx.types.get(func_type);
-    let type_attrs = data
-        .attrs
-        .iter()
-        .filter(|(key, _)| {
-            **key != crate::Symbol::new(core::NUM_INPUTS_ATTR)
-                && **key != crate::Symbol::new(core::NUM_RESULTS_ATTR)
-        })
+    let type_attrs = func
+        .non_reserved_attrs(ctx)
         .map(|(key, value)| (*key, convert_attribute_types(ctx, converter, value)))
         .collect::<crate::AttributeMap>();
     let attrs_changed = type_attrs

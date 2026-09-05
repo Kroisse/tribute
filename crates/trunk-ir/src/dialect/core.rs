@@ -134,6 +134,16 @@ impl Func {
         self.results(ctx).first().copied()
     }
 
+    /// Iterate function metadata without the input/result count delimiters.
+    pub fn non_reserved_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (&'a Symbol, &'a Attribute)> {
+        ctx.types.get(self.0).attrs.iter().filter(|(key, _)| {
+            **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
+        })
+    }
+
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
         self.results(ctx).is_empty()
     }

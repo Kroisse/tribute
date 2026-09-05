@@ -29,9 +29,10 @@ pub fn build_func_type_with_evidence(
         .expect("build_func_type_with_evidence requires a valid core.func type");
     let results = function.results(ctx).to_vec();
     let old_params = function.inputs(ctx);
-    let mut type_attrs = ctx.types.get(old_func_ty).attrs.clone();
-    type_attrs.remove(core::NUM_INPUTS_ATTR);
-    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    let type_attrs = function
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
 
     let mut new_params = Vec::with_capacity(old_params.len() + 1);
     new_params.push(ev_ty);

@@ -794,9 +794,10 @@ fn dispatch_entry_function_type(
     let mut params = callable.inputs(ctx).to_vec();
     params.insert(1, anyref);
     let results = callable.results(ctx).to_vec();
-    let mut type_attrs = ctx.types.get(callable_ty).attrs.clone();
-    type_attrs.remove(core::NUM_INPUTS_ATTR);
-    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    let type_attrs = callable
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
     Ok(core::func_with_attrs(ctx, params, results, type_attrs).as_type_ref())
 }
 
@@ -1115,9 +1116,10 @@ fn validate_constant(
         params.remove(index);
     }
     let results = target.results(ctx).to_vec();
-    let mut type_attrs = ctx.types.get(identity.signature).attrs.clone();
-    type_attrs.remove(core::NUM_INPUTS_ATTR);
-    type_attrs.remove(core::NUM_RESULTS_ATTR);
+    let type_attrs = target
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
     let expected = core::func_with_attrs(ctx, params, results, type_attrs).as_type_ref();
     if ctx.op_result_types(constant.op_ref()) != [expected] {
         return Err(TargetAbiError::new(
@@ -1281,7 +1283,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         } else {
             self.convert_embedded(result)?
         };
-        let attrs = self.convert_func_attributes(ty)?;
+        let attrs = self.convert_func_attributes(callable)?;
         let converted = core::func_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
         self.callable.insert((ty, convention), converted);
         Ok(converted)
@@ -1326,7 +1328,7 @@ impl<'a> PhysicalTypeConverter<'a> {
                 .map(|input| self.convert_embedded(input))
                 .collect::<Result<Vec<_>, _>>()?;
             let result = self.convert_embedded(result)?;
-            let attrs = self.convert_func_attributes(ty)?;
+            let attrs = self.convert_func_attributes(callable)?;
             let converted = core::func_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
             self.embedded.insert(ty, converted);
             return Ok(converted);
@@ -1341,17 +1343,12 @@ impl<'a> PhysicalTypeConverter<'a> {
         Ok(converted)
     }
 
-    fn convert_func_attributes(&mut self, ty: TypeRef) -> Result<AttributeMap, TargetAbiError> {
-        let attributes = self
-            .ctx
-            .types
-            .get(ty)
-            .attrs
-            .iter()
-            .filter(|(name, _)| {
-                **name != Symbol::new(core::NUM_INPUTS_ATTR)
-                    && **name != Symbol::new(core::NUM_RESULTS_ATTR)
-            })
+    fn convert_func_attributes(
+        &mut self,
+        callable: core::Func,
+    ) -> Result<AttributeMap, TargetAbiError> {
+        let attributes = callable
+            .non_reserved_attrs(self.ctx)
             .map(|(name, value)| (*name, value.clone()))
             .collect::<Vec<_>>();
         attributes

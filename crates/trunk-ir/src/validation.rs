@@ -439,28 +439,7 @@ fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Vali
             "call result list mismatch",
         ));
     }
-    let expected = func_ty.inputs(ctx);
-    if args.len() != expected.len() {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            format!(
-                "passes {} argument(s), but callee expects {}",
-                args.len(),
-                expected.len()
-            ),
-        ));
-        return;
-    }
-    for (index, (arg, expected)) in args.iter().zip(expected).enumerate() {
-        if ctx.value_ty(*arg) != *expected {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!("argument #{index} type does not match the callee parameter"),
-            ));
-        }
-    }
+    check_value_types(ctx, op, args, func_ty.inputs(ctx), "call argument", errors);
 }
 
 fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -2426,7 +2405,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("callee must have core.func"), "{text}");
-        assert!(text.contains("passes 0 argument(s)"), "{text}");
+        assert!(
+            text.contains("call argument count mismatch: expected 1, found 0"),
+            "{text}"
+        );
         assert!(text.contains("must terminate its block"), "{text}");
         assert_eq!(result.errors.len(), 6, "{text}");
     }
