@@ -3,7 +3,7 @@ source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
 expression: result
 ---
 core.module @test {
-  !t0 = core.func<(core.i32) -> core.nil>
+  !t0 = func.func_sig<(core.i32) -> core.nil>
 
   clif.func {sym_name = @direct_target, tribute.calling_convention = 2, type = !t0} {
     ^bb0(%0: core.i32):
@@ -13,7 +13,7 @@ core.module @test {
     ^bb0(%0: core.i32):
       clif.return_call %0 {callee = @direct_target, tribute.calling_convention = 2}
   }
-  clif.func {sym_name = @indirect_caller, tribute.calling_convention = 2, type = core.func<(core.ptr, core.i32) -> core.nil>} {
+  clif.func {sym_name = @indirect_caller, tribute.calling_convention = 2, type = func.func_sig<(core.ptr, core.i32) -> core.nil>} {
     ^bb0(%0: core.ptr, %1: core.i32):
       clif.return_call_indirect %0, %1 {sig = !t0, tribute.calling_convention = 2}
   }

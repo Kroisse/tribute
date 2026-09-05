@@ -54,7 +54,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .iter()
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
-    let signature = core::func(ctx, parameters, [result]).as_type_ref();
+    let signature = func::func_sig(ctx, parameters, [result]).as_type_ref();
     let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -1079,7 +1079,8 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
         let marker_ty = ability::marker_adt_type_ref(&mut ctx);
-        let func_ty = core::func(&mut ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
+        let func_ty =
+            func::func_sig(&mut ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,

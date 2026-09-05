@@ -149,13 +149,13 @@ mod tests {
     wasm.return_call_indirect %table_index, %value {signature = core.i32, table = 0, type_idx = 0}
   }
 }"#,
-            "signature must be core.func",
+            "signature must be func.func_sig",
         );
 
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.i32, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0}
   }
 }"#,
             "must have an empty result",
@@ -164,7 +164,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller() -> core.nil {
-    wasm.return_call_indirect {signature = core.func(core.nil), table = 0, type_idx = 0}
+    wasm.return_call_indirect {signature = func.func_sig<() -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
             "requires a table index operand",
@@ -173,7 +173,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i64, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
             "first operand must be an i32 table index",
@@ -182,7 +182,7 @@ mod tests {
         rejects(
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i64) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
             "operands do not match its exact signature",
@@ -198,16 +198,16 @@ mod tests {
   !Array = core.array(core.i32)
   !Struct = adt.struct() {fields = [[@value, core.i32]], name = @Struct}
   wasm.func @typeref(%table_index: core.i32, %value: adt.typeref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.func @struct(%table_index: core.i32, %value: !Struct) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.func @array(%table_index: core.i32, %value: !Array) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.arrayref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.arrayref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.func @i31(%table_index: core.i32, %value: wasm.i31ref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.anyref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
         );
@@ -225,7 +225,7 @@ mod tests {
             assert_rejects_tail_signature(&format!(
                 r#"core.module @test {{
   wasm.func @caller(%table_index: core.i32, %value: {value_ty}) -> core.nil {{
-    wasm.return_call_indirect %table_index, %value {{signature = core.func(core.nil, {parameter_ty}), table = 0, type_idx = 0}}
+    wasm.return_call_indirect %table_index, %value {{signature = func.func_sig<({parameter_ty}) -> core.nil>, table = 0, type_idx = 0}}
   }}
 }}"#
             ));
@@ -238,7 +238,7 @@ mod tests {
             r#"core.module @test {
   !Struct = adt.struct() {fields = [[@value, core.i32]], name = @Struct}
   wasm.func @caller(%table_index: core.i32, %value: !Struct) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = core.func(core.nil, wasm.structref), table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
         );

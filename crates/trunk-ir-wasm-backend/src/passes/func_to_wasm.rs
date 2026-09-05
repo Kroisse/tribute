@@ -551,7 +551,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("!t0 = core.func<(core.i32) -> core.i32>")
+            output.contains("!t0 = func.func_sig<(core.i32) -> core.i32>")
                 && output.contains("wasm.func {custom = 7, sym_name = @external, type = !t0}"),
             "{output}"
         );
@@ -602,7 +602,7 @@ mod tests {
     func.tail_call %value {callee = @target}
   }
   func.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
     %result = func.call_indirect %table_index, %value : core.i32
@@ -624,7 +624,7 @@ mod tests {
         );
         assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("!t0 = core.func<(core.i32) -> core.nil>")
+            output.contains("!t0 = func.func_sig<(core.i32) -> core.nil>")
                 && output.contains("signature = !t0"),
             "{output}"
         );
@@ -637,7 +637,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%table_index: core.i32) -> core.nil {
-    func.call_indirect %table_index {signature = core.func(core.nil)}
+    func.call_indirect %table_index {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
@@ -648,7 +648,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0 {signature = core.func<() -> core.nil>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0 {signature = func.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );
@@ -666,7 +666,7 @@ mod tests {
   }
   func.func @caller(%value: core.i32) -> core.nil {
     %table_index = func.constant {func_ref = @target} : core.i32
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
   }
 }"#,
         );
@@ -691,10 +691,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.anyref), table = 7, tribute.calling_convention = 2, type_idx = 9}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> core.nil>, table = 7, tribute.calling_convention = 2, type_idx = 9}
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.nil, tribute_rt.float), tribute.calling_convention = 2}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> core.nil>, tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -721,16 +721,16 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.return_call_indirect %0, %1 {signature = core.func<(wasm.anyref) -> core.nil>"
+                "wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>"
             ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = core.func<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
+            output.contains("wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
             "the converted transfer must retain its calling convention: {output}"
         );
         assert!(
-            !output.contains("signature = core.func<(tribute_rt.anyref) -> core.nil>"),
+            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> core.nil>"),
             "{output}"
         );
         assert!(
@@ -738,7 +738,7 @@ mod tests {
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            output.contains("func.tail_call_indirect %0, %1 {signature = core.func<(tribute_rt.float) -> core.nil>, tribute.calling_convention = 2}"),
+            output.contains("func.tail_call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> core.nil>, tribute.calling_convention = 2}"),
             "the mismatched transfer must remain unchanged: {output}"
         );
     }
@@ -750,11 +750,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.anyref), table = 7, type_idx = 9} : core.i32
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> core.i32>, table = 7, type_idx = 9} : core.i32
     func.return %result
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value {signature = core.func(core.i32, tribute_rt.float)} : core.i32
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32
     func.return %result
   }
 }"#,
@@ -782,7 +782,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0, %1 {signature = core.func<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );
@@ -791,12 +791,12 @@ mod tests {
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            !output.contains("signature = core.func<(tribute_rt.anyref) -> core.i32>"),
+            !output.contains("signature = func.func_sig<(tribute_rt.anyref) -> core.i32>"),
             "{output}"
         );
         assert!(
             output.contains(
-                "func.call_indirect %0, %1 {signature = core.func<(tribute_rt.float) -> core.i32>} : core.i32"
+                "func.call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> core.i32>} : core.i32"
             ),
             "the mismatched call must remain unchanged: {output}"
         );
@@ -812,7 +812,7 @@ mod tests {
     func.tail_call_indirect %table_index, %value
   }
   func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = core.func(core.i32, core.i32)}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#,
         );

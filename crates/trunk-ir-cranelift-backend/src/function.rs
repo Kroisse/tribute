@@ -11,7 +11,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{clif, core};
+use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
@@ -38,7 +38,7 @@ pub(crate) fn call_conv_for_cps_signature(
 }
 
 fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
-    core::Func::from_type_ref(ctx, signature)
+    func::FuncSig::from_type_ref(ctx, signature)
         .and_then(|function| function.single_result(ctx))
         .is_some_and(|result| is_nil_type(ctx, result))
 }
@@ -136,7 +136,7 @@ pub(crate) fn translate_type(
     )))
 }
 
-/// Translate a TrunkIR `core.func` type to a Cranelift `Signature`.
+/// Translate a TrunkIR `func.func_sig` type to a Cranelift `Signature`.
 ///
 /// `ptr_ty` is the platform pointer type, obtained from `target_config().pointer_type()`.
 pub(crate) fn translate_signature(
@@ -145,15 +145,15 @@ pub(crate) fn translate_signature(
     call_conv: CallConv,
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_ir::Signature> {
-    let function = core::Func::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
-        CompilationError::type_error("expected valid core.func type for signature translation")
+    let function = func::FuncSig::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
+        CompilationError::type_error("expected valid func.func_sig type for signature translation")
     })?;
 
     let mut sig = cl_ir::Signature::new(call_conv);
 
     let ret_type = function.single_result(ctx).ok_or_else(|| {
         CompilationError::type_error(
-            "Cranelift signature translation currently requires one core.func result",
+            "Cranelift signature translation currently requires one func.func_sig result",
         )
     })?;
     let param_types = function.inputs(ctx);
@@ -794,7 +794,7 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        let func_ty = core::func(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 2);
@@ -810,7 +810,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = core::func(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 1);
@@ -825,7 +825,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = core::func(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(
@@ -844,7 +844,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        let func_ty = core::func(&mut ctx, [], [i64_ty]).as_type_ref();
+        let func_ty = func::func_sig(&mut ctx, [], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 0);
@@ -857,8 +857,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_core_type(&mut ctx, "i32");
         let nil_ty = make_core_type(&mut ctx, "nil");
-        let logical_signature = core::func(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let physical_signature = core::func(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
+        let logical_signature = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let physical_signature = func::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
 
         assert_eq!(
             call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),
@@ -877,13 +877,13 @@ mod result_list_tests {
     #[test]
     fn unsupported_resultless_signature_is_rejected_without_panicking() {
         let mut ctx = IrContext::new();
-        let signature = core::func(&mut ctx, [], []).as_type_ref();
+        let signature = func::func_sig(&mut ctx, [], []).as_type_ref();
         let error =
             translate_signature(&ctx, signature, CallConv::SystemV, cl_types::I64).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("currently requires one core.func result")
+                .contains("currently requires one func.func_sig result")
         );
     }
 }

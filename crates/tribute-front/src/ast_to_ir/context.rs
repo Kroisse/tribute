@@ -11,7 +11,7 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectType as _;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -906,11 +906,11 @@ impl<'db> IrLoweringCtx<'db> {
         tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Create a `core.func` type with params and result.
+    /// Create a `func.func_sig` type with params and result.
     ///
-    /// Construct an input-first, one-result `core.func`.
+    /// Construct an input-first, one-result `func.func_sig`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        core::func(ir, params.iter().copied(), [result]).as_type_ref()
+        func::func_sig(ir, params.iter().copied(), [result]).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.
@@ -1089,14 +1089,14 @@ impl<'db> IrLoweringCtx<'db> {
         )
     }
 
-    /// Check if a type is a `core.func` type.
+    /// Check if a type is a `func.func_sig` type.
     pub fn is_func_type(&self, ir: &IrContext, ty: TypeRef) -> bool {
-        core::Func::from_type_ref(ir, ty).is_some()
+        func::FuncSig::from_type_ref(ir, ty).is_some()
     }
 
-    /// Get the input count from a validated `core.func` type.
+    /// Get the input count from a validated `func.func_sig` type.
     pub fn func_type_param_count(&self, ir: &IrContext, ty: TypeRef) -> usize {
-        core::Func::from_type_ref(ir, ty)
+        func::FuncSig::from_type_ref(ir, ty)
             .map(|function| function.inputs(ir).len())
             .unwrap_or(0)
     }
@@ -1189,7 +1189,7 @@ mod tests {
             HashMap::new(),
         );
         let i32_ty = ctx.i32_type(&mut ir);
-        let resultless = core::func(&mut ir, [i32_ty, i32_ty], []).as_type_ref();
+        let resultless = func::func_sig(&mut ir, [i32_ty, i32_ty], []).as_type_ref();
 
         assert!(ctx.is_func_type(&ir, resultless));
         assert_eq!(ctx.func_type_param_count(&ir, resultless), 2);
@@ -1300,7 +1300,7 @@ mod tests {
 
     /// The logical frontend boundary has its own recursive conversion: source
     /// callables, bottom values, resumptions, tuple layouts, and forward
-    /// nominals must never fall back to the physical `core.func` carrier.
+    /// nominals must never fall back to the physical `func.func_sig` carrier.
     #[test]
     fn test_convert_logical_types_preserves_recursive_control_shapes() {
         let db = test_db();
@@ -1591,7 +1591,7 @@ mod tests {
         );
         let ir_ty = ctx.convert_type(&mut ir, ty);
 
-        // BoundVar params/result → tribute_rt.any, wrapped in core.func
+        // BoundVar params/result → tribute_rt.any, wrapped in func.func_sig
         let any_ty = ctx.anyref_type(&mut ir);
         let expected = ctx.func_type(&mut ir, &[any_ty], any_ty);
         assert_eq!(ir_ty, expected);

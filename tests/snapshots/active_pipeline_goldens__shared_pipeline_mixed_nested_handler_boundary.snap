@@ -9,7 +9,7 @@ core.module @mixed_nested {
   !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
-  !t2 = core.func<(tribute_rt.anyref) -> tribute_rt.anyref>
+  !t2 = func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !t3 = closure.closure(!t2)
   !"step::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32], [@_1, core.i32], [@_2, tribute_rt.anyref]], name = @"step::__clam_0::__clam_0::env"}
@@ -22,14 +22,14 @@ core.module @mixed_nested {
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
   !t6 = core.ability_ref() {name = @"abilities::Throw"}
-  !t9 = core.func<(tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t9 = func.func_sig<(tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
-  !t1 = core.func<(!t0, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t1 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
   !t4 = closure.closure(!t1)
-  !t5 = core.func<(!t0, tribute_rt.anyref, !_closure, tribute_rt.anyref) -> tribute_rt.anyref>
-  !t7 = core.func<(!t0, tribute_rt.anyref, !_closure) -> tribute_rt.anyref>
-  !t8 = core.func<(!t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t5 = func.func_sig<(!t0, tribute_rt.anyref, !_closure, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t7 = func.func_sig<(!t0, tribute_rt.anyref, !_closure) -> tribute_rt.anyref>
+  !t8 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
 
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
@@ -134,7 +134,7 @@ core.module @mixed_nested {
       %15 = func.constant {func_ref = @"run_all::__clam_1"} : !t9
       %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
       %17 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %18 = func.constant {func_ref = @"run_all::__clam_2"} : core.func<(core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
+      %18 = func.constant {func_ref = @"run_all::__clam_2"} : func.func_sig<(core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
       %19 = adt.struct_new %18, %17 {type = !_closure} : !_closure
       %20 = func.call {callee = @__tribute_next_tag} : core.i32
       %21 = effect.extend %1, %20, %19, %16 {ability_ref = core.ability_ref() {name = @Console}} : !t0

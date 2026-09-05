@@ -749,29 +749,29 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = @call_target, type = core.func(core.i32, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @call_target, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return %value
   }
-  clif.func {sym_name = @direct_call, type = core.func(core.i32, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @direct_call, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @indirect_call, type = core.func(core.i32, core.ptr, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @indirect_call, type = func.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      %result = clif.call_indirect %callee, %value, %unit, %last {sig = core.func(core.i32, core.i32, core.nil, core.i64)} : core.i32
+      %result = clif.call_indirect %callee, %value, %unit, %last {sig = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = core.func(core.nil, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return_call %value, %unit, %last {callee = @direct_tail}
   }
-  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = core.func(core.nil, core.ptr, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = func.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = core.func(core.nil, core.i32, core.nil, core.i64)}
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
   }
-  clif.func {sym_name = @jump, type = core.func(core.nil, core.i32, core.nil, core.i64)} {
+  clif.func {sym_name = @jump, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.jump %value, %unit, %last [^merge]
     ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):

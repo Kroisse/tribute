@@ -7,7 +7,7 @@
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
 use crate::context::{IrContext, OperationDataBuilder};
-use crate::dialect::{core, func, wasm};
+use crate::dialect::{func, wasm};
 use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef, TypeRef};
 use crate::rewrite::clone_attrs_except;
@@ -16,7 +16,7 @@ use crate::rewrite::rewriter::PatternRewriter;
 use crate::rewrite::type_converter::TypeConverter;
 use crate::types::Attribute;
 
-/// Result of converting a `core.func` type's params and result.
+/// Result of converting a `func.func_sig` type's params and result.
 struct ConvertedSignature {
     new_params: Vec<TypeRef>,
     new_results: Vec<TypeRef>,
@@ -24,15 +24,15 @@ struct ConvertedSignature {
     changed: bool,
 }
 
-/// Analyze a `core.func` TypeRef and convert params/result via the type converter.
+/// Analyze a `func.func_sig` TypeRef and convert params/result via the type converter.
 ///
-/// Returns `None` when `func_type` is not a well-formed `core.func` type.
+/// Returns `None` when `func_type` is not a well-formed `func.func_sig` type.
 fn convert_func_signature(
     ctx: &IrContext,
     func_type: TypeRef,
     converter: &TypeConverter,
 ) -> Option<ConvertedSignature> {
-    let func = core::Func::from_type_ref(ctx, func_type)?;
+    let func = func::FuncSig::from_type_ref(ctx, func_type)?;
     let data = ctx.types.get(func_type);
     let type_attrs = func
         .non_reserved_attrs(ctx)
@@ -85,9 +85,9 @@ fn convert_attribute_types(
     }
 }
 
-/// Build a new `core.func` TypeRef from converted params/result.
+/// Build a new `func.func_sig` TypeRef from converted params/result.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    crate::dialect::core::func_with_attrs(
+    crate::dialect::func::func_sig_with_attrs(
         ctx,
         sig.new_params.iter().copied(),
         sig.new_results.iter().copied(),
@@ -96,7 +96,7 @@ fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
     .as_type_ref()
 }
 
-/// Convert the parameter and result types of a `core.func` type.
+/// Convert the parameter and result types of a `func.func_sig` type.
 ///
 /// This is the type-only counterpart to the function-signature rewrite
 /// patterns. It is for exact callable attributes whose source operation does
@@ -312,7 +312,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
+        crate::dialect::func::func_sig(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     fn make_module(ctx: &mut IrContext, loc: crate::types::Location, ops: Vec<OpRef>) -> Module {
@@ -422,7 +422,8 @@ mod tests {
 
         let mut type_attrs = crate::AttributeMap::new();
         type_attrs.insert(Symbol::new("metadata_type"), Attribute::Type(i32_ty));
-        let func_ty = core::func_with_attrs(&mut ctx, [i32_ty], [i32_ty], type_attrs).as_type_ref();
+        let func_ty =
+            func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], type_attrs).as_type_ref();
         let func_op = make_func_op(&mut ctx, loc, "test_fn", func_ty, &[i32_ty]);
         let module = make_module(&mut ctx, loc, vec![func_op]);
 
@@ -443,7 +444,7 @@ mod tests {
         assert_eq!(ops.len(), 1);
         let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
-        let function = core::Func::from_type_ref(&ctx, new_type).unwrap();
+        let function = func::FuncSig::from_type_ref(&ctx, new_type).unwrap();
         assert_eq!(function.inputs(&ctx), &[i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
@@ -487,13 +488,13 @@ mod tests {
         let (mut ctx, _) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let i64_ty = i64_type(&mut ctx);
-        let resultless = core::func(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
+        let resultless = func::func_sig(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
         let before = ctx.types.get(resultless).clone();
         let converter = i32_to_i64_converter(i32_ty, i64_ty);
 
         let converted = convert_function_type(&mut ctx, resultless, &converter).unwrap();
         assert_eq!(ctx.types.get(resultless), &before);
-        let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+        let function = func::FuncSig::from_type_ref(&ctx, converted).unwrap();
         assert_eq!(function.inputs(&ctx), [i64_ty, i64_ty]);
         assert!(function.is_resultless(&ctx));
     }
@@ -527,7 +528,7 @@ mod tests {
         let ops = module.ops(&ctx);
         let new_func = wasm::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
-        let function = core::Func::from_type_ref(&ctx, new_type).unwrap();
+        let function = func::FuncSig::from_type_ref(&ctx, new_type).unwrap();
         assert_eq!(function.inputs(&ctx), &[i64_ty, i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
@@ -555,7 +556,7 @@ mod tests {
             } else {
                 vec![i32_ty]
             };
-            let func_ty = core::func(&mut ctx, [i32_ty], results).as_type_ref();
+            let func_ty = func::func_sig(&mut ctx, [i32_ty], results).as_type_ref();
 
             let func_decl = make_bodyless_function_op(
                 &mut ctx,
@@ -596,7 +597,7 @@ mod tests {
                 let data = ctx.op(ops[index]);
                 assert_eq!(data.regions.len(), expected_regions);
                 let func_ty = data.attributes.get_type("type").unwrap();
-                let function = core::Func::from_type_ref(&ctx, func_ty).unwrap();
+                let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
                 assert_eq!(function.inputs(&ctx), [i64_ty]);
                 assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
             }
@@ -610,7 +611,7 @@ mod tests {
             let result = if result_count == 0 { "()" } else { "core.i64" };
             assert!(text.contains(&format!("func.func @external(%arg0: core.i64){arrow}\n")));
             assert!(
-                text.contains(&format!("!t0 = core.func<(core.i64) -> {result}>")),
+                text.contains(&format!("!t0 = func.func_sig<(core.i64) -> {result}>")),
                 "{text}"
             );
             assert!(
@@ -645,7 +646,7 @@ mod tests {
 
         let ops = module.ops(&ctx);
         let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
-        let function = core::Func::from_type_ref(&ctx, new_func.r#type(&ctx)).unwrap();
+        let function = func::FuncSig::from_type_ref(&ctx, new_func.r#type(&ctx)).unwrap();
         assert_eq!(function.inputs(&ctx), &[i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
     }
@@ -716,6 +717,7 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    use crate::dialect::core;
     use crate::{Symbol, ops::DialectOp, parser::parse_test_module};
 
     #[test]
@@ -731,13 +733,17 @@ mod result_list_tests {
                     Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
                 );
                 attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
-                let signature =
-                    core::func_with_attrs(&mut ctx, vec![nil; inputs], vec![nil; results], attrs)
-                        .as_type_ref();
+                let signature = func::func_sig_with_attrs(
+                    &mut ctx,
+                    vec![nil; inputs],
+                    vec![nil; results],
+                    attrs,
+                )
+                .as_type_ref();
                 let mut converter = TypeConverter::new();
                 converter.add_conversion(move |_, ty| (ty == nil).then_some(ptr));
                 let converted = convert_function_type(&mut ctx, signature, &converter).unwrap();
-                let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+                let function = func::FuncSig::from_type_ref(&ctx, converted).unwrap();
                 assert_eq!(function.inputs(&ctx), vec![ptr; inputs]);
                 assert_eq!(function.results(&ctx), vec![ptr; results]);
                 assert_eq!(
@@ -765,7 +771,7 @@ mod result_list_tests {
         let function = func::Func::from_op(&ctx, op).unwrap();
         let nil = core::nil(&mut ctx).as_type_ref();
         let ptr = core::ptr(&mut ctx).as_type_ref();
-        let bad_signature = core::func(&mut ctx, [nil, nil], []).as_type_ref();
+        let bad_signature = func::func_sig(&mut ctx, [nil, nil], []).as_type_ref();
         ctx.op_mut(op)
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(bad_signature));

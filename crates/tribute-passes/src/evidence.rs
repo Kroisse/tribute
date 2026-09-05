@@ -4,13 +4,13 @@
 
 use tribute_ir::dialect::ability;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 
-/// Check if a `core.func` type has evidence as its first parameter.
+/// Check if a `func.func_sig` type has evidence as its first parameter.
 pub fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let Some(function) = core::Func::from_type_ref(ctx, func_ty) else {
+    let Some(function) = func::FuncSig::from_type_ref(ctx, func_ty) else {
         return false;
     };
     function
@@ -19,14 +19,14 @@ pub fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
         .is_some_and(|&input| ability::is_evidence_type_ref(ctx, input))
 }
 
-/// Build a new `core.func` TypeRef with evidence prepended to params.
+/// Build a new `func.func_sig` TypeRef with evidence prepended to params.
 pub fn build_func_type_with_evidence(
     ctx: &mut IrContext,
     old_func_ty: TypeRef,
     ev_ty: TypeRef,
 ) -> TypeRef {
-    let function = core::Func::from_type_ref(ctx, old_func_ty)
-        .expect("build_func_type_with_evidence requires a valid core.func type");
+    let function = func::FuncSig::from_type_ref(ctx, old_func_ty)
+        .expect("build_func_type_with_evidence requires a valid func.func_sig type");
     let results = function.results(ctx).to_vec();
     let old_params = function.inputs(ctx);
     let type_attrs = function
@@ -38,7 +38,7 @@ pub fn build_func_type_with_evidence(
     new_params.push(ev_ty);
     new_params.extend_from_slice(old_params);
 
-    core::func_with_attrs(ctx, new_params, results, type_attrs).as_type_ref()
+    func::func_sig_with_attrs(ctx, new_params, results, type_attrs).as_type_ref()
 }
 
 /// Find the evidence value from the enclosing `func.func`'s entry block.
@@ -67,6 +67,7 @@ pub fn find_enclosing_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::dialect::core;
     use trunk_ir::{Attribute, AttributeMap, Symbol};
 
     #[test]
@@ -81,10 +82,10 @@ mod tests {
             let attrs =
                 AttributeMap::from_iter([(Symbol::new("metadata"), Attribute::Type(i32_ty))]);
             let source =
-                core::func_with_attrs(&mut ctx, [i32_ty], results.clone(), attrs).as_type_ref();
+                func::func_sig_with_attrs(&mut ctx, [i32_ty], results.clone(), attrs).as_type_ref();
             assert!(!has_evidence_first_param(&ctx, source));
             let converted = build_func_type_with_evidence(&mut ctx, source, evidence);
-            let function = core::Func::from_type_ref(&ctx, converted).unwrap();
+            let function = func::FuncSig::from_type_ref(&ctx, converted).unwrap();
             assert_eq!(function.inputs(&ctx), [evidence, i32_ty]);
             assert_eq!(function.results(&ctx), results);
             assert_eq!(

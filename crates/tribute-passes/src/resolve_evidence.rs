@@ -46,7 +46,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .iter()
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
-    let signature = core::func(ctx, parameters, [result]).as_type_ref();
+    let signature = func::func_sig(ctx, parameters, [result]).as_type_ref();
     let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -254,7 +254,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = core::func(ctx, [evidence_ty, i32_ty], [marker_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, [evidence_ty, i32_ty], [marker_ty]).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
@@ -292,7 +292,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = core::func(ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -330,7 +330,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let i32_ty = i32_type_ref(ctx);
 
         // fn __tribute_next_tag() -> i32
-        let func_ty = core::func(ctx, std::iter::empty(), [i32_ty]).as_type_ref();
+        let func_ty = func::func_sig(ctx, std::iter::empty(), [i32_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -373,9 +373,9 @@ fn collect_functions_with_evidence(ctx: &IrContext, module: Module) -> HashSet<S
     fns_with_evidence
 }
 
-/// Check if a `core.func` type has evidence as its first parameter.
+/// Check if a `func.func_sig` type has evidence as its first parameter.
 fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let Some(func) = core::Func::from_type_ref(ctx, func_ty) else {
+    let Some(func) = func::FuncSig::from_type_ref(ctx, func_ty) else {
         return false;
     };
     let params = func.inputs(ctx);

@@ -10,7 +10,7 @@ core.module @resumptive_op {
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
-  !t3 = core.func<(tribute_rt.anyref) -> tribute_rt.anyref>
+  !t3 = func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>
   !t2 = closure.closure(!t3)
   !"bump::__clam_0::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32], [@_1, tribute_rt.anyref]], name = @"bump::__clam_0::__clam_0::env"}
   !"run_state::__clam_1::__clam_0::env" = adt.struct() {fields = [[@_0, core.i32]], name = @"run_state::__clam_1::__clam_0::env"}
@@ -24,10 +24,10 @@ core.module @resumptive_op {
   !t6 = core.ability_ref() {name = @"abilities::Throw"}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
-  !t1 = core.func<(!t0, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t1 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
   !t4 = closure.closure(!t1)
-  !t5 = core.func<(!t0, tribute_rt.anyref, !_closure, tribute_rt.anyref) -> tribute_rt.anyref>
-  !t7 = core.func<(!t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t5 = func.func_sig<(!t0, tribute_rt.anyref, !_closure, tribute_rt.anyref) -> tribute_rt.anyref>
+  !t7 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
 
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
@@ -78,12 +78,12 @@ core.module @resumptive_op {
       %12 = adt.struct_get %7 {field = 0, type = !_closure} : core.i32
       %13 = adt.struct_get %7 {field = 1, type = !_closure} : tribute_rt.anyref
       %14 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %15 = func.constant {func_ref = @"run_state::__clam_1"} : core.func<(tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
+      %15 = func.constant {func_ref = @"run_state::__clam_1"} : func.func_sig<(tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
       %16 = adt.struct_new %15, %14 {type = !_closure} : !_closure
       %17 = arith.const {value = 0} : tribute_rt.anyref
       %18 = func.call {callee = @__tribute_next_tag} : core.i32
       %19 = effect.extend %1, %18, %17, %16 {ability_ref = core.ability_ref() {name = @State}} : !t0
-      %20 = func.call_indirect %12, %19, %13, %10 {signature = core.func<(!t0, tribute_rt.anyref, !_closure) -> tribute_rt.anyref>} : tribute_rt.anyref
+      %20 = func.call_indirect %12, %19, %13, %10 {signature = func.func_sig<(!t0, tribute_rt.anyref, !_closure) -> tribute_rt.anyref>} : tribute_rt.anyref
       %21 = adt.variant_is %20 {tag = @Normal, type = !__tribute_cps_control} : core.i1
       %22 = scf.if %21 : tribute_rt.anyref {
           %23 = adt.variant_cast %20 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref

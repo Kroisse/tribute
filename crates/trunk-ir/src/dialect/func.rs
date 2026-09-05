@@ -2,6 +2,7 @@
 
 use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
+use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
 /// The optional exact callable signature retained after a typed indirect callee
 /// becomes a runtime function or table index.
@@ -64,6 +65,212 @@ mod func {
     fn constant() -> result {}
 
     fn unreachable() {}
+}
+
+/// Reserved delimiter attribute for the number of function inputs.
+pub const NUM_INPUTS_ATTR: &str = "num_inputs";
+
+/// Reserved delimiter attribute for the number of function results.
+pub const NUM_RESULTS_ATTR: &str = "num_results";
+
+/// Return the interned name of the `func.func_sig` type.
+#[allow(non_snake_case)]
+#[inline]
+pub fn FUNC_SIG() -> Symbol {
+    Symbol::new("func_sig")
+}
+
+/// Why a name-matching `func.func_sig` does not satisfy its storage invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuncSigTypeError {
+    MissingCount(&'static str),
+    InvalidCount(&'static str),
+    CountOverflow,
+    LengthMismatch {
+        num_inputs: u32,
+        num_results: u32,
+        params: usize,
+    },
+    UnsupportedResultCount(u32),
+}
+
+impl std::fmt::Display for FuncSigTypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingCount(name) => write!(f, "missing required `{name}` u32 attribute"),
+            Self::InvalidCount(name) => write!(f, "`{name}` must be a u32 attribute"),
+            Self::CountOverflow => write!(f, "input and result counts overflow u32"),
+            Self::LengthMismatch {
+                num_inputs,
+                num_results,
+                params,
+            } => write!(
+                f,
+                "num_inputs ({num_inputs}) + num_results ({num_results}) must equal params length ({params})"
+            ),
+            Self::UnsupportedResultCount(count) => {
+                write!(f, "currently supports at most one result, found {count}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FuncSigTypeError {}
+
+/// Validated wrapper for an input-first, zero-or-one-result `func.func_sig` type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FuncSig(TypeRef);
+
+impl FuncSig {
+    /// Validate a name-matching `func.func_sig`, including both delimiter counts.
+    pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
+        let data = ctx.types.get(ty);
+        debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
+
+        let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
+        let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)?;
+        if num_results > 1 {
+            return Err(FuncSigTypeError::UnsupportedResultCount(num_results));
+        }
+        let total = num_inputs
+            .checked_add(num_results)
+            .ok_or(FuncSigTypeError::CountOverflow)?;
+        if usize::try_from(total).ok() != Some(data.params.len()) {
+            return Err(FuncSigTypeError::LengthMismatch {
+                num_inputs,
+                num_results,
+                params: data.params.len(),
+            });
+        }
+        Ok(Self(ty))
+    }
+
+    fn counts(self, ctx: &IrContext) -> (usize, usize) {
+        let data = ctx.types.get(self.0);
+        let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)
+            .expect("validated func.func_sig must retain a valid num_inputs attribute");
+        let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)
+            .expect("validated func.func_sig must retain a valid num_results attribute");
+        (
+            usize::try_from(num_inputs).expect("u32 must fit usize"),
+            usize::try_from(num_results).expect("u32 must fit usize"),
+        )
+    }
+
+    pub fn as_type_ref(&self) -> TypeRef {
+        self.0
+    }
+
+    pub fn inputs<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
+        let (num_inputs, _) = self.counts(ctx);
+        &ctx.types.get(self.0).params[..num_inputs]
+    }
+
+    pub fn results<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
+        let (num_inputs, num_results) = self.counts(ctx);
+        &ctx.types.get(self.0).params[num_inputs..num_inputs + num_results]
+    }
+
+    pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
+        self.results(ctx).first().copied()
+    }
+
+    /// Iterate function metadata without the input/result count delimiters.
+    pub fn non_reserved_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (&'a Symbol, &'a Attribute)> {
+        ctx.types.get(self.0).attrs.iter().filter(|(key, _)| {
+            **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
+        })
+    }
+
+    /// Remove input/result count delimiters from owned function metadata before rebuilding it.
+    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
+        attrs.remove(NUM_INPUTS_ATTR);
+        attrs.remove(NUM_RESULTS_ATTR);
+    }
+
+    pub fn is_resultless(&self, ctx: &IrContext) -> bool {
+        self.results(ctx).is_empty()
+    }
+}
+
+impl DialectType for FuncSig {
+    const DIALECT_NAME: &'static str = "func";
+    const TYPE_NAME: &'static str = "func_sig";
+
+    fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+        if !Self::matches(ctx, ty) {
+            return None;
+        }
+        Self::validate(ctx, ty).ok()
+    }
+
+    fn as_type_ref(&self) -> TypeRef {
+        self.0
+    }
+}
+
+impl From<FuncSig> for TypeRef {
+    fn from(ty: FuncSig) -> Self {
+        ty.0
+    }
+}
+
+fn read_count(attrs: &AttributeMap, name: &'static str) -> Result<u32, FuncSigTypeError> {
+    match attrs.get(name) {
+        None => Err(FuncSigTypeError::MissingCount(name)),
+        Some(Attribute::Int(value)) => {
+            u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(name))
+        }
+        Some(_) => Err(FuncSigTypeError::InvalidCount(name)),
+    }
+}
+
+/// Construct a canonical `func.func_sig` with zero or one result.
+pub fn func_sig(
+    ctx: &mut IrContext,
+    inputs: impl IntoIterator<Item = TypeRef>,
+    results: impl IntoIterator<Item = TypeRef>,
+) -> FuncSig {
+    func_sig_with_attrs(ctx, inputs, results, AttributeMap::new())
+}
+
+/// Construct a canonical `func.func_sig` while preserving non-reserved attributes.
+pub fn func_sig_with_attrs(
+    ctx: &mut IrContext,
+    inputs: impl IntoIterator<Item = TypeRef>,
+    results: impl IntoIterator<Item = TypeRef>,
+    attrs: AttributeMap,
+) -> FuncSig {
+    assert!(
+        !attrs.contains_key(NUM_INPUTS_ATTR) && !attrs.contains_key(NUM_RESULTS_ATTR),
+        "func.func_sig count attributes are reserved"
+    );
+
+    let inputs: Vec<_> = inputs.into_iter().collect();
+    let results: Vec<_> = results.into_iter().collect();
+    assert!(
+        results.len() <= 1,
+        "func.func_sig currently supports at most one result"
+    );
+    let num_inputs = u32::try_from(inputs.len()).expect("func.func_sig input count exceeds u32");
+    let num_results = u32::try_from(results.len()).expect("func.func_sig result count exceeds u32");
+
+    let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
+        .params(inputs)
+        .params(results);
+    for (key, value) in attrs {
+        builder = builder.attr(key, value);
+    }
+    let ty = ctx.types.intern(
+        builder
+            .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
+            .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
+            .build(),
+    );
+    FuncSig::validate(ctx, ty).expect("func.func_sig constructor must produce a valid type")
 }
 
 // One-result source producers use these explicit convenience accessors. Generic
@@ -149,13 +356,13 @@ inventory::submit! {
 /// Attach an exact callable contract to a `func` indirect transfer.
 ///
 /// Returns `false` without mutation when the operation is not a `func`
-/// indirect call or the supplied type is not a `core.func` contract.
+/// indirect call or the supplied type is not a `func.func_sig` contract.
 pub fn set_indirect_call_signature(
     ctx: &mut crate::IrContext,
     op: crate::OpRef,
     signature: crate::TypeRef,
 ) -> bool {
-    if crate::dialect::core::Func::from_type_ref(ctx, signature).is_none()
+    if crate::dialect::func::FuncSig::from_type_ref(ctx, signature).is_none()
         || (CallIndirect::from_op(ctx, op).is_err() && TailCallIndirect::from_op(ctx, op).is_err())
     {
         return false;
@@ -237,12 +444,12 @@ fn print_func(
         data.regions.first().copied()
     };
 
-    // Extract the validated input/result lists from the core.func type attribute.
+    // Extract the validated input/result lists from the func.func_sig type attribute.
     let type_info = {
         let data = h.ctx().op(op);
         data.attributes
             .get_type("type")
-            .and_then(|ty| crate::dialect::core::Func::from_type_ref(h.ctx(), ty))
+            .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(h.ctx(), ty))
             .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
     };
 
@@ -297,8 +504,8 @@ fn print_func(
         .get_type("type")
         .is_some_and(|ty| {
             h.ctx().types.get(ty).attrs.keys().any(|key| {
-                *key != crate::Symbol::new(crate::dialect::core::NUM_INPUTS_ATTR)
-                    && *key != crate::Symbol::new(crate::dialect::core::NUM_RESULTS_ATTR)
+                *key != crate::Symbol::new(crate::dialect::func::NUM_INPUTS_ATTR)
+                    && *key != crate::Symbol::new(crate::dialect::func::NUM_RESULTS_ATTR)
             })
         });
     let extra_attrs: Vec<_> = {
@@ -397,11 +604,11 @@ inventory::submit! {
 }
 
 impl crate::op_interface::CallableOwnerModel for Func {
-    fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::core::Func> {
+    fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::FuncSig> {
         ctx.op(self.op_ref())
             .attributes
             .get_type("type")
-            .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty))
+            .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty))
     }
 }
 inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
@@ -417,8 +624,8 @@ mod tests {
     #[test]
     fn indirect_signature_is_declared_and_round_trips() {
         let input = r#"core.module @test {
-  func.func @run(%callee: core.func(core.i32, core.i32), %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, core.i32)} : core.i32
+  func.func @run(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
     func.return %result
   }
 }"#;
@@ -433,7 +640,7 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains("!t0 = core.func<(core.i32) -> core.i32>"),
+            printed.contains("!t0 = func.func_sig<(core.i32) -> core.i32>"),
             "{printed}"
         );
         assert!(printed.contains("signature = !t0"), "{printed}");
@@ -446,12 +653,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @ordinary(%callee: core.func(core.i32, core.i32), %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, core.i32)} : core.i32
+  func.func @ordinary(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
     func.return %result
   }
-  func.func @tail(%callee: core.func(core.nil, core.i32), %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32)}
+  func.func @tail(%callee: func.func_sig<(core.i32) -> core.nil>, %value: core.i32) -> core.nil {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>}
   }
   func.func @direct() -> core.nil {
     func.return
@@ -523,8 +730,8 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = @f, type = core.func<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} }",
-            "core.module @m { func.func @f(%x: core.i32) attributes {type = core.func<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} { func.return } }",
+            "core.module @m { func.func {sym_name = @f, type = func.func_sig<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} }",
+            "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();
@@ -542,7 +749,7 @@ mod result_list_tests {
         assert!(
             parse_module(
                 &mut ctx,
-                "core.module @m { func.func @f() attributes {type = core.func<() -> core.nil>} }"
+                "core.module @m { func.func @f() attributes {type = func.func_sig<() -> core.nil>} }"
             )
             .is_err()
         );
@@ -554,7 +761,7 @@ mod result_list_tests {
         let module = crate::parser::parse_test_module(&mut ctx, "core.module @m {}");
         let loc = ctx.op(module.op()).location;
         let nil = core::nil(&mut ctx).as_type_ref();
-        let signature = core::func(&mut ctx, [], []).as_type_ref();
+        let signature = func_sig(&mut ctx, [], []).as_type_ref();
         let callee = constant(&mut ctx, loc, signature, Symbol::new("f")).result(&ctx);
         for results in [vec![], vec![nil]] {
             let direct = call(&mut ctx, loc, [], results.clone(), Symbol::new("f"));
@@ -576,17 +783,17 @@ mod result_list_tests {
         let valid = "core.module @m {
           func.func @sink(%x: core.i32)
           func.func @value(%x: core.i32) -> core.i32
-          func.func @run(%k: core.func<(core.i32) -> ()>, %x: core.i32) {
+          func.func @run(%k: func.func_sig<(core.i32) -> ()>, %x: core.i32) {
             func.call %x {callee = @sink}
-            func.call_indirect %k, %x {signature = core.func<(core.i32) -> ()>}
+            func.call_indirect %k, %x {signature = func.func_sig<(core.i32) -> ()>}
             %r = func.call %x {callee = @value} : core.i32
             func.return
           }
           func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
-          func.func @logical(%k: core.func<(core.i32) -> core.never>, %x: core.i32) -> core.never {
+          func.func @logical(%k: func.func_sig<(core.i32) -> core.never>, %x: core.i32) -> core.never {
             func.tail_call_indirect %k, %x
           }
-          func.func @one(%k: core.func<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
+          func.func @one(%k: func.func_sig<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
             %r = func.call_indirect %k, %x : core.i32
             func.return %r
           }
@@ -615,8 +822,8 @@ mod result_list_tests {
                 "tail caller/callee result lists differ",
             ),
             (
-                "signature = core.func<(core.i32) -> ()>",
-                "signature = core.func<(core.i64) -> ()>",
+                "signature = func.func_sig<(core.i32) -> ()>",
+                "signature = func.func_sig<(core.i64) -> ()>",
                 "exact indirect signature differs",
             ),
             (
@@ -649,8 +856,8 @@ mod owner_identity_tests {
         let module = crate::parser::parse_test_module(
             &mut ctx,
             "core.module @m {
-          func.func @f(%k: core.func<() -> core.never>) -> core.never {
-            test.lambda {type = core.func<() -> core.nil>} { func.tail_call_indirect %k }
+          func.func @f(%k: func.func_sig<() -> core.never>) -> core.never {
+            test.lambda {type = func.func_sig<() -> core.nil>} { func.tail_call_indirect %k }
             func.unreachable
           }
         }",
@@ -706,7 +913,7 @@ mod normal_validation_regressions {
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(
-                "core.module @m {{ func.func @sink() func.func @run(%k: core.func<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+                "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
             let result = crate::validation::validate_all(&ctx, module);

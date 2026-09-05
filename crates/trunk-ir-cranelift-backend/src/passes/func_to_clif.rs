@@ -254,7 +254,7 @@ impl RewritePattern for FuncCallIndirectPattern {
             else {
                 return false;
             };
-            let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
+            let Some(callable) = func::FuncSig::from_type_ref(ctx, signature) else {
                 return false;
             };
             let Some(callable_result) = callable.single_result(ctx) else {
@@ -285,7 +285,7 @@ impl RewritePattern for FuncCallIndirectPattern {
                 .first()
                 .copied()
                 .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-            core::func(ctx, param_types, [result]).as_type_ref()
+            func::func_sig(ctx, param_types, [result]).as_type_ref()
         };
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -393,7 +393,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         else {
             return false;
         };
-        let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
+        let Some(callable) = func::FuncSig::from_type_ref(ctx, signature) else {
             return false;
         };
         if callable.single_result(ctx) != Some(core::nil(ctx).as_type_ref())
@@ -553,7 +553,7 @@ mod tests {
     func.tail_call %value {callee = @direct_target, tribute.calling_convention = 2}
   }
   func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>, tribute.calling_convention = 2}
   }
 }"#;
 
@@ -576,9 +576,9 @@ mod tests {
             );
             let op = module.ops(&ctx)[0];
             if malformed {
-                let ty = ctx
-                    .types
-                    .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+                let ty = ctx.types.intern(
+                    TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig")).build(),
+                );
                 ctx.op_mut(op)
                     .attributes
                     .insert(Symbol::new("type"), trunk_ir::Attribute::Type(ty));
@@ -659,14 +659,14 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn(%callee: core.ptr) -> core.nil {
-    func.call_indirect %callee {signature = core.func(core.nil)}
+    func.call_indirect %callee {signature = func.func_sig<() -> core.nil>}
     func.return
   }
 }"#,
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = core.func<() -> core.nil>}"),
+            result.contains("clif.call_indirect %0 {sig = func.func_sig<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
@@ -686,7 +686,7 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array(core.i32)
   func.func @caller(%callee: core.ptr, %evidence: !evidence) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %evidence {signature = core.func(core.nil, !evidence), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> core.nil>, tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -702,11 +702,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = core.func<(core.ptr) -> core.nil>"),
+                && printed.contains("sig = func.func_sig<(core.ptr) -> core.nil>"),
             "{printed}"
         );
         assert!(
-            !printed.contains("sig = core.func<(!evidence) -> core.nil>"),
+            !printed.contains("sig = func.func_sig<(!evidence) -> core.nil>"),
             "{printed}"
         );
     }
@@ -719,11 +719,11 @@ mod tests {
             r#"core.module @test {
   !evidence = core.array(core.i32)
   func.func @physical(%callee: core.ptr, %evidence: core.ptr) -> core.i32 {
-    %result = func.call_indirect %callee, %evidence {signature = core.func(core.i32, !evidence)} : core.i32
+    %result = func.call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
     func.return %result
   }
   func.func @mismatch(%callee: core.ptr, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %callee, %value {signature = core.func(core.i32, !evidence)} : core.i32
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32
     func.return %result
   }
 }"#,
@@ -742,12 +742,12 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.call_indirect")
-                && printed.contains("sig = core.func<(core.ptr) -> core.i32>"),
+                && printed.contains("sig = func.func_sig<(core.ptr) -> core.i32>"),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "func.call_indirect %0, %1 {signature = core.func<(!evidence) -> core.i32>} : core.i32"
+                "func.call_indirect %0, %1 {signature = func.func_sig<(!evidence) -> core.i32>} : core.i32"
             ),
             "the mismatched call must remain unchanged: {printed}"
         );
@@ -760,7 +760,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i64), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i64) -> core.nil>, tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -811,7 +811,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.i32, core.i32), tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -830,7 +830,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32)}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>}
   }
 }"#,
         );
@@ -851,7 +851,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = core.func(core.nil, core.i32), tribute.calling_convention = 0}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>, tribute.calling_convention = 0}
   }
 }"#,
         );

@@ -25,8 +25,8 @@ use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -513,7 +513,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
     let result = core::nil(ctx).as_type_ref();
-    let signature = core::func(ctx, parameters, [result]).as_type_ref();
+    let signature = func::func_sig(ctx, parameters, [result]).as_type_ref();
     let _ = wasm_dialect::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -1388,9 +1388,9 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
-/// Intern a `core.func` type with the given parameter and return types.
+/// Intern a `func.func_sig` type with the given parameter and return types.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-    trunk_ir::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
+    trunk_ir::dialect::func::func_sig(ctx, params.iter().copied(), [ret]).as_type_ref()
 }
 
 /// Compute a stable ability ID as a WASM i32 immediate.

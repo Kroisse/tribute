@@ -9,7 +9,6 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -22,9 +21,9 @@ use crate::errors::{CompilationError, CompilationResult};
 
 use super::helpers::{self, intern_named_adt_struct};
 
-/// Intern a core.func type from params and result type.
+/// Intern a func.func_sig type from params and result type.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
-    core::func(ctx, params.iter().copied(), [result_ty]).as_type_ref()
+    func::func_sig(ctx, params.iter().copied(), [result_ty]).as_type_ref()
 }
 
 /// Intern a simple wasm type with no params or attrs.
@@ -91,7 +90,7 @@ pub(crate) fn collect_call_indirect_types(
                     let (_, ret_ty) =
                         helpers::func_type_parts(ctx, func_type).ok_or_else(|| {
                             CompilationError::type_error(
-                                "Wasm indirect-call collection requires valid one-result core.func",
+                                "Wasm indirect-call collection requires valid one-result func.func_sig",
                             )
                         })?;
                     Some(ret_ty)
@@ -99,7 +98,7 @@ pub(crate) fn collect_call_indirect_types(
                     let (_, ret_ty) =
                         helpers::func_type_parts(ctx, func.r#type(ctx)).ok_or_else(|| {
                             CompilationError::type_error(
-                                "Wasm indirect-call collection requires valid one-result core.func",
+                                "Wasm indirect-call collection requires valid one-result func.func_sig",
                             )
                         })?;
                     Some(ret_ty)
@@ -228,7 +227,7 @@ pub(crate) fn collect_call_indirect_types(
                         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
                         let func_returns_funcref =
                             helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
-                                || helpers::is_type(ctx, func_ret_ty, "core", "func");
+                                || helpers::is_type(ctx, func_ret_ty, "func", "func_sig");
                         // Check for Step type (trampoline-based effect system)
                         let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
                         debug!(
@@ -400,21 +399,21 @@ mod result_list_tests {
             let mut ctx = IrContext::new();
             let text = format!(
                 "core.module @m {{
-                wasm.func {{sym_name = @good, type = core.func<() -> core.i32>}} {{
+                wasm.func {{sym_name = @good, type = func.func_sig<() -> core.i32>}} {{
                     %callee = wasm.i32_const {{value = 0}} : core.i32
                     %value = wasm.call_indirect %callee : core.i32
                     wasm.return %value
                 }}
-                {dialect}.func {{sym_name = @bad, type = core.func<() -> ()>}} {{}}
+                {dialect}.func {{sym_name = @bad, type = func.func_sig<() -> ()>}} {{}}
             }}"
             );
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
-            let seed = core::func(&mut ctx, [], []).as_type_ref();
+            let seed = func::func_sig(&mut ctx, [], []).as_type_ref();
             let mut indices = HashMap::from([(seed, 7)]);
             let before = indices.clone();
             let error =
                 collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap_err();
-            assert!(error.to_string().contains("one-result core.func"));
+            assert!(error.to_string().contains("one-result func.func_sig"));
             assert_eq!(indices, before);
             let bad = module.ops(&ctx)[1];
             trunk_ir::rewrite::erase_op(&mut ctx, bad);
@@ -434,12 +433,12 @@ mod result_list_tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = @f, type = core.func<() -> ()>} { wasm.return } }",
+            "core.module @m { wasm.func {sym_name = @f, type = func.func_sig<() -> ()>} { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
         let mut indices = HashMap::new();
         let error = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap_err();
-        assert!(error.to_string().contains("one-result core.func"));
+        assert!(error.to_string().contains("one-result func.func_sig"));
         assert!(indices.is_empty());
         assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
     }

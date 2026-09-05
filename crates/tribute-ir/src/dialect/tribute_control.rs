@@ -793,7 +793,7 @@ fn contains_forbidden_logical_component(
         return true;
     }
     let data = ctx.types.get(ty);
-    let forbidden = (data.dialect == Symbol::new("core") && data.name == Symbol::new("func"))
+    let forbidden = (data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig"))
         || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
@@ -4651,7 +4651,7 @@ mod tests {
     fn resume_token_components_are_checked_recursively() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !physical = core.func(core.i32)
+  !physical = func.func_sig<() -> core.i32>
   !wrapper = core.tuple(!physical)
   !token = tribute_control.resume_token(!wrapper, core.i32)
 }"#,

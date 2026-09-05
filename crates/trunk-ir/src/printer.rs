@@ -107,7 +107,7 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
-        if let Some(func) = crate::dialect::core::Func::from_type_ref(self.ctx, ty) {
+        if let Some(func) = crate::dialect::func::FuncSig::from_type_ref(self.ctx, ty) {
             return self.write_func_type(f, func);
         }
         let data = self.ctx.types.get(ty);
@@ -138,8 +138,12 @@ impl<'a> PrintState<'a> {
         Ok(())
     }
 
-    fn write_func_type(&self, f: &mut dyn Write, func: crate::dialect::core::Func) -> fmt::Result {
-        f.write_str("core.func<(")?;
+    fn write_func_type(
+        &self,
+        f: &mut dyn Write,
+        func: crate::dialect::func::FuncSig,
+    ) -> fmt::Result {
+        f.write_str("func.func_sig<(")?;
         for (index, &input) in func.inputs(self.ctx).iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
@@ -455,7 +459,7 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
 
         // Attributes containing types.
         // Skip func.func — its `type` attribute holds the function signature
-        // (core.func), which would otherwise dominate alias candidates.
+        // (func.func_sig), which would otherwise dominate alias candidates.
         let is_func_decl =
             data.dialect == crate::Symbol::new("func") && data.name == crate::Symbol::new("func");
         if !is_func_decl {
@@ -955,9 +959,9 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    /// Create a one-result `core.func` type.
+    /// Create a one-result `func.func_sig` type.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
+        crate::dialect::func::func_sig(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     #[test]
@@ -982,7 +986,7 @@ mod tests {
             let input = format!(
                 "core.module @m {{
                 !scalar = core.i32
-                !callable = core.func<(!scalar) -> {result}> {{nested = [!scalar]}}
+                !callable = func.func_sig<(!scalar) -> {result}> {{nested = [!scalar]}}
                 func.func @f(%x: !callable) {{ func.return }}
             }}"
             );
@@ -991,12 +995,12 @@ mod tests {
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
                 print_type(&ctx, callable),
-                format!("core.func<(core.i32) -> {expanded_result}> {{nested = [core.i32]}}")
+                format!("func.func_sig<(core.i32) -> {expanded_result}> {{nested = [core.i32]}}")
             );
             let printed = print_module(&ctx, module);
             assert!(
                 printed.contains(&format!(
-                    "core.func<(!scalar) -> {result}> {{nested = [!scalar]}}"
+                    "func.func_sig<(!scalar) -> {result}> {{nested = [!scalar]}}"
                 )),
                 "{printed}"
             );
@@ -1010,20 +1014,20 @@ mod tests {
     fn test_print_func_type_uses_canonical_result_list_syntax() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let zero_zero = core::func(&mut ctx, [], []).as_type_ref();
-        let many_zero = core::func(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
-        let zero_one = core::func(&mut ctx, [], [i32_ty]).as_type_ref();
-        let many_one = core::func(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
+        let zero_zero = func::func_sig(&mut ctx, [], []).as_type_ref();
+        let many_zero = func::func_sig(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
+        let zero_one = func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
+        let many_one = func::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
 
-        assert_eq!(print_type(&ctx, zero_zero), "core.func<() -> ()>");
+        assert_eq!(print_type(&ctx, zero_zero), "func.func_sig<() -> ()>");
         assert_eq!(
             print_type(&ctx, many_zero),
-            "core.func<(core.i32, core.i32) -> ()>"
+            "func.func_sig<(core.i32, core.i32) -> ()>"
         );
-        assert_eq!(print_type(&ctx, zero_one), "core.func<() -> core.i32>");
+        assert_eq!(print_type(&ctx, zero_one), "func.func_sig<() -> core.i32>");
         assert_eq!(
             print_type(&ctx, many_one),
-            "core.func<(core.i32, core.i32) -> core.i32>"
+            "func.func_sig<(core.i32, core.i32) -> core.i32>"
         );
     }
 
@@ -1438,7 +1442,7 @@ mod tests {
         let output = print_module(&ctx, module);
 
         // No auto aliases should be generated — core.i32 is a leaf type and
-        // core.func has no dialect-provided name hint
+        // func.func_sig has no dialect-provided name hint
         assert!(
             !output.contains('!'),
             "No types should be aliased:\n{output}"

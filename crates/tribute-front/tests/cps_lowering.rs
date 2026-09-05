@@ -29,7 +29,7 @@ fn assert_logical_boundary(ir: &str) {
         "ability.handle",
         "effect.",
         "__tribute_cps_control",
-        "core.func",
+        "func.func_sig",
     ] {
         assert!(
             !ir.contains(forbidden),
@@ -470,7 +470,7 @@ pub mod Nested {
     );
     assert!(
         ir_text.contains("tribute_control.callable(core.i32, core.i32)")
-            && !ir_text.contains("core.func"),
+            && !ir_text.contains("func.func_sig"),
         "nested callable fields must remain source-logical:\n{ir_text}"
     );
 }
@@ -1528,7 +1528,7 @@ fn run() ->{Trace} Pair {
 }
 
 /// Logical aggregate construction and matching must preserve callable fields
-/// recursively; no physical `core.func` carrier may enter tuple/list layouts.
+/// recursively; no physical `func.func_sig` carrier may enter tuple/list layouts.
 #[salsa_test]
 fn logical_callable_tuple_and_list_layouts_remain_distinct(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -1600,14 +1600,14 @@ fn from_list(callback: fn(Int) -> Int) -> Int {
         "length-delimited logical keys must not alias delimiter-sensitive tuple shapes:\n{ir}"
     );
     assert!(
-        !ir.contains("core.func"),
-        "callable aggregate layouts must not use physical core.func:\n{ir}"
+        !ir.contains("func.func_sig"),
+        "callable aggregate layouts must not use physical func.func_sig:\n{ir}"
     );
 }
 
 /// Nominal logical layouts must share the same recursive callable conversion:
 /// generated field accessors, enum construction, and enum pattern extraction
-/// cannot reintroduce a physical `core.func` field.
+/// cannot reintroduce a physical `func.func_sig` field.
 #[salsa_test]
 fn logical_nominal_callable_fields_use_control_callables(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -1641,7 +1641,7 @@ fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
         "nested callable variant patterns must stay in the logical aggregate dialect:\n{inspect}"
     );
     assert!(inspect.contains("-> !t"));
-    assert!(!ir.contains("core.func"));
+    assert!(!ir.contains("func.func_sig"));
 }
 
 /// Callable list patterns use the source-logical list layout through exact,
@@ -1671,7 +1671,7 @@ fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -
             && ir.contains("tribute_control.callable(core.i32, core.i32)"),
         "callable list pattern extraction must retain its logical element type:\n{first_or}"
     );
-    assert!(!first_or.contains("core.func"));
+    assert!(!first_or.contains("func.func_sig"));
 }
 
 /// Nonempty list and tuple pattern checks both extract callable values through
@@ -1714,7 +1714,7 @@ fn choose_pair(pair: #(fn(Int) -> Int, Bool), fallback: fn(Int) -> Int) -> fn(In
             && tuple_case.contains("scf.if"),
         "callable tuple pattern check must stay in logical aggregate IR:\n{tuple_case}"
     );
-    assert!(!ir.contains("core.func"));
+    assert!(!ir.contains("func.func_sig"));
 }
 
 /// Multi-field variants and exact list literals retain each nested pattern

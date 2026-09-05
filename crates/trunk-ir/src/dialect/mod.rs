@@ -34,7 +34,7 @@ mod tests {
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
         let nil_ty = super::core::nil(ctx).as_type_ref();
-        super::core::func(ctx, [], [nil_ty]).as_type_ref()
+        super::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
     }
 
     // ================================================================
@@ -517,9 +517,9 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // func(i32, i32) -> i32  (no effect)
-        let f = super::core::func(&mut ctx, [i32_ty, i32_ty], [i32_ty]);
+        let f = super::func::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]);
 
-        assert!(super::core::Func::matches(&ctx, f.as_type_ref()));
+        assert!(super::func::FuncSig::matches(&ctx, f.as_type_ref()));
         assert_eq!(f.results(&ctx), &[i32_ty]);
         assert_eq!(f.inputs(&ctx), &[i32_ty, i32_ty]);
     }
@@ -529,7 +529,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let f = super::core::func(&mut ctx, [i32_ty], [i32_ty]);
+        let f = super::func::func_sig(&mut ctx, [i32_ty], [i32_ty]);
 
         assert_eq!(f.single_result(&ctx), Some(i32_ty));
         assert_eq!(f.inputs(&ctx), &[i32_ty]);
@@ -540,7 +540,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let nil_ty = super::core::nil(&mut ctx);
 
-        let f = super::core::func(&mut ctx, [], [nil_ty.as_type_ref()]);
+        let f = super::func::func_sig(&mut ctx, [], [nil_ty.as_type_ref()]);
 
         assert_eq!(f.results(&ctx), &[nil_ty.as_type_ref()]);
         assert!(f.inputs(&ctx).is_empty());
@@ -550,8 +550,8 @@ mod tests {
     fn test_func_type_result_lists_are_distinct() {
         let mut ctx = IrContext::new();
         let nil_ty = super::core::nil(&mut ctx).as_type_ref();
-        let resultless = super::core::func(&mut ctx, [], []);
-        let unit = super::core::func(&mut ctx, [], [nil_ty]);
+        let resultless = super::func::func_sig(&mut ctx, [], []);
+        let unit = super::func::func_sig(&mut ctx, [], [nil_ty]);
 
         assert_ne!(resultless.as_type_ref(), unit.as_type_ref());
         assert!(resultless.is_resultless(&ctx));
@@ -563,8 +563,8 @@ mod tests {
     fn test_func_type_counts_distinguish_the_same_flat_params() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
-        let one_input = super::core::func(&mut ctx, [i32_ty], []);
-        let one_result = super::core::func(&mut ctx, [], [i32_ty]);
+        let one_input = super::func::func_sig(&mut ctx, [i32_ty], []);
+        let one_result = super::func::func_sig(&mut ctx, [], [i32_ty]);
 
         assert_ne!(one_input.as_type_ref(), one_result.as_type_ref());
         assert_eq!(
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn test_func_type_zero_input_zero_result() {
         let mut ctx = IrContext::new();
-        let function = super::core::func(&mut ctx, [], []);
+        let function = super::func::func_sig(&mut ctx, [], []);
         assert!(function.inputs(&ctx).is_empty());
         assert!(function.results(&ctx).is_empty());
     }
@@ -593,23 +593,23 @@ mod tests {
     fn test_func_type_inputs_zero_one_result() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
-        let function = super::core::func(&mut ctx, [], [i32_ty]);
+        let function = super::func::func_sig(&mut ctx, [], [i32_ty]);
         assert!(function.inputs(&ctx).is_empty());
         assert_eq!(function.results(&ctx), [i32_ty]);
     }
 
     #[test]
-    #[should_panic(expected = "core.func currently supports at most one result")]
+    #[should_panic(expected = "func.func_sig currently supports at most one result")]
     fn test_func_type_constructor_rejects_multiple_results() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
-        let _ = super::core::func(&mut ctx, [], [i32_ty, i32_ty]);
+        let _ = super::func::func_sig(&mut ctx, [], [i32_ty, i32_ty]);
     }
 
     #[test]
     fn test_type_name_constants_extended() {
         assert_eq!(super::core::TUPLE(), Symbol::new("tuple"));
-        assert_eq!(super::core::FUNC(), Symbol::new("func"));
+        assert_eq!(super::func::FUNC_SIG(), Symbol::new("func_sig"));
         assert_eq!(super::core::BYTES(), Symbol::new("bytes"));
     }
 }

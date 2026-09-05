@@ -76,13 +76,13 @@ fn print_closure_lambda(
     write!(h, ")")?;
 
     // "-> return_type"
-    // Decompose: result type = closure.closure<core.func<(inputs...) -> result>>
+    // Decompose: result type = closure.closure<func.func_sig<(inputs...) -> result>>
     let return_ty = {
         let result_ty = h.ctx().op_result_types(op)[0];
         let closure_ty_data = h.ctx().types.get(result_ty);
         if !closure_ty_data.params.is_empty() {
             let func_ty = closure_ty_data.params[0];
-            trunk_ir::dialect::core::Func::from_type_ref(h.ctx(), func_ty)
+            trunk_ir::dialect::func::FuncSig::from_type_ref(h.ctx(), func_ty)
                 .and_then(|function| function.single_result(h.ctx()))
         } else {
             None
@@ -214,7 +214,7 @@ fn parse_closure_lambda<'a>(
         regions.push(region);
     }
 
-    // Reconstruct closure.closure<core.func<(param_types...) -> return_ty>> type.
+    // Reconstruct closure.closure<func.func_sig<(param_types...) -> return_ty>> type.
     let param_raw_types: Vec<RawType<'a>> = params.iter().map(|(_, ty)| ty.clone()).collect();
 
     let func_raw_ty = RawType::Function {
@@ -223,7 +223,7 @@ fn parse_closure_lambda<'a>(
         attrs: vec![],
     };
 
-    // closure.closure<core.func<...>>
+    // closure.closure<func.func_sig<...>>
     let closure_raw_ty = RawType::Concrete {
         dialect: "closure",
         name: "closure",
@@ -260,7 +260,7 @@ impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
     fn callable_signature(
         self,
         ctx: &trunk_ir::IrContext,
-    ) -> Option<trunk_ir::dialect::core::Func> {
+    ) -> Option<trunk_ir::dialect::func::FuncSig> {
         use trunk_ir::ops::DialectType;
         let [result] = ctx.op_result_types(self.op_ref()) else {
             return None;
@@ -269,7 +269,7 @@ impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
         let [function] = ctx.types.get(closure.as_type_ref()).params.as_slice() else {
             return None;
         };
-        trunk_ir::dialect::core::Func::from_type_ref(ctx, *function)
+        trunk_ir::dialect::func::FuncSig::from_type_ref(ctx, *function)
     }
 }
 inventory::submit! { trunk_ir::op_interface::CallableOwnerOps::register::<Lambda>() }
@@ -639,7 +639,7 @@ mod malformed_owner_tests {
             let mut ctx = trunk_ir::IrContext::new();
             let input = "core.module @m {
           func.func @host() -> core.never {
-            %lambda = closure.lambda(%k: core.func<() -> core.never>) -> core.never [] {
+            %lambda = closure.lambda(%k: func.func_sig<() -> core.never>) -> core.never [] {
               func.tail_call_indirect %k
             }
             func.unreachable
@@ -678,7 +678,7 @@ mod callable_owner_regressions {
                 "core.module @m {{
               func.func @host() {{
                 %outer = closure.lambda() -> core.i32 [] {{
-                  %inner = closure.lambda(%k: core.func<() -> {callee_result}>) -> core.never [] {{
+                  %inner = closure.lambda(%k: func.func_sig<() -> {callee_result}>) -> core.never [] {{
                     func.tail_call_indirect %k
                   }}
                   %v = arith.const {{value = 0}} : core.i32

@@ -8,7 +8,6 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -25,7 +24,7 @@ use crate::{CompilationError, CompilationResult};
 #[derive(Debug)]
 pub(crate) struct FunctionDef {
     pub name: Symbol,
-    /// Validated `core.func` signature.
+    /// Validated `func.func_sig` signature.
     pub func_type: TypeRef,
     pub op: OpRef,
 }
@@ -35,7 +34,7 @@ pub(crate) struct ImportFuncDef {
     pub sym: Symbol,
     pub module: Symbol,
     pub name: Symbol,
-    /// core.func TypeRef
+    /// func.func_sig TypeRef
     pub func_type: TypeRef,
 }
 
@@ -99,8 +98,9 @@ pub(crate) fn extract_function_def(
     let name = func_op.sym_name(ctx);
     let ty = func_op.r#type(ctx);
 
-    let function = core::Func::from_type_ref(ctx, ty)
-        .ok_or_else(|| CompilationError::type_error("wasm.func requires valid core.func type"))?;
+    let function = func::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
+        CompilationError::type_error("wasm.func requires valid func.func_sig type")
+    })?;
 
     if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.types.get(result_ty);
@@ -136,9 +136,9 @@ pub(crate) fn extract_import_def(
     let sym = import_op.sym_name(ctx);
     let ty = import_op.r#type(ctx);
 
-    if core::Func::from_type_ref(ctx, ty).is_none() {
+    if func::FuncSig::from_type_ref(ctx, ty).is_none() {
         return Err(CompilationError::type_error(
-            "wasm.import_func requires valid core.func type",
+            "wasm.import_func requires valid func.func_sig type",
         ));
     }
 
@@ -312,12 +312,12 @@ mod tests {
     use trunk_ir::types::{Location, TypeDataBuilder};
 
     #[test]
-    fn import_function_requires_valid_core_func_counts() {
+    fn import_function_requires_valid_func_sig_counts() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let malformed = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig")).build());
         let import = wasm_dialect::import_func(
             &mut ctx,
             location,
@@ -329,7 +329,9 @@ mod tests {
 
         let error = extract_import_def(&ctx, import).expect_err("malformed import signature");
         assert!(
-            error.to_string().contains("requires valid core.func type"),
+            error
+                .to_string()
+                .contains("requires valid func.func_sig type"),
             "{error}"
         );
     }
