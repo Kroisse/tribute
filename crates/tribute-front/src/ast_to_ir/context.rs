@@ -703,7 +703,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let convention = self
                     .calling_convention_for_type(ty)
                     .unwrap_or(crate::ast::CallingConvention::Cps);
-                tribute_ir::dialect::tribute_control::callable(
+                tribute_ir::dialect::tribute_control::func_sig(
                     ir,
                     result,
                     params,
@@ -755,7 +755,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Canonical nominal name for a source-logical tuple layout.  Do not use
     /// arena dialect type names here: distinct callable signatures all share
-    /// the `tribute_control.callable` dialect name.
+    /// the `tribute_control.func_sig` dialect name.
     pub fn logical_tuple_name(&self, ty: crate::ast::Type<'db>) -> Symbol {
         Symbol::from_dynamic(&format!("__logical_tuple_{}", self.logical_type_key(ty)))
     }
@@ -1329,12 +1329,12 @@ mod tests {
         let logical_callable = ctx.convert_logical_type(&mut ir, callable);
         let i32_ty = ctx.i32_type(&mut ir);
         let signature =
-            tribute_ir::dialect::tribute_control::Callable::from_type_ref(&ir, logical_callable)
+            tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, logical_callable)
                 .expect("logical function type must be a control callable");
         assert_eq!(signature.result(&ir), i32_ty);
-        assert_eq!(signature.params(&ir), &[i32_ty]);
+        assert_eq!(signature.inputs(&ir), &[i32_ty]);
         assert_eq!(
-            tribute_ir::dialect::tribute_control::callable_convention(&ir, logical_callable),
+            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, logical_callable),
             Some(tribute_ir::dialect::tribute_control::CallingConvention::Direct)
         );
 
@@ -1473,11 +1473,11 @@ mod tests {
         let evidence_ir = ctx.convert_logical_type(&mut ir, evidence_callable);
         let cps_ir = ctx.convert_logical_type(&mut ir, cps_callable);
         assert_eq!(
-            tribute_ir::dialect::tribute_control::callable_convention(&ir, evidence_ir),
+            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, evidence_ir),
             Some(tribute_ir::dialect::tribute_control::CallingConvention::EvidenceDirect)
         );
         assert_eq!(
-            tribute_ir::dialect::tribute_control::callable_convention(&ir, cps_ir),
+            tribute_ir::dialect::tribute_control::func_sig_convention(&ir, cps_ir),
             Some(tribute_ir::dialect::tribute_control::CallingConvention::Cps)
         );
 

@@ -117,13 +117,13 @@ fn control_convention(convention: CallingConvention) -> tribute_control::Calling
     }
 }
 
-fn callable_type(
+fn func_sig_type(
     ir: &mut IrContext,
     result: TypeRef,
     params: impl IntoIterator<Item = TypeRef>,
     convention: CallingConvention,
 ) -> TypeRef {
-    tribute_control::callable(ir, result, params, control_convention(convention)).as_type_ref()
+    tribute_control::func_sig(ir, result, params, control_convention(convention)).as_type_ref()
 }
 
 fn declaration_name(prefix: &mut String, name: Symbol) -> Symbol {
@@ -632,7 +632,7 @@ fn lower_struct_accessors<'db>(
             blocks: trunk_ir::smallvec::smallvec![entry],
             parent_op: None,
         });
-        let callable = callable_type(ir, field_type, [struct_type], CallingConvention::Direct);
+        let callable = func_sig_type(ir, field_type, [struct_type], CallingConvention::Direct);
         let getter = tribute_control::func_declaration(ir, location, getter_name, callable);
         ir.op_mut(getter.op_ref()).regions.push(body);
         ir.region_mut(body).parent_op = Some(getter.op_ref());
@@ -684,7 +684,7 @@ fn lower_function<'db>(
                 .expect("root main has a function type")
         });
     let signature = function_signature(ctx, ir, &function);
-    let callable = callable_type(
+    let callable = func_sig_type(
         ir,
         signature.return_type,
         signature.param_types.iter().copied(),
@@ -773,7 +773,7 @@ fn lower_extern<'db>(
             decl.name
         )
     });
-    let callable = callable_type(
+    let callable = func_sig_type(
         ir,
         signature.return_type,
         signature.param_types,
@@ -814,7 +814,7 @@ fn ensure_prelude_declaration(
     {
         return;
     }
-    let callable = callable_type(
+    let callable = func_sig_type(
         builder.ir,
         signature.return_type,
         signature.param_types.iter().copied(),
@@ -1051,7 +1051,7 @@ fn lower_expr<'db>(
                     .function_calling_convention(name)
                     .unwrap_or(signature.convention);
                 ensure_prelude_declaration(builder, location, name, &signature);
-                let ty = callable_type(
+                let ty = func_sig_type(
                     builder.ir,
                     signature.return_type,
                     signature.param_types,
@@ -1755,9 +1755,9 @@ fn lower_call<'db>(
                     .unwrap_or_else(|| panic!("missing logical callable binding for local {id:?}"));
                 let callable_ty = builder.ir.value_ty(callable);
                 let callable_signature =
-                    tribute_control::Callable::from_type_ref(builder.ir, callable_ty)
+                    tribute_control::FuncSig::from_type_ref(builder.ir, callable_ty)
                         .unwrap_or_else(|| panic!("local call target is not a logical callable"));
-                let parameters = callable_signature.params(builder.ir).to_vec();
+                let parameters = callable_signature.inputs(builder.ir).to_vec();
                 if values.len() != parameters.len() {
                     panic!("typechecked indirect call arity disagrees with logical callable");
                 }
@@ -1788,9 +1788,9 @@ fn lower_call<'db>(
         let callable = indirect_callee
             .expect("non-variable logical callee must be evaluated before its arguments");
         let callable_ty = builder.ir.value_ty(callable);
-        let callable_signature = tribute_control::Callable::from_type_ref(builder.ir, callable_ty)
+        let callable_signature = tribute_control::FuncSig::from_type_ref(builder.ir, callable_ty)
             .unwrap_or_else(|| panic!("indirect call target is not a logical callable"));
-        let parameters = callable_signature.params(builder.ir).to_vec();
+        let parameters = callable_signature.inputs(builder.ir).to_vec();
         if values.len() != parameters.len() {
             panic!("typechecked indirect call arity disagrees with logical callable");
         }
@@ -1896,7 +1896,7 @@ fn lower_lambda<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
-    let callable = callable_type(builder.ir, result_type, param_types, convention);
+    let callable = func_sig_type(builder.ir, result_type, param_types, convention);
     let lambda = op(builder.ir, builder.block, location, "lambda", |builder| {
         builder.operands(captures).result(callable).region(region)
     });

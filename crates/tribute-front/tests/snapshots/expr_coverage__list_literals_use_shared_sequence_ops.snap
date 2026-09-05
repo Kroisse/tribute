@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(tribute_rt.anyref) {tribute.calling_convention = 0}
+  !t0 = tribute_control.func_sig<() -> tribute_rt.anyref> {tribute.calling_convention = 0}
 
   tribute_control.func @empty() -> tribute_rt.anyref convention(direct) {
       %0 = list.empty {element_type = tribute_rt.anyref} : tribute_rt.anyref

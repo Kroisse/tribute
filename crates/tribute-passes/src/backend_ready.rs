@@ -567,7 +567,7 @@ mod tests {
     fn rejects_logical_type_nested_in_textual_metadata() {
         let error = verify(
             r#"core.module @test {
-  !logical = core.array(tribute_control.callable(core.nil))
+  !logical = core.array(tribute_control.func_sig<() -> core.nil>)
   wasm.func @main() -> core.nil {
     wasm.return
   }
@@ -575,7 +575,7 @@ mod tests {
             TributeBackend::Wasm,
         )
         .expect_err("backend boundary must reject nested logical types");
-        assert!(error.contains("tribute_control.callable"), "{error}");
+        assert!(error.contains("tribute_control.func_sig"), "{error}");
     }
 
     #[test]
@@ -617,13 +617,13 @@ mod tests {
         for ir in [
             r#"core.module @test {
   clif.func @main() -> core.nil {
-    %logical = clif.unknown : tribute_control.callable(core.nil)
+    %logical = clif.unknown : tribute_control.func_sig<() -> core.nil>
     clif.return
   }
 }"#,
             r#"core.module @test {
   wasm.func @main() -> core.nil {
-    wasm.return {metadata = [core.array(tribute_control.callable(core.nil))]}
+    wasm.return {metadata = [core.array(tribute_control.func_sig<() -> core.nil>)]}
   }
 }"#,
         ] {
@@ -636,7 +636,7 @@ mod tests {
                 },
             )
             .expect_err("every type-bearing surface must be checked");
-            assert!(error.contains("tribute_control.callable"), "{error}");
+            assert!(error.contains("tribute_control.func_sig"), "{error}");
         }
     }
 

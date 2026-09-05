@@ -1221,13 +1221,13 @@ impl<'a> Converter<'a> {
         if let Some(converted) = self.converted_types.get(&ty) {
             return *converted;
         }
-        if let Some(callable) = tribute_control::Callable::from_type_ref(self.ctx, ty) {
+        if let Some(callable) = tribute_control::FuncSig::from_type_ref(self.ctx, ty) {
             let convention = convert_convention(
-                tribute_control::callable_convention(self.ctx, ty)
+                tribute_control::func_sig_convention(self.ctx, ty)
                     .expect("pre-CPS validation checked callable convention"),
             );
             let result = self.convert_type(callable.result(self.ctx));
-            let source_params = callable.params(self.ctx).to_vec();
+            let source_params = callable.inputs(self.ctx).to_vec();
             let params: Vec<_> = source_params
                 .into_iter()
                 .map(|param| self.convert_type(param))
@@ -1310,14 +1310,14 @@ impl<'a> Converter<'a> {
     }
 
     fn physical_function_type(&mut self, logical: TypeRef) -> TypeRef {
-        let callable = tribute_control::Callable::from_type_ref(self.ctx, logical)
+        let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");
         let convention = convert_convention(
-            tribute_control::callable_convention(self.ctx, logical)
+            tribute_control::func_sig_convention(self.ctx, logical)
                 .expect("pre-CPS validation checked function convention"),
         );
         let result = self.convert_type(callable.result(self.ctx));
-        let source_params = callable.params(self.ctx).to_vec();
+        let source_params = callable.inputs(self.ctx).to_vec();
         let params: Vec<_> = source_params
             .into_iter()
             .map(|param| self.convert_type(param))
@@ -1951,11 +1951,11 @@ impl<'a> Converter<'a> {
     ) -> Result<OpRef, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
-        let callable = tribute_control::Callable::from_type_ref(self.ctx, logical_ty).unwrap();
+        let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical_ty).unwrap();
         let convention =
-            convert_convention(tribute_control::callable_convention(self.ctx, logical_ty).unwrap());
+            convert_convention(tribute_control::func_sig_convention(self.ctx, logical_ty).unwrap());
         let source_result = callable.result(self.ctx);
-        let source_params = callable.params(self.ctx).to_vec();
+        let source_params = callable.inputs(self.ctx).to_vec();
         let result = self.convert_type(source_result);
         let source_param_types: Vec<_> = source_params
             .iter()
@@ -2109,9 +2109,9 @@ impl<'a> Converter<'a> {
             .current_func(target_symbol)
             .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_callable = tribute_control::Callable::from_type_ref(self.ctx, result_logical_ty)
+        let result_callable = tribute_control::FuncSig::from_type_ref(self.ctx, result_logical_ty)
             .expect("pre-CPS validation checked func_ref result type");
-        let result_convention = tribute_control::callable_convention(self.ctx, result_logical_ty)
+        let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
             .map(convert_convention)
             .expect("pre-CPS validation checked func_ref convention");
         debug_assert!(
@@ -2120,7 +2120,7 @@ impl<'a> Converter<'a> {
         );
         let result = self.convert_type(result_callable.result(self.ctx));
         let source_params: Vec<_> = result_callable
-            .params(self.ctx)
+            .inputs(self.ctx)
             .to_vec()
             .into_iter()
             .map(|ty| self.convert_type(ty))
@@ -3473,7 +3473,7 @@ impl<'a> Converter<'a> {
                 "call_indirect" => {
                     let source_callee = self.ctx.op_operands(source)[0];
                     let logical_type = self.ctx.value_ty(source_callee);
-                    let convention = tribute_control::callable_convention(self.ctx, logical_type)
+                    let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
                         .map(convert_convention)
                         .expect("pre-CPS validation checked indirect callee convention");
                     let callee = mapping
@@ -3774,9 +3774,9 @@ fn collect_callable_graph(
                         .attributes
                         .get_type("type")
                         .expect("pre-CPS validation checked function type");
-                    let callable = tribute_control::Callable::from_type_ref(ctx, logical_type)
+                    let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
                         .expect("pre-CPS validation checked callable type");
-                    let convention = tribute_control::callable_convention(ctx, logical_type)
+                    let convention = tribute_control::func_sig_convention(ctx, logical_type)
                         .expect("pre-CPS validation checked callable convention");
                     funcs.insert(
                         symbol,
@@ -3784,7 +3784,7 @@ fn collect_callable_graph(
                             symbol,
                             convention: convert_convention(convention),
                             source_result: callable.result(ctx),
-                            source_params: callable.params(ctx).to_vec(),
+                            source_params: callable.inputs(ctx).to_vec(),
                         },
                     );
                 }
@@ -3990,7 +3990,7 @@ mod tests {
         let i32_ty = ctx.types.intern(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
-        let source_callable = tribute_control::callable(
+        let source_callable = tribute_control::func_sig(
             &mut ctx,
             i32_ty,
             vec![i32_ty],
@@ -4177,9 +4177,9 @@ mod tests {
     #[test]
     fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
         let input = r#"core.module @test {
-  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
-  !evidence = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 1}
-  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
   tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -4307,7 +4307,7 @@ mod tests {
     #[test]
     fn textual_nested_attribute_types_convert_atomically() {
         let input = r#"core.module @test {
-  !callback = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !record = adt.struct() {fields = [[@callback, !callback]], name = @CallbackRecord}
   tribute_control.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
@@ -4369,7 +4369,7 @@ mod tests {
     tribute_control.return %result
   }
 }"#,
-                "callee operand must have tribute_control.callable type",
+                "callee operand must have tribute_control.func_sig type",
             ),
             (
                 r#"core.module @test {
@@ -4530,7 +4530,7 @@ mod tests {
     #[test]
     fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
         let input = r#"core.module @candidate {
-  !callback = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   func.func @broken(%value: core.i32) -> core.i32 {
     func.return %value
   }
@@ -5353,7 +5353,7 @@ mod tests {
     #[test]
     fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
         let input = r#"core.module @test {
-  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5379,9 +5379,9 @@ mod tests {
     #[test]
     fn func_ref_adapters_cover_every_legal_convention_strengthening() {
         let input = r#"core.module @test {
-  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
-  !evidence = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 1}
-  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
   tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5418,7 +5418,7 @@ mod tests {
     #[test]
     fn weaker_func_ref_adapter_is_rejected_before_mutation() {
         let input = r#"core.module @test {
-  !evidence = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 1}
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
   tribute_control.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }

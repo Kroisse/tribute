@@ -17,7 +17,6 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
-use super::ops::DialectType;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -107,8 +106,8 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
-        if let Some(func) = crate::dialect::func::FuncSig::from_type_ref(self.ctx, ty) {
-            return self.write_func_type(f, func);
+        if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
+            return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.types.get(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
@@ -138,27 +137,40 @@ impl<'a> PrintState<'a> {
         Ok(())
     }
 
-    fn write_func_type(
+    fn write_func_sig_type(
         &self,
         f: &mut dyn Write,
-        func: crate::dialect::func::FuncSig,
+        ty: TypeRef,
+        inputs: &[TypeRef],
+        results: &[TypeRef],
     ) -> fmt::Result {
-        f.write_str("func.func_sig<(")?;
-        for (index, &input) in func.inputs(self.ctx).iter().enumerate() {
+        let data = self.ctx.types.get(ty);
+        write!(f, "{}.{}<(", data.dialect, data.name)?;
+        for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
             }
             self.write_type(f, input)?;
         }
         f.write_str(") -> ")?;
-        if let Some(result) = func.single_result(self.ctx) {
-            self.write_type(f, result)?;
+        if results.len() == 1 {
+            self.write_type(f, results[0])?;
         } else {
-            f.write_str("()")?;
+            f.write_char('(')?;
+            for (index, &result) in results.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                self.write_type(f, result)?;
+            }
+            f.write_char(')')?;
         }
         f.write_char('>')?;
 
-        let mut visible = func.non_reserved_attrs(self.ctx);
+        let mut visible = data.attrs.iter().filter(|(key, _)| {
+            **key != crate::Symbol::new(crate::dialect::func::NUM_INPUTS_ATTR)
+                && **key != crate::Symbol::new(crate::dialect::func::NUM_RESULTS_ATTR)
+        });
         if let Some((key, value)) = visible.next() {
             write!(f, " {{{key} = ")?;
             self.write_attribute(f, value)?;
@@ -215,6 +227,25 @@ impl<'a> PrintState<'a> {
             }
         }
     }
+}
+
+/// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
+/// Other types, including malformed count-shaped data, retain concrete printing.
+fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
+    let data = ctx.types.get(ty);
+    if data.name != crate::Symbol::new("func_sig") {
+        return None;
+    }
+    let num_inputs = match data.attrs.get(crate::dialect::func::NUM_INPUTS_ATTR) {
+        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
+        _ => return None,
+    };
+    let num_results = match data.attrs.get(crate::dialect::func::NUM_RESULTS_ATTR) {
+        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
+        _ => return None,
+    };
+    let end = num_inputs.checked_add(num_results)?;
+    (end == data.params.len()).then_some((&data.params[..num_inputs], &data.params[num_inputs..]))
 }
 
 // ============================================================================
