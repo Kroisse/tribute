@@ -179,36 +179,13 @@ impl RewritePattern for FuncFuncPattern {
         let func_type_attr = data.attributes.get_type("type");
 
         let mut new_attrs = data.attributes.clone();
-        if let Some(func_ty) = func_type_attr {
-            let type_data = ctx.types.get(func_ty);
-            if type_data.dialect == Symbol::new("core") && type_data.name == Symbol::new("func") {
-                // The arena core.func type may use two layouts:
-                // - Layout A: params = [ret, arg1, arg2, ...] (translate_signature format)
-                // - Layout B: params = [arg1, arg2, ...], attrs.result = ret
-                // We read both and output in Layout A for translate_signature.
-                let (arg_params, ret_ty) = if let Some(r) = type_data.attrs.get_type("result") {
-                    // Layout B: return type in attrs
-                    (&type_data.params[..], Some(r))
-                } else if !type_data.params.is_empty() {
-                    // Layout A: params[0] = return type
-                    (&type_data.params[1..], Some(type_data.params[0]))
-                } else {
-                    (&type_data.params[..], None)
-                };
-
-                // Convert params and return type
-                let new_params: Vec<TypeRef> = arg_params
-                    .iter()
-                    .map(|&p| tc.convert_type_or_identity(ctx, p))
-                    .collect();
-                let new_ret = ret_ty.map(|r| tc.convert_type_or_identity(ctx, r));
-
-                // Build new func type in Layout A: params[0] = return type
-                let ret_ty = new_ret.unwrap_or_else(|| core::nil(ctx).as_type_ref());
-                let new_func_ty = core::func(ctx, ret_ty, new_params.iter().copied()).as_type_ref();
-                new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
-            }
-        }
+        let Some(func_ty) = func_type_attr else {
+            return false;
+        };
+        let Some(new_func_ty) = trunk_ir::rewrite::convert_function_type(ctx, func_ty, tc) else {
+            return false;
+        };
+        new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -280,15 +257,17 @@ impl RewritePattern for FuncCallIndirectPattern {
             let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
                 return false;
             };
-            let callable_result = callable.r#return(ctx);
+            let Some(callable_result) = callable.single_result(ctx) else {
+                return false;
+            };
             let results_match = if crate::function::is_nil_type(ctx, callable_result) {
                 result_types.is_empty()
             } else {
                 result_types == [callable_result]
             };
-            if callable.params(ctx).len() != CallLike::call_args(&call, ctx).len()
+            if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
                 || callable
-                    .params(ctx)
+                    .inputs(ctx)
                     .iter()
                     .zip(CallLike::call_args(&call, ctx))
                     .any(|(&param, &arg)| param != ctx.value_ty(arg))
@@ -306,7 +285,7 @@ impl RewritePattern for FuncCallIndirectPattern {
                 .first()
                 .copied()
                 .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-            core::func(ctx, result, param_types).as_type_ref()
+            core::func(ctx, param_types, [result]).as_type_ref()
         };
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -417,11 +396,11 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(callable) = core::Func::from_type_ref(ctx, signature) else {
             return false;
         };
-        if callable.r#return(ctx) != core::nil(ctx).as_type_ref()
+        if callable.single_result(ctx) != Some(core::nil(ctx).as_type_ref())
             || !TailCallLike::is_resultless(&tail, ctx)
-            || callable.params(ctx).len() != CallLike::call_args(&tail, ctx).len()
+            || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
             || callable
-                .params(ctx)
+                .inputs(ctx)
                 .iter()
                 .zip(CallLike::call_args(&tail, ctx))
                 .any(|(&param, &arg)| param != ctx.value_ty(arg))
@@ -587,6 +566,37 @@ mod tests {
     }
 
     #[test]
+    fn review_invalid_function_signature_does_not_move_body() {
+        use trunk_ir::rewrite::PatternApplicator;
+        for malformed in [false, true] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                "core.module @m { func.func @f(%x: core.i32) -> core.i32 { func.return %x } }",
+            );
+            let op = module.ops(&ctx)[0];
+            if malformed {
+                let ty = ctx
+                    .types
+                    .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+                ctx.op_mut(op)
+                    .attributes
+                    .insert(Symbol::new("type"), trunk_ir::Attribute::Type(ty));
+            } else {
+                ctx.op_mut(op).attributes.remove("type");
+            }
+            let before = print_module(&ctx, module.op());
+            let regions = ctx.op(op).regions.clone();
+            PatternApplicator::new(TypeConverter::new())
+                .add_pattern(super::FuncFuncPattern)
+                .apply_partial(&mut ctx, module);
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(module.ops(&ctx)[0], op);
+            assert_eq!(ctx.op(op).regions, regions);
+        }
+    }
+
+    #[test]
     fn test_func_func_to_clif() {
         let result = run_pass(
             r#"core.module @test {
@@ -656,7 +666,7 @@ mod tests {
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = core.func(core.nil)}"),
+            result.contains("clif.call_indirect %0 {sig = core.func<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
@@ -692,11 +702,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = core.func(core.nil, core.ptr)"),
+                && printed.contains("sig = core.func<(core.ptr) -> core.nil>"),
             "{printed}"
         );
         assert!(
-            !printed.contains("sig = core.func(core.nil, !evidence)"),
+            !printed.contains("sig = core.func<(!evidence) -> core.nil>"),
             "{printed}"
         );
     }
@@ -732,12 +742,12 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.call_indirect")
-                && printed.contains("sig = core.func(core.i32, core.ptr)"),
+                && printed.contains("sig = core.func<(core.ptr) -> core.i32>"),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "func.call_indirect %0, %1 {signature = core.func(core.i32, !evidence)} : core.i32"
+                "func.call_indirect %0, %1 {signature = core.func<(!evidence) -> core.i32>} : core.i32"
             ),
             "the mismatched call must remain unchanged: {printed}"
         );

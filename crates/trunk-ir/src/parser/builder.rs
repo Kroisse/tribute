@@ -18,6 +18,7 @@ use winnow::prelude::*;
 use super::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
 use crate::Symbol;
 use crate::context::{IrContext, OperationDataBuilder};
+use crate::ops::DialectType;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
@@ -76,6 +77,15 @@ impl<'a> ArenaIrBuilder<'a> {
                 params,
                 attrs,
             } => {
+                if *dialect == "core" && *name == "func" {
+                    let Some((result, inputs)) = params.split_first() else {
+                        return Err(ParseError {
+                            message: "legacy core.func requires a result type".to_string(),
+                            offset: 0,
+                        });
+                    };
+                    return self.build_function_type(inputs, std::slice::from_ref(result), attrs);
+                }
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
                 let params: Vec<TypeRef> = params
@@ -96,7 +106,54 @@ impl<'a> ArenaIrBuilder<'a> {
                 }
                 Ok(self.ctx.types.intern(builder.build()))
             }
+            RawType::Function {
+                inputs,
+                results,
+                attrs,
+            } => self.build_function_type(inputs, results, attrs),
         }
+    }
+
+    fn build_function_type(
+        &mut self,
+        inputs: &[RawType<'_>],
+        results: &[RawType<'_>],
+        attrs: &[(&str, RawAttribute<'_>)],
+    ) -> Result<TypeRef, ParseError> {
+        if results.len() > 1 {
+            return Err(ParseError {
+                message: format!(
+                    "core.func currently does not support multiple results (found {})",
+                    results.len()
+                ),
+                offset: 0,
+            });
+        }
+        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
+            matches!(
+                *name,
+                crate::dialect::core::NUM_INPUTS_ATTR | crate::dialect::core::NUM_RESULTS_ATTR
+            )
+        }) {
+            return Err(ParseError {
+                message: format!("`{name}` is reserved by core.func"),
+                offset: 0,
+            });
+        }
+
+        let inputs = inputs
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let results = results
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let attrs = attrs
+            .iter()
+            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
+            .collect::<Result<AttributeMap, ParseError>>()?;
+        Ok(crate::dialect::core::func_with_attrs(self.ctx, inputs, results, attrs).as_type_ref())
     }
 
     fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Result<Attribute, ParseError> {
@@ -376,11 +433,12 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Handle func-style signature → core.func type
-        let has_func_signature = raw.return_type.is_some() || !raw.func_params.is_empty();
+        let has_func_signature =
+            raw.has_func_signature || raw.return_type.is_some() || !raw.func_params.is_empty();
         if has_func_signature {
-            let return_ty = match raw.return_type.as_ref() {
-                Some(t) => self.build_type(t)?,
-                None => crate::dialect::core::nil(self.ctx).as_type_ref(),
+            let results = match raw.return_type.as_ref() {
+                Some(t) => vec![self.build_type(t)?],
+                None => vec![],
             };
 
             let param_types: Vec<TypeRef> = raw
@@ -389,9 +447,29 @@ impl<'a> ArenaIrBuilder<'a> {
                 .map(|(_, raw_ty)| self.build_type(raw_ty))
                 .collect::<Result<_, _>>()?;
 
-            let func_ty =
-                crate::dialect::core::func(self.ctx, return_ty, param_types).as_type_ref();
-            attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+            let func_ty = crate::dialect::core::func(self.ctx, param_types, results).as_type_ref();
+            if attributes.contains_key("type") && attributes.get_type("type").is_none() {
+                return Err(ParseError {
+                    message: "explicit function type attribute must be a type".into(),
+                    offset: 0,
+                });
+            }
+            if let Some(explicit) = attributes.get_type("type") {
+                let signature = crate::dialect::core::Func::from_type_ref(self.ctx, explicit);
+                let synthesized =
+                    crate::dialect::core::Func::from_type_ref(self.ctx, func_ty).unwrap();
+                if signature.is_none_or(|signature| {
+                    signature.inputs(self.ctx) != synthesized.inputs(self.ctx)
+                        || signature.results(self.ctx) != synthesized.results(self.ctx)
+                }) {
+                    return Err(ParseError {
+                        message: "explicit function type does not match custom signature".into(),
+                        offset: 0,
+                    });
+                }
+            } else {
+                attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+            }
         }
 
         // Resolve successors
@@ -540,6 +618,7 @@ pub fn parse_test_module(ctx: &mut IrContext, input: &str) -> Module {
 mod tests {
     use super::*;
     use crate::dialect::{arith, core, func};
+    use crate::ops::{DialectOp, DialectType};
     use crate::printer::print_module;
     use crate::validation;
 
@@ -568,7 +647,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     fn wrap_in_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> OpRef {
@@ -866,7 +945,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let call = func::call(&mut ctx, loc, [], i32_ty, Symbol::new("callee"));
+        let call = func::call(&mut ctx, loc, [], [i32_ty], Symbol::new("callee"));
         ctx.push_op(entry2, call.op_ref());
         let call_val = call.result(&ctx);
         let ret2 = func::r#return(&mut ctx, loc, [call_val]);
@@ -1123,6 +1202,146 @@ core.module @test {
     // ================================================================
     // Type alias tests
     // ================================================================
+
+    #[test]
+    fn review_function_result_type_preserves_empty_body() {
+        for attrs in ["", " {effect = core.nil}"] {
+            let input = format!(
+                "core.module @test {{ func.func @f() -> core.func<() -> ()>{attrs} {{}} }}"
+            );
+            let mut ctx = IrContext::new();
+            let module = parse_module(&mut ctx, &input).unwrap();
+            let function = ctx
+                .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+                .ops[0];
+            assert_eq!(
+                ctx.op(function).regions.len(),
+                1,
+                "empty body must not become a declaration"
+            );
+            assert_roundtrip(&ctx, module);
+            let printed = print_module(&ctx, module);
+            let mut reparsed = IrContext::new();
+            let module2 = parse_module(&mut reparsed, &printed).unwrap();
+            let function2 = reparsed
+                .block(reparsed.region(reparsed.op(module2).regions[0]).blocks[0])
+                .ops[0];
+            assert_eq!(reparsed.op(function2).regions.len(), 1);
+            assert_eq!(printed.contains("effect = core.nil"), !attrs.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_canonical_func_type_roundtrips_all_supported_arities() {
+        let input = r#"core.module @test {
+  !zero_zero = core.func<() -> ()>
+  !many_zero = core.func<(core.i32, core.i64) -> ()>
+  !zero_one = core.func<() -> core.i32>
+  !many_one = core.func<(core.i32, core.i64) -> core.i32>
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("canonical function types should parse");
+
+        for (name, input_count, result_count) in [
+            ("zero_zero", 0, 0),
+            ("many_zero", 2, 0),
+            ("zero_one", 0, 1),
+            ("many_one", 2, 1),
+        ] {
+            let ty = ctx
+                .type_alias_by_name(Symbol::from_dynamic(name))
+                .expect("function alias");
+            let function = core::Func::from_type_ref(&ctx, ty).expect("validated core.func");
+            assert_eq!(function.inputs(&ctx).len(), input_count);
+            assert_eq!(function.results(&ctx).len(), result_count);
+        }
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_legacy_func_type_normalizes_to_canonical_storage_and_text() {
+        let input = r#"core.module @test {
+  !legacy = core.func(core.i64, core.i32)
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("legacy function type should parse");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains("!legacy = core.func<(core.i32) -> core.i64>"),
+            "{printed}"
+        );
+        assert!(!printed.contains("core.func(core.i64"), "{printed}");
+
+        let ty = ctx
+            .type_alias_by_name(Symbol::new("legacy"))
+            .expect("legacy alias");
+        let data = ctx.types.get(ty);
+        assert_eq!(data.params.len(), 2);
+        assert_eq!(data.attrs.get_u32(core::NUM_INPUTS_ATTR), Ok(Some(1)));
+        assert_eq!(data.attrs.get_u32(core::NUM_RESULTS_ATTR), Ok(Some(1)));
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_func_type_preserves_non_reserved_attributes() {
+        let input = r#"core.module @test {
+  !with_attr = core.func<(core.i32) -> core.i64> {effect = core.nil}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("function type attribute should parse");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains("!with_attr = core.func<(core.i32) -> core.i64> {effect = core.nil}"),
+            "{printed}"
+        );
+        assert!(!printed.contains("num_inputs"), "{printed}");
+        assert!(!printed.contains("num_results"), "{printed}");
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_func_type_rejects_reserved_textual_attributes() {
+        for reserved in [core::NUM_INPUTS_ATTR, core::NUM_RESULTS_ATTR] {
+            for form in ["core.func<() -> ()>", "core.func(core.nil)"] {
+                let input = format!("core.module @test {{ !bad = {form} {{{reserved} = 0}} }}");
+                let mut ctx = IrContext::new();
+                let error =
+                    parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
+                assert!(error.message.contains("reserved by core.func"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_func_type_rejects_multiple_results_after_recognizing_syntax() {
+        let input = "core.module @test { !bad = core.func<() -> (core.i32, core.i64)> }";
+        let mut ctx = IrContext::new();
+        let error = parse_module(&mut ctx, input).expect_err("multi-result must be rejected");
+        assert!(error.message.contains("multiple results"), "{error}");
+    }
+
+    #[test]
+    fn test_no_arrow_func_op_preserves_zero_results() {
+        let input = r#"core.module @test {
+  func.func @consume(%value: core.i32) {
+    func.return
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("Unit function should parse");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains("func.func @consume(%0: core.i32) {"),
+            "{printed}"
+        );
+
+        let module_view = crate::rewrite::Module::new(&ctx, module).unwrap();
+        let function = func::Func::from_op(&ctx, module_view.ops(&ctx)[0]).unwrap();
+        let signature = core::Func::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
+        assert_eq!(signature.inputs(&ctx).len(), 1);
+        assert!(signature.is_resultless(&ctx));
+        assert_roundtrip(&ctx, module);
+    }
 
     #[test]
     fn test_roundtrip_type_alias() {

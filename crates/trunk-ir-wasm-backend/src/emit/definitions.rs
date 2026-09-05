@@ -8,9 +8,10 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::Attribute;
 use wasm_encoder::{ExportKind, RefType, ValType};
@@ -24,7 +25,7 @@ use crate::{CompilationError, CompilationResult};
 #[derive(Debug)]
 pub(crate) struct FunctionDef {
     pub name: Symbol,
-    /// core.func TypeRef - params are all but last, last is return type
+    /// Validated `core.func` signature.
     pub func_type: TypeRef,
     pub op: OpRef,
 }
@@ -98,20 +99,16 @@ pub(crate) fn extract_function_def(
     let name = func_op.sym_name(ctx);
     let ty = func_op.r#type(ctx);
 
-    let ty_data = ctx.types.get(ty);
-    if !(ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("func")) {
-        return Err(CompilationError::type_error(
-            "wasm.func requires core.func type",
-        ));
-    }
+    let function = core::Func::from_type_ref(ctx, ty)
+        .ok_or_else(|| CompilationError::type_error("wasm.func requires valid core.func type"))?;
 
-    if !ty_data.params.is_empty() {
-        let result_ty = *ty_data.params.last().unwrap();
+    if let Some(result_ty) = function.single_result(ctx) {
         let result_data = ctx.types.get(result_ty);
         debug!(
             "extract_function_def: {} fn_params={:?}, result={}.{}",
             name,
-            ty_data.params[..ty_data.params.len() - 1]
+            function
+                .inputs(ctx)
                 .iter()
                 .map(|p| {
                     let d = ctx.types.get(*p);
@@ -139,10 +136,9 @@ pub(crate) fn extract_import_def(
     let sym = import_op.sym_name(ctx);
     let ty = import_op.r#type(ctx);
 
-    let ty_data = ctx.types.get(ty);
-    if !(ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("func")) {
+    if core::Func::from_type_ref(ctx, ty).is_none() {
         return Err(CompilationError::type_error(
-            "wasm.import_func requires core.func type",
+            "wasm.import_func requires valid core.func type",
         ));
     }
 
@@ -306,4 +302,35 @@ pub(crate) fn extract_global_def(
         mutable,
         init,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::Span;
+    use trunk_ir::refs::PathRef;
+    use trunk_ir::types::{Location, TypeDataBuilder};
+
+    #[test]
+    fn import_function_requires_valid_core_func_counts() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let malformed = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+        let import = wasm_dialect::import_func(
+            &mut ctx,
+            location,
+            Symbol::new("env"),
+            Symbol::new("run"),
+            Symbol::new("run"),
+            malformed,
+        );
+
+        let error = extract_import_def(&ctx, import).expect_err("malformed import signature");
+        assert!(
+            error.to_string().contains("requires valid core.func type"),
+            "{error}"
+        );
+    }
 }

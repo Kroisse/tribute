@@ -342,8 +342,8 @@ use super::super::helpers::attr_u32;
 /// Find a core.func type in the `type_idx_by_type` / `func_types` registries by
 /// matching params and result.
 ///
-/// core.func types encode a single result followed by parameters in `TypeData.params`:
-/// `[result, param1, .., paramN]`.
+/// `core.func` stores inputs followed by its single result in `TypeData.params`;
+/// callers use the validated accessor rather than depending on that flat layout.
 ///
 /// This performs a linear O(n) scan over the registries to avoid requiring
 /// `&mut IrContext` for interning a new type. The trade-off is O(n) per

@@ -888,7 +888,10 @@ fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
         return false;
     };
     core::Func::from_type_ref(ctx, signature).is_some_and(|callable| {
-        let result = ctx.types.get(callable.r#return(ctx));
+        let Some(result) = callable.single_result(ctx) else {
+            return false;
+        };
+        let result = ctx.types.get(result);
         result.dialect == Symbol::new("core")
             && (result.name == Symbol::new("nil") || result.name == Symbol::new("never"))
     })
@@ -950,9 +953,9 @@ fn validate_bodyless_signature(
         .and_then(|ty| core::Func::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
     if signature
-        .params(ctx)
+        .inputs(ctx)
         .iter()
-        .chain(std::iter::once(&signature.r#return(ctx)))
+        .chain(signature.results(ctx))
         .any(|&ty| is_typed_managed_reference(ctx, ty, managed_layouts))
     {
         return Err(OwnershipPlanError::new(
@@ -975,10 +978,10 @@ fn validate_function_contract(
         .and_then(|ty| core::Func::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("defined function lacks exact signature"))?;
     let entry_args = ctx.block_args(cfg.entry());
-    if entry_args.len() != signature.params(ctx).len()
+    if entry_args.len() != signature.inputs(ctx).len()
         || entry_args
             .iter()
-            .zip(signature.params(ctx))
+            .zip(signature.inputs(ctx))
             .any(|(&argument, &expected)| {
                 let actual = ctx.value_ty(argument);
                 (is_typed_managed_reference(ctx, actual, managed_layouts)
@@ -996,7 +999,9 @@ fn validate_function_contract(
             validate_result_contract(
                 ctx,
                 ctx.op_operands(terminator),
-                signature.r#return(ctx),
+                signature.single_result(ctx).ok_or_else(|| {
+                    OwnershipPlanError::new("native ownership requires one logical result")
+                })?,
                 managed_layouts,
                 "function return",
             )?;

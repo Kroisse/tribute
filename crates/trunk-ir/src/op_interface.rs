@@ -399,6 +399,63 @@ pub struct RegionValueTransfer {
     pub inputs: SuccessorInputs,
 }
 
+/// Exact callable region signature supplied by the owning dialect.
+/// A registered owner with an invalid signature is still an ownership boundary.
+pub trait CallableOwnerModel: DialectOp {
+    fn callable_signature(self, ctx: &IrContext) -> Option<crate::dialect::core::Func>;
+}
+
+pub struct CallableOwnerRegistration {
+    dialect: &'static str,
+    op_name: &'static str,
+    signature: fn(&IrContext, OpRef) -> Option<crate::dialect::core::Func>,
+}
+
+fn callable_owner_signature<T: CallableOwnerModel>(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Option<crate::dialect::core::Func> {
+    T::from_op(ctx, op).ok()?.callable_signature(ctx)
+}
+
+inventory::collect!(CallableOwnerRegistration);
+
+static CALLABLE_OWNER_REGISTRY: LazyLock<
+    HashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
+> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for registration in inventory::iter::<CallableOwnerRegistration> {
+        let key = (
+            Symbol::from_dynamic(registration.dialect),
+            Symbol::from_dynamic(registration.op_name),
+        );
+        assert!(
+            registry.insert(key, registration).is_none(),
+            "duplicate callable owner registration"
+        );
+    }
+    registry
+});
+
+pub struct CallableOwnerOps;
+impl CallableOwnerOps {
+    pub const fn register<T: CallableOwnerModel>() -> CallableOwnerRegistration {
+        CallableOwnerRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            signature: callable_owner_signature::<T>,
+        }
+    }
+
+    /// Outer None means unregistered; Some(None) means a malformed owner.
+    pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::core::Func>> {
+        let data = ctx.op(op);
+        CALLABLE_OWNER_REGISTRY
+            .get(&(data.dialect, data.name))
+            .map(|registration| (registration.signature)(ctx, op))
+    }
+}
+
 /// Object-safe semantic accessors for indirect calls.
 ///
 /// An exact signature is optional on otherwise valid ordinary indirect

@@ -239,26 +239,24 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             && closure_ty.name == Symbol::new("closure")
             && closure_ty.params.len() == 1
         {
-            let func_ty = ctx.types.get(closure_ty.params[0]);
-            let params = &func_ty.params;
-            if general {
-                func_ty.dialect == Symbol::new("core")
-                    && func_ty.name == Symbol::new("func")
-                    && params.len() == 5
-                    && type_is(ctx, params[0], "core", "never")
-                    && params[1] == evidence
-                    && type_is(ctx, params[2], "tribute_rt", "anyref")
-                    && type_is(ctx, params[3], "core", "i32")
-                    && type_is(ctx, params[4], "tribute_rt", "anyref")
-            } else {
-                func_ty.dialect == Symbol::new("core")
-                    && func_ty.name == Symbol::new("func")
-                    && params.len() == 4
-                    && type_is(ctx, params[0], "tribute_rt", "anyref")
-                    && params[1] == evidence
-                    && type_is(ctx, params[2], "core", "i32")
-                    && type_is(ctx, params[3], "tribute_rt", "anyref")
-            }
+            core::Func::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
+                let params = function.inputs(ctx);
+                let result = function.single_result(ctx);
+                if general {
+                    result.is_some_and(|result| type_is(ctx, result, "core", "never"))
+                        && params.len() == 4
+                        && params[0] == evidence
+                        && type_is(ctx, params[1], "tribute_rt", "anyref")
+                        && type_is(ctx, params[2], "core", "i32")
+                        && type_is(ctx, params[3], "tribute_rt", "anyref")
+                } else {
+                    result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
+                        && params.len() == 3
+                        && params[0] == evidence
+                        && type_is(ctx, params[1], "core", "i32")
+                        && type_is(ctx, params[2], "tribute_rt", "anyref")
+                }
+            })
         } else {
             false
         };
@@ -411,13 +409,10 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                 });
                 return;
             };
-            let ty = ctx.types.get(*func_ty);
-            let valid_never = ty.dialect == Symbol::new("core")
-                && ty.name == Symbol::new("func")
-                && ty
-                    .params
-                    .first()
-                    .is_some_and(|result| type_is(ctx, *result, "core", "never"));
+            let function = core::Func::from_type_ref(ctx, *func_ty);
+            let valid_never = function
+                .and_then(|function| function.single_result(ctx))
+                .is_some_and(|result| type_is(ctx, result, "core", "never"));
             if !valid_never {
                 failures.push(BoundaryFailure {
                     op: Some(op),
@@ -425,7 +420,9 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
                     message: "func.tail_call target must have core.never result".into(),
                 });
             }
-            let expected = ty.params.get(1..).unwrap_or_default();
+            let expected = function
+                .map(|function| function.inputs(ctx))
+                .unwrap_or_default();
             let operands = ctx.op_operands(op);
             if operands.len() != expected.len()
                 || operands
@@ -857,10 +854,11 @@ impl<'a> Converter<'a> {
                 "CPS indirect tail callee contract is not core.func",
             )
         })?;
-        if callable.r#return(self.ctx) != self.never_type()
-            || callable.params(self.ctx).len() != args.len()
+        let never = self.never_type();
+        if callable.results(self.ctx) != [never]
+            || callable.inputs(self.ctx).len() != args.len()
             || callable
-                .params(self.ctx)
+                .inputs(self.ctx)
                 .iter()
                 .zip(&args)
                 .any(|(expected, actual)| *expected != self.ctx.value_ty(*actual))
@@ -1032,7 +1030,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             factory_args,
-            dispatch_type,
+            [dispatch_type],
             dispatch_factory,
         );
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -1072,8 +1070,8 @@ impl<'a> Converter<'a> {
         let dispatch_type = self.frame_types(value_type).dispatch;
         let factory_type = core::func(
             self.ctx,
-            dispatch_type,
             [completion_type, outer_dispatch_type],
+            [dispatch_type],
         )
         .as_type_ref();
         let factory_block = self.make_block(location, &[completion_type, outer_dispatch_type]);
@@ -1187,7 +1185,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             [typed_completion.result(self.ctx), outer_dispatch],
-            dispatch_type,
+            [dispatch_type],
             dispatch_factory,
         );
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -1243,12 +1241,34 @@ impl<'a> Converter<'a> {
             } else {
                 result
             };
-            let function = core::func(self.ctx, lowered_result, lowered_params).as_type_ref();
+            let function = core::func(self.ctx, lowered_params, [lowered_result]).as_type_ref();
             let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
         }
         let data = self.ctx.types.get(ty).clone();
+        if data.dialect == core::DIALECT_NAME() && data.name == core::FUNC() {
+            let function = core::Func::from_type_ref(self.ctx, ty)
+                .expect("pre-CPS validation must reject malformed core.func types");
+            let source_inputs = function.inputs(self.ctx).to_vec();
+            let source_results = function.results(self.ctx).to_vec();
+            let inputs = source_inputs
+                .into_iter()
+                .map(|input| self.convert_type(input))
+                .collect::<Vec<_>>();
+            let results = source_results
+                .into_iter()
+                .map(|result| self.convert_type(result))
+                .collect::<Vec<_>>();
+            let mut attrs = data.attrs;
+            core::Func::remove_reserved_attrs(&mut attrs);
+            for value in attrs.values_mut() {
+                *value = self.convert_attribute(value);
+            }
+            let converted = core::func_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
+            self.converted_types.insert(ty, converted);
+            return converted;
+        }
         if data.dialect == Symbol::new("tribute_control")
             && data.name == Symbol::new("resume_token")
             && data.params.len() == 2
@@ -1310,7 +1330,7 @@ impl<'a> Converter<'a> {
         } else {
             result
         };
-        core::func(self.ctx, result, params).as_type_ref()
+        core::func(self.ctx, params, [result]).as_type_ref()
     }
 
     fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
@@ -1916,7 +1936,7 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
-        let function = core::func(self.ctx, never, [evidence_type, frame_type]).as_type_ref();
+        let function = core::func(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
@@ -2030,7 +2050,7 @@ impl<'a> Converter<'a> {
                 .map(|value| mapping.get(value).copied().unwrap_or(*value)),
         );
         let result_ty = self.convert_type(target.source_result);
-        let call = func::call(self.ctx, location, args, result_ty, target.symbol);
+        let call = func::call(self.ctx, location, args, [result_ty], target.symbol);
         set_calling_convention(self.ctx, call.op_ref(), target.convention);
         Ok(call)
     }
@@ -2116,7 +2136,7 @@ impl<'a> Converter<'a> {
             result
         };
         let adapter_ty =
-            core::func(self.ctx, physical_result, physical_params.clone()).as_type_ref();
+            core::func(self.ctx, physical_params.clone(), [physical_result]).as_type_ref();
         let block = self.make_block(location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
@@ -2144,7 +2164,7 @@ impl<'a> Converter<'a> {
                 self.ctx,
                 location,
                 target_args,
-                target_result,
+                [target_result],
                 target.symbol,
             );
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
@@ -2342,7 +2362,7 @@ impl<'a> Converter<'a> {
         let dispatch_type = self.frame_types(body_type).dispatch;
         let mut params = vec![completion_type, parent_dispatch_type, i32_type];
         params.extend(arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
-        let factory_type = core::func(self.ctx, dispatch_type, params.clone()).as_type_ref();
+        let factory_type = core::func(self.ctx, params.clone(), [dispatch_type]).as_type_ref();
         let factory_block = self.make_block(location, &params);
         let factory_args = self.ctx.block_args(factory_block).to_vec();
         let mut factory_arms = arms.to_vec();
@@ -2511,7 +2531,7 @@ impl<'a> Converter<'a> {
                 let input_type = *arm.params.last().expect("resumptive arm has a token");
                 let token_input = cps_closure_function_type(self.ctx, input_type)
                     .and_then(|function| core::Func::from_type_ref(self.ctx, function))
-                    .and_then(|function| function.params(self.ctx).get(2).copied())
+                    .and_then(|function| function.inputs(self.ctx).get(2).copied())
                     .ok_or_else(|| {
                         TributeControlToCpsError::one(
                             POST_CPS_BOUNDARY,
@@ -2964,7 +2984,7 @@ impl<'a> Converter<'a> {
         } else {
             self.convert_type(operation_result)
         };
-        let function = core::func(self.ctx, result, params).as_type_ref();
+        let function = core::func(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
         let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
@@ -3091,7 +3111,7 @@ impl<'a> Converter<'a> {
                     location,
                     arm.value,
                     call_args,
-                    arm.operation_result,
+                    [arm.operation_result],
                     Some(signature),
                 );
                 set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
@@ -3131,7 +3151,7 @@ impl<'a> Converter<'a> {
 
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
-        let function = core::func(self.ctx, result, params).as_type_ref();
+        let function = core::func(self.ctx, params, [result]).as_type_ref();
         let convention = if general {
             CallingConvention::Cps
         } else {
@@ -3271,7 +3291,7 @@ impl<'a> Converter<'a> {
             self.ctx,
             location,
             local_dispatch_args,
-            local_dispatch_type,
+            [local_dispatch_type],
             local_dispatch_factory,
         );
         set_calling_convention(
@@ -3513,7 +3533,7 @@ impl<'a> Converter<'a> {
                     );
                     let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
                     let call =
-                        func::call_indirect(self.ctx, location, callee, args, result_type, None);
+                        func::call_indirect(self.ctx, location, callee, args, [result_type], None);
                     set_calling_convention(self.ctx, call.op_ref(), convention);
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -3961,6 +3981,50 @@ mod tests {
         (ctx, module)
     }
 
+    #[test]
+    fn shared_function_conversion_preserves_lists_and_nested_attributes() {
+        let (mut ctx, module) =
+            parse("core.module @m { func.func @placeholder() { func.return } }");
+        let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
+        let i32_ty = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+        );
+        let source_callable = tribute_control::callable(
+            &mut ctx,
+            i32_ty,
+            vec![i32_ty],
+            tribute_control::CallingConvention::Direct,
+        )
+        .as_type_ref();
+        for results in [vec![], vec![source_callable]] {
+            let attrs = AttributeMap::from_iter([(
+                Symbol::new("nested"),
+                Attribute::Type(source_callable),
+            )]);
+            let source = core::func_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
+                .as_type_ref();
+            let mut converter = Converter::new(&mut ctx, block, HashMap::new(), module.op());
+            let converted = converter.convert_type(source);
+            assert_eq!(
+                converter.convert_type(source),
+                converted,
+                "cached conversion must be stable"
+            );
+            let converted_callable = converter.convert_type(source_callable);
+            let function = core::Func::from_type_ref(converter.ctx, converted).unwrap();
+            assert_ne!(converted_callable, source_callable);
+            assert_eq!(function.inputs(converter.ctx), [converted_callable]);
+            assert_eq!(function.results(converter.ctx).len(), results.len());
+            if !results.is_empty() {
+                assert_eq!(function.results(converter.ctx), [converted_callable]);
+            }
+            assert_eq!(
+                converter.ctx.types.get(converted).attrs.get_type("nested"),
+                Some(converted_callable)
+            );
+        }
+    }
+
     fn operation_declarations(
         ctx: &IrContext,
         operations: &[(&str, &str)],
@@ -4161,7 +4225,7 @@ mod tests {
             tribute_core::get_calling_convention(&ctx, *lambda) == Some(CallingConvention::Cps)
                 && closure::Closure::from_type_ref(&ctx, closure_ty)
                     .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
-                    .is_some_and(|callable| callable.params(&ctx).len() == 1)
+                    .is_some_and(|callable| callable.inputs(&ctx).len() == 1)
         });
         let lambda =
             one_parameter_cps.expect("conversion should produce a one-parameter CPS continuation");
@@ -4251,7 +4315,7 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
-        assert!(printed.contains("closure.closure(core.func(core.i32, core.i32))"));
+        assert!(printed.contains("closure.closure(core.func<(core.i32) -> core.i32>)"));
         assert!(!printed.contains("tribute_control."));
 
         let mut reparsed = IrContext::new();
@@ -4809,9 +4873,9 @@ mod tests {
             .expect("ability.perform resume has CPS callable provenance");
         let erased = core::Func::from_type_ref(&ctx, erased_function)
             .expect("ability.perform resume has a function signature");
-        assert_eq!(erased.params(&ctx).len(), 3);
+        assert_eq!(erased.inputs(&ctx).len(), 3);
         assert!(
-            type_is(&ctx, erased.params(&ctx)[2], "tribute_rt", "anyref"),
+            type_is(&ctx, erased.inputs(&ctx)[2], "tribute_rt", "anyref"),
             "ability.perform must receive Resume<anyref, R>, not the exact continuation: {}",
             print_module(&ctx, module.op())
         );
@@ -4824,8 +4888,8 @@ mod tests {
                 cps_closure_function_type(&ctx, ctx.value_ty(capture))
                     .and_then(|function| core::Func::from_type_ref(&ctx, function))
                     .is_some_and(|function| {
-                        function.params(&ctx).len() == 3
-                            && type_is(&ctx, function.params(&ctx)[2], "core", "i32")
+                        function.inputs(&ctx).len() == 3
+                            && type_is(&ctx, function.inputs(&ctx)[2], "core", "i32")
                     })
             }),
             "the erased adapter must capture the declared ResumeExact<I, R>: {}",
@@ -4984,9 +5048,12 @@ mod tests {
                     .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");
-            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
             assert_eq!(
-                callable.params(&ctx).len() + 1,
+                callable.single_result(&ctx).unwrap(),
+                core::never(&mut ctx).as_type_ref()
+            );
+            assert_eq!(
+                callable.inputs(&ctx).len() + 1,
                 ctx.op_operands(tail).len(),
                 "the exact signature covers every tail operand: {printed}"
             );
@@ -5135,15 +5202,18 @@ mod tests {
                     .expect("every emitted CPS indirect tail has its exact closure contract");
             let callable = core::Func::from_type_ref(&ctx, signature)
                 .expect("the indirect tail signature is a core.func");
-            assert_eq!(callable.r#return(&ctx), core::never(&mut ctx).as_type_ref());
             assert_eq!(
-                callable.params(&ctx).len() + 1,
+                callable.single_result(&ctx).unwrap(),
+                core::never(&mut ctx).as_type_ref()
+            );
+            assert_eq!(
+                callable.inputs(&ctx).len() + 1,
                 ctx.op_operands(tail).len(),
                 "the exact signature covers every tail operand: {printed}"
             );
             assert!(
                 callable
-                    .params(&ctx)
+                    .inputs(&ctx)
                     .iter()
                     .zip(&ctx.op_operands(tail)[1..])
                     .all(|(expected, actual)| *expected == ctx.value_ty(*actual)),
@@ -5166,7 +5236,7 @@ mod tests {
             let callable = closure::Closure::from_type_ref(&ctx, closure_ty)
                 .and_then(|closure| core::Func::from_type_ref(&ctx, closure.func_type(&ctx)))
                 .unwrap();
-            generated_param_counts.push(callable.params(&ctx).len());
+            generated_param_counts.push(callable.inputs(&ctx).len());
         }
         assert!(generated_param_counts.contains(&2), "{printed}");
 
@@ -5195,7 +5265,7 @@ mod tests {
         let module_block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
         let location = ctx.op(module.op()).location;
         let never = core::never(&mut ctx).as_type_ref();
-        let raw_type = core::func(&mut ctx, never, []).as_type_ref();
+        let raw_type = core::func(&mut ctx, [], [never]).as_type_ref();
         let raw = func::constant(&mut ctx, location, raw_type, Symbol::new("raw"));
         let before = ctx.block(module_block).ops.to_vec();
         let mut converter = Converter::new(&mut ctx, module_block, HashMap::new(), module.op());
@@ -5678,5 +5748,34 @@ mod tests {
         assert!(printed.contains("ability.perform"));
         assert!(printed.matches("func.tail_call_indirect").count() >= 2);
         assert!(!printed.contains("tribute_control."));
+    }
+}
+
+#[cfg(test)]
+mod shared_contract_boundary_regressions {
+    use super::verify_tribute_control_post_cps;
+    #[test]
+    fn post_cps_boundary_checks_known_ordinary_calls_and_returns() {
+        let valid = "core.module @m {
+          func.func @identity(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+            func.return %x
+          }
+          func.func @caller(%x: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+            %r = func.call %x {callee = @identity, tribute.calling_convention = 0} : core.i32
+            func.return %r
+          }
+        }";
+        let mut ctx = trunk_ir::IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
+        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        for (from, to, expected) in [
+            ("} : core.i32", "} : core.nil", "call result list mismatch"),
+            ("func.return %x", "func.return", "return count mismatch"),
+        ] {
+            let mut ctx = trunk_ir::IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &valid.replace(from, to));
+            let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 }

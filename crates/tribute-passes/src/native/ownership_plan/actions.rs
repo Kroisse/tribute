@@ -788,12 +788,12 @@ impl ActionPlanner<'_> {
                             .collect::<Vec<_>>()
                     ))
                 })?;
-            if signature.params(self.ir).len() != args.len() {
+            if signature.inputs(self.ir).len() != args.len() {
                 return Err(OwnershipPlanError::new("indirect call arity is malformed"));
             }
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
             signature
-                .params(self.ir)
+                .inputs(self.ir)
                 .iter()
                 .map(|&ty| {
                     if is_typed_managed_reference(self.ir, ty, self.managed_layouts) {
@@ -915,10 +915,10 @@ fn validate_call_contract(
     args: &[ValueRef],
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<(), OwnershipPlanError> {
-    if args.len() != signature.params(ctx).len()
+    if args.len() != signature.inputs(ctx).len()
         || args
             .iter()
-            .zip(signature.params(ctx))
+            .zip(signature.inputs(ctx))
             .any(|(&argument, &expected)| {
                 let actual = ctx.value_ty(argument);
                 (is_typed_managed_reference(ctx, actual, managed_layouts)
@@ -933,7 +933,9 @@ fn validate_call_contract(
     validate_result_contract(
         ctx,
         ctx.op_results(op),
-        signature.r#return(ctx),
+        signature.single_result(ctx).ok_or_else(|| {
+            OwnershipPlanError::new("native ownership requires one logical result")
+        })?,
         managed_layouts,
         "call result",
     )

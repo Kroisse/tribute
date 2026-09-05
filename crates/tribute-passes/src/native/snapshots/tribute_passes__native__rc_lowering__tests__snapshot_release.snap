@@ -3,7 +3,7 @@ source: crates/tribute-passes/src/native/rc_lowering.rs
 expression: result
 ---
 core.module @test {
-  clif.func {sym_name = @f, type = core.func(core.nil, core.ptr)} {
+  clif.func {sym_name = @f, type = core.func<(core.ptr) -> core.nil>} {
     ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 0} : core.ptr
       %2 = clif.icmp %0, %1 {cond = @eq} : core.i8

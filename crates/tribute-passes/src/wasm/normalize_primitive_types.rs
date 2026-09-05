@@ -149,7 +149,7 @@ impl RewritePattern for NormalizeCallPattern {
         let callee = call_op.callee(ctx);
         let args: Vec<_> = call_op.args(ctx).to_vec();
 
-        let new_op = func::call(ctx, loc, args, new_result_ty, callee);
+        let new_op = func::call(ctx, loc, args, [new_result_ty], callee);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -197,7 +197,7 @@ impl RewritePattern for NormalizeCallIndirectPattern {
         let args = args.to_vec();
 
         let signature = IndirectCallLikeOps::exact_signature(ctx, op);
-        let new_op = func::call_indirect(ctx, loc, callee, args, new_result_ty, signature);
+        let new_op = func::call_indirect(ctx, loc, callee, args, [new_result_ty], signature);
         rewriter.replace_op(new_op.op_ref());
         true
     }

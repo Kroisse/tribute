@@ -473,7 +473,7 @@ pub(super) fn wrap_func_as_closure(
         builder.ir,
         location,
         lowered_call_args,
-        source_result_ty,
+        [source_result_ty],
         func_name,
     );
     set_calling_convention(builder.ir, call_op.op_ref(), source_convention);

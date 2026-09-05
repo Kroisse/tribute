@@ -703,9 +703,10 @@ Generic consumer는 다른 dialect의 attribute key 대신 interface를 query한
 Interface를 구현하지 않는 operation에는 exact signature가 없으며, erased callee나
 result operand로 이를 추론해서는 안 된다.
 `func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
-terminator다. Shared verifier는 callee `core.func`와 enclosing caller의 result가
-모두 `core.never`인지 검사한다. Native/Wasm signature lowering은 이를 empty result
-vector로 바꾸고 각각 indirect return-call로 낮춘다.
+terminator다. Shared verifier checks complete caller/callee result-list agreement;
+logical CPS callables both retain `[core.never]` despite the resultless transfer
+operation. Final Native/Wasm signature lowering will change these to empty
+result lists; the current target ABI still uses temporary `[core.nil]` encoding.
 
 `scf.*` represents structured control flow, including pattern/case regions and
 region yields. Loop-like forms may be introduced by optimization passes such as
@@ -789,6 +790,98 @@ and `Text` lower through ADT and runtime/library conventions. `List` is an
 opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
+
+### `core.func` function type
+
+`core.func` stores inputs and results as separate logical lists while keeping a
+flat interned parameter vector. Its canonical textual form follows MLIR
+FunctionType syntax:
+
+```text
+core.func<() -> ()>
+core.func<(core.i32) -> core.i64>
+core.func<(Evidence, Frame, core.i32) -> core.never>
+```
+
+The input list is always parenthesized. An empty result list is printed as
+`()`, while the single supported result is printed without parentheses.
+TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but
+currently rejects more than one result.
+
+The interned representation is:
+
+```text
+TypeData {
+  dialect: core,
+  name: func,
+  params: [input_0, ..., input_n, result_0?],
+  attrs: {
+    num_inputs: n,
+    num_results: 0 | 1,
+    ...other_type_attributes
+  }
+}
+```
+
+Both counts are mandatory `u32` delimiters and participate in type identity.
+They do not identify an ABI. Their sum must equal `params.len()`, and
+`num_results` must not exceed one. The generic recursive type walk continues to
+visit the entire flat `params` vector. The canonical printer hides only these
+two reserved attributes and preserves every other type attribute; textual type
+attribute dictionaries may not specify either reserved key.
+
+During the compatibility window the reader also accepts legacy
+`core.func(Return, Params...)`, immediately normalizes it to the new input-first
+storage, and never interns the legacy layout. The printer always emits the
+canonical form. Production code constructs function types only through the
+validated `core::func` API; direct `TypeData` construction is reserved for
+malformed-type verifier tests.
+
+The three result states have distinct meanings:
+
+```text
+logical Unit function: results = [core.nil]
+logical CPS function:  results = [core.never]
+physical CPS function: results = []
+```
+
+The physical proper-tail ABI is proven only by the combination of
+`tribute.calling_convention = Cps` and exact `results = []`. The stored counts
+are not an ABI marker, and general resultless IR need not be CPS.
+
+Shared `func.call` and `func.call_indirect` support zero or one SSA result.
+Calls match complete input/result lists; returns match the enclosing function's
+result list. Proper-tail operations themselves remain resultless, including
+when transferring to a logical `[core.never]` callable, and require matching
+caller/callee result lists. Exact indirect signatures must agree with a typed
+callee when both are present.
+
+Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
+for one result. Absent arrow means zero IR results, never implicit Unit.
+Generic operation syntax preserves its explicit `type` attribute; custom
+assembly retains an explicit type when needed to preserve type attributes and
+validates its agreement with the decomposed signature. Shared conversion maps
+every input/result and nested type attribute, preserving cardinality, and
+checks entry argument arity before changing the signature or entry arguments.
+Normal `validate_all` combines local operation checks with contextual shared
+function-contract checks. Local checks enforce zero/one ordinary-call results,
+resultless terminators, and exact typed indirect operand/result agreement.
+Contextual checks verify returns, caller/callee tail result lists, and direct
+calls whose declarations are available. An undeclared runtime callee has no
+inferred signature; it does not exempt other known contracts from validation.
+Duplicate, malformed, or non-callable declarations are errors.
+
+Callable region ownership comes from a dialect-registered operation interface,
+not unqualified operation names. `func.func` exposes its explicit function type;
+`closure.lambda` exposes the function type inside its result closure type. The
+nearest registered owner is authoritative, including when its signature is
+malformed. Shared validation does not infer a lambda signature from an attribute
+or an outer function, and does not select a physical CPS ABI.
+
+Existing source producers remain one-result. Backend zero-result readiness and
+the `[core.never]` to `[]` target switch follow in later atomic changes. Current
+target ABI lowering still uses temporary `[core.nil]` encoding for physical CPS;
+this migration state is not the final physical contract.
 
 ## Open Questions
 

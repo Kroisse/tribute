@@ -515,7 +515,7 @@ struct NativeTypeRefsCopy {
 mod tests {
     use super::*;
     use trunk_ir::dialect::clif;
-    use trunk_ir::ops::DialectOp;
+    use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
@@ -562,14 +562,12 @@ mod tests {
             .expect("bodied definition");
 
         assert_eq!(ctx.op(declaration.op_ref()).regions.len(), 0);
-        assert_eq!(
-            ctx.types.get(declaration.r#type(&ctx)).params.as_slice(),
-            [refs.core_ptr, refs.core_ptr]
-        );
-        assert_eq!(
-            ctx.types.get(definition.r#type(&ctx)).params.as_slice(),
-            [refs.core_ptr, refs.core_ptr]
-        );
+        let declaration_type = core::Func::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
+        assert_eq!(declaration_type.inputs(&ctx), [refs.core_ptr]);
+        assert_eq!(declaration_type.single_result(&ctx), Some(refs.core_ptr));
+        let definition_type = core::Func::from_type_ref(&ctx, definition.r#type(&ctx)).unwrap();
+        assert_eq!(definition_type.inputs(&ctx), [refs.core_ptr]);
+        assert_eq!(definition_type.single_result(&ctx), Some(refs.core_ptr));
 
         let body = definition.body(&ctx);
         let entry = ctx

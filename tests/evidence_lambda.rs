@@ -12,8 +12,8 @@ use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
 use tribute_passes::evidence::has_evidence_first_param;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::dialect::{core, func};
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 
 /// Helper to compile code through AST pipeline and return arena IR.
@@ -56,8 +56,8 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
     let func_ty = func_op.r#type(ctx);
-    let data = ctx.types.get(func_ty);
-    let params = &data.params[1..];
+    let function = core::Func::from_type_ref(ctx, func_ty).expect("valid core.func signature");
+    let params = function.inputs(ctx);
     let has_evidence = params
         .first()
         .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
@@ -71,9 +71,11 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
                 }),
         );
     let has_done_k = hidden_count == 2;
-    let result = ctx.types.get(data.params[0]);
-    let returns_anyref = result.dialect == trunk_ir::Symbol::new("tribute_rt")
-        && result.name == trunk_ir::Symbol::new("anyref");
+    let returns_anyref = function.single_result(ctx).is_some_and(|result| {
+        let result = ctx.types.get(result);
+        result.dialect == trunk_ir::Symbol::new("tribute_rt")
+            && result.name == trunk_ir::Symbol::new("anyref")
+    });
     (
         params.len() - hidden_count,
         has_evidence,

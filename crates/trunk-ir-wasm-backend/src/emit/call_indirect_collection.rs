@@ -9,6 +9,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -17,21 +18,13 @@ use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
 use trunk_ir::types::TypeData;
 
-use crate::errors::CompilationResult;
+use crate::errors::{CompilationError, CompilationResult};
 
 use super::helpers::{self, intern_named_adt_struct};
 
 /// Intern a core.func type from params and result type.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
-    let mut all_params = SmallVec::with_capacity(params.len() + 1);
-    all_params.push(result_ty);
-    all_params.extend_from_slice(params);
-    ctx.types.intern(TypeData {
-        dialect: Symbol::new("core"),
-        name: Symbol::new("func"),
-        params: all_params,
-        attrs: Default::default(),
-    })
+    core::func(ctx, params.iter().copied(), [result_ty]).as_type_ref()
 }
 
 /// Intern a simple wasm type with no params or attrs.
@@ -95,20 +88,21 @@ pub(crate) fn collect_call_indirect_types(
                         "collect_call_indirect_types: found wasm.func, type={}",
                         fmt_type(ctx, func_type)
                     );
-                    if let Some((_, ret_ty)) = helpers::func_type_parts(ctx, func_type) {
-                        debug!(
-                            "collect_call_indirect_types: wasm.func return type={}",
-                            fmt_type(ctx, ret_ty)
-                        );
-                        Some(ret_ty)
-                    } else {
-                        debug!("collect_call_indirect_types: wasm.func r#type is not core.func");
-                        None
-                    }
+                    let (_, ret_ty) =
+                        helpers::func_type_parts(ctx, func_type).ok_or_else(|| {
+                            CompilationError::type_error(
+                                "Wasm indirect-call collection requires valid one-result core.func",
+                            )
+                        })?;
+                    Some(ret_ty)
                 } else if let Ok(func) = func::Func::from_op(ctx, op) {
-                    // Also check for func.func (in case IR isn't fully lowered)
-                    let func_type = func.r#type(ctx);
-                    helpers::func_type_parts(ctx, func_type).map(|(_, ret_ty)| ret_ty)
+                    let (_, ret_ty) =
+                        helpers::func_type_parts(ctx, func.r#type(ctx)).ok_or_else(|| {
+                            CompilationError::type_error(
+                                "Wasm indirect-call collection requires valid one-result core.func",
+                            )
+                        })?;
+                    Some(ret_ty)
                 } else {
                     None
                 };
@@ -302,12 +296,13 @@ pub(crate) fn collect_call_indirect_types(
     // call_indirect types should start after that
     let mut next_type_idx = (gc_type_count + func_type_count) as u32;
     let mut new_types = Vec::new();
+    let mut staged_indices = type_idx_by_type.clone();
 
     let body = module.body(ctx).unwrap();
     collect_from_region(
         ctx,
         body,
-        type_idx_by_type,
+        &mut staged_indices,
         &mut next_type_idx,
         &mut new_types,
         None, // No enclosing function at module level
@@ -316,6 +311,7 @@ pub(crate) fn collect_call_indirect_types(
     // Sort by type index to ensure they are emitted in order
     new_types.sort_by_key(|(idx, _)| *idx);
 
+    *type_idx_by_type = staged_indices;
     Ok(new_types)
 }
 
@@ -380,7 +376,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn indirect_function_type_uses_result_first_layout() {
+    fn indirect_function_type_uses_input_and_result_accessors() {
         let mut ctx = IrContext::new();
         let result = intern_simple_wasm_type(&mut ctx, "i32");
         let first = intern_simple_wasm_type(&mut ctx, "i64");
@@ -392,5 +388,59 @@ mod tests {
             helpers::func_type_parts(&ctx, func_ty),
             Some((&[first, second][..], result))
         );
+    }
+}
+
+#[cfg(test)]
+mod result_list_tests {
+    use super::*;
+    #[test]
+    fn review_late_signature_error_preserves_seeded_indices() {
+        for dialect in ["wasm", "func"] {
+            let mut ctx = IrContext::new();
+            let text = format!(
+                "core.module @m {{
+                wasm.func {{sym_name = @good, type = core.func<() -> core.i32>}} {{
+                    %callee = wasm.i32_const {{value = 0}} : core.i32
+                    %value = wasm.call_indirect %callee : core.i32
+                    wasm.return %value
+                }}
+                {dialect}.func {{sym_name = @bad, type = core.func<() -> ()>}} {{}}
+            }}"
+            );
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, &text);
+            let seed = core::func(&mut ctx, [], []).as_type_ref();
+            let mut indices = HashMap::from([(seed, 7)]);
+            let before = indices.clone();
+            let error =
+                collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap_err();
+            assert!(error.to_string().contains("one-result core.func"));
+            assert_eq!(indices, before);
+            let bad = module.ops(&ctx)[1];
+            trunk_ir::rewrite::erase_op(&mut ctx, bad);
+            let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
+            assert_eq!(
+                added.len(),
+                1,
+                "the earlier call must register a new signature"
+            );
+            assert_eq!(indices.len(), 2);
+            assert_eq!(indices[&seed], 7);
+        }
+    }
+
+    #[test]
+    fn unsupported_resultless_function_is_rejected_before_collection() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m { wasm.func {sym_name = @f, type = core.func<() -> ()>} { wasm.return } }",
+        );
+        let before = trunk_ir::printer::print_module(&ctx, module.op());
+        let mut indices = HashMap::new();
+        let error = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap_err();
+        assert!(error.to_string().contains("one-result core.func"));
+        assert!(indices.is_empty());
+        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
     }
 }

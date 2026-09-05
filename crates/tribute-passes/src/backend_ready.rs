@@ -12,6 +12,8 @@ use std::ops::ControlFlow;
 use tribute_core::{CallingConvention, get_calling_convention};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::Attribute;
@@ -193,11 +195,14 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
         }
         let is_function = data.dialect == Symbol::new("core") && data.name == Symbol::new("func");
         if is_function {
-            let Some((&result, parameters)) = data.params.split_first() else {
+            let Some(function) = core::Func::from_type_ref(self.ctx, ty) else {
+                return Err(self.error(format!("malformed `core.func` type in {where_}")));
+            };
+            let Some(result) = function.single_result(self.ctx) else {
                 return Err(self.error(format!("`core.func` has no result type in {where_}")));
             };
             self.verify_type(result, TypeSurface::Result, "function result")?;
-            for &parameter in parameters {
+            for &parameter in function.inputs(self.ctx) {
                 self.verify_type(parameter, TypeSurface::Value, "function parameter")?;
             }
         } else {
@@ -266,13 +271,10 @@ impl<'ctx> RecursiveLegalityWalker<'ctx> {
                 .attributes
                 .get_type("type")
                 .ok_or_else(|| self.error("Cps function has no signature"))?;
-            let signature = self.ctx.types.get(signature);
-            if signature.dialect != Symbol::new("core")
-                || signature.name != Symbol::new("func")
-                || signature
-                    .params
-                    .first()
-                    .is_none_or(|&result| !is_core_type(self.ctx, result, "nil"))
+            let signature = core::Func::from_type_ref(self.ctx, signature);
+            if signature
+                .and_then(|function| function.single_result(self.ctx))
+                .is_none_or(|result| !is_core_type(self.ctx, result, "nil"))
             {
                 return Err(self.error("Cps function result is not physically empty"));
             }
@@ -410,6 +412,39 @@ mod tests {
             TributeBackend::Wasm => verify_wasm_backend_ready(&ctx, module),
         }
         .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn malformed_function_counts_are_rejected_at_each_backend_boundary() {
+        for (dialect, backend) in [
+            ("clif", TributeBackend::Native),
+            ("wasm", TributeBackend::Wasm),
+        ] {
+            let mut ctx = IrContext::new();
+            let text = format!(
+                "core.module @m {{ {dialect}.func @f() -> core.nil {{ {dialect}.return }} }}"
+            );
+            let module = parse_test_module(&mut ctx, &text);
+            let op = module.ops(&ctx)[0];
+            let ty = ctx.op(op).attributes.get_type("type").unwrap();
+            let mut malformed = ctx.types.get(ty).clone();
+            malformed.attrs.remove(core::NUM_RESULTS_ATTR);
+            let malformed = ctx.types.intern(malformed);
+            ctx.op_mut(op)
+                .attributes
+                .insert(Symbol::new("type"), Attribute::Type(malformed));
+            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let error = match backend {
+                TributeBackend::Native => verify_native_backend_ready(&ctx, module),
+                TributeBackend::Wasm => verify_wasm_backend_ready(&ctx, module),
+            }
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("malformed `core.func`"),
+                "{error}"
+            );
+            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        }
     }
 
     #[test]

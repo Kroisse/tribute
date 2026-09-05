@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::core;
 use trunk_ir::op_interface::IndirectCallLikeOps;
+use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
@@ -94,15 +96,8 @@ pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Get the params and return type of a core.func TypeRef.
 /// Returns (param_types, return_type) or None if not a core.func.
 pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], TypeRef)> {
-    let data = ctx.types.get(ty);
-    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
-        return None;
-    }
-    if data.params.is_empty() {
-        return None;
-    }
-    let (ret, params) = data.params.split_first()?;
-    Some((params, *ret))
+    let function = core::Func::from_type_ref(ctx, ty)?;
+    Some((function.inputs(ctx), function.single_result(ctx)?))
 }
 
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm

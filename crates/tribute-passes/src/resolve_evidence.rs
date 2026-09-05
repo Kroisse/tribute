@@ -46,7 +46,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .iter()
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
-    let signature = core::func(ctx, result, parameters).as_type_ref();
+    let signature = core::func(ctx, parameters, [result]).as_type_ref();
     let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -254,7 +254,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = core::func(ctx, marker_ty, [evidence_ty, i32_ty]).as_type_ref();
+        let func_ty = core::func(ctx, [evidence_ty, i32_ty], [marker_ty]).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
@@ -292,7 +292,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = core::func(ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
+        let func_ty = core::func(ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -330,7 +330,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let i32_ty = i32_type_ref(ctx);
 
         // fn __tribute_next_tag() -> i32
-        let func_ty = core::func(ctx, i32_ty, std::iter::empty()).as_type_ref();
+        let func_ty = core::func(ctx, std::iter::empty(), [i32_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -378,7 +378,7 @@ fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
     let Some(func) = core::Func::from_type_ref(ctx, func_ty) else {
         return false;
     };
-    let params = func.params(ctx);
+    let params = func.inputs(ctx);
     if params.is_empty() {
         return false;
     }
@@ -680,7 +680,7 @@ fn update_calls_in_region(
                 .copied()
                 .unwrap_or_else(|| core::nil(ctx).as_type_ref());
 
-            let new_call = func::call(ctx, loc, new_args, result_ty, callee);
+            let new_call = func::call(ctx, loc, new_args, [result_ty], callee);
 
             if !ctx.op_results(op).is_empty() {
                 let old_result = ctx.op_result(op, 0);
@@ -784,7 +784,7 @@ fn transform_shifts_in_block(
                     ctx,
                     location,
                     std::iter::empty::<ValueRef>(),
-                    i32_ty,
+                    [i32_ty],
                     Symbol::new("__tribute_next_tag"),
                 );
                 let resolved = prompt.result(ctx);
@@ -840,7 +840,7 @@ fn transform_shifts_in_block(
                         ctx,
                         loc,
                         std::iter::empty::<ValueRef>(),
-                        i32_ty,
+                        [i32_ty],
                         Symbol::new("__tribute_next_tag"),
                     );
                     let tag_val = tag_call.result(ctx);
@@ -912,7 +912,7 @@ fn transform_shifts_in_block(
                                 std::iter::once(current_ev)
                                     .chain(operands[2..].iter().copied())
                                     .collect::<Vec<_>>(),
-                                ctx.op_result_types(candidate)[0],
+                                [ctx.op_result_types(candidate)[0]],
                                 None,
                             );
                             attach_exact_indirect_signature(ctx, new_call.op_ref());
@@ -969,7 +969,7 @@ fn transform_shifts_in_block(
                         args
                     };
 
-                    let new_call = func::call(ctx, loc, new_args, result_ty, callee);
+                    let new_call = func::call(ctx, loc, new_args, [result_ty], callee);
 
                     if !ctx.op_results(op).is_empty() {
                         let old_result = ctx.op_result(op, 0);
@@ -1001,7 +1001,7 @@ fn transform_shifts_in_block(
                     new_args.extend(current_operands[2..].iter().copied());
 
                     let new_call =
-                        func::call_indirect(ctx, loc, table_idx, new_args, result_ty, None);
+                        func::call_indirect(ctx, loc, table_idx, new_args, [result_ty], None);
                     attach_exact_indirect_signature(ctx, new_call.op_ref());
 
                     if !ctx.op_results(op).is_empty() {
@@ -1035,7 +1035,7 @@ fn transform_shifts_in_block(
                 ctx,
                 loc,
                 vec![ev_value, ability_id_val],
-                marker_ty,
+                [marker_ty],
                 Symbol::new(evidence_abi::LOOKUP),
             );
             let new_marker = ctx.op_result(lookup_call.op_ref(), 0);

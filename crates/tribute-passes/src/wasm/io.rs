@@ -113,7 +113,7 @@ impl RewritePattern for WritePattern {
             ctx,
             ctx.op(op).location,
             [write.bytes(ctx), write.newline(ctx)],
-            ctx.op_result_types(op)[0],
+            [ctx.op_result_types(op)[0]],
             Symbol::new(WRITE_HELPER),
         );
         rewriter.replace_op(call.op_ref());
@@ -206,7 +206,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         blocks: smallvec![body],
         parent_op: None,
     });
-    let fn_ty = core::func(ctx, nil_ty, [bytes_ty, i32_ty]).as_type_ref();
+    let fn_ty = core::func(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
     func::func(ctx, loc, Symbol::new(WRITE_HELPER), fn_ty, body).op_ref()
 }
 

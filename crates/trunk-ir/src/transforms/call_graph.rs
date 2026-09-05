@@ -334,7 +334,7 @@ mod tests {
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        crate::dialect::core::func(ctx, nil_ty, []).as_type_ref()
+        crate::dialect::core::func(ctx, [], [nil_ty]).as_type_ref()
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
@@ -374,7 +374,7 @@ mod tests {
                 ctx,
                 loc,
                 std::iter::empty(),
-                i32_ty,
+                [i32_ty],
                 Symbol::from_dynamic(callee),
             );
             ctx.push_op(entry, call.op_ref());

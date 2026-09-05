@@ -39,6 +39,7 @@ pub struct RawOperation<'a> {
     /// Optional symbol name parsed from `@name` after `dialect.op`.
     pub sym_name: Option<String>,
     /// Optional function-style parameters: `(%arg: type, ...)`.
+    pub has_func_signature: bool,
     pub func_params: Vec<(&'a str, RawType<'a>)>,
     /// Optional return type from `-> type`.
     pub return_type: Option<RawType<'a>>,
@@ -69,6 +70,12 @@ pub enum RawType<'a> {
         dialect: &'a str,
         name: &'a str,
         params: Vec<RawType<'a>>,
+        attrs: Vec<(&'a str, RawAttribute<'a>)>,
+    },
+    /// Canonical `core.func<(inputs...) -> results>` syntax.
+    Function {
+        inputs: Vec<RawType<'a>>,
+        results: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
     },
     /// Type alias reference: `!name` or `!"quoted name"`
@@ -270,6 +277,45 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     }
 
     let (dialect, name) = qualified_name.parse_next(input)?;
+
+    if dialect == "core" && name == "func" && input.starts_with('<') {
+        '<'.parse_next(input)?;
+        ws.parse_next(input)?;
+        let inputs = delimited(
+            ('(', ws),
+            separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
+            (ws, ')'),
+        )
+        .parse_next(input)?;
+        ws.parse_next(input)?;
+        "->".parse_next(input)?;
+        ws.parse_next(input)?;
+        let results = if input.starts_with('(') {
+            delimited(
+                ('(', ws),
+                separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
+                (ws, ')'),
+            )
+            .parse_next(input)?
+        } else {
+            vec![raw_type.parse_next(input)?]
+        };
+        ws.parse_next(input)?;
+        '>'.parse_next(input)?;
+        // An empty dictionary is indistinguishable from an empty operation body.
+        // Only consume nonempty type attributes, leaving `{}` for the region parser.
+        let attrs = opt(preceded(
+            ws,
+            raw_attr_dict.verify(|attrs: &Vec<_>| !attrs.is_empty()),
+        ))
+        .parse_next(input)?
+        .unwrap_or_default();
+        return Ok(RawType::Function {
+            inputs,
+            results,
+            attrs,
+        });
+    }
 
     // Optional type parameters
     let opt_params = opt(delimited(
@@ -517,21 +563,28 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     // Optional @symbol (e.g., core.module @test, func.func @main)
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
 
+    ws.parse_next(input)?;
+    // A bare attribute dictionary is generic syntax, even for func.func.
+    let generic_func = dialect == "func" && op_name == "func" && input.starts_with('{');
     // Check custom assembly format registry
     if let Some(fmt) = crate::op_interface::lookup_asm_format(
         crate::Symbol::from_dynamic(dialect),
         crate::Symbol::from_dynamic(op_name),
-    ) {
+    )
+    .filter(|_| !generic_func)
+    {
         return (fmt.parse_fn)(input, results, sym_name);
     }
 
     // Parse either func-style params (%arg: type, ...) or operands (%val, %val)
     // or empty parens ()
+    let mut has_func_signature = false;
     let mut func_params_parsed = Vec::new();
     let mut operands = Vec::new();
 
     ws.parse_next(input)?;
     if input.starts_with('(') {
+        has_func_signature = true;
         // Try func_params first (which includes empty parens)
         if let Ok(params) = func_params.parse_next(input) {
             func_params_parsed = params;
@@ -577,6 +630,7 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         dialect,
         op_name,
         sym_name,
+        has_func_signature,
         func_params: func_params_parsed,
         return_type: return_ty,
         operands,
@@ -728,8 +782,53 @@ mod tests {
                 params,
                 ..
             } => (dialect, name, params),
+            RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type() {
+        let mut input = "core.func<(core.i32, core.i64) -> core.never>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function {
+            inputs,
+            results,
+            attrs,
+        } = raw
+        else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(results.len(), 1);
+        assert!(attrs.is_empty());
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type_with_empty_results() {
+        let mut input = "core.func<(core.i32) -> ()>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function {
+            inputs, results, ..
+        } = raw
+        else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(inputs.len(), 1);
+        assert!(results.is_empty());
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_canonical_function_type_recognizes_multiple_results() {
+        let mut input = "core.func<() -> (core.i32, core.i64)>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse type");
+        let RawType::Function { results, .. } = raw else {
+            panic!("expected canonical Function")
+        };
+        assert_eq!(results.len(), 2);
+        assert!(input.is_empty());
     }
 
     #[test]
@@ -951,6 +1050,7 @@ mod tests {
                 assert_eq!(attrs.len(), 1);
                 assert_eq!(attrs[0].0, "effect");
             }
+            RawType::Function { .. } => panic!("expected legacy Concrete, got Function"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
     }

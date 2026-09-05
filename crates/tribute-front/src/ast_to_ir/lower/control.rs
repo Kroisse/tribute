@@ -108,7 +108,7 @@ pub(super) fn invoke_continuation<D: ControlDomain>(
         location,
         continuation,
         vec![value],
-        anyref_ty,
+        [anyref_ty],
         None,
     );
     builder.ir.push_op(builder.block, call.op_ref());

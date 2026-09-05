@@ -17,6 +17,7 @@ use std::fmt::Write;
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
+use super::ops::DialectType;
 use super::refs::*;
 use super::types::*;
 use super::walk::{WalkAction, walk_region};
@@ -34,18 +35,23 @@ struct PrintState<'a> {
 
 impl<'a> PrintState<'a> {
     fn new(ctx: &'a IrContext) -> Self {
-        let type_alias_names = ctx
+        let mut state = Self::without_aliases(ctx);
+        state.type_alias_names = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (*ty, name.to_string()))
             .collect();
+        state
+    }
+
+    fn without_aliases(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
             value_names: HashMap::new(),
             block_labels: HashMap::new(),
             next_value_num: 0,
             next_block_num: 0,
-            type_alias_names,
+            type_alias_names: HashMap::new(),
         }
     }
 
@@ -101,6 +107,9 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
+        if let Some(func) = crate::dialect::core::Func::from_type_ref(self.ctx, ty) {
+            return self.write_func_type(f, func);
+        }
         let data = self.ctx.types.get(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
         if !data.params.is_empty() {
@@ -123,6 +132,35 @@ impl<'a> PrintState<'a> {
                 }
                 write!(f, "{} = ", key)?;
                 self.write_attribute(f, val)?;
+            }
+            f.write_char('}')?;
+        }
+        Ok(())
+    }
+
+    fn write_func_type(&self, f: &mut dyn Write, func: crate::dialect::core::Func) -> fmt::Result {
+        f.write_str("core.func<(")?;
+        for (index, &input) in func.inputs(self.ctx).iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            self.write_type(f, input)?;
+        }
+        f.write_str(") -> ")?;
+        if let Some(result) = func.single_result(self.ctx) {
+            self.write_type(f, result)?;
+        } else {
+            f.write_str("()")?;
+        }
+        f.write_char('>')?;
+
+        let mut visible = func.non_reserved_attrs(self.ctx);
+        if let Some((key, value)) = visible.next() {
+            write!(f, " {{{key} = ")?;
+            self.write_attribute(f, value)?;
+            for (key, value) in visible {
+                write!(f, ", {key} = ")?;
+                self.write_attribute(f, value)?;
             }
             f.write_char('}')?;
         }
@@ -306,7 +344,9 @@ pub fn print_op(ctx: &IrContext, op: OpRef) -> String {
 /// Print a type as IR text.
 pub fn print_type(ctx: &IrContext, ty: TypeRef) -> String {
     let mut out = String::new();
-    write_type(ctx, &mut out, ty).expect("fmt::Write to String never fails");
+    PrintState::without_aliases(ctx)
+        .write_type(&mut out, ty)
+        .expect("fmt::Write to String never fails");
     out
 }
 
@@ -318,88 +358,9 @@ pub fn print_module(ctx: &IrContext, root: OpRef) -> String {
     out
 }
 
-// ============================================================================
-// Type printing
-// ============================================================================
-
-fn write_type(ctx: &IrContext, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
-    let data = ctx.types.get(ty);
-    write!(f, "{}.{}", data.dialect, data.name)?;
-    if !data.params.is_empty() {
-        f.write_char('(')?;
-        for (i, &param) in data.params.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write_type(ctx, f, param)?;
-        }
-        f.write_char(')')?;
-    } else if !data.attrs.is_empty() {
-        // Empty parens signal that attrs follow
-        f.write_str("()")?;
-    }
-    if !data.attrs.is_empty() {
-        f.write_str(" {")?;
-        for (i, (key, val)) in data.attrs.iter().enumerate() {
-            if i > 0 {
-                f.write_str(", ")?;
-            }
-            write!(f, "{} = ", key)?;
-            write_attribute(ctx, f, val)?;
-        }
-        f.write_char('}')?;
-    }
-    Ok(())
-}
-
-// ============================================================================
-// Attribute printing
-// ============================================================================
-
+#[cfg(test)]
 fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt::Result {
-    match attr {
-        Attribute::Unit => f.write_str("unit"),
-        Attribute::Bool(b) => write!(f, "{b}"),
-        Attribute::Int(v) => write!(f, "{v}"),
-        Attribute::FloatBits(bits) => {
-            let v = f64::from_bits(*bits);
-            let s = format!("{v}");
-            f.write_str(&s)?;
-            // Ensure decimal point for finite whole numbers (don't corrupt inf/NaN)
-            if v.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
-                f.write_str(".0")?;
-            }
-            Ok(())
-        }
-        Attribute::String(s) => {
-            f.write_char('"')?;
-            write_escaped_string(f, s)?;
-            f.write_char('"')
-        }
-        Attribute::Bytes(bytes) => {
-            f.write_str("b\"")?;
-            write_escaped_bytes(f, bytes)?;
-            f.write_char('"')
-        }
-        Attribute::Symbol(sym) => write_symbol(f, *sym),
-        Attribute::Type(ty) => write_type(ctx, f, *ty),
-        Attribute::List(list) => {
-            f.write_char('[')?;
-            for (i, item) in list.iter().enumerate() {
-                if i > 0 {
-                    f.write_str(", ")?;
-                }
-                write_attribute(ctx, f, item)?;
-            }
-            f.write_char(']')
-        }
-        Attribute::Location(loc) => {
-            let path_str = ctx.paths.get(loc.path);
-            f.write_str("loc(\"")?;
-            write_escaped_string(f, path_str)?;
-            write!(f, "\" {}:{})", loc.span.start, loc.span.end)
-        }
-    }
+    PrintState::without_aliases(ctx).write_attribute(f, attr)
 }
 
 pub(crate) fn write_escaped_bytes(f: &mut dyn Write, bytes: &[u8]) -> fmt::Result {
@@ -994,10 +955,9 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
-    /// in `TypeData.params`, matching the convention used by `core::Func`.
+    /// Create a one-result `core.func` type.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     #[test]
@@ -1013,6 +973,58 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let tuple_ty = crate::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
+    }
+
+    #[test]
+    fn standalone_function_printing_expands_aliases_in_lists_and_attributes() {
+        for result in ["()", "!scalar"] {
+            let mut ctx = IrContext::new();
+            let input = format!(
+                "core.module @m {{
+                !scalar = core.i32
+                !callable = core.func<(!scalar) -> {result}> {{nested = [!scalar]}}
+                func.func @f(%x: !callable) {{ func.return }}
+            }}"
+            );
+            let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
+            let callable = ctx.type_alias_by_name(Symbol::new("callable")).unwrap();
+            let expanded_result = if result == "()" { "()" } else { "core.i32" };
+            assert_eq!(
+                print_type(&ctx, callable),
+                format!("core.func<(core.i32) -> {expanded_result}> {{nested = [core.i32]}}")
+            );
+            let printed = print_module(&ctx, module);
+            assert!(
+                printed.contains(&format!(
+                    "core.func<(!scalar) -> {result}> {{nested = [!scalar]}}"
+                )),
+                "{printed}"
+            );
+            let mut reparsed = IrContext::new();
+            let module = crate::parser::parse_module(&mut reparsed, &printed).unwrap();
+            assert_eq!(print_module(&reparsed, module), printed);
+        }
+    }
+
+    #[test]
+    fn test_print_func_type_uses_canonical_result_list_syntax() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx);
+        let zero_zero = core::func(&mut ctx, [], []).as_type_ref();
+        let many_zero = core::func(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
+        let zero_one = core::func(&mut ctx, [], [i32_ty]).as_type_ref();
+        let many_one = core::func(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
+
+        assert_eq!(print_type(&ctx, zero_zero), "core.func<() -> ()>");
+        assert_eq!(
+            print_type(&ctx, many_zero),
+            "core.func<(core.i32, core.i32) -> ()>"
+        );
+        assert_eq!(print_type(&ctx, zero_one), "core.func<() -> core.i32>");
+        assert_eq!(
+            print_type(&ctx, many_one),
+            "core.func<(core.i32, core.i32) -> core.i32>"
+        );
     }
 
     #[test]

@@ -45,10 +45,12 @@ mod func {
     }
 
     #[attr(callee: Symbol)]
-    fn call(#[rest] args: ()) -> result {}
+    #[rest_results]
+    fn call(#[rest] args: ()) -> results {}
 
     #[attr(signature?: Type)]
-    fn call_indirect(callee: (), #[rest] args: ()) -> result {}
+    #[rest_results]
+    fn call_indirect(callee: (), #[rest] args: ()) -> results {}
 
     #[attr(callee: Symbol)]
     fn tail_call(#[rest] args: ()) {}
@@ -63,6 +65,30 @@ mod func {
 
     fn unreachable() {}
 }
+
+// One-result source producers use these explicit convenience accessors. Generic
+// consumers use `results` / `single_result` and validate cardinality first.
+macro_rules! single_call_result {
+    ($name:ident) => {
+        impl $name {
+            pub fn single_result(&self, ctx: &crate::IrContext) -> Option<crate::ValueRef> {
+                match self.results(ctx) {
+                    [result] => Some(*result),
+                    _ => None,
+                }
+            }
+            pub fn result(&self, ctx: &crate::IrContext) -> crate::ValueRef {
+                self.single_result(ctx)
+                    .expect("one-result call required by producer")
+            }
+            pub fn result_ty(&self, ctx: &crate::IrContext) -> crate::TypeRef {
+                ctx.value_ty(self.result(ctx))
+            }
+        }
+    };
+}
+single_call_result!(Call);
+single_call_result!(CallIndirect);
 
 impl CallLike for Call {
     fn call_args<'a>(&self, ctx: &'a crate::IrContext) -> &'a [crate::ValueRef] {
@@ -211,24 +237,13 @@ fn print_func(
         data.regions.first().copied()
     };
 
-    // Extract type decomposition: return type from core.func type attribute
+    // Extract the validated input/result lists from the core.func type attribute.
     let type_info = {
         let data = h.ctx().op(op);
-        if let Some(func_ty) = data.attributes.get_type("type") {
-            let ty_data = h.ctx().types.get(func_ty);
-            let is_core_func = ty_data.dialect == crate::Symbol::new("core")
-                && ty_data.name == crate::Symbol::new("func");
-            if is_core_func && !ty_data.params.is_empty() {
-                let result_ty = ty_data.params[0];
-                let param_tys: Vec<crate::TypeRef> = ty_data.params[1..].to_vec();
-                Some((result_ty, param_tys))
-            } else {
-                // Non-standard or empty core.func type — skip signature
-                None
-            }
-        } else {
-            None
-        }
+        data.attributes
+            .get_type("type")
+            .and_then(|ty| crate::dialect::core::Func::from_type_ref(h.ctx(), ty))
+            .map(|func| (func.single_result(h.ctx()), func.inputs(h.ctx()).to_vec()))
     };
 
     if let Some(region) = region {
@@ -267,7 +282,7 @@ fn print_func(
         write!(h, "()")?;
     }
 
-    if let Some((result_ty, _)) = type_info {
+    if let Some((Some(result_ty), _)) = type_info {
         write!(h, " -> ")?;
         h.write_type(result_ty)?;
     }
@@ -275,12 +290,24 @@ fn print_func(
     // Extra attributes (everything except sym_name and type, which are
     // already encoded in the signature).  Clone to avoid borrow conflicts
     // with the mutable write helpers.
+    let preserve_type = h
+        .ctx()
+        .op(op)
+        .attributes
+        .get_type("type")
+        .is_some_and(|ty| {
+            h.ctx().types.get(ty).attrs.keys().any(|key| {
+                *key != crate::Symbol::new(crate::dialect::core::NUM_INPUTS_ATTR)
+                    && *key != crate::Symbol::new(crate::dialect::core::NUM_RESULTS_ATTR)
+            })
+        });
     let extra_attrs: Vec<_> = {
         let data = h.ctx().op(op);
         data.attributes
             .iter()
             .filter(|(k, _)| {
-                **k != crate::Symbol::new("sym_name") && **k != crate::Symbol::new("type")
+                **k != crate::Symbol::new("sym_name")
+                    && (preserve_type || **k != crate::Symbol::new("type"))
             })
             .map(|(k, v)| (*k, v.clone()))
             .collect()
@@ -349,6 +376,7 @@ fn parse_func<'a>(
         dialect: "func",
         op_name: "func",
         sym_name,
+        has_func_signature: true,
         func_params: params,
         return_type: ret_ty,
         operands: vec![],
@@ -367,6 +395,16 @@ inventory::submit! {
         parse_fn: parse_func,
     }
 }
+
+impl crate::op_interface::CallableOwnerModel for Func {
+    fn callable_signature(self, ctx: &crate::IrContext) -> Option<crate::dialect::core::Func> {
+        ctx.op(self.op_ref())
+            .attributes
+            .get_type("type")
+            .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty))
+    }
+}
+inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
 
 #[cfg(test)]
 mod tests {
@@ -394,7 +432,11 @@ mod tests {
         assert!(call.signature(&ctx).is_some(), "declared signature");
 
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("signature = core.func(core.i32, core.i32)"));
+        assert!(
+            printed.contains("!t0 = core.func<(core.i32) -> core.i32>"),
+            "{printed}"
+        );
+        assert!(printed.contains("signature = !t0"), "{printed}");
         assert!(!printed.contains("func.indirect_call_signature"));
     }
 
@@ -446,5 +488,243 @@ mod tests {
         assert!(IndirectCallLikeOps::get(&ctx, direct_op).is_none());
         assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
         assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
+    }
+}
+
+#[cfg(test)]
+mod result_list_tests {
+    use super::*;
+    use crate::dialect::core;
+    use crate::parser::parse_module;
+    use crate::printer::print_module;
+    use crate::rewrite::Module;
+    use crate::validation::validate_all;
+    use crate::{IrContext, Symbol};
+
+    #[test]
+    fn function_assembly_preserves_arity_and_type_attributes() {
+        for inputs in ["", "%x: core.i32, %y: core.i64"] {
+            for result in ["", " -> core.nil"] {
+                for body in ["", " { func.unreachable }"] {
+                    let input =
+                        format!("core.module @m {{ func.func @f({inputs}){result}{body} }}");
+                    let mut ctx = IrContext::new();
+                    let op = parse_module(&mut ctx, &input).unwrap();
+                    let printed = print_module(&ctx, op);
+                    let copy = parse_module(&mut ctx, &printed).unwrap();
+                    let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
+                    let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
+                    assert_eq!(
+                        ctx.op(a).attributes.get_type("type"),
+                        ctx.op(b).attributes.get_type("type")
+                    );
+                    assert_eq!(print_module(&ctx, copy), printed);
+                }
+            }
+        }
+        for input in [
+            "core.module @m { func.func {sym_name = @f, type = core.func<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} }",
+            "core.module @m { func.func @f(%x: core.i32) attributes {type = core.func<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} { func.return } }",
+        ] {
+            let mut ctx = IrContext::new();
+            let op = parse_module(&mut ctx, input).unwrap();
+            let printed = print_module(&ctx, op);
+            assert!(printed.contains("tag = @kept"), "{printed}");
+            let copy = parse_module(&mut ctx, &printed).unwrap();
+            let a = Module::new(&ctx, op).unwrap().ops(&ctx)[0];
+            let b = Module::new(&ctx, copy).unwrap().ops(&ctx)[0];
+            assert_eq!(
+                ctx.op(a).attributes.get_type("type"),
+                ctx.op(b).attributes.get_type("type")
+            );
+        }
+        let mut ctx = IrContext::new();
+        assert!(
+            parse_module(
+                &mut ctx,
+                "core.module @m { func.func @f() attributes {type = core.func<() -> core.nil>} }"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn call_constructors_support_zero_and_one_results() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, "core.module @m {}");
+        let loc = ctx.op(module.op()).location;
+        let nil = core::nil(&mut ctx).as_type_ref();
+        let signature = core::func(&mut ctx, [], []).as_type_ref();
+        let callee = constant(&mut ctx, loc, signature, Symbol::new("f")).result(&ctx);
+        for results in [vec![], vec![nil]] {
+            let direct = call(&mut ctx, loc, [], results.clone(), Symbol::new("f"));
+            let indirect = call_indirect(&mut ctx, loc, callee, [], results.clone(), None);
+            assert_eq!(direct.call_result_types(&ctx), results);
+            assert_eq!(indirect.call_result_types(&ctx), results);
+            assert_eq!(direct.single_result(&ctx).is_some(), results.len() == 1);
+        }
+    }
+
+    fn verify(input: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        validate_all(&ctx, module).to_string()
+    }
+
+    #[test]
+    fn complete_call_return_and_tail_contracts() {
+        let valid = "core.module @m {
+          func.func @sink(%x: core.i32)
+          func.func @value(%x: core.i32) -> core.i32
+          func.func @run(%k: core.func<(core.i32) -> ()>, %x: core.i32) {
+            func.call %x {callee = @sink}
+            func.call_indirect %k, %x {signature = core.func<(core.i32) -> ()>}
+            %r = func.call %x {callee = @value} : core.i32
+            func.return
+          }
+          func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
+          func.func @logical(%k: core.func<(core.i32) -> core.never>, %x: core.i32) -> core.never {
+            func.tail_call_indirect %k, %x
+          }
+          func.func @one(%k: core.func<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
+            %r = func.call_indirect %k, %x : core.i32
+            func.return %r
+          }
+        }";
+        assert_eq!(verify(valid), "validation passed");
+        for (old, new, expected) in [
+            (
+                "func.call %x {callee = @sink}",
+                "%bad = func.call %x {callee = @sink} : core.nil",
+                "call result list mismatch",
+            ),
+            (
+                "func.call %x {callee = @sink}",
+                "func.call {callee = @sink}",
+                "call argument count mismatch",
+            ),
+            ("func.return %r", "func.return", "return count mismatch"),
+            (
+                "func.return %r",
+                "func.return %k",
+                "return #0 type mismatch",
+            ),
+            (
+                "@tail(%x: core.i32)",
+                "@tail(%x: core.i32) -> core.nil",
+                "tail caller/callee result lists differ",
+            ),
+            (
+                "signature = core.func<(core.i32) -> ()>",
+                "signature = core.func<(core.i64) -> ()>",
+                "exact indirect signature differs",
+            ),
+            (
+                "callee = @sink",
+                "callee = 1",
+                "requires symbol callee attribute",
+            ),
+        ] {
+            let text = verify(&valid.replace(old, new));
+            assert!(text.contains(expected), "{expected}: {text}");
+        }
+        let order = "core.module @m { func.func @f(%a: core.i32, %b: core.i64) func.func @g(%a: core.i32, %b: core.i64) { func.call %b, %a {callee = @f} func.return } }";
+        let errors = verify(order);
+        assert!(
+            errors.contains("call argument #0 type mismatch"),
+            "{errors}"
+        );
+        assert!(
+            errors.contains("call argument #1 type mismatch"),
+            "{errors}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod owner_identity_tests {
+    #[test]
+    fn operation_name_and_type_attribute_do_not_establish_ownership() {
+        let mut ctx = crate::IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m {
+          func.func @f(%k: core.func<() -> core.never>) -> core.never {
+            test.lambda {type = core.func<() -> core.nil>} { func.tail_call_indirect %k }
+            func.unreachable
+          }
+        }",
+        );
+        let result = crate::validation::validate_all(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+    }
+
+    #[test]
+    fn missing_runtime_symbols_do_not_hide_known_invalid_declarations() {
+        for declaration in [
+            "func.func @f() func.func @f()",
+            "test.object {sym_name = @f}",
+        ] {
+            let mut ctx = crate::IrContext::new();
+            let input = format!(
+                "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
+            );
+            let module = crate::parser::parse_test_module(&mut ctx, &input);
+            let result = crate::validation::validate_all(&ctx, module);
+            assert!(
+                result
+                    .to_string()
+                    .contains("uniquely resolved valid callable"),
+                "{result}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod normal_validation_regressions {
+    #[test]
+    fn normal_validation_rejects_known_contract_mismatches() {
+        for (body, expected) in [
+            (
+                "%a, %b = func.call {callee = @runtime} : core.i32, core.i32\nfunc.return",
+                "multiple call results",
+            ),
+            (
+                "%a, %b = func.call_indirect %k : core.i32, core.i32\nfunc.return",
+                "multiple call results",
+            ),
+            (
+                "%a = func.call {callee = @sink} : core.i32\nfunc.return",
+                "call result list mismatch",
+            ),
+            (
+                "%a = func.call_indirect %k : core.i32\nfunc.return",
+                "call result list mismatch",
+            ),
+            ("func.return %k", "return count mismatch"),
+        ] {
+            let mut ctx = crate::IrContext::new();
+            let input = format!(
+                "core.module @m {{ func.func @sink() func.func @run(%k: core.func<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
+            );
+            let module = crate::parser::parse_test_module(&mut ctx, &input);
+            let result = crate::validation::validate_all(&ctx, module);
+            assert!(
+                result.to_string().contains(expected),
+                "{expected}: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_explicit_custom_function_type_is_rejected() {
+        let mut ctx = crate::IrContext::new();
+        let error = crate::parser::parse_module(
+            &mut ctx,
+            "core.module @m { func.func @f() attributes {type = 1} }",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("type attribute"), "{error}");
     }
 }

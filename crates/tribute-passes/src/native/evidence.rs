@@ -54,7 +54,7 @@ fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
         .iter()
         .map(|&value| ctx.value_ty(value))
         .collect::<Vec<_>>();
-    let signature = core::func(ctx, result, parameters).as_type_ref();
+    let signature = core::func(ctx, parameters, [result]).as_type_ref();
     let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
@@ -335,7 +335,7 @@ impl RewritePattern for LowerLegacyEffectDispatchCpsToNative {
             ctx,
             loc,
             [dispatch_op.evidence(ctx), ability_id_value],
-            ptr_ty,
+            [ptr_ty],
             Symbol::new(evidence_abi::LOOKUP_HANDLER),
         );
         let handler_value = handler.result(ctx);
@@ -344,7 +344,7 @@ impl RewritePattern for LowerLegacyEffectDispatchCpsToNative {
             ctx,
             loc,
             [dispatch_op.evidence(ctx), ability_id_value],
-            i32_ty,
+            [i32_ty],
             Symbol::new(evidence_abi::LOOKUP),
         );
         let prompt_value = prompt.result(ctx);
@@ -370,7 +370,7 @@ impl RewritePattern for LowerLegacyEffectDispatchCpsToNative {
                 op_idx_value,
                 dispatch_op.payload(ctx),
             ],
-            *result_ty,
+            [*result_ty],
             None,
         );
         attach_exact_indirect_signature(ctx, call.op_ref());
@@ -509,7 +509,7 @@ impl RewritePattern for LowerEffectExtendToNative {
             ctx,
             loc,
             operands,
-            ptr_ty,
+            [ptr_ty],
             Symbol::new(evidence_abi::EXTEND),
         );
         let new_result = extend_call.result(ctx);
@@ -547,7 +547,7 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
             ctx,
             loc,
             [dispatch_op.evidence(ctx), ability_id_val],
-            ptr_ty,
+            [ptr_ty],
             Symbol::new(evidence_abi::LOOKUP_TR),
         );
         let dispatch_val = dispatch_closure.result(ctx);
@@ -576,7 +576,7 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
-            result_ty,
+            [result_ty],
             None,
         );
         attach_exact_indirect_signature(ctx, call.op_ref());
@@ -619,7 +619,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
             ctx,
             loc,
             [dispatch_op.evidence(ctx), ability_id_val],
-            i32_ty,
+            [i32_ty],
             Symbol::new(evidence_abi::LOOKUP),
         );
         let prompt_val = prompt.result(ctx);
@@ -698,7 +698,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
-                let call = func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
+                let call = func::call(ctx, loc, [], [ptr_ty], Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -726,7 +726,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     ));
                 }
                 let old_result = ctx.op_result(op, 0);
-                let call = func::call(ctx, loc, [], ptr_ty, Symbol::new(evidence_abi::EMPTY));
+                let call = func::call(ctx, loc, [], [ptr_ty], Symbol::new(evidence_abi::EMPTY));
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -774,7 +774,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     ctx,
                     loc,
                     operands,
-                    i32_ty,
+                    [i32_ty],
                     Symbol::new(evidence_abi::LOOKUP),
                 );
                 let new_result = new_call.result(ctx);
@@ -820,7 +820,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                 args.extend_from_slice(fields);
                 let old_result = ctx.op_result(op, 0);
                 let new_call =
-                    func::call(ctx, loc, args, ptr_ty, Symbol::new(evidence_abi::EXTEND));
+                    func::call(ctx, loc, args, [ptr_ty], Symbol::new(evidence_abi::EXTEND));
                 let new_result = new_call.result(ctx);
                 ctx.insert_op_before(block, op, new_call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -863,7 +863,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
-                                ptr_ty,
+                                [ptr_ty],
                                 Symbol::new(evidence_abi::LOOKUP_TR),
                             );
                             let new_result = tr_call.result(ctx);
@@ -878,7 +878,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
-                                ptr_ty,
+                                [ptr_ty],
                                 Symbol::new(evidence_abi::LOOKUP_HANDLER),
                             );
                             let new_result = handler_call.result(ctx);
@@ -1079,7 +1079,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
         let marker_ty = ability::marker_adt_type_ref(&mut ctx);
-        let func_ty = core::func(&mut ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
+        let func_ty = core::func(&mut ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -1102,7 +1102,7 @@ mod tests {
             &mut ctx,
             loc,
             [ev, marker],
-            evidence_ty,
+            [evidence_ty],
             Symbol::new(evidence_abi::EXTEND),
         );
         let extend_result = extend_call.result(&ctx);

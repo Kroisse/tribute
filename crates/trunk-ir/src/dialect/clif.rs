@@ -225,6 +225,6 @@ mod tests {
 
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.call_indirect"));
-        assert!(printed.contains("sig = core.func(core.i32, core.i32)"));
+        assert!(printed.contains("sig = core.func<(core.i32) -> core.i32>"));
     }
 }

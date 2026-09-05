@@ -1115,7 +1115,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
         .get_type("type")
         .and_then(|ty| core::Func::from_type_ref(&ctx, ty))
         .unwrap()
-        .params(&ctx)
+        .inputs(&ctx)
     {
         assert!(!plan.is_managed_type(&ctx, *ty));
     }

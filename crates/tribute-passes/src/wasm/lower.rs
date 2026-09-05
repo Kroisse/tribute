@@ -14,7 +14,7 @@ use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{PassError, PassManager};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -250,9 +250,11 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             // Check for func.func or wasm.func operations
             if data.dialect == func::DIALECT_NAME() && data.name == Symbol::new("func") {
                 if let Some(fn_ty) = data.attributes.get_type("type") {
-                    let fn_data = ctx.types.get(fn_ty);
-                    let params: Vec<_> = fn_data
-                        .params
+                    let Some(function) = core::Func::from_type_ref(ctx, fn_ty) else {
+                        continue;
+                    };
+                    let params: Vec<_> = function
+                        .inputs(ctx)
                         .iter()
                         .map(|t| {
                             let td = ctx.types.get(*t);
@@ -270,9 +272,11 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                 && data.name == Symbol::new("func")
                 && let Some(fn_ty) = data.attributes.get_type("type")
             {
-                let fn_data = ctx.types.get(fn_ty);
-                let params: Vec<_> = fn_data
-                    .params
+                let Some(function) = core::Func::from_type_ref(ctx, fn_ty) else {
+                    continue;
+                };
+                let params: Vec<_> = function
+                    .inputs(ctx)
                     .iter()
                     .map(|t| {
                         let td = ctx.types.get(*t);
@@ -319,7 +323,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    core::func(ctx, result, params).as_type_ref()
+    core::func(ctx, params, [result]).as_type_ref()
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
@@ -480,13 +484,11 @@ impl<'a> WasmLowerer<'a> {
         self.main_exports.saw_main = true;
         self.main_exports.main_convention = get_calling_convention(ctx, op).unwrap_or_default();
 
-        if let Some(fn_ty) = data.attributes.get_type("type") {
-            let fn_data = ctx.types.get(fn_ty);
-            // In arena core.func type, params[0] is the return type
-            if let Some(&result_ty) = fn_data.params.first() {
-                self.main_exports.main_result_type = Some(result_ty);
-            }
-            self.main_exports.main_param_types = fn_data.params[1..].to_vec();
+        if let Some(fn_ty) = data.attributes.get_type("type")
+            && let Some(function) = core::Func::from_type_ref(ctx, fn_ty)
+        {
+            self.main_exports.main_result_type = function.single_result(ctx);
+            self.main_exports.main_param_types = function.inputs(ctx).to_vec();
         }
     }
 
@@ -810,6 +812,53 @@ mod tests {
         let placeholder = module.ops(ctx)[0];
         trunk_ir::rewrite::erase_op(ctx, placeholder);
         module
+    }
+
+    #[test]
+    fn review_resultless_evidence_main_preserves_inputs() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @m { wasm.func {sym_name = @main, type = core.func<(wasm.arrayref) -> ()>, tribute.calling_convention = 1} {} }",
+        );
+        let main = module.ops(&ctx)[0];
+        let const_analysis = ConstAnalysis {
+            allocations: vec![],
+            string_enum_ty: None,
+        };
+        let io_analysis = IoAnalysis {
+            needs_fd_write: false,
+            iovec_offset: 0,
+            nwritten_offset: 0,
+            scratch_offset: 0,
+            total_size: 0,
+        };
+        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        lowerer.scan_wasm_func(&ctx, main);
+        let evidence = intern_type(&mut ctx, "wasm", "arrayref");
+        assert_eq!(lowerer.main_exports.main_param_types, [evidence]);
+        assert_eq!(lowerer.main_exports.main_result_type, None);
+        assert_eq!(
+            lowerer.main_exports.main_convention,
+            CallingConvention::EvidenceDirect
+        );
+        let location = ctx.op(main).location;
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let i32_ty = intern_type(&mut ctx, "core", "i32");
+        let args = lowerer.build_main_args(&mut ctx, block, location, i32_ty);
+        assert_eq!(args.len(), 1);
+        assert_eq!(ctx.value_ty(args[0]), evidence);
+        let before = print_module(&ctx, module.op());
+        let error = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
+            .err()
+            .expect("resultless emission remains unsupported");
+        assert!(error.to_string().contains("one-result"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

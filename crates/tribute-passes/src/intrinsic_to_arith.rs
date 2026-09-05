@@ -14,7 +14,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
@@ -289,9 +289,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // All mapped intrinsics are binary (lhs, rhs) -> result.
         // This will panic if a non-binary intrinsic is ever added to the map.
-        let func_data = ctx.types.get(func_ty);
-        let return_ty = func_data.params[0];
-        let param_tys: Vec<TypeRef> = func_data.params[1..].to_vec();
+        let function = core::Func::from_type_ref(ctx, func_ty)
+            .expect("mapped intrinsic declaration must have a valid core.func type");
+        let Some(return_ty) = function.single_result(ctx) else {
+            return false;
+        };
+        let param_tys: Vec<TypeRef> = function.inputs(ctx).to_vec();
 
         // Build a new body: entry block with params → arith op → func.return
         let block_args: Vec<BlockArgData> = param_tys
@@ -342,15 +345,20 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 }
 
 fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &ArithMapping) -> bool {
-    let data = ctx.types.get(ty);
-    let [result, left, right] = data.params.as_slice() else {
+    let Some(function) = core::Func::from_type_ref(ctx, ty) else {
+        return false;
+    };
+    let [left, right] = function.inputs(ctx) else {
+        return false;
+    };
+    let Some(result) = function.single_result(ctx) else {
         return false;
     };
     if left != right {
         return false;
     }
     let operand = ctx.types.get(*left);
-    let result = ctx.types.get(*result);
+    let result = ctx.types.get(result);
     let operand_is_i32 =
         operand.dialect == Symbol::new("core") && operand.name == Symbol::new("i32");
     let operand_is_f64 =

@@ -24,6 +24,7 @@ use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
+use super::ops::DialectType;
 use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::walk;
@@ -319,6 +320,8 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
+    validate_core_func_types(ctx, &mut errors);
+
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
@@ -332,7 +335,8 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
         validate_scf_if_structure(ctx, op, &mut errors);
         validate_scf_loop_result_arity(ctx, op, &mut errors);
         validate_scf_switch_result_arity(ctx, op, &mut errors);
-        validate_func_tail_call_indirect(ctx, op, &mut errors);
+        validate_func_shapes(ctx, op, &mut errors);
+        validate_func_indirect_call(ctx, op, &mut errors);
         if errors.len() == error_count {
             validate_branch_interface(ctx, op, &mut errors);
             validate_region_branch_interface(ctx, op, &mut errors);
@@ -344,14 +348,33 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     ValidationResult { errors }
 }
 
-fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+fn validate_core_func_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+    for (ty, data) in ctx.types.iter() {
+        if data.dialect != crate::dialect::core::DIALECT_NAME()
+            || data.name != crate::dialect::core::FUNC()
+        {
+            continue;
+        }
+        if let Err(error) = crate::dialect::core::Func::validate(ctx, ty) {
+            errors.push(ValidationError::Operation {
+                message: format!("type verifier failed for core.func ({ty}): {error}"),
+            });
+        }
+    }
+}
+
+fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.dialect != Symbol::new("func") || data.name != Symbol::new("tail_call_indirect") {
+    if data.dialect != Symbol::new("func")
+        || ![
+            Symbol::new("call_indirect"),
+            Symbol::new("tail_call_indirect"),
+        ]
+        .contains(&data.name)
+    {
         return;
     }
-    if !ctx.op_results(op).is_empty() {
-        errors.push(operation_verifier_error(ctx, op, "must be resultless"));
-    }
+    let tail = data.name == Symbol::new("tail_call_indirect");
     let Some((&callee, args)) = ctx.op_operands(op).split_first() else {
         errors.push(operation_verifier_error(
             ctx,
@@ -376,48 +399,338 @@ fn validate_func_tail_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec
     } else {
         ctx.value_ty(callee)
     };
-    let func_ty = ctx.types.get(func_ty);
-    if func_ty.dialect != Symbol::new("core")
-        || func_ty.name != Symbol::new("func")
-        || func_ty.params.is_empty()
+    let typed = crate::dialect::core::Func::from_type_ref(ctx, func_ty);
+    let exact = data
+        .attributes
+        .get_type("signature")
+        .and_then(|ty| crate::dialect::core::Func::from_type_ref(ctx, ty));
+    if data.attributes.contains_key("signature") && exact.is_none() {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "invalid exact indirect signature",
+        ));
+        return;
+    }
+    if let (Some(typed), Some(exact)) = (typed, exact)
+        && typed != exact
     {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "exact indirect signature differs from typed callee",
+        ));
+    }
+    let Some(func_ty) = exact.or(typed) else {
+        if !tail {
+            return;
+        }
         errors.push(operation_verifier_error(
             ctx,
             op,
             "callee must have core.func or closure.closure<core.func> type",
         ));
         return;
-    }
-    let return_ty = ctx.types.get(func_ty.params[0]);
-    if return_ty.dialect != Symbol::new("core") || return_ty.name != Symbol::new("never") {
+    };
+    if !tail && ctx.op_result_types(op) != func_ty.results(ctx) {
         errors.push(operation_verifier_error(
             ctx,
             op,
-            "callee function result must be core.never",
+            "call result list mismatch",
         ));
     }
-    let expected = &func_ty.params[1..];
-    if args.len() != expected.len() {
+    check_value_types(ctx, op, args, func_ty.inputs(ctx), "call argument", errors);
+}
+
+fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
+    use crate::dialect::{core, func};
+    use crate::ops::DialectOp;
+    if func::Func::matches(ctx, op) {
+        let Some(signature) = ctx
+            .op(op)
+            .attributes
+            .get_type("type")
+            .and_then(|ty| core::Func::from_type_ref(ctx, ty))
+        else {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                "requires valid core.func type",
+            ));
+            return;
+        };
+        if ctx.op(op).regions.len() > 1 {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                "expects at most one body",
+            ));
+        }
+        if let Some(&region) = ctx.op(op).regions.first() {
+            if let Some(&entry) = ctx.region(region).blocks.first() {
+                check_value_types(
+                    ctx,
+                    op,
+                    ctx.block_args(entry),
+                    signature.inputs(ctx),
+                    "entry argument",
+                    errors,
+                );
+            } else {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "body requires an entry block",
+                ));
+            }
+        }
+    }
+    if (func::Call::matches(ctx, op) || func::CallIndirect::matches(ctx, op))
+        && ctx.op_results(op).len() > 1
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "multiple call results are unsupported",
+        ));
+    }
+    if (func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op))
+        && ctx.op(op).attributes.get_symbol("callee").is_none()
+    {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "requires symbol callee attribute",
+        ));
+    }
+    if func::Return::matches(ctx, op)
+        || func::TailCall::matches(ctx, op)
+        || func::TailCallIndirect::matches(ctx, op)
+    {
+        if !ctx.op_results(op).is_empty() {
+            errors.push(operation_verifier_error(ctx, op, "must be resultless"));
+        }
+        if ctx
+            .op(op)
+            .parent_block
+            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
+        {
+            errors.push(operation_verifier_error(
+                ctx,
+                op,
+                "must terminate its block",
+            ));
+        }
+    }
+    if func::Return::matches(ctx, op) && ctx.op_operands(op).len() > 1 {
+        errors.push(operation_verifier_error(
+            ctx,
+            op,
+            "return count mismatch: at most one value is supported",
+        ));
+    }
+}
+
+/// Nearest dialect-registered owner, including a malformed owner boundary.
+fn enclosing_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<crate::dialect::core::Func> {
+    loop {
+        let block = ctx.op(op).parent_block?;
+        let region = ctx.block(block).parent_region?;
+        op = ctx.region(region).parent_op?;
+        if let Some(signature) = crate::op_interface::CallableOwnerOps::signature(ctx, op) {
+            return signature;
+        }
+        if crate::op_interface::IsolatedFromAboveOps::is_isolated(ctx, op) {
+            return None;
+        }
+    }
+}
+
+fn typed_callee_signature(ctx: &IrContext, value: ValueRef) -> Option<crate::dialect::core::Func> {
+    let ty = ctx.value_ty(value);
+    let data = ctx.types.get(ty);
+    let ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        let [ty] = data.params.as_slice() else {
+            return None;
+        };
+        *ty
+    } else {
+        ty
+    };
+    crate::dialect::core::Func::from_type_ref(ctx, ty)
+}
+
+fn check_value_types(
+    ctx: &IrContext,
+    op: OpRef,
+    values: &[ValueRef],
+    expected: &[crate::TypeRef],
+    role: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    if values.len() != expected.len() {
         errors.push(operation_verifier_error(
             ctx,
             op,
             format!(
-                "passes {} argument(s), but callee expects {}",
-                args.len(),
-                expected.len()
+                "{role} count mismatch: expected {}, found {}",
+                expected.len(),
+                values.len()
             ),
         ));
-        return;
-    }
-    for (index, (arg, expected)) in args.iter().zip(expected).enumerate() {
-        if ctx.value_ty(*arg) != *expected {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                format!("argument #{index} type does not match the callee parameter"),
-            ));
+    } else {
+        for (index, (&value, &ty)) in values.iter().zip(expected).enumerate() {
+            if ctx.value_ty(value) != ty {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    format!("{role} #{index} type mismatch"),
+                ));
+            }
         }
     }
+}
+
+/// Validate contextual shared function contracts; called by `validate_all`.
+/// Local shapes and typed indirect operands/results are checked separately by
+/// `validate_operation_verifiers`. An undeclared runtime symbol has no known
+/// signature, but never exempts other fully typed contracts from validation.
+pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> ValidationResult {
+    use crate::dialect::{core, func};
+    use crate::ops::DialectOp;
+    let mut errors = Vec::new();
+    let Some(body) = module.body(ctx) else {
+        return ValidationResult { errors };
+    };
+    // None is genuinely undeclared. A found but invalid/ambiguous declaration
+    // is Some(None), so compatibility cannot hide malformed known contracts.
+    fn resolve(ctx: &IrContext, mut op: OpRef, name: Symbol) -> Option<Option<core::Func>> {
+        loop {
+            let region = ctx.block(ctx.op(op).parent_block?).parent_region?;
+            let parent = ctx.region(region).parent_op?;
+            if core::Module::matches(ctx, parent) {
+                let mut matches = ctx
+                    .region(region)
+                    .blocks
+                    .iter()
+                    .flat_map(|&b| ctx.block(b).ops.iter().copied())
+                    .filter(|&candidate| {
+                        ctx.op(candidate).attributes.get_symbol("sym_name") == Some(name)
+                    });
+                if let Some(found) = matches.next() {
+                    if matches.next().is_some() || !func::Func::matches(ctx, found) {
+                        return Some(None);
+                    }
+                    return Some(
+                        ctx.op(found)
+                            .attributes
+                            .get_type("type")
+                            .and_then(|ty| core::Func::from_type_ref(ctx, ty)),
+                    );
+                }
+            }
+            op = parent;
+        }
+    }
+    walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        let mut verify = || {
+            if func::Return::matches(ctx, op) {
+                if let Some(caller) = enclosing_func_signature(ctx, op) {
+                    check_value_types(
+                        ctx,
+                        op,
+                        ctx.op_operands(op),
+                        caller.results(ctx),
+                        "return",
+                        &mut errors,
+                    );
+                } else {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "requires registered enclosing callable signature",
+                    ));
+                }
+                return;
+            }
+            let tail = func::TailCall::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
+            let direct = func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op);
+            if !direct && !tail {
+                return;
+            }
+            // Even an undeclared runtime target cannot erase the caller's
+            // independently known ownership boundary.
+            let caller = enclosing_func_signature(ctx, op);
+            if tail && caller.is_none() {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "tail transfer requires registered enclosing callable signature",
+                ));
+                return;
+            }
+            let operands = ctx.op_operands(op);
+            let (signature, args) = if direct {
+                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                    return;
+                };
+                let Some(signature) = resolve(ctx, op, name) else {
+                    return;
+                };
+                let Some(signature) = signature else {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "requires uniquely resolved valid callable signature",
+                    ));
+                    return;
+                };
+                (signature, operands)
+            } else {
+                let Some((&callee, args)) = operands.split_first() else {
+                    return;
+                };
+                let signature = ctx
+                    .op(op)
+                    .attributes
+                    .get_type("signature")
+                    .and_then(|ty| core::Func::from_type_ref(ctx, ty))
+                    .or_else(|| typed_callee_signature(ctx, callee));
+                let Some(signature) = signature else {
+                    return;
+                };
+                (signature, args)
+            };
+            if direct {
+                check_value_types(
+                    ctx,
+                    op,
+                    args,
+                    signature.inputs(ctx),
+                    "call argument",
+                    &mut errors,
+                );
+            }
+            if tail {
+                if caller.is_none_or(|caller| caller.results(ctx) != signature.results(ctx)) {
+                    errors.push(operation_verifier_error(
+                        ctx,
+                        op,
+                        "tail caller/callee result lists differ",
+                    ));
+                }
+            } else if ctx.op_result_types(op) != signature.results(ctx) {
+                errors.push(operation_verifier_error(
+                    ctx,
+                    op,
+                    "call result list mismatch",
+                ));
+            }
+        };
+        verify();
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    ValidationResult { errors }
 }
 
 /// Validate operation-level semantic constraints that are independent of
@@ -976,8 +1289,6 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
     let wasm_dialect = Symbol::new("wasm");
     let clif_dialect = Symbol::new("clif");
 
-    let core_dialect = Symbol::new("core");
-    let core_func_name = Symbol::new("func");
     let sym_name_key = Symbol::new("sym_name");
     let type_key = Symbol::new("type");
 
@@ -1002,14 +1313,10 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             };
 
-            let ty_data = ctx.types.get(func_ty);
-            if ty_data.dialect != core_dialect || ty_data.name != core_func_name {
+            let Some(func_ty) = crate::dialect::core::Func::from_type_ref(ctx, func_ty) else {
                 continue;
-            }
-
-            // core.func layout: params[0] = Return, params[1..] = Params
-            let param_count = ty_data.params.len().saturating_sub(1);
-            signatures.insert(sym_name, param_count);
+            };
+            signatures.insert(sym_name, func_ty.inputs(ctx).len());
         }
     }
 
@@ -1105,10 +1412,9 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
 /// Run all validations and combine results.
 ///
-/// Note: arity errors from `validate_call_arity` are intentionally excluded
-/// because they are currently non-blocking warnings (see TODO(#582) in
-/// pipeline). Use `validate_call_arity` directly when arity diagnostics
-/// are needed.
+/// Local shapes and contextual contracts are separate checks. Known direct
+/// callees, exact indirect signatures and registered return/tail owners are
+/// checked here; undeclared runtime calls do not invent a signature.
 pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
@@ -1116,6 +1422,7 @@ pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = scope.errors;
     errors.extend(uses.errors);
     errors.extend(ops.errors);
+    errors.extend(validate_function_contracts(ctx, module).errors);
     ValidationResult { errors }
 }
 
@@ -1163,7 +1470,7 @@ mod tests {
         params: &[super::super::refs::TypeRef],
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
+        crate::dialect::core::func(ctx, params.iter().copied(), [ret]).as_type_ref()
     }
 
     fn stale_value_errors(result: &ValidationResult) -> Vec<(&str, &str, &str)> {
@@ -1202,6 +1509,103 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    fn empty_module(ctx: &mut IrContext) -> Module {
+        crate::parser::parse_test_module(ctx, "core.module @test {}")
+    }
+
+    #[test]
+    fn malformed_core_func_counts_are_rejected_by_typed_and_whole_ir_validation() {
+        let cases = [
+            (
+                "missing num_inputs",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "missing required `num_inputs`",
+            ),
+            (
+                "missing num_results",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0)),
+                "missing required `num_results`",
+            ),
+            (
+                "wrong num_inputs type",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::String("zero".to_string()))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "wrong num_results type",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0))
+                    .attr(
+                        core::NUM_RESULTS_ATTR,
+                        Attribute::String("zero".to_string()),
+                    ),
+                "`num_results` must be a u32",
+            ),
+            (
+                "count sum mismatch",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(1))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(0)),
+                "must equal params length",
+            ),
+            (
+                "negative input",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_inputs", Attribute::Int(-1))
+                    .attr("num_results", Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "negative result",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_results", Attribute::Int(-1))
+                    .attr("num_inputs", Attribute::Int(0)),
+                "`num_results` must be a u32",
+            ),
+            (
+                "input outside u32",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_inputs", Attribute::Int(u32::MAX as i128 + 1))
+                    .attr("num_results", Attribute::Int(0)),
+                "`num_inputs` must be a u32",
+            ),
+            (
+                "result outside u32",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr("num_results", Attribute::Int(u32::MAX as i128 + 1))
+                    .attr("num_inputs", Attribute::Int(0)),
+                "`num_results` must be a u32",
+            ),
+            (
+                "multiple results",
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .attr(core::NUM_INPUTS_ATTR, Attribute::Int(0))
+                    .attr(core::NUM_RESULTS_ATTR, Attribute::Int(2)),
+                "supports at most one result",
+            ),
+        ];
+
+        for (case, builder, expected) in cases {
+            let mut ctx = IrContext::new();
+            let module = empty_module(&mut ctx);
+            let malformed = ctx.types.intern(builder.build());
+            assert!(
+                core::Func::from_type_ref(&ctx, malformed).is_none(),
+                "{case} must fail typed validation"
+            );
+            let result = validate_operation_verifiers(&ctx, module);
+            let messages = operation_error_messages(&result);
+            assert!(
+                messages.iter().any(|message| message.contains(expected)),
+                "{case}: {result}"
+            );
+        }
     }
 
     fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
@@ -1961,9 +2365,9 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let result = validate_operation_verifiers(&ctx, module);
+        let result = validate_all(&ctx, module);
         let text = result.to_string();
-        assert!(text.contains("result must be core.never"), "{text}");
+        assert!(text.contains("caller/callee result lists differ"), "{text}");
         assert!(text.contains("argument #0 type"), "{text}");
     }
 
@@ -2001,8 +2405,12 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("callee must have core.func"), "{text}");
-        assert!(text.contains("passes 0 argument(s)"), "{text}");
-        assert_eq!(result.errors.len(), 5, "{text}");
+        assert!(
+            text.contains("call argument count mismatch: expected 1, found 0"),
+            "{text}"
+        );
+        assert!(text.contains("must terminate its block"), "{text}");
+        assert_eq!(result.errors.len(), 6, "{text}");
     }
 
     #[test]
