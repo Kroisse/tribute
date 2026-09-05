@@ -64,7 +64,7 @@ unknown operation이 legal하지 않으므로 frontend 적합성 target과 backe
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
 `func.func_sig`/`closure.closure`와 post-CPS의
-`tribute_control.callable`/`resume_token`을 별도로 거부한다. 같은 walk는
+`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. 같은 walk는
 `tribute-backend-ready-native`와 `tribute-backend-ready-wasm`에서도 필수이며
 남은 두 `tribute_control` type을 거부한다. 함수·호출 signature, operand/result,
 block argument, type attribute와 nested type parameter를 재귀적으로 검사하며,
@@ -175,8 +175,10 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 않는다.
 
 논리 callable type은
-`tribute_control.callable(Result, Params...) {tribute.calling_convention = N}`이다.
-`Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
+`tribute_control.func_sig<(Params...) -> Result> {tribute.calling_convention = N}`이다.
+It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
+`num_results` u32 delimiters; its source-owned validated API requires exactly
+one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
 `EvidenceDirect = 1`, `Cps = 2`를 그대로 사용한다. 이 metadata는 typechecking
 결과를 복사한 것으로 body에서 추론하지 않는다. Legalization은 이를 기존
 `CallableAbi`와 physical `func.func_sig`, `closure.closure` 및
@@ -225,7 +227,7 @@ non-resumptive case를 식별해야 하므로 `Never`용 `anyref` placeholder는
 간결한 convention 문법은 `convention(direct)`,
 `convention(evidence_direct)`, `convention(cps)`이며 각각 callable type의
 `tribute.calling_convention = 0`, `1`, `2`로 round trip한다. Parser는 signature와
-keyword로 `tribute_control.callable`을 만들고 convention을 type에만 저장한다.
+keyword로 `tribute_control.func_sig`을 만들고 convention을 type에만 저장한다.
 출력기도 type attribute만 읽으며 body에서 추론하거나 operation에 중복
 attribute를 쓰지 않는다. 추가 operation attribute에
 `tribute.calling_convention`을 다시 적으면 parser 또는 verifier가 거부한다.
@@ -267,7 +269,7 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
 ```
 
 - **형상:** 피연산자와 결과는 없다. `sym_name: Symbol`과
-  `type: tribute_control.callable(Result, Params...)`가 필수다. 선언은 region이
+  `type: tribute_control.func_sig<(Params...) -> Result>`가 필수다. 선언은 region이
   없고 정의는 source parameter만 block argument로 받는 single-block `body`
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
   attribute는 보존한다.
@@ -291,7 +293,7 @@ symbol spelling, 위치 또는 printed IR만으로 origin을 복구하거나 승
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 module-local symbol을 유일하게 resolve하고 완전한 signature를
-맞춰야 한다. Indirect call은 exact `tribute_control.callable` signature와 source-logical
+맞춰야 한다. Indirect call은 exact `tribute_control.func_sig` signature와 source-logical
 callable producer를 요구한다. Return은 enclosing callable의 logical result와 일치해야
 한다. Body가 없는 declaration도 body traversal 없이 같은 검사를 받는다.
 
@@ -302,7 +304,7 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** 피연산자는 typechecking된 capture를 source 순서로 나열한다. 결과는
-  `tribute_control.callable` 하나이고 필수 attribute는 없다. Single-block body는
+  `tribute_control.func_sig` 하나이고 필수 attribute는 없다. Single-block body는
   source parameter만 block argument로 받으며 `tribute_control.return`으로 끝난다.
 - **의미:** source lambda를 만들며 body는 lexical capture와 parameter를 사용한다.
 - **검증:** local verifier는 result signature, block argument, return type을
@@ -318,7 +320,7 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** 피연산자와 region은 없고 terminator가 아니다. `func_ref: Symbol`이
-  필수이며 결과는 `tribute_control.callable` 하나다.
+  필수이며 결과는 `tribute_control.func_sig` 하나다.
 - **의미:** named function을 first-class source value로 만든다. Source가 named
   function을 higher-order value로 사용할 수 있으므로 필요하다. Result는 대상과
   같은 source signature이며 convention은 대상 worker와 같거나 더 강할 수 있다.
@@ -349,7 +351,7 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 %result = tribute_control.call_indirect %callee, %arg0, ... : Result
 ```
 
-- **형상:** `tribute_control.callable` callee, source argument, callee type의
+- **형상:** `tribute_control.func_sig` callee, source argument, callee type의
   source-logical result 하나를 가지며 attribute/region이 없는 non-terminator다.
 - **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
@@ -775,7 +777,7 @@ Important stage invariants:
 | Resolution | Names, constructors, and variable references are resolved |
 | Type check | Type variables and effect rows are solved |
 | TDNR | Method-style calls are converted to resolved calls |
-| AST-to-IR | `tribute_control.callable`과 callable/control operation, valid SSA use chain |
+| AST-to-IR | `tribute_control.func_sig`과 callable/control operation, valid SSA use chain |
 | Shared CPS legalization | 전체 callable graph가 physical `CallableAbi`와 direct/indirect tail transfer를 사용하며 `tribute_control` operation/type이 남지 않음 |
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |

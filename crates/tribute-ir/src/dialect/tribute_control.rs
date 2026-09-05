@@ -13,7 +13,7 @@ use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{IrContext, Symbol};
 
 use super::list;
@@ -70,7 +70,7 @@ mod tribute_control {
     // Types
     struct ResumeToken<Input, Answer>;
 
-    // Callable operations
+    // FuncSig operations
     #[attr(sym_name: Symbol, r#type: Type)]
     fn func() {
         #[region(body)]
@@ -121,16 +121,29 @@ mod tribute_control {
     fn r#yield(value: ()) {}
 }
 
-/// Typed wrapper for `tribute_control.callable(Result, Params...)`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Callable(TypeRef);
+/// Why a name-matching source signature does not satisfy its storage contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuncSigTypeError {
+    MissingCount(&'static str),
+    InvalidCount(&'static str),
+    CountOverflow,
+    LengthMismatch,
+    ResultCount(u32),
+    Convention,
+}
 
-impl DialectType for Callable {
+/// Typed wrapper for an input-first, exactly-one-result source signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FuncSig(TypeRef);
+
+impl DialectType for FuncSig {
     const DIALECT_NAME: &'static str = "tribute_control";
-    const TYPE_NAME: &'static str = "callable";
+    const TYPE_NAME: &'static str = "func_sig";
 
     fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
-        (Self::matches(ctx, ty) && !ctx.types.get(ty).params.is_empty()).then_some(Self(ty))
+        Self::matches(ctx, ty)
+            .then(|| Self::validate(ctx, ty).ok())
+            .flatten()
     }
 
     fn as_type_ref(&self) -> TypeRef {
@@ -138,50 +151,140 @@ impl DialectType for Callable {
     }
 }
 
-impl From<Callable> for TypeRef {
-    fn from(value: Callable) -> Self {
+impl From<FuncSig> for TypeRef {
+    fn from(value: FuncSig) -> Self {
         value.0
     }
 }
 
-impl Callable {
+impl FuncSig {
+    fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
+        let data = ctx.types.get(ty);
+        let inputs = read_count(&data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
+        let results = read_count(&data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;
+        if results != 1 {
+            return Err(FuncSigTypeError::ResultCount(results));
+        }
+        let total = inputs
+            .checked_add(results)
+            .ok_or(FuncSigTypeError::CountOverflow)?;
+        if usize::try_from(total).ok() != Some(data.params.len()) {
+            return Err(FuncSigTypeError::LengthMismatch);
+        }
+        CallingConvention::try_from(
+            data.attrs
+                .get_i128(CALLING_CONVENTION_ATTR)
+                .ok_or(FuncSigTypeError::Convention)?,
+        )
+        .map_err(|_| FuncSigTypeError::Convention)?;
+        Ok(Self(ty))
+    }
+
     pub fn as_type_ref(self) -> TypeRef {
         self.0
     }
 
     pub fn result(self, ctx: &IrContext) -> TypeRef {
-        ctx.types.get(self.0).params[0]
+        self.results(ctx)[0]
     }
 
-    pub fn params(self, ctx: &IrContext) -> &[TypeRef] {
-        &ctx.types.get(self.0).params[1..]
+    pub fn inputs(self, ctx: &IrContext) -> &[TypeRef] {
+        let count = read_count(
+            &ctx.types.get(self.0).attrs,
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+        )
+        .expect("validated source func_sig retains input count") as usize;
+        &ctx.types.get(self.0).params[..count]
+    }
+
+    pub fn results(self, ctx: &IrContext) -> &[TypeRef] {
+        let inputs = self.inputs(ctx).len();
+        &ctx.types.get(self.0).params[inputs..]
+    }
+
+    pub fn convention(self, ctx: &IrContext) -> CallingConvention {
+        CallingConvention::try_from(
+            ctx.types
+                .get(self.0)
+                .attrs
+                .get_i128(CALLING_CONVENTION_ATTR)
+                .expect("validated source func_sig retains convention"),
+        )
+        .expect("validated source func_sig retains convention domain")
+    }
+
+    /// Remove the storage delimiters and source-only convention metadata.
+    ///
+    /// Consumers rebuilding an equivalent signature in another dialect retain
+    /// every other attribute through their owning typed constructor.
+    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
+        attrs.remove(trunk_ir::dialect::func::NUM_INPUTS_ATTR);
+        attrs.remove(trunk_ir::dialect::func::NUM_RESULTS_ATTR);
+        attrs.remove(CALLING_CONVENTION_ATTR);
     }
 }
 
-/// Build a verified-shape logical callable type.
-pub fn callable(
+fn read_count(attrs: &AttributeMap, key: &'static str) -> Result<u32, FuncSigTypeError> {
+    match attrs.get(key) {
+        Some(Attribute::Int(value)) => {
+            u32::try_from(*value).map_err(|_| FuncSigTypeError::InvalidCount(key))
+        }
+        Some(_) => Err(FuncSigTypeError::InvalidCount(key)),
+        None => Err(FuncSigTypeError::MissingCount(key)),
+    }
+}
+
+/// Build a verified-shape logical source signature.
+pub fn func_sig(
     ctx: &mut IrContext,
     result: TypeRef,
-    params: impl IntoIterator<Item = TypeRef>,
+    inputs: impl IntoIterator<Item = TypeRef>,
     convention: CallingConvention,
-) -> Callable {
-    let data = TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("callable"))
-        .param(result)
-        .params(params)
-        .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
-        .build();
-    let ty = ctx.types.intern(data);
-    Callable::from_type_ref(ctx, ty).expect("newly built callable type")
+) -> FuncSig {
+    func_sig_with_attrs(ctx, result, inputs, convention, AttributeMap::new())
 }
 
-/// Read the exact convention metadata from a logical callable type.
-pub fn callable_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConvention> {
-    let callable = Callable::from_type_ref(ctx, ty)?;
-    ctx.types
-        .get(callable.as_type_ref())
-        .attrs
-        .get_i128(CALLING_CONVENTION_ATTR)
-        .and_then(|code| CallingConvention::try_from(code).ok())
+/// Construct a source signature while preserving only non-reserved metadata.
+pub fn func_sig_with_attrs(
+    ctx: &mut IrContext,
+    result: TypeRef,
+    inputs: impl IntoIterator<Item = TypeRef>,
+    convention: CallingConvention,
+    attrs: AttributeMap,
+) -> FuncSig {
+    assert!(
+        !attrs.contains_key(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
+            && !attrs.contains_key(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
+            && !attrs.contains_key(CALLING_CONVENTION_ATTR),
+        "source func_sig reserves delimiters and convention metadata"
+    );
+    let inputs: Vec<_> = inputs.into_iter().collect();
+    let count = u32::try_from(inputs.len()).expect("source func_sig input count exceeds u32");
+    let mut builder = TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+        .params(inputs)
+        .param(result);
+    for (key, value) in attrs {
+        builder = builder.attr(key, value);
+    }
+    let ty = ctx.types.intern(
+        builder
+            .attr(
+                trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+                Attribute::from(count),
+            )
+            .attr(
+                trunk_ir::dialect::func::NUM_RESULTS_ATTR,
+                Attribute::from(1_u32),
+            )
+            .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
+            .build(),
+    );
+    FuncSig::from_type_ref(ctx, ty).expect("source func_sig constructor must produce a valid type")
+}
+
+/// Read convention only through a validated source signature.
+pub fn func_sig_convention(ctx: &IrContext, ty: TypeRef) -> Option<CallingConvention> {
+    FuncSig::from_type_ref(ctx, ty).map(|signature| signature.convention(ctx))
 }
 
 /// Read the exact input and answer types carried by a resume token.
@@ -200,7 +303,7 @@ pub fn func_declaration(
     ctx: &mut IrContext,
     location: Location,
     sym_name: Symbol,
-    callable_type: TypeRef,
+    func_sig_type: TypeRef,
 ) -> Func {
     let data = trunk_ir::OperationDataBuilder::new(
         location,
@@ -208,7 +311,7 @@ pub fn func_declaration(
         Symbol::new("func"),
     )
     .attr("sym_name", Attribute::Symbol(sym_name))
-    .attr("type", Attribute::Type(callable_type))
+    .attr("type", Attribute::Type(func_sig_type))
     .build(ctx);
     let op = ctx.create_op(data);
     Func::from_op(ctx, op).expect("newly built tribute_control.func")
@@ -243,15 +346,16 @@ fn print_symbol(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, symbol: Symbol
     h.write_attribute(&Attribute::Symbol(symbol))
 }
 
-fn callable_parts(
+fn func_sig_parts(
     ctx: &IrContext,
     ty: TypeRef,
 ) -> Option<(TypeRef, Vec<TypeRef>, CallingConvention)> {
-    let callable = Callable::from_type_ref(ctx, ty)?;
-    let data = ctx.types.get(callable.as_type_ref());
-    let (&result, params) = data.params.split_first()?;
-    let convention = callable_convention(ctx, ty)?;
-    Some((result, params.to_vec(), convention))
+    let signature = FuncSig::from_type_ref(ctx, ty)?;
+    Some((
+        signature.result(ctx),
+        signature.inputs(ctx).to_vec(),
+        signature.convention(ctx),
+    ))
 }
 
 fn print_extra_attributes(
@@ -276,6 +380,42 @@ fn print_extra_attributes(
         return Ok(());
     }
     write!(h, " attributes {{")?;
+    for (index, (key, value)) in attrs.iter().enumerate() {
+        if index > 0 {
+            write!(h, ", ")?;
+        }
+        write!(h, "{key} = ")?;
+        h.write_attribute(value)?;
+    }
+    write!(h, "}}")
+}
+
+fn print_signature_attributes(
+    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> fmt::Result {
+    use fmt::Write;
+
+    if FuncSig::from_type_ref(h.ctx(), ty).is_none() {
+        return Ok(());
+    }
+    let attrs: Vec<_> = h
+        .ctx()
+        .types
+        .get(ty)
+        .attrs
+        .iter()
+        .filter(|(key, _)| {
+            **key != Symbol::new(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
+                && **key != Symbol::new(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
+                && **key != Symbol::new(CALLING_CONVENTION_ATTR)
+        })
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
+    if attrs.is_empty() {
+        return Ok(());
+    }
+    write!(h, " signature_attributes {{")?;
     for (index, (key, value)) in attrs.iter().enumerate() {
         if index > 0 {
             write!(h, ", ")?;
@@ -332,7 +472,7 @@ fn print_func(
     let symbol = data.attributes.get_symbol("sym_name");
     let callable_ty = data.attributes.get_type("type");
     let region = data.regions.first().copied();
-    let parts = callable_ty.and_then(|ty| callable_parts(h.ctx(), ty));
+    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
     if let Some(symbol) = symbol {
@@ -352,6 +492,9 @@ fn print_func(
         write!(h, " -> ")?;
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
+    }
+    if let Some(callable_ty) = callable_ty {
+        print_signature_attributes(h, callable_ty)?;
     }
     print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
 
@@ -384,22 +527,23 @@ fn parse_convention(input: &mut &str) -> winnow::ModalResult<CallingConvention> 
     Ok(convention)
 }
 
-fn callable_raw_type<'a>(
+fn func_sig_raw_type<'a>(
     result: trunk_ir::parser::raw::RawType<'a>,
     params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
     convention: CallingConvention,
+    mut attrs: Vec<(&'a str, trunk_ir::parser::raw::RawAttribute<'a>)>,
 ) -> trunk_ir::parser::raw::RawType<'a> {
     use trunk_ir::parser::raw::{RawAttribute, RawType};
-    let mut type_params = vec![result];
-    type_params.extend(params.iter().map(|(_, ty)| ty.clone()));
-    RawType::Concrete {
+    attrs.push((
+        CALLING_CONVENTION_ATTR,
+        RawAttribute::Int(convention as i128),
+    ));
+    RawType::Function {
         dialect: "tribute_control",
-        name: "callable",
-        params: type_params,
-        attrs: vec![(
-            CALLING_CONVENTION_ATTR,
-            RawAttribute::Int(convention as i128),
-        )],
+        name: "func_sig",
+        inputs: params.iter().map(|(_, ty)| ty.clone()).collect(),
+        results: vec![result],
+        attrs,
     }
 }
 
@@ -407,6 +551,17 @@ fn has_duplicate_convention_attr(
     attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)],
 ) -> bool {
     attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
+}
+
+fn has_reserved_signature_attr(attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)]) -> bool {
+    attrs.iter().any(|(key, _)| {
+        matches!(
+            *key,
+            trunk_ir::dialect::func::NUM_INPUTS_ATTR
+                | trunk_ir::dialect::func::NUM_RESULTS_ATTR
+                | CALLING_CONVENTION_ATTR
+        )
+    })
 }
 
 fn parse_func<'a>(
@@ -428,11 +583,16 @@ fn parse_func<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
+    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
+        .parse_next(input)?
+        .map(|(_, _, _, attrs)| attrs)
+        .unwrap_or_default();
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes)
+    if has_reserved_signature_attr(&signature_attributes)
+        || has_duplicate_convention_attr(&attributes)
         || attributes
             .iter()
             .any(|(key, _)| *key == "sym_name" || *key == "type")
@@ -454,9 +614,9 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let callable = callable_raw_type(result, &params, convention);
+    let signature = func_sig_raw_type(result, &params, convention, signature_attributes);
     let mut attributes = attributes;
-    attributes.push(("type", RawAttribute::Type(callable)));
+    attributes.push(("type", RawAttribute::Type(signature)));
 
     Ok(RawOperation {
         results,
@@ -495,7 +655,7 @@ fn print_lambda(
     let result = h.ctx().op_results(op).first().copied();
     let result_name = result.map(|value| h.assign_value_name(value));
     let callable_ty = h.ctx().op_result_types(op).first().copied();
-    let parts = callable_ty.and_then(|ty| callable_parts(h.ctx(), ty));
+    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
     let region = h.ctx().op(op).regions.first().copied();
 
     write!(h, "{}", " ".repeat(indent))?;
@@ -513,6 +673,9 @@ fn print_lambda(
         write!(h, " -> ")?;
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
+    }
+    if let Some(callable_ty) = callable_ty {
+        print_signature_attributes(h, callable_ty)?;
     }
 
     write!(h, " captures [")?;
@@ -575,12 +738,18 @@ fn parse_lambda<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
+    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
+        .parse_next(input)?
+        .map(|(_, _, _, attrs)| attrs)
+        .unwrap_or_default();
     let captures = parse_captures(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_duplicate_convention_attr(&attributes) {
+    if has_reserved_signature_attr(&signature_attributes)
+        || has_duplicate_convention_attr(&attributes)
+    {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
         ));
@@ -604,7 +773,12 @@ fn parse_lambda<'a>(
         return_type: None,
         operands: captures,
         attributes,
-        result_types: vec![callable_raw_type(result, &params, convention)],
+        result_types: vec![func_sig_raw_type(
+            result,
+            &params,
+            convention,
+            signature_attributes,
+        )],
         regions: vec![region],
         successors: vec![],
     })
@@ -811,28 +985,13 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
         if data.dialect != Symbol::new("tribute_control") {
             continue;
         }
-        if data.name == Symbol::new("callable") {
-            if data.params.is_empty() {
+        if data.name == Symbol::new("func_sig") {
+            if let Err(error) = FuncSig::validate(ctx, ty) {
                 push_type_error(
                     errors,
-                    format!("{ty}: tribute_control.callable requires one result type"),
+                    format!("{ty}: malformed tribute_control.func_sig: {error:?}"),
                 );
                 continue;
-            }
-            match data.attrs.get_i128(CALLING_CONVENTION_ATTR) {
-                Some(code) if CallingConvention::try_from(code).is_ok() => {}
-                Some(code) => push_type_error(
-                    errors,
-                    format!(
-                        "{ty}: tribute_control.callable has unsupported {CALLING_CONVENTION_ATTR} code {code}; expected 0, 1, or 2"
-                    ),
-                ),
-                None => push_type_error(
-                    errors,
-                    format!(
-                        "{ty}: tribute_control.callable requires integer {CALLING_CONVENTION_ATTR}"
-                    ),
-                ),
             }
             for component in data.params.iter().copied() {
                 if contains_forbidden_logical_component(ctx, component, &mut HashSet::new()) {
@@ -892,7 +1051,7 @@ fn validate_attr_keys(
             op,
             errors,
             format!(
-                "{CALLING_CONVENTION_ATTR} belongs only on tribute_control.callable, not on the operation"
+                "{CALLING_CONVENTION_ATTR} belongs only on tribute_control.func_sig, not on the operation"
             ),
         );
     }
@@ -1096,12 +1255,12 @@ fn validate_callable_body(
     body: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let Some((result_ty, params, _)) = callable_parts(ctx, callable_ty) else {
+    let Some((result_ty, params, _)) = func_sig_parts(ctx, callable_ty) else {
         push_op_error(
             ctx,
             owner,
             errors,
-            "requires a valid tribute_control.callable signature",
+            "requires a valid tribute_control.func_sig signature",
         );
         return;
     };
@@ -1205,12 +1364,12 @@ fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     let Some(callable_ty) = ctx.op(op).attributes.get_type("type") else {
         return;
     };
-    if !Callable::matches(ctx, callable_ty) {
+    if !FuncSig::matches(ctx, callable_ty) {
         push_op_error(
             ctx,
             op,
             errors,
-            "type attribute must be tribute_control.callable",
+            "type attribute must be tribute_control.func_sig",
         );
     }
     match ctx.op(op).regions.as_slice() {
@@ -1234,12 +1393,12 @@ fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
     let Some(&callable_ty) = ctx.op_result_types(op).first() else {
         return;
     };
-    if !Callable::matches(ctx, callable_ty) {
+    if !FuncSig::matches(ctx, callable_ty) {
         push_op_error(
             ctx,
             op,
             errors,
-            "result must have tribute_control.callable type",
+            "result must have tribute_control.func_sig type",
         );
     }
     if let Some(&body) = ctx.op(op).regions.first() {
@@ -1252,13 +1411,13 @@ fn validate_func_ref(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErro
     validate_attr_keys(ctx, op, &["func_ref"], false, errors);
     validate_attr_types(ctx, op, &[("func_ref", AttributeKind::Symbol)], errors);
     if let Some(&ty) = ctx.op_result_types(op).first()
-        && !Callable::matches(ctx, ty)
+        && !FuncSig::matches(ctx, ty)
     {
         push_op_error(
             ctx,
             op,
             errors,
-            "result must have tribute_control.callable type",
+            "result must have tribute_control.func_sig type",
         );
     }
 }
@@ -1284,12 +1443,12 @@ fn validate_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validatio
         return;
     };
     let callee_ty = ctx.value_ty(callee);
-    let Some((result, params, _)) = callable_parts(ctx, callee_ty) else {
+    let Some((result, params, _)) = func_sig_parts(ctx, callee_ty) else {
         push_op_error(
             ctx,
             op,
             errors,
-            "callee operand must have tribute_control.callable type",
+            "callee operand must have tribute_control.func_sig type",
         );
         return;
     };
@@ -1329,7 +1488,7 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
     } else {
         None
     };
-    let Some((result, _, _)) = callable_ty.and_then(|ty| callable_parts(ctx, ty)) else {
+    let Some((result, _, _)) = callable_ty.and_then(|ty| func_sig_parts(ctx, ty)) else {
         push_op_error(
             ctx,
             op,
@@ -1783,10 +1942,10 @@ fn collect_funcs(
 }
 
 fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
-    let Some((left_result, left_params, _)) = callable_parts(ctx, left) else {
+    let Some((left_result, left_params, _)) = func_sig_parts(ctx, left) else {
         return false;
     };
-    let Some((right_result, right_params, _)) = callable_parts(ctx, right) else {
+    let Some((right_result, right_params, _)) = func_sig_parts(ctx, right) else {
         return false;
     };
     left_result == right_result && left_params == right_params
@@ -1826,8 +1985,8 @@ fn validate_symbol_uses(
                     "func_ref result source signature does not match its target",
                 );
             } else if let (Some(target_cc), Some(result_cc)) = (
-                callable_convention(ctx, target_ty),
-                callable_convention(ctx, result_ty),
+                func_sig_convention(ctx, target_ty),
+                func_sig_convention(ctx, result_ty),
             ) && result_cc < target_cc
             {
                 push_op_error(
@@ -1848,7 +2007,7 @@ fn validate_symbol_uses(
             let Some(target_ty) = ctx.op(target).attributes.get_type("type") else {
                 return;
             };
-            let Some((result, params, _)) = callable_parts(ctx, target_ty) else {
+            let Some((result, params, _)) = func_sig_parts(ctx, target_ty) else {
                 return;
             };
             check_types_equal(
@@ -2300,7 +2459,7 @@ fn compiler_intrinsic_map<'a>(
             );
         }
         previous = Some(key);
-        if callable_convention(ctx, declaration.callable_type) != Some(CallingConvention::Direct) {
+        if func_sig_convention(ctx, declaration.callable_type) != Some(CallingConvention::Direct) {
             push_type_error(
                 errors,
                 format!(
@@ -2421,7 +2580,7 @@ fn callable_block_arg_has_source_contract(
     };
     let value_type = ctx.value_ty(value);
 
-    let callable_type = if is_control_op(ctx, owner, "func") {
+    let func_sig_type = if is_control_op(ctx, owner, "func") {
         (ctx.op(owner).regions.as_slice() == [region])
             .then(|| ctx.op(owner).attributes.get_type("type"))
             .flatten()
@@ -2432,7 +2591,7 @@ fn callable_block_arg_has_source_contract(
     } else {
         None
     };
-    if let Some((_, parameters, _)) = callable_type.and_then(|ty| callable_parts(ctx, ty)) {
+    if let Some((_, parameters, _)) = func_sig_type.and_then(|ty| func_sig_parts(ctx, ty)) {
         return parameters.get(index as usize) == Some(&value_type);
     }
 
@@ -2479,7 +2638,7 @@ fn callable_has_semantic_provenance(
     provenance: &CallableProvenance<'_>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
-    if !visiting.insert(value) || Callable::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
+    if !visiting.insert(value) || FuncSig::from_type_ref(ctx, ctx.value_ty(value)).is_none() {
         return false;
     }
     match ctx.value_def(value) {
@@ -2551,7 +2710,7 @@ fn verified_callable_declaration(
     if !data.regions.is_empty() {
         return true;
     }
-    let (Some(symbol), Some(identity), Some(callable_type)) = (
+    let (Some(symbol), Some(identity), Some(func_sig_type)) = (
         data.attributes.get_symbol("sym_name"),
         Func::from_op(ctx, function)
             .ok()
@@ -2561,7 +2720,7 @@ fn verified_callable_declaration(
         return false;
     };
     registered.get(&symbol).is_some_and(|declaration| {
-        declaration.identity == identity && declaration.callable_type == callable_type
+        declaration.identity == identity && declaration.callable_type == func_sig_type
     })
 }
 
@@ -2583,7 +2742,7 @@ fn validate_callable_origins(
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
-            let (Some(symbol), Some(callable_type)) = (
+            let (Some(symbol), Some(func_sig_type)) = (
                 data.attributes.get_symbol("sym_name"),
                 data.attributes.get_type("type"),
             ) else {
@@ -2605,7 +2764,7 @@ fn validate_callable_origins(
                 let exact_intrinsic = match (registered.get(&symbol), intrinsic_identity) {
                     (Some(expected), Some(actual))
                         if expected.identity == actual
-                            && expected.callable_type == callable_type =>
+                            && expected.callable_type == func_sig_type =>
                     {
                         seen.insert(symbol);
                         true
@@ -2630,7 +2789,7 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                if !exact_intrinsic && contains_adt_typeref(ctx, callable_type, &mut HashSet::new())
+                if !exact_intrinsic && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
                 {
                     push_op_error(
                         ctx,
@@ -2688,7 +2847,7 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
             }
             owner = parent_op(ctx, current);
         };
-        let Some((expected, _, _)) = callable.and_then(|ty| callable_parts(ctx, ty)) else {
+        let Some((expected, _, _)) = callable.and_then(|ty| func_sig_parts(ctx, ty)) else {
             return;
         };
         if let [value] = ctx.op_operands(op)
@@ -3251,7 +3410,7 @@ mod tests {
         let loc = location(&mut ctx);
         let i32_ty = simple_type(&mut ctx, "core", "i32");
         let ability = ability_type(&mut ctx, "State");
-        let direct = callable(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
+        let direct = func_sig(&mut ctx, i32_ty, [i32_ty], CallingConvention::Direct).as_type_ref();
 
         let id = identity_func(&mut ctx, loc, "id", direct, i32_ty);
 
@@ -3266,7 +3425,7 @@ mod tests {
         let indirect_call = call_indirect(&mut ctx, loc, function_ref_value, [x], i32_ty);
         ctx.push_op(entry, indirect_call.op_ref());
 
-        let lambda_ty = callable(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
+        let lambda_ty = func_sig(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
         let lambda_block = block(&mut ctx, loc, &[]);
         let lambda_return = r#return(&mut ctx, loc, x);
         ctx.push_op(lambda_block, lambda_return.op_ref());
@@ -3346,7 +3505,7 @@ mod tests {
     }
 
     const VALID_CONTROL_MODULE: &str = r#"core.module @test {
-  !callable = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !callable = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
 
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
@@ -3506,9 +3665,9 @@ mod tests {
             (CallingConvention::EvidenceDirect, 1),
             (CallingConvention::Cps, 2),
         ] {
-            let ty = callable(&mut ctx, i32_ty, [i32_ty], convention);
+            let ty = func_sig(&mut ctx, i32_ty, [i32_ty], convention);
             assert_eq!(ty.result(&ctx), i32_ty);
-            assert_eq!(ty.params(&ctx), &[i32_ty]);
+            assert_eq!(ty.inputs(&ctx), &[i32_ty]);
             assert_eq!(
                 ctx.types
                     .get(ty.as_type_ref())
@@ -3517,7 +3676,7 @@ mod tests {
                 Some(code)
             );
             assert_eq!(
-                callable_convention(&ctx, ty.as_type_ref()),
+                func_sig_convention(&ctx, ty.as_type_ref()),
                 Some(convention)
             );
         }
@@ -3531,18 +3690,67 @@ mod tests {
     fn callable_wrapper_rejects_missing_result_component() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !malformed = tribute_control.callable() {tribute.calling_convention = 0}
+  !malformed = tribute_control.func_sig<() -> ()> {tribute.calling_convention = 0}
 }"#,
         );
         let malformed = ctx
             .types
             .iter()
-            .find_map(|(ty, _)| Callable::matches(&ctx, ty).then_some(ty))
+            .find_map(|(ty, _)| FuncSig::matches(&ctx, ty).then_some(ty))
             .expect("malformed callable type");
-        assert!(Callable::from_type_ref(&ctx, malformed).is_none());
+        assert!(FuncSig::from_type_ref(&ctx, malformed).is_none());
 
         let result = validate_local(&ctx, module);
-        assert!(messages(&result).contains("requires one result type"));
+        assert!(messages(&result).contains("ResultCount(0)"));
+    }
+
+    #[test]
+    fn func_sig_rejects_raw_delimiter_failures_before_conversion() {
+        let (mut ctx, module) = parse_fixture("core.module @test {}");
+        let i32_ty = simple_type(&mut ctx, "core", "i32");
+        let malformed = [
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(
+                    trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+                    Attribute::String("bad".into()),
+                )
+                .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(2))
+                .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(
+                    trunk_ir::dialect::func::NUM_INPUTS_ATTR,
+                    Attribute::Int(i128::from(u32::MAX) + 1),
+                )
+                .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+            TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(trunk_ir::dialect::func::NUM_INPUTS_ATTR, Attribute::Int(0))
+                .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(2))
+                .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))
+                .build(),
+        ];
+        for data in malformed {
+            let ty = ctx.types.intern(data);
+            assert!(FuncSig::matches(&ctx, ty));
+            assert!(FuncSig::from_type_ref(&ctx, ty).is_none());
+        }
+        let errors = validate_local(&ctx, module);
+        assert!(messages(&errors).contains("malformed tribute_control.func_sig"));
     }
 
     #[test]
@@ -3588,12 +3796,13 @@ mod tests {
     #[test]
     fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
         let input = r#"core.module @test {
-  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}
+  !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}
   tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
     tribute_control.return %value
   }
   tribute_control.func @outer(%first: core.i32, %second: core.i32) -> core.i32 convention(direct) {
-    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
+    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
       tribute_control.return %first
     }
     %empty = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
@@ -3606,11 +3815,15 @@ mod tests {
         let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
         assert!(printed.contains(
-            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) attributes {visibility = @private}"
+            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}"
         ));
         assert!(printed.contains("convention(evidence_direct)"));
         assert!(printed.contains("convention(cps) captures []"));
-        assert!(printed.contains("convention(direct) captures [%0, %1] attributes {"));
+        assert!(printed.contains("signature_attributes {metadata = [[!inner, @decl]]}"));
+        assert!(printed.contains("signature_attributes {metadata = [[!inner, @lambda]]}"));
+        assert!(printed.contains(
+            "convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%0, %1] attributes {"
+        ));
         assert!(printed.contains("debug_name = \"apply\""));
         assert!(printed.contains("inline_hint = true"));
         assert!(!printed.contains("^bb"));
@@ -3653,6 +3866,15 @@ mod tests {
     tribute_control.return %1
   }
 }"#,
+            r#"core.module @test {
+  tribute_control.func @bad() -> core.i32 convention(direct) signature_attributes {num_inputs = 0}
+}"#,
+            r#"core.module @test {
+  %0 = tribute_control.lambda() -> core.i32 convention(cps) signature_attributes {tribute.calling_convention = 2} captures [] {
+    %1 = arith.const {value = 1} : core.i32
+    tribute_control.return %1
+  }
+}"#,
         ] {
             let mut ctx = IrContext::new();
             assert!(parse_module(&mut ctx, input).is_err(), "{input}");
@@ -3675,21 +3897,21 @@ mod tests {
     fn validator_rejects_invalid_convention_and_duplicate_op_metadata() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !bad = tribute_control.callable(core.i32) {tribute.calling_convention = 3}
+  !bad = tribute_control.func_sig<() -> core.i32> {tribute.calling_convention = 3}
   %call = tribute_control.call {callee = @missing, tribute.calling_convention = 0} : core.i32
 }"#,
         );
         let result = validate_local(&ctx, module);
         let messages = messages(&result);
-        assert!(messages.contains("unsupported tribute.calling_convention code 3"));
-        assert!(messages.contains("belongs only on tribute_control.callable"));
+        assert!(messages.contains("malformed tribute_control.func_sig: Convention"));
+        assert!(messages.contains("belongs only on tribute_control.func_sig"));
     }
 
     #[test]
     fn validator_rejects_wrong_required_attribute_types() {
         let (mut ctx, module) = parse_fixture(
             r#"core.module @test {
-  !callable = tribute_control.callable(core.i32) {tribute.calling_convention = 0}
+  !callable = tribute_control.func_sig<() -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @malformed() -> core.i32 convention(direct)
   %ref = tribute_control.func_ref {func_ref = 1} : !callable
   %call = tribute_control.call {callee = 1} : core.i32
@@ -3839,7 +4061,7 @@ mod tests {
     fn local_validator_reports_distinct_malformed_operation_contracts() {
         let (mut ctx, module) = parse_fixture(
             r#"core.module @test {
-  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !token = tribute_control.resume_token(core.i32, core.i32)
   %integer = arith.const {value = 1} : core.i32
   %boolean = arith.const {value = true} : core.bool
@@ -3949,14 +4171,14 @@ mod tests {
             &result,
             bad_func,
             &[
-                "type attribute must be tribute_control.callable",
+                "type attribute must be tribute_control.func_sig",
                 "expects zero or one body region, found 2",
             ],
         );
         assert_op_diagnostics(
             &result,
             bad_lambda,
-            &["result must have tribute_control.callable type"],
+            &["result must have tribute_control.func_sig type"],
         );
         assert_op_diagnostics(
             &result,
@@ -3965,7 +4187,7 @@ mod tests {
                 "expects 0 operand(s), found 1",
                 "expects 1 result(s), found 2",
                 "has unsupported attribute 'unexpected'",
-                "result must have tribute_control.callable type",
+                "result must have tribute_control.func_sig type",
             ],
         );
         assert_op_diagnostics(
@@ -3981,7 +4203,7 @@ mod tests {
         assert_op_diagnostics(
             &result,
             non_callable_indirect,
-            &["callee operand must have tribute_control.callable type"],
+            &["callee operand must have tribute_control.func_sig type"],
         );
         assert_op_diagnostics(
             &result,
@@ -4192,7 +4414,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @outer {
   core.module @integers {
-    !callable = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+    !callable = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
     tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
       tribute_control.return %value
     }
@@ -4204,7 +4426,7 @@ mod tests {
     }
   }
   core.module @booleans {
-    !callable = tribute_control.callable(core.bool, core.bool) {tribute.calling_convention = 0}
+    !callable = tribute_control.func_sig<(core.bool) -> core.bool> {tribute.calling_convention = 0}
     tribute_control.func @id(%value: core.bool) -> core.bool convention(direct) {
       tribute_control.return %value
     }
@@ -4226,9 +4448,9 @@ mod tests {
     fn whole_ir_reports_symbol_declaration_capture_and_token_contracts() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !direct = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
-  !cps = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 2}
-  !different = tribute_control.callable(core.bool) {tribute.calling_convention = 0}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  !different = tribute_control.func_sig<() -> core.bool> {tribute.calling_convention = 0}
   !token = tribute_control.resume_token(core.i32, core.i32)
 
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct)
@@ -4801,18 +5023,18 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let callable_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
         let exact = CompilerIntrinsicDeclaration::new(
             Symbol::new("Nat::+"),
             Symbol::new("Nat::+"),
-            callable_type,
+            func_sig_type,
         );
         assert!(validate(&ctx, module, &[], std::slice::from_ref(&exact)).is_ok());
 
         let wrong_signature = CompilerIntrinsicDeclaration::new(
             exact.symbol,
             exact.identity,
-            ctx.types.get(callable_type).params[0],
+            ctx.types.get(func_sig_type).params[0],
         );
         let result = validate(&ctx, module, &[], &[wrong_signature]);
         assert!(messages(&result).contains("complete signature"), "{result}");
@@ -4833,11 +5055,11 @@ mod tests {
 }"#,
         );
         let function = control_op(&ctx, module, "func");
-        let callable_type = ctx.op(function).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op(function).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             Symbol::new("read"),
             Symbol::new("read"),
-            callable_type,
+            func_sig_type,
         );
 
         let result = validate(&ctx, module, &[], &[declaration]);
@@ -4851,7 +5073,7 @@ mod tests {
     fn exact_registered_intrinsic_has_indirect_callable_provenance() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
     attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
   tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
@@ -4865,11 +5087,11 @@ mod tests {
             .into_iter()
             .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("Nat::+")))
             .unwrap();
-        let callable_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
+        let func_sig_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
             Symbol::new("Nat::+"),
             Symbol::new("Nat::+"),
-            callable_type,
+            func_sig_type,
         );
 
         let result = validate(&ctx, module, &[], &[declaration]);
@@ -5059,7 +5281,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @caller(%raw: core.ptr, %value: core.i32) -> core.i32 convention(direct) {
-    %callee = core.unrealized_conversion_cast %raw : tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+    %callee = core.unrealized_conversion_cast %raw : tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
     %result = tribute_control.call_indirect %callee, %value : core.i32
     tribute_control.return %result
   }
@@ -5077,7 +5299,7 @@ mod tests {
     fn indirect_call_rejects_callable_from_uncontracted_structured_block_argument() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @caller(%condition: core.i1, %value: core.i32) -> core.i32 convention(direct) {
     %result = scf.if %condition : core.i32 {
       ^then(%callee: !F):
@@ -5103,7 +5325,7 @@ mod tests {
     fn callable_handle_completion_argument_traces_the_body_yield() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5131,7 +5353,7 @@ mod tests {
     fn callable_handler_parameter_requires_an_exact_operation_declaration() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
     %handled = tribute_control.handle : core.i32 {
       tribute_control.yield %value
@@ -5175,7 +5397,7 @@ mod tests {
     fn exact_adt_callable_projections_have_semantic_provenance() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !Tuple = adt.struct() {name = @Tuple, fields = [[@callee, !F]]}
   !TupleRef = adt.typeref() {name = @Tuple}
   !Choice = adt.enum() {name = @Choice, variants = [[@Some, [!F]]]}
@@ -5199,7 +5421,7 @@ mod tests {
     fn adt_callable_projection_requires_matching_declared_field_type() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !Tuple = adt.struct() {name = @Tuple, fields = [[@not_callable, core.i32]]}
   !TupleRef = adt.typeref() {name = @Tuple}
   !Choice = adt.enum() {name = @Choice, variants = [[@Some, [core.i32]]]}
@@ -5227,7 +5449,7 @@ mod tests {
     fn duplicate_nominal_layout_rejects_callable_projection_spoofing() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !Canonical = adt.struct() {name = @Tuple, fields = [[@value, core.i32]]}
   !Spoofed = adt.struct() {name = @Tuple, fields = [[@callee, !F]]}
   !TupleRef = adt.typeref() {name = @Tuple}
@@ -5266,7 +5488,7 @@ mod tests {
     fn indirect_call_rejects_callable_from_unclassified_external() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !F = tribute_control.callable(core.i32, core.i32) {tribute.calling_convention = 0}
+  !F = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   tribute_control.func @factory() -> !F convention(direct) attributes {abi = "C"}
   tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
     %callee = tribute_control.call {callee = @factory} : !F

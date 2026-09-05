@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(tribute_rt.anyref) {tribute.calling_convention = 2}
+  !t0 = tribute_control.func_sig<() -> tribute_rt.anyref> {tribute.calling_convention = 2}
   !t1 = core.ability_ref(tribute_rt.anyref) {name = @State}
 
   tribute_control.func @run_state(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref convention(cps) {

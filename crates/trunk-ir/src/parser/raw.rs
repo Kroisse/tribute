@@ -72,8 +72,10 @@ pub enum RawType<'a> {
         params: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
     },
-    /// Canonical `func.func_sig<(inputs...) -> results>` syntax.
+    /// Canonical qualified `*.func_sig<(inputs...) -> results>` syntax.
     Function {
+        dialect: &'a str,
+        name: &'a str,
         inputs: Vec<RawType<'a>>,
         results: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
@@ -278,9 +280,7 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 
     let (dialect, name) = qualified_name.parse_next(input)?;
 
-    if ((dialect == "func" && name == "func_sig") || (dialect == "core" && name == "func"))
-        && input.starts_with('<')
-    {
+    if (name == "func_sig" || (dialect == "core" && name == "func")) && input.starts_with('<') {
         '<'.parse_next(input)?;
         ws.parse_next(input)?;
         let inputs = delimited(
@@ -313,6 +313,8 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         .parse_next(input)?
         .unwrap_or_default();
         return Ok(RawType::Function {
+            dialect,
+            name,
             inputs,
             results,
             attrs,
@@ -797,6 +799,7 @@ mod tests {
             inputs,
             results,
             attrs,
+            ..
         } = raw
         else {
             panic!("expected canonical Function")

@@ -84,7 +84,13 @@ impl<'a> ArenaIrBuilder<'a> {
                             offset: 0,
                         });
                     };
-                    return self.build_function_type(inputs, std::slice::from_ref(result), attrs);
+                    return self.build_function_type(
+                        "func",
+                        "func_sig",
+                        inputs,
+                        std::slice::from_ref(result),
+                        attrs,
+                    );
                 }
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
@@ -107,14 +113,31 @@ impl<'a> ArenaIrBuilder<'a> {
                 Ok(self.ctx.types.intern(builder.build()))
             }
             RawType::Function {
+                dialect,
+                name,
                 inputs,
                 results,
                 attrs,
-            } => self.build_function_type(inputs, results, attrs),
+            } => self.build_function_type(dialect, name, inputs, results, attrs),
         }
     }
 
     fn build_function_type(
+        &mut self,
+        dialect: &str,
+        name: &str,
+        inputs: &[RawType<'_>],
+        results: &[RawType<'_>],
+        attrs: &[(&str, RawAttribute<'_>)],
+    ) -> Result<TypeRef, ParseError> {
+        if (dialect == "func" && name == "func_sig") || (dialect == "core" && name == "func") {
+            return self.build_shared_function_type(inputs, results, attrs);
+        }
+        self.build_foreign_function_type(dialect, name, inputs, results, attrs)
+    }
+
+    /// Build the existing shared signature through its owning validated API.
+    fn build_shared_function_type(
         &mut self,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
@@ -157,6 +180,68 @@ impl<'a> ArenaIrBuilder<'a> {
             crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
         )
+    }
+
+    /// Build a non-shared qualified `*.func_sig` as opaque dialect-owned storage.
+    /// Semantic result cardinality remains the owning dialect's responsibility.
+    fn build_foreign_function_type(
+        &mut self,
+        dialect: &str,
+        name: &str,
+        inputs: &[RawType<'_>],
+        results: &[RawType<'_>],
+        attrs: &[(&str, RawAttribute<'_>)],
+    ) -> Result<TypeRef, ParseError> {
+        if let Some((reserved, _)) = attrs.iter().find(|(key, _)| {
+            matches!(
+                *key,
+                crate::dialect::func::NUM_INPUTS_ATTR | crate::dialect::func::NUM_RESULTS_ATTR
+            )
+        }) {
+            return Err(ParseError {
+                message: format!("`{reserved}` is reserved by {dialect}.{name}"),
+                offset: 0,
+            });
+        }
+        let inputs = inputs
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let results = results
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let attrs = attrs
+            .iter()
+            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
+            .collect::<Result<AttributeMap, ParseError>>()?;
+        let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
+            message: format!("{dialect}.{name} input count exceeds u32"),
+            offset: 0,
+        })?;
+        let num_results = u32::try_from(results.len()).map_err(|_| ParseError {
+            message: format!("{dialect}.{name} result count exceeds u32"),
+            offset: 0,
+        })?;
+        let mut builder =
+            TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name))
+                .params(inputs)
+                .params(results);
+        for (key, value) in attrs {
+            builder = builder.attr(key, value);
+        }
+        Ok(self.ctx.types.intern(
+            builder
+                .attr(
+                    crate::dialect::func::NUM_INPUTS_ATTR,
+                    Attribute::from(num_inputs),
+                )
+                .attr(
+                    crate::dialect::func::NUM_RESULTS_ATTR,
+                    Attribute::from(num_results),
+                )
+                .build(),
+        ))
     }
 
     fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Result<Attribute, ParseError> {
@@ -1342,6 +1427,62 @@ core.module @test {
         let mut ctx = IrContext::new();
         let error = parse_module(&mut ctx, input).expect_err("multi-result must be rejected");
         assert!(error.message.contains("multiple results"), "{error}");
+    }
+
+    #[test]
+    fn foreign_func_sig_roundtrips_without_changing_shared_contracts() {
+        let input = r#"core.module @test {
+  !foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32)> {nested = core.array(core.i32)}
+  !unrelated = foreign.record(core.i32) {num_inputs = 1, num_results = 0}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("foreign signature should parse");
+        let printed = print_module(&ctx, module);
+        assert!(printed.contains("!foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32)> {nested = core.array(core.i32)}"), "{printed}");
+        assert!(
+            printed.contains(
+                "!unrelated = foreign.record(core.i32) {num_inputs = 1, num_results = 0}"
+            ),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, module);
+
+        for reserved in [func::NUM_INPUTS_ATTR, func::NUM_RESULTS_ATTR] {
+            let mut rejected = IrContext::new();
+            let error = parse_module(
+                &mut rejected,
+                &format!("core.module @test {{ !bad = foreign.func_sig<() -> core.i32> {{{reserved} = 0}} }}"),
+            )
+            .expect_err("foreign signature delimiters remain reserved");
+            assert!(
+                error.message.contains("reserved by foreign.func_sig"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
+        let input = r#"core.module @test {
+  !foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}
+  !shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("raw storage should remain parseable");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains(
+                "!foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+            ),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "!shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
+            ),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, module);
     }
 
     #[test]

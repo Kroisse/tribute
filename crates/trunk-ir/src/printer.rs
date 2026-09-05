@@ -107,8 +107,8 @@ impl<'a> PrintState<'a> {
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
         }
-        if let Some(func) = crate::dialect::func::FuncSig::from_type_ref(self.ctx, ty) {
-            return self.write_func_type(f, func);
+        if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
+            return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.types.get(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
@@ -138,27 +138,40 @@ impl<'a> PrintState<'a> {
         Ok(())
     }
 
-    fn write_func_type(
+    fn write_func_sig_type(
         &self,
         f: &mut dyn Write,
-        func: crate::dialect::func::FuncSig,
+        ty: TypeRef,
+        inputs: &[TypeRef],
+        results: &[TypeRef],
     ) -> fmt::Result {
-        f.write_str("func.func_sig<(")?;
-        for (index, &input) in func.inputs(self.ctx).iter().enumerate() {
+        let data = self.ctx.types.get(ty);
+        write!(f, "{}.{}<(", data.dialect, data.name)?;
+        for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
             }
             self.write_type(f, input)?;
         }
         f.write_str(") -> ")?;
-        if let Some(result) = func.single_result(self.ctx) {
-            self.write_type(f, result)?;
+        if results.len() == 1 {
+            self.write_type(f, results[0])?;
         } else {
-            f.write_str("()")?;
+            f.write_char('(')?;
+            for (index, &result) in results.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                self.write_type(f, result)?;
+            }
+            f.write_char(')')?;
         }
         f.write_char('>')?;
 
-        let mut visible = func.non_reserved_attrs(self.ctx);
+        let mut visible = data.attrs.iter().filter(|(key, _)| {
+            **key != crate::Symbol::new(crate::dialect::func::NUM_INPUTS_ATTR)
+                && **key != crate::Symbol::new(crate::dialect::func::NUM_RESULTS_ATTR)
+        });
         if let Some((key, value)) = visible.next() {
             write!(f, " {{{key} = ")?;
             self.write_attribute(f, value)?;
@@ -215,6 +228,33 @@ impl<'a> PrintState<'a> {
             }
         }
     }
+}
+
+/// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
+/// Other types, including malformed count-shaped data, retain concrete printing.
+fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
+    let data = ctx.types.get(ty);
+    if data.name != crate::Symbol::new("func_sig") {
+        return None;
+    }
+    if data.dialect == crate::Symbol::new("func")
+        && crate::dialect::func::FuncSig::from_type_ref(ctx, ty).is_none()
+    {
+        return None;
+    }
+    let num_inputs = match data.attrs.get(crate::dialect::func::NUM_INPUTS_ATTR) {
+        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
+        _ => return None,
+    };
+    let num_results = match data.attrs.get(crate::dialect::func::NUM_RESULTS_ATTR) {
+        Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
+        _ => return None,
+    };
+    let end = num_inputs.checked_add(num_results)?;
+    if end != data.params.len() {
+        return None;
+    }
+    Some((&data.params[..num_inputs], &data.params[num_inputs..]))
 }
 
 // ============================================================================
@@ -1028,6 +1068,37 @@ mod tests {
         assert_eq!(
             print_type(&ctx, many_one),
             "func.func_sig<(core.i32, core.i32) -> core.i32>"
+        );
+    }
+
+    #[test]
+    fn malformed_func_sig_storage_prints_as_concrete_type() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx);
+        let foreign = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
+                .param(i32_ty)
+                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
+                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(1))
+                .build(),
+        );
+        assert_eq!(
+            print_type(&ctx, foreign),
+            "foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+        );
+
+        // Shared signatures have a stricter one-result contract, so raw
+        // multi-result storage must not be printed in arrow syntax either.
+        let shared = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
+                .params([i32_ty, i32_ty, i32_ty])
+                .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
+                .attr(func::NUM_RESULTS_ATTR, Attribute::Int(2))
+                .build(),
+        );
+        assert_eq!(
+            print_type(&ctx, shared),
+            "func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
         );
     }
 
