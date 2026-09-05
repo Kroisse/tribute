@@ -1260,14 +1260,11 @@ impl<'a> Converter<'a> {
                 .into_iter()
                 .map(|result| self.convert_type(result))
                 .collect::<Vec<_>>();
-            let attrs: Vec<_> = function
-                .non_reserved_attrs(self.ctx)
-                .map(|(key, value)| (*key, value.clone()))
-                .collect();
-            let attrs = attrs
-                .into_iter()
-                .map(|(key, value)| (key, self.convert_attribute(&value)))
-                .collect::<AttributeMap>();
+            let mut attrs = data.attrs;
+            core::Func::remove_reserved_attrs(&mut attrs);
+            for value in attrs.values_mut() {
+                *value = self.convert_attribute(value);
+            }
             let converted = core::func_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
             self.converted_types.insert(ty, converted);
             return converted;

@@ -144,6 +144,12 @@ impl Func {
         })
     }
 
+    /// Remove input/result count delimiters from owned function metadata before rebuilding it.
+    pub fn remove_reserved_attrs(attrs: &mut AttributeMap) {
+        attrs.remove(NUM_INPUTS_ATTR);
+        attrs.remove(NUM_RESULTS_ATTR);
+    }
+
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
         self.results(ctx).is_empty()
     }
@@ -314,6 +320,30 @@ mod canonicalize_tests {
             ControlFlow::Continue(WalkAction::Advance)
         });
         count
+    }
+
+    #[test]
+    fn remove_reserved_attrs_preserves_metadata_and_is_idempotent() {
+        let mut attrs = AttributeMap::new();
+        Func::remove_reserved_attrs(&mut attrs);
+        assert!(attrs.is_empty());
+
+        let mut ctx = IrContext::new();
+        let nil = nil(&mut ctx).as_type_ref();
+        let metadata = AttributeMap::from_iter([
+            (Symbol::new("tag"), Attribute::Symbol(Symbol::new("kept"))),
+            (
+                Symbol::new("nested"),
+                Attribute::List(vec![Attribute::Type(nil)]),
+            ),
+        ]);
+        attrs = metadata.clone();
+        attrs.insert(Symbol::new(NUM_INPUTS_ATTR), Attribute::from(2u32));
+        attrs.insert(Symbol::new(NUM_RESULTS_ATTR), Attribute::from(1u32));
+        Func::remove_reserved_attrs(&mut attrs);
+        assert_eq!(attrs, metadata);
+        Func::remove_reserved_attrs(&mut attrs);
+        assert_eq!(attrs, metadata);
     }
 
     #[test]
