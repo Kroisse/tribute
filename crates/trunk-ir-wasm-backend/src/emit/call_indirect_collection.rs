@@ -93,7 +93,10 @@ pub(crate) fn collect_call_indirect_types(
                                 "Wasm indirect-call collection requires valid wasm.func_sig",
                             )
                         })?;
-                    results.first().copied()
+                    match results {
+                        [result] => Some(*result),
+                        _ => None,
+                    }
                 } else if let Ok(func) = func::Func::from_op(ctx, op) {
                     func::FuncSig::from_type_ref(ctx, func.r#type(ctx))
                         .and_then(|signature| signature.single_result(ctx))
@@ -201,11 +204,13 @@ pub(crate) fn collect_call_indirect_types(
                     // and the call_indirect has anyref result. This is needed because
                     // WebAssembly GC has separate type hierarchies for anyref and funcref,
                     // so we can't cast between them.
-                    let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
-                    let mut result_ty = match result_types.first().copied() {
-                        Some(ty) => ty,
-                        None => continue, // Skip if no result
+                    let result_types = ctx.op_result_types(op);
+                    let [result_ty] = result_types else {
+                        return Err(CompilationError::invalid_module(
+                            "legacy wasm.call_indirect requires exactly one result; attach an exact wasm.func_sig for zero or multiple results",
+                        ));
                     };
+                    let mut result_ty = *result_ty;
 
                     // If result type is anyref but enclosing function returns funcref,
                     // use funcref as the result type. This is needed because WebAssembly GC has
@@ -222,7 +227,7 @@ pub(crate) fn collect_call_indirect_types(
                         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
                         let func_returns_funcref =
                             helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
-                                || helpers::is_type(ctx, func_ret_ty, "func", "func_sig");
+                                || helpers::is_type(ctx, func_ret_ty, "wasm", "func_sig");
                         // Check for Step type (trampoline-based effect system)
                         let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
                         debug!(
@@ -392,7 +397,7 @@ mod result_list_tests {
     fn resultless_target_functions_do_not_abort_indirect_collection() {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
-                wasm.func {sym_name = @good, type = func.func_sig<() -> core.i32>} {
+                wasm.func {sym_name = @good, type = wasm.func_sig<() -> core.i32>} {
                     %callee = wasm.i32_const {value = 0} : core.i32
                     %value = wasm.call_indirect %callee : core.i32
                     wasm.return %value
@@ -412,7 +417,7 @@ mod result_list_tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = @f, type = func.func_sig<() -> ()>} { wasm.return } }",
+            "core.module @m { wasm.func {sym_name = @f, type = wasm.func_sig<() -> ()>} { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
         let mut indices = HashMap::new();
@@ -420,5 +425,53 @@ mod result_list_tests {
         assert!(added.is_empty());
         assert!(indices.is_empty());
         assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn legacy_indirect_call_rejects_zero_or_multiple_results_before_collection() {
+        for source in [
+            r#"core.module @m {
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> ()>} {
+    ^entry(%table_index: core.i32):
+      wasm.call_indirect %table_index
+  }
+}"#,
+            r#"core.module @m {
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> ()>} {
+    ^entry(%table_index: core.i32):
+      %first, %second = wasm.call_indirect %table_index : core.i32, core.i64
+  }
+}"#,
+        ] {
+            let mut ctx = IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(&mut ctx, source);
+            let error = collect_call_indirect_types(&mut ctx, module, &mut HashMap::new(), 0, 1)
+                .expect_err("legacy non-scalar result list must fail before type collection");
+            assert!(
+                error.to_string().contains("requires exactly one result"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_indirect_call_does_not_infer_from_a_multi_result_caller() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m {
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
+    ^entry(%table_index: core.i32):
+      %result = wasm.call_indirect %table_index : wasm.anyref
+  }
+}",
+        );
+        let added = collect_call_indirect_types(&mut ctx, module, &mut HashMap::new(), 0, 1)
+            .expect("multi-result caller must not make legacy inference malformed");
+        let [(_, signature)] = added.as_slice() else {
+            panic!("expected one inferred legacy signature")
+        };
+        let (_, results) = helpers::func_type_parts(&ctx, *signature).unwrap();
+        assert!(helpers::is_type(&ctx, results[0], "wasm", "anyref"));
     }
 }

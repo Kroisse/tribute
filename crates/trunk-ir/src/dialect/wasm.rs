@@ -644,7 +644,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @ordinary(%table: core.i32, %value: core.i32) -> core.i32 {
-    %result = wasm.call_indirect %table, %value {signature = func.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0} : core.i32
     wasm.return %result
   }
   wasm.func @plain(%table: core.i32, %value: core.i32) -> core.i32 {
@@ -652,7 +652,7 @@ mod tests {
     wasm.return %result
   }
   wasm.func @tail(%table: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.func @direct() -> core.nil {
     wasm.return
@@ -706,11 +706,20 @@ mod tests {
         let mut attrs = crate::AttributeMap::new();
         attrs.insert(crate::Symbol::new("kept"), crate::Attribute::Type(i64));
         let zero = func_sig(&mut ctx, [i32], []).as_type_ref();
+        let one = func_sig(&mut ctx, [i32], [i64]).as_type_ref();
         let many = func_sig_with_attrs(&mut ctx, [i32], [i32, i64], attrs).as_type_ref();
         assert!(
             FuncSig::from_type_ref(&ctx, zero)
                 .unwrap()
                 .is_resultless(&ctx)
+        );
+        assert_eq!(
+            FuncSig::from_type_ref(&ctx, one).unwrap().inputs(&ctx),
+            [i32]
+        );
+        assert_eq!(
+            FuncSig::from_type_ref(&ctx, one).unwrap().results(&ctx),
+            [i64]
         );
         let many_sig = FuncSig::from_type_ref(&ctx, many).unwrap();
         assert_eq!(many_sig.inputs(&ctx), [i32]);
@@ -739,5 +748,51 @@ mod tests {
                 .build(),
         );
         assert!(FuncSig::from_type_ref(&ctx, malformed).is_none());
+
+        let missing = ctx.types.intern(
+            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
+                .param(i32)
+                .attr(NUM_INPUTS_ATTR, crate::Attribute::Int(1))
+                .build(),
+        );
+        assert_eq!(
+            FuncSig::validate(&ctx, missing),
+            Err(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR))
+        );
+
+        let wrong_kind = ctx.types.intern(
+            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
+                .param(i32)
+                .attr(
+                    NUM_INPUTS_ATTR,
+                    crate::Attribute::Symbol(crate::Symbol::new("one")),
+                )
+                .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(0))
+                .build(),
+        );
+        assert_eq!(
+            FuncSig::validate(&ctx, wrong_kind),
+            Err(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR))
+        );
+
+        let overflow = ctx.types.intern(
+            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
+                .attr(NUM_INPUTS_ATTR, crate::Attribute::Int(i128::from(u32::MAX)))
+                .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(1))
+                .build(),
+        );
+        assert_eq!(
+            FuncSig::validate(&ctx, overflow),
+            Err(FuncSigTypeError::CountOverflow)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "count attributes are reserved")]
+    fn func_sig_constructor_rejects_reserved_count_attributes() {
+        let mut ctx = crate::IrContext::new();
+        let mut attrs = crate::AttributeMap::new();
+        attrs.insert(NUM_INPUTS_ATTR.into(), crate::Attribute::Int(0));
+        let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
     }
 }

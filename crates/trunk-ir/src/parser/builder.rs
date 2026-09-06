@@ -616,35 +616,6 @@ impl<'a> ArenaIrBuilder<'a> {
             }
         }
 
-        // Generic wasm.func assembly still has one authoritative `type`
-        // attribute. Normalize a shared parsed type at this target boundary.
-        if raw.dialect == "wasm"
-            && matches!(
-                raw.op_name,
-                "func" | "import_func" | "call_indirect" | "return_call_indirect"
-            )
-        {
-            let key = if matches!(raw.op_name, "func" | "import_func") {
-                "type"
-            } else {
-                "signature"
-            };
-            if let Some(ty) = attributes.get_type(key)
-                && let Some(shared) = crate::dialect::func::FuncSig::from_type_ref(self.ctx, ty)
-            {
-                let inputs = shared.inputs(self.ctx).to_vec();
-                let results = shared.results(self.ctx).to_vec();
-                let attrs = shared
-                    .non_reserved_attrs(self.ctx)
-                    .map(|(key, value)| (*key, value.clone()))
-                    .collect();
-                let target =
-                    crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
-                        .as_type_ref();
-                attributes.insert(Symbol::new(key), Attribute::Type(target));
-            }
-        }
-
         // Resolve successors
         let successors: Vec<BlockRef> = raw
             .successors
@@ -1449,6 +1420,25 @@ core.module @test {
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
             ctx.type_alias_by_name(Symbol::new("signature"))
+        );
+    }
+
+    #[test]
+    fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
+        let input = r#"core.module @test {
+  wasm.func {sym_name = @unlowered, type = func.func_sig<() -> core.nil>} { wasm.return }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
+        let function = ctx
+            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .ops[0];
+        let signature = ctx.op(function).attributes.get_type("type").unwrap();
+        assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
+        assert!(crate::dialect::wasm::FuncSig::from_type_ref(&ctx, signature).is_none());
+        assert!(
+            print_module(&ctx, module).contains("type = func.func_sig<() -> core.nil>"),
+            "the parser must not apply an implicit target conversion"
         );
     }
 

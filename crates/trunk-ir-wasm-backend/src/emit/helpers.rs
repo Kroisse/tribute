@@ -101,12 +101,17 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
 
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm
 /// backend's physical type mapping.
-fn is_wasm_physical_argument_assignable(
+pub(crate) fn is_wasm_physical_argument_assignable(
     ctx: &IrContext,
     argument: TypeRef,
     parameter: TypeRef,
 ) -> bool {
     if argument == parameter {
+        return true;
+    }
+
+    // `core.i1` is represented by an i32 in the Wasm value space.
+    if is_type(ctx, argument, "core", "i1") && is_type(ctx, parameter, "core", "i32") {
         return true;
     }
 

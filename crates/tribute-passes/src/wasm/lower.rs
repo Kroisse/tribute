@@ -819,7 +819,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = @main, type = func.func_sig<(wasm.arrayref) -> ()>, tribute.calling_convention = 1} {} }",
+            "core.module @m { wasm.func {sym_name = @main, type = wasm.func_sig<(wasm.arrayref) -> ()>, tribute.calling_convention = 1} {} }",
         );
         let main = module.ops(&ctx)[0];
         let const_analysis = ConstAnalysis {

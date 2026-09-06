@@ -221,7 +221,7 @@ struct ModuleInfo {
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<TypeRef, u32>,
-    /// Function type lookup map (func.func_sig TypeRef).
+    /// Function type lookup map (wasm.func_sig TypeRef).
     func_types: HashMap<Symbol, TypeRef>,
     /// Function index lookup map (import index or func index).
     func_indices: HashMap<Symbol, u32>,
@@ -1227,7 +1227,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1246,7 +1246,7 @@ mod tests {
     wasm.return
   }
   wasm.func @caller(%table_index: core.i32, %value: adt.typeref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1411,7 +1411,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
   }
 }"#,
         );
@@ -1453,7 +1453,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32, %value: wasm.structref) -> core.i32 {
-    %result = wasm.call_indirect %table_index, %value {signature = func.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0} : core.i32
+    %result = wasm.call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0} : core.i32
     wasm.return %result
   }
 }"#,
@@ -1464,7 +1464,7 @@ mod tests {
             panic!("expected one collected exact signature")
         };
         let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
-            panic!("expected func.func_sig signature")
+            panic!("expected wasm.func_sig signature")
         };
         assert_eq!(ctx.types.get(params[0]).name, Symbol::new("anyref"));
         assert_eq!(result.len(), 1);
@@ -1485,7 +1485,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
-  wasm.func @caller(%table_index: core.i32) -> func.func_sig<() -> core.nil> {
+  wasm.func @caller(%table_index: core.i32) -> wasm.func_sig<() -> core.nil> {
     %result = wasm.call_indirect %table_index : wasm.anyref
     wasm.return %result
   }
@@ -1497,7 +1497,7 @@ mod tests {
             panic!("expected one collected exact signature")
         };
         let Some((_, result)) = helpers::func_type_parts(&ctx, *signature) else {
-            panic!("expected func.func_sig signature")
+            panic!("expected wasm.func_sig signature")
         };
         assert_eq!(result.len(), 1);
         assert!(helpers::is_type(&ctx, result[0], "wasm", "funcref"));
@@ -1511,7 +1511,7 @@ mod tests {
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32) -> wasm.funcref {
-    %ignored = wasm.call_indirect %table_index {signature = func.func_sig<() -> wasm.anyref>, table = 0, type_idx = 0} : wasm.anyref
+    %ignored = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.anyref>, table = 0, type_idx = 0} : wasm.anyref
     %result = wasm.nop : wasm.funcref
     wasm.return %result
   }
@@ -1534,7 +1534,7 @@ mod tests {
             r#"core.module @test {
   wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.block {
-      wasm.return_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
+      wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
     }
   }
   wasm.func @tail_direct(%value: core.i32) -> core.nil {
@@ -1573,5 +1573,72 @@ mod tests {
             .status()
             .expect("run Wasmtime");
         assert!(status.success(), "Wasmtime returned {status}");
+    }
+
+    #[test]
+    #[ignore = "requires the Wasmtime CLI runtime"]
+    fn multi_result_direct_and_exact_indirect_calls_execute_in_wasmtime() {
+        let invoke = |source: &str, export: &str, args: &[&str]| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, source);
+            let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+                .expect("multi-result module must emit")
+                .bytes;
+            let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+            fs::write(file.path(), bytes).expect("write Wasm module");
+            let output = Command::new("wasmtime")
+                .args(["-W", "gc=y", "--invoke", export])
+                .arg(file.path())
+                .args(args)
+                .output()
+                .expect("run Wasmtime");
+            assert!(
+                output.status.success(),
+                "Wasmtime failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("Wasmtime stdout is UTF-8"),
+                "7\n9\n"
+            );
+        };
+
+        invoke(
+            r#"core.module @test {
+  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a = wasm.i32_const {value = 7} : core.i32
+    %b = wasm.i64_const {value = 9} : core.i64
+    wasm.return %a, %b
+  }
+  wasm.func {sym_name = @caller, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
+    wasm.return %a, %b
+  }
+  wasm.export_func {name = "direct_pair", func = @caller}
+}"#,
+            "direct_pair",
+            &[],
+        );
+        invoke(
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @pair} : wasm.funcref
+  }
+  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a = wasm.i32_const {value = 7} : core.i32
+    %b = wasm.i64_const {value = 9} : core.i64
+    wasm.return %a, %b
+  }
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
+    ^entry(%table_index: core.i32):
+      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
+      wasm.return %a, %b
+  }
+  wasm.export_func {name = "indirect_pair", func = @caller}
+}"#,
+            "indirect_pair",
+            &["0"],
+        );
     }
 }
