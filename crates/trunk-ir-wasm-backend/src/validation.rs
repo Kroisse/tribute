@@ -141,22 +141,45 @@ fn is_nil(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == Symbol::new("core") && data.name == Symbol::new("nil")
 }
 
-/// `core.nil` occupies a logical result slot but has no physical Wasm value;
-/// every non-nil result must remain in its original order and type.
-fn result_list_matches(ctx: &IrContext, actual: &[TypeRef], expected: &[TypeRef]) -> bool {
-    let expected = if actual.len() == expected.len() {
-        expected.to_vec()
-    } else {
-        expected
-            .iter()
-            .copied()
-            .filter(|&result| !is_nil(ctx, result))
-            .collect()
-    };
-    actual.len() == expected.len()
-        && actual.iter().zip(expected).all(|(&actual, expected)| {
-            crate::emit::helpers::is_wasm_physical_argument_assignable(ctx, actual, expected)
+/// `core.nil` occupies a logical result slot but has no physical Wasm value.
+/// The first list produces values consumed by the second, so assignability is
+/// directional: a value may be widened but never narrowed.
+fn result_list_matches(ctx: &IrContext, produced: &[TypeRef], received: &[TypeRef]) -> bool {
+    let produced = produced
+        .iter()
+        .copied()
+        .filter(|&result| !is_nil(ctx, result))
+        .collect::<Vec<_>>();
+    let received = received
+        .iter()
+        .copied()
+        .filter(|&result| !is_nil(ctx, result))
+        .collect::<Vec<_>>();
+    produced.len() == received.len()
+        && produced.iter().zip(received).all(|(&produced, received)| {
+            is_wasm_physical_result_assignable(ctx, produced, received)
         })
+}
+
+/// `core.array` is emitted as the same abstract array reference as
+/// `wasm.arrayref`; accepting that physical equivalence here does not permit
+/// a reference downcast such as `wasm.anyref -> wasm.structref`.
+fn is_wasm_physical_result_assignable(
+    ctx: &IrContext,
+    produced: TypeRef,
+    received: TypeRef,
+) -> bool {
+    let produced_data = ctx.types.get(produced);
+    let received_data = ctx.types.get(received);
+    (produced_data.dialect == Symbol::new("wasm")
+        && produced_data.name == Symbol::new("arrayref")
+        && received_data.dialect == Symbol::new("core")
+        && received_data.name == Symbol::new("array"))
+        || (produced_data.dialect == Symbol::new("core")
+            && produced_data.name == Symbol::new("i32")
+            && received_data.dialect == Symbol::new("core")
+            && received_data.name == Symbol::new("i1"))
+        || crate::emit::helpers::is_wasm_physical_argument_assignable(ctx, produced, received)
 }
 
 fn check_value_types(
@@ -217,6 +240,10 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
         return;
     }
     let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+        errors.push(format!(
+            "wasm.{} requires a symbol callee attribute",
+            ctx.op(op).name
+        ));
         return;
     };
     let Some(resolved) = resolve_wasm_callee(ctx, op, callee) else {
@@ -266,8 +293,22 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
         if caller.results(ctx) != signature.results(ctx) {
             errors.push("wasm.return_call tail caller/callee result lists differ".into());
         }
-    } else if !result_list_matches(ctx, ctx.op_result_types(op), signature.results(ctx)) {
-        errors.push("wasm.call result list mismatch".into());
+    } else if !result_list_matches(ctx, signature.results(ctx), ctx.op_result_types(op)) {
+        let format_types = |types: &[TypeRef]| {
+            types
+                .iter()
+                .map(|&ty| {
+                    let data = ctx.types.get(ty);
+                    format!("{}.{}", data.dialect, data.name)
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        errors.push(format!(
+            "wasm.call result list mismatch: callee produces [{}], call declares [{}]",
+            format_types(signature.results(ctx)),
+            format_types(ctx.op_result_types(op))
+        ));
     }
 }
 
@@ -279,6 +320,25 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
     }
     if let Err(error) = crate::emit::helpers::exact_return_call_indirect_signature(ctx, op) {
         errors.push(error.to_string());
+        return;
+    }
+    let Some(caller) = enclosing_wasm_func_signature(ctx, op) else {
+        errors.push(
+            "wasm.return_call_indirect requires a valid enclosing wasm.func signature".into(),
+        );
+        return;
+    };
+    let Some(signature) = ctx
+        .op(op)
+        .attributes
+        .get_type("signature")
+        .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty))
+    else {
+        // The exact helper above already produced the local diagnostic.
+        return;
+    };
+    if caller.results(ctx) != signature.results(ctx) {
+        errors.push("wasm.return_call_indirect tail caller/callee result lists differ".into());
     }
 }
 
@@ -483,6 +543,58 @@ mod tests {
     }
 
     #[test]
+    fn rejects_direct_result_narrowing_and_missing_callee_contracts() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @source() -> wasm.anyref {
+    %value = wasm.nop : wasm.anyref
+    wasm.return %value
+  }
+  wasm.func @caller() -> wasm.structref {
+    %value = wasm.call {callee = @source} : wasm.structref
+    wasm.return %value
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module).expect_err("anyref cannot narrow to structref");
+        assert!(
+            error.to_string().contains("wasm.call result list mismatch"),
+            "{error}"
+        );
+        let Err(error) = crate::emit_module_to_wasm(&mut ctx, module) else {
+            panic!("the invalid direct result must not reach binary emission")
+        };
+        assert!(
+            error.to_string().contains("wasm.call result list mismatch"),
+            "{error}"
+        );
+
+        for callee in ["", " {callee = 0}"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{
+  wasm.func @caller() -> core.nil {{
+    wasm.call{callee}
+    wasm.return
+  }}
+}}"
+                ),
+            );
+            let error = validate_wasm_ir(&ctx, module).expect_err("callee must be a symbol");
+            assert!(
+                error
+                    .to_string()
+                    .contains("wasm.call requires a symbol callee attribute"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn resolves_tail_call_against_the_nearest_module_owner() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -503,6 +615,28 @@ mod tests {
             error
                 .to_string()
                 .contains("wasm.return_call tail caller/callee result lists differ"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_return_call_indirect_with_a_mismatched_enclosing_result_list() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @outer {
+  core.module @inner {
+    wasm.func @caller(%index: core.i32) -> core.i32 {
+      wasm.return_call_indirect %index {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}
+    }
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module).expect_err("tail result mismatch");
+        assert!(
+            error
+                .to_string()
+                .contains("wasm.return_call_indirect tail caller/callee result lists differ"),
             "{error}"
         );
     }

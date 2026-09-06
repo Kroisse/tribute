@@ -16,6 +16,7 @@
 //! - Generates `wasm.table` and `wasm.elem` operations
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -28,6 +29,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockData, RegionData};
 
 use trunk_ir::smallvec::smallvec;
@@ -37,6 +39,8 @@ use trunk_ir::smallvec::smallvec;
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    materialize_nested_callable_value_types(ctx, module, &type_converter);
+
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(ctx, module);
 
@@ -85,6 +89,74 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
     // 4. Add wasm.table and wasm.elem to the module
     add_function_table(ctx, module, &sorted_funcs, table_size);
+}
+
+/// The outer function signature is not the only type-bearing surface of a
+/// callable value. Before rewriting operations, materialize nested callable
+/// types consistently on block arguments, produced values, and attributes so
+/// a `func.func_sig` value can cross the boundary without leaving its body in
+/// the shared type system.
+fn materialize_nested_callable_value_types(
+    ctx: &mut IrContext,
+    module: Module,
+    converter: &TypeConverter,
+) {
+    let mut ops = Vec::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        ops.push(op);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    for op in ops {
+        let result_types = ctx.op_result_types(op).to_vec();
+        for (index, ty) in result_types.into_iter().enumerate() {
+            let Some(converted) = convert_nested_callable_type(ctx, ty, converter) else {
+                continue;
+            };
+            if converted != ty {
+                ctx.set_op_result_type(op, index as u32, converted);
+            }
+        }
+
+        let attributes = ctx.op(op).attributes.clone();
+        let is_func = func::Func::matches(ctx, op);
+        let is_indirect =
+            func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
+        let converted_attributes =
+            convert_nested_callable_attributes(ctx, &attributes, converter, |key| {
+                (key == Symbol::new("type") && is_func)
+                    || (key == Symbol::new("signature") && is_indirect)
+            });
+        if let Some(converted_attributes) = converted_attributes
+            && converted_attributes != attributes
+        {
+            ctx.op_mut(op).attributes = converted_attributes;
+        }
+
+        let regions = ctx.op(op).regions.to_vec();
+        for region in regions {
+            let blocks = ctx.region(region).blocks.to_vec();
+            for block in blocks {
+                let arguments = ctx.block_args(block).to_vec();
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let ty = ctx.value_ty(argument);
+                    let Some(converted) = convert_nested_callable_type(ctx, ty, converter) else {
+                        continue;
+                    };
+                    if converted != ty {
+                        ctx.set_block_arg_type(block, index as u32, converted);
+                    }
+                    let attributes = ctx.block(block).args[index].attrs.clone();
+                    let converted_attributes =
+                        convert_nested_callable_attributes(ctx, &attributes, converter, |_| false);
+                    if let Some(converted_attributes) = converted_attributes
+                        && converted_attributes != attributes
+                    {
+                        ctx.block_mut(block).args[index].attrs = converted_attributes;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Collect all function symbols referenced by func.constant operations.
@@ -249,6 +321,27 @@ fn convert_nested_callable_attribute(
         )),
         other => Some(other.clone()),
     }
+}
+
+fn convert_nested_callable_attributes(
+    ctx: &mut IrContext,
+    attributes: &trunk_ir::AttributeMap,
+    converter: &TypeConverter,
+    skip: impl Fn(Symbol) -> bool,
+) -> Option<trunk_ir::AttributeMap> {
+    attributes
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                if skip(*key) {
+                    value.clone()
+                } else {
+                    convert_nested_callable_attribute(ctx, value, converter)?
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Recursively materialize target types, including shared callable values and
@@ -682,33 +775,39 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main() -> core.nil { func.return }
+  func.func @identity(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
+    func.return %f
+  }
+  func.func @caller(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
+    %result = func.call %f {callee = @identity} : func.func_sig<() -> core.nil>
+    func.return %result
+  }
 }"#,
         );
         let function = module.ops(&ctx)[0];
-        let nil = ctx
+        let original = ctx
             .op(function)
             .attributes
             .get_type("type")
             .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
-            .unwrap()
-            .results(&ctx)[0];
-        let nested = func::func_sig(&mut ctx, [], [nil]).as_type_ref();
-        let nested_container = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(nested)
-                .build(),
-        );
+            .unwrap();
+        let inputs = original.inputs(&ctx).to_vec();
+        let results = original.results(&ctx).to_vec();
+        let nested = inputs[0];
         let mut attrs = trunk_ir::AttributeMap::new();
         attrs.insert(
             Symbol::new("metadata"),
             Attribute::List(vec![Attribute::Type(nested)]),
         );
-        let outer =
-            func::func_sig_with_attrs(&mut ctx, [nested_container], [nested], attrs).as_type_ref();
+        let outer = func::func_sig_with_attrs(&mut ctx, inputs, results, attrs).as_type_ref();
         ctx.op_mut(function)
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(outer));
+        let original_body = ctx.op(function).regions[0];
+        let original_block = ctx.region(original_body).blocks[0];
+        ctx.block_mut(original_block).args[0]
+            .attrs
+            .insert(Symbol::new("metadata"), Attribute::Type(nested));
 
         lower(&mut ctx, module, TypeConverter::new());
 
@@ -717,9 +816,14 @@ mod tests {
             .unwrap()
             .r#type(&ctx);
         let signature = wasm_dialect::FuncSig::from_type_ref(&ctx, signature).unwrap();
-        let nested_input = ctx.types.get(signature.inputs(&ctx)[0]).params[0];
+        let nested_input = signature.inputs(&ctx)[0];
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, nested_input).is_some());
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, signature.results(&ctx)[0]).is_some());
+        let body = ctx.op(lowered).regions[0];
+        let block = ctx.region(body).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
+        let block_metadata = ctx.block(block).args[0].attrs.get_type("metadata").unwrap();
+        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, block_metadata).is_some());
         let metadata = signature
             .non_reserved_attrs(&ctx)
             .find_map(|(key, value)| (*key == Symbol::new("metadata")).then_some(value))
@@ -731,6 +835,9 @@ mod tests {
             panic!("nested metadata must remain a type")
         };
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, *nested_attribute).is_some());
+        crate::validate_wasm_ir(&ctx, module).expect("nested callable identity must validate");
+        crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("nested callable identity and call must emit");
     }
 
     #[test]

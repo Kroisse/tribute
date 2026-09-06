@@ -722,7 +722,12 @@ fn emit_function(
         ));
     }
 
-    let func_return_type = signature_results.first().copied();
+    // Legacy indirect-call inference is scalar-only. A multi-result caller
+    // must not make its first result look like an authoritative context.
+    let func_return_type = match signature_results {
+        [result] => Some(*result),
+        _ => None,
+    };
     let mut emit_ctx = FunctionEmitContext {
         value_locals: HashMap::new(),
         effective_types: HashMap::new(),
@@ -1377,6 +1382,30 @@ mod tests {
         Validator::new()
             .validate_all(&bytes)
             .expect("two-result exact indirect call must validate");
+    }
+
+    #[test]
+    fn legacy_indirect_call_in_a_multi_result_caller_does_not_inherit_its_first_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
+    ^entry(%index: core.i32):
+      %ignored = wasm.call_indirect %index : wasm.anyref
+      %function = wasm.nop : wasm.funcref
+      %integer = wasm.i32_const {value = 0} : core.i32
+      wasm.return %function, %integer
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("multi-result caller must not change a legacy call signature")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("legacy indirect type section must match its emitted instruction");
     }
 
     #[test]
