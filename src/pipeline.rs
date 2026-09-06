@@ -2026,7 +2026,7 @@ fn main() {
         let output = trunk_ir::printer::print_module(&ctx, module.op());
         for forbidden in [
             "tribute_control.",
-            "tribute_control.callable",
+            "tribute_control.func_sig",
             "resume_token",
         ] {
             assert!(

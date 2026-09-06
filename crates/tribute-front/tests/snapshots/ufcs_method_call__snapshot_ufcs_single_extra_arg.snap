@@ -6,8 +6,8 @@ core.module @test {
   !Triple = adt.typeref() {name = @Triple}
   !Triple_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}
   !Pair = adt.typeref() {name = @Pair}
-  !t0 = tribute_control.callable(core.i32, !Triple) {tribute.calling_convention = 0}
-  !t1 = tribute_control.callable(core.i32, !Pair) {tribute.calling_convention = 0}
+  !t0 = tribute_control.func_sig<(!Triple) -> core.i32> {tribute.calling_convention = 0}
+  !t1 = tribute_control.func_sig<(!Pair) -> core.i32> {tribute.calling_convention = 0}
   !Pair_1 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}
 
   tribute_control.func @"Pair::x"(%0: !Pair) -> core.i32 convention(direct) {

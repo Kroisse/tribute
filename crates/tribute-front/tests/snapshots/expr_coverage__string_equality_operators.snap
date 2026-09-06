@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/expr_coverage.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(core.i1, tribute_rt.anyref, tribute_rt.anyref) {tribute.calling_convention = 2}
+  !t0 = tribute_control.func_sig<(tribute_rt.anyref, tribute_rt.anyref) -> core.i1> {tribute.calling_convention = 2}
   !__logical_tuple_tuple_3_1_2_4_bool_4_bool = adt.struct() {fields = [[@0, core.i1], [@1, core.i1]], name = @__logical_tuple_tuple_3_1_2_4_bool_4_bool}
   !__logical_tuple_tuple_3_1_2_4_bool_4_bool_1 = adt.typeref() {name = @__logical_tuple_tuple_3_1_2_4_bool_4_bool}
 

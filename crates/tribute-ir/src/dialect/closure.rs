@@ -218,6 +218,8 @@ fn parse_closure_lambda<'a>(
     let param_raw_types: Vec<RawType<'a>> = params.iter().map(|(_, ty)| ty.clone()).collect();
 
     let func_raw_ty = RawType::Function {
+        dialect: "func",
+        name: "func_sig",
         inputs: param_raw_types,
         results: ret_ty.into_iter().collect(),
         attrs: vec![],

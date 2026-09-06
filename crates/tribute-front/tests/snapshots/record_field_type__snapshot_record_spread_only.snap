@@ -5,7 +5,7 @@ expression: ir_text
 core.module @test {
   !Config = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}
   !Config_1 = adt.typeref() {name = @Config}
-  !t0 = tribute_control.callable(core.i1, !Config_1) {tribute.calling_convention = 0}
+  !t0 = tribute_control.func_sig<(!Config_1) -> core.i1> {tribute.calling_convention = 0}
 
   tribute_control.func @"Config::debug"(%0: !Config_1) -> core.i1 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1

@@ -55,6 +55,22 @@ target ABI conversion may later change logical CPS `[core.never]` into the
 physical empty result list. Malformed raw `func.func_sig` types are permitted only
 in verifier tests and are rejected by whole-IR validation.
 
+The source-logical callable type is independently owned as
+`tribute_control.func_sig`. It uses the same flat input-first storage and
+mandatory u32 delimiters, but its validated API requires exactly one source
+result (including `core.nil` and `core.never`) and owns the Direct,
+EvidenceDirect, and Cps convention metadata. Its codec retains the qualified
+type identity, so source arrow text is never interned as `func.func_sig`;
+malformed raw source signatures are rejected before conversion mutates IR.
+Custom `tribute_control.func` and `tribute_control.lambda` assembly keeps
+non-reserved source-signature metadata on the complete
+`tribute_control.func_sig` type expression or alias definition, distinct from
+operation `attributes`. Their concise custom form is used only when it can
+represent the source signature losslessly; otherwise generic operation assembly
+keeps the complete type-bearing attribute visible. The codec reconstructs that
+type metadata before source-to-shared conversion; no operation-local signature
+metadata clause or override exists.
+
 ## 직접형 제어 소유권
 
 구조와 의미의 source of truth는

@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/evidence_lowering.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(core.i32) {tribute.calling_convention = 2}
+  !t0 = tribute_control.func_sig<() -> core.i32> {tribute.calling_convention = 2}
 
   tribute_control.func @get_count() -> core.i32 convention(cps) {
       %0 = tribute_control.perform {ability_ref = core.ability_ref() {name = @Counter}, op_name = @inc, operation_kind = @op} : core.i32

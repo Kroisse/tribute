@@ -469,7 +469,7 @@ pub mod Nested {
         "field access must call the matching logical accessor:\n{read}"
     );
     assert!(
-        ir_text.contains("tribute_control.callable(core.i32, core.i32)")
+        ir_text.contains("tribute_control.func_sig<(core.i32) -> core.i32>")
             && !ir_text.contains("func.func_sig"),
         "nested callable fields must remain source-logical:\n{ir_text}"
     );
@@ -1568,8 +1568,8 @@ fn from_list(callback: fn(Int) -> Int) -> Int {
     );
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
-    assert!(ir.contains("tribute_control.callable(core.i32, core.i32)"));
-    assert!(ir.contains("tribute_control.callable(core.i1, core.i1)"));
+    assert!(ir.contains("tribute_control.func_sig<(core.i32) -> core.i32>"));
+    assert!(ir.contains("tribute_control.func_sig<(core.i1) -> core.i1>"));
     let tuple_layout = |function: &str| {
         logical_function(&ir, function)
             .split("adt.struct_new")
@@ -1630,7 +1630,8 @@ fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
     assert_logical_boundary(&ir);
     let accessor = checked_logical_function(&ir, "Holder::callback");
     assert!(
-        accessor.contains("-> !t") && ir.contains("= tribute_control.callable(core.i32, core.i32)"),
+        accessor.contains("-> !t")
+            && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32>"),
         "generated accessor must retain its callable field type:\n{accessor}"
     );
     let inspect = checked_logical_function(&ir, "inspect");
@@ -1668,7 +1669,7 @@ fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -
         first_or.contains("list.is_empty")
             && first_or.contains("list.head")
             && first_or.contains("list.tail")
-            && ir.contains("tribute_control.callable(core.i32, core.i32)"),
+            && ir.contains("tribute_control.func_sig<(core.i32) -> core.i32>"),
         "callable list pattern extraction must retain its logical element type:\n{first_or}"
     );
     assert!(!first_or.contains("func.func_sig"));

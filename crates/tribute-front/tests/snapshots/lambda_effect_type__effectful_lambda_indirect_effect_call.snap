@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.callable(core.i32) {tribute.calling_convention = 2}
+  !t0 = tribute_control.func_sig<() -> core.i32> {tribute.calling_convention = 2}
 
   tribute_control.func @"Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @counter() -> core.i32 convention(cps) {
