@@ -68,6 +68,47 @@ fn convert_func_signature(
     })
 }
 
+/// Analyze a target-owned `wasm.func_sig` and convert all of its parameter and
+/// result types through the supplied converter.
+fn convert_wasm_func_signature(
+    ctx: &IrContext,
+    func_type: TypeRef,
+    converter: &TypeConverter,
+) -> Option<ConvertedSignature> {
+    let func = wasm::FuncSig::from_type_ref(ctx, func_type)?;
+    let data = ctx.types.get(func_type);
+    let type_attrs = func
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, convert_attribute_types(ctx, converter, value)))
+        .collect::<crate::AttributeMap>();
+    let attrs_changed = type_attrs
+        .iter()
+        .any(|(key, value)| data.attrs.get(key) != Some(value));
+
+    let old_results = func.results(ctx);
+    let old_params = func.inputs(ctx);
+    let new_results: Vec<_> = old_results
+        .iter()
+        .map(|&ty| converter.convert_type_or_identity(ctx, ty))
+        .collect();
+    let new_params: Vec<_> = old_params
+        .iter()
+        .map(|&ty| converter.convert_type_or_identity(ctx, ty))
+        .collect();
+    let params_changed = new_params
+        .iter()
+        .zip(old_params.iter())
+        .any(|(new, old)| new != old);
+    let result_changed = new_results != old_results;
+
+    Some(ConvertedSignature {
+        new_params,
+        new_results,
+        type_attrs,
+        changed: params_changed || result_changed || attrs_changed,
+    })
+}
+
 fn convert_attribute_types(
     ctx: &IrContext,
     converter: &TypeConverter,
@@ -94,6 +135,43 @@ fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
         sig.type_attrs.clone(),
     )
     .as_type_ref()
+}
+
+fn rebuild_wasm_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
+    crate::dialect::wasm::func_sig_with_attrs(
+        ctx,
+        sig.new_params.iter().copied(),
+        sig.new_results.iter().copied(),
+        sig.type_attrs.clone(),
+    )
+    .as_type_ref()
+}
+
+#[derive(Clone, Copy)]
+enum SignatureDialect {
+    Shared,
+    Wasm,
+}
+
+impl SignatureDialect {
+    fn convert(
+        self,
+        ctx: &IrContext,
+        func_type: TypeRef,
+        converter: &TypeConverter,
+    ) -> Option<ConvertedSignature> {
+        match self {
+            Self::Shared => convert_func_signature(ctx, func_type, converter),
+            Self::Wasm => convert_wasm_func_signature(ctx, func_type, converter),
+        }
+    }
+
+    fn rebuild(self, ctx: &mut IrContext, signature: &ConvertedSignature) -> TypeRef {
+        match self {
+            Self::Shared => rebuild_func_type(ctx, signature),
+            Self::Wasm => rebuild_wasm_func_type(ctx, signature),
+        }
+    }
 }
 
 /// Convert the parameter and result types of a `func.func_sig` type.
@@ -165,12 +243,13 @@ fn rewrite_function_signature(
     rewriter: &mut PatternRewriter<'_>,
     func_type: TypeRef,
     body: Option<RegionRef>,
+    signature_dialect: SignatureDialect,
     make_op: impl FnOnce(&mut IrContext, TypeRef, Option<RegionRef>) -> OpRef,
 ) -> bool {
     let converter = rewriter.type_converter();
     let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
-    let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
+    let Some(sig) = signature_dialect.convert(ctx, func_type, converter) else {
         return false;
     };
     if !sig.changed {
@@ -183,7 +262,7 @@ fn rewrite_function_signature(
     }
 
     // Build new func type
-    let new_func_type = rebuild_func_type(ctx, &sig);
+    let new_func_type = signature_dialect.rebuild(ctx, &sig);
 
     // Detach body region so it can be reused in the new op
     if let Some(body) = body {
@@ -229,6 +308,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             rewriter,
             func_type,
             body,
+            SignatureDialect::Shared,
             |ctx, ty, body| match body {
                 Some(body) => func::func(ctx, loc, sym_name, ty, body).op_ref(),
                 None => {
@@ -270,6 +350,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             rewriter,
             func_type,
             body,
+            SignatureDialect::Wasm,
             |ctx, ty, body| match body {
                 Some(body) => wasm::func(ctx, loc, sym_name, ty, body).op_ref(),
                 None => {
@@ -505,7 +586,7 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let i64_ty = i64_type(&mut ctx);
 
-        let func_ty = make_func_type(&mut ctx, &[i32_ty, i32_ty], i32_ty);
+        let func_ty = wasm::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
         let func_op = make_wasm_func_op(&mut ctx, loc, "wasm_fn", func_ty, &[i32_ty, i32_ty]);
         ctx.op_mut(func_op)
             .attributes
@@ -528,7 +609,7 @@ mod tests {
         let ops = module.ops(&ctx);
         let new_func = wasm::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
-        let function = func::FuncSig::from_type_ref(&ctx, new_type).unwrap();
+        let function = wasm::FuncSig::from_type_ref(&ctx, new_type).unwrap();
         assert_eq!(function.inputs(&ctx), &[i64_ty, i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
@@ -556,7 +637,8 @@ mod tests {
             } else {
                 vec![i32_ty]
             };
-            let func_ty = func::func_sig(&mut ctx, [i32_ty], results).as_type_ref();
+            let func_ty = func::func_sig(&mut ctx, [i32_ty], results.clone()).as_type_ref();
+            let wasm_ty = wasm::func_sig(&mut ctx, [i32_ty], results).as_type_ref();
 
             let func_decl = make_bodyless_function_op(
                 &mut ctx,
@@ -570,10 +652,10 @@ mod tests {
                 loc,
                 Symbol::new("wasm"),
                 Symbol::new("wasm_external"),
-                func_ty,
+                wasm_ty,
             );
             let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
-            let wasm_def = make_wasm_func_op(&mut ctx, loc, "wasm_defined", func_ty, &[i32_ty]);
+            let wasm_def = make_wasm_func_op(&mut ctx, loc, "wasm_defined", wasm_ty, &[i32_ty]);
             let module = make_module(
                 &mut ctx,
                 loc,
@@ -597,9 +679,15 @@ mod tests {
                 let data = ctx.op(ops[index]);
                 assert_eq!(data.regions.len(), expected_regions);
                 let func_ty = data.attributes.get_type("type").unwrap();
-                let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
-                assert_eq!(function.inputs(&ctx), [i64_ty]);
-                assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
+                if data.dialect == Symbol::new("wasm") {
+                    let function = wasm::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
+                    assert_eq!(function.inputs(&ctx), [i64_ty]);
+                    assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
+                } else {
+                    let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
+                    assert_eq!(function.inputs(&ctx), [i64_ty]);
+                    assert_eq!(function.results(&ctx), vec![i64_ty; result_count]);
+                }
             }
 
             let text = print_module(&ctx, module.op());
@@ -611,11 +699,11 @@ mod tests {
             let result = if result_count == 0 { "()" } else { "core.i64" };
             assert!(text.contains(&format!("func.func @external(%arg0: core.i64){arrow}\n")));
             assert!(
-                text.contains(&format!("!t0 = func.func_sig<(core.i64) -> {result}>")),
+                text.contains("wasm.func {sym_name = @wasm_external, type = !t"),
                 "{text}"
             );
             assert!(
-                text.contains("wasm.func {sym_name = @wasm_external, type = !t0}\n"),
+                text.contains(&format!("wasm.func_sig<(core.i64) -> {result}>")),
                 "{text}"
             );
             assert!(text.contains(&format!("func.func @defined(%0: core.i64){arrow} {{")));
@@ -658,7 +746,7 @@ mod tests {
         let i64_ty = i64_type(&mut ctx);
 
         // Signature has 2 params, but entry block has only 1 arg (arity mismatch)
-        let func_ty = make_func_type(&mut ctx, &[i32_ty, i32_ty], i32_ty);
+        let func_ty = wasm::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]).as_type_ref();
         let func_op = make_wasm_func_op(&mut ctx, loc, "mismatched_wasm", func_ty, &[i32_ty]);
         let module = make_module(&mut ctx, loc, vec![func_op]);
 

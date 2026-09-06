@@ -242,6 +242,11 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
     {
         return None;
     }
+    if data.dialect == crate::Symbol::new("wasm")
+        && crate::dialect::wasm::FuncSig::from_type_ref(ctx, ty).is_none()
+    {
+        return None;
+    }
     let num_inputs = match data.attrs.get(crate::dialect::func::NUM_INPUTS_ATTR) {
         Some(Attribute::Int(value)) => usize::try_from(u32::try_from(*value).ok()?).ok()?,
         _ => return None,

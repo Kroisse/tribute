@@ -892,6 +892,30 @@ the `[core.never]` to `[]` target switch follow in later atomic changes. Current
 target ABI lowering still uses temporary `[core.nil]` encoding for physical CPS;
 this migration state is not the final physical contract.
 
+### `wasm.func_sig` target function type
+
+`wasm.func_sig` is the Wasm-owned callable contract.  Like the shared and
+source signatures it stores an input-first flat parameter vector and mandatory
+`num_inputs`/`num_results` `u32` delimiters, but it validates zero or more
+results.  The delimiters participate in interning and must exactly cover the
+flat vector; they are storage delimiters, not evidence of an ABI convention.
+Non-reserved type attributes remain part of the complete type identity and are
+preserved by parsing, printing, aliases, and recursive conversion.
+
+Wasm functions, imports, direct and indirect calls, returns, type-section
+collection, and binary emission all consume this one target-owned type.  A
+multi-result call has one SSA result and one local per declared result; local
+stores consume Wasm's result stack in reverse result order.  Exact indirect
+contracts are `wasm.func_sig`, never reconstructed from an erased table index.
+Ordinary empty result lists are legal and do not imply CPS.  The existing Wasm
+slot rule omits every `core.nil` result from the binary result vector, while
+retaining the order of all non-nil results; this preserves ordinary target
+`Unit` compatibility as well as the temporary CPS `[core.nil]` encoding.
+Nil in an input or value position remains a nullable reference value and is not
+omitted.  The later atomic CPS switch changes the semantic CPS contract to an
+empty target result list; it does not make the Wasm emitter infer CPS from a
+function body or a call-site shape.
+
 ## Open Questions
 
 - Final closure environment representation for each backend.

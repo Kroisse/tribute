@@ -227,8 +227,8 @@ struct ModuleInfo {
     func_indices: HashMap<Symbol, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<Symbol>,
-    /// Additional function types from call_indirect that need to be added to type section.
-    /// Stored as (type_idx, func.func_sig TypeRef) pairs.
+    /// Additional target function types from call_indirect that need to be added to the type section.
+    /// Stored as (type_idx, wasm.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
     /// Pre-interned common types for use in handlers.
     common_types: CommonTypes,
@@ -313,13 +313,14 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     }
 
     for import_def in module_info.imports.iter() {
-        let (params_refs, result_ref) = func_type_parts(ctx, import_def.func_type)
-            .ok_or_else(|| CompilationError::type_error("import func type is not func.func_sig"))?;
+        let (params_refs, signature_results) = func_type_parts(ctx, import_def.func_type)
+            .ok_or_else(|| CompilationError::type_error("import func type is not wasm.func_sig"))?;
         let params = params_refs
             .iter()
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(ctx, result_ref, &module_info.type_idx_by_type)?;
+        let results =
+            signature_result_types(ctx, signature_results, &module_info.type_idx_by_type)?;
         type_section.ty().function(params, results);
         let type_index = next_type_index;
         next_type_index += 1;
@@ -332,53 +333,38 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
 
     for func_def in module_info.funcs.iter() {
         debug!("Processing function type for: {:?}", func_def.name);
-        let (params_refs, declared_result) = func_type_parts(ctx, func_def.func_type)
-            .ok_or_else(|| CompilationError::type_error("func type is not func.func_sig"))?;
+        let (params_refs, declared_results) = func_type_parts(ctx, func_def.func_type)
+            .ok_or_else(|| CompilationError::type_error("func type is not wasm.func_sig"))?;
         let params = params_refs
             .iter()
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
 
-        let declared_result_data = ctx.types.get(declared_result);
-        debug!(
-            "  checking return type adjustment for {}: declared={}.{}",
-            func_def.name, declared_result_data.dialect, declared_result_data.name
-        );
-
-        let effective_result = {
+        let mut effective_results = declared_results.to_vec();
+        // The legacy handler workaround remains deliberately confined to a
+        // one-result function; it must not rewrite arbitrary result vectors.
+        if let [declared_result] = declared_results {
             let regions = &ctx.op(func_def.op).regions;
-            if let Some(&body_region) = regions.first() {
-                if is_type(ctx, declared_result, "func", "func_sig")
-                    || is_type(ctx, declared_result, "wasm", "funcref")
-                {
-                    debug!("  checking funcref function for handler dispatch...");
-                    if should_adjust_handler_return_to_i32(ctx, body_region) {
-                        debug!(
-                            "  adjusting return type from funcref to i32 for computation lambda: {}",
-                            func_def.name
-                        );
-                        intern_simple_type(ctx, "core", "i32")
-                    } else {
-                        declared_result
-                    }
-                } else {
-                    declared_result
-                }
-            } else {
-                declared_result
+            if let Some(&body_region) = regions.first()
+                && (is_type(ctx, *declared_result, "func", "func_sig")
+                    || is_type(ctx, *declared_result, "wasm", "funcref"))
+                && should_adjust_handler_return_to_i32(ctx, body_region)
+            {
+                effective_results[0] = intern_simple_type(ctx, "core", "i32");
             }
-        };
+        }
 
-        let results = match result_types(ctx, effective_result, &module_info.type_idx_by_type) {
-            Ok(r) => {
-                debug!("  results: {:?}", r);
-                r
-            }
-            Err(e) => {
-                debug!("Function results conversion failed: {:?}", e);
-                return Err(e);
-            }
-        };
+        let results =
+            match signature_result_types(ctx, &effective_results, &module_info.type_idx_by_type) {
+                Ok(r) => {
+                    debug!("  results: {:?}", r);
+                    r
+                }
+                Err(e) => {
+                    debug!("Function results conversion failed: {:?}", e);
+                    return Err(e);
+                }
+            };
         type_section.ty().function(params, results);
         let type_index = next_type_index;
         next_type_index += 1;
@@ -388,11 +374,11 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
 
     // Emit call_indirect function types
     for (type_idx, func_ty) in &module_info.call_indirect_types {
-        let (params_refs, result_ref) = func_type_parts(ctx, *func_ty).ok_or_else(|| {
-            CompilationError::type_error("call_indirect type is not func.func_sig")
+        let (params_refs, signature_results) = func_type_parts(ctx, *func_ty).ok_or_else(|| {
+            CompilationError::type_error("call_indirect type is not wasm.func_sig")
         })?;
         debug!(
-            "Emitting call_indirect type idx={}: params={:?}, result={}.{}",
+            "Emitting call_indirect type idx={}: params={:?}, results={:?}",
             type_idx,
             params_refs
                 .iter()
@@ -401,14 +387,17 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
                     format!("{}.{}", d.dialect, d.name)
                 })
                 .collect::<Vec<_>>(),
-            ctx.types.get(result_ref).dialect,
-            ctx.types.get(result_ref).name
+            signature_results
+                .iter()
+                .map(|ty| format!("{}.{}", ctx.types.get(*ty).dialect, ctx.types.get(*ty).name))
+                .collect::<Vec<_>>()
         );
         let params = params_refs
             .iter()
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(ctx, result_ref, &module_info.type_idx_by_type)?;
+        let results =
+            signature_result_types(ctx, signature_results, &module_info.type_idx_by_type)?;
         type_section.ty().function(params, results);
         assert_eq!(
             *type_idx, next_type_index,
@@ -724,8 +713,8 @@ fn emit_function(
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.func has no entry block"))?;
 
-    let (params_refs, result_ref) = func_type_parts(ctx, func_def.func_type)
-        .ok_or_else(|| CompilationError::type_error("func type is not func.func_sig"))?;
+    let (params_refs, signature_results) = func_type_parts(ctx, func_def.func_type)
+        .ok_or_else(|| CompilationError::type_error("func type is not wasm.func_sig"))?;
     let block_args = ctx.block_args(block);
     if params_refs.len() != block_args.len() {
         return Err(CompilationError::invalid_module(
@@ -733,7 +722,7 @@ fn emit_function(
         ));
     }
 
-    let func_return_type = Some(result_ref);
+    let func_return_type = signature_results.first().copied();
     let mut emit_ctx = FunctionEmitContext {
         value_locals: HashMap::new(),
         effective_types: HashMap::new(),
@@ -804,10 +793,7 @@ fn assign_locals_in_region(
             }
 
             let result_types = ctx.op_result_types(op);
-            if result_types.len() > 1 {
-                return Err(CompilationError::unsupported_feature("multi-result ops"));
-            }
-            if let Some(&result_ty) = result_types.first() {
+            for (index, &result_ty) in result_types.iter().enumerate() {
                 let effective_ty = result_ty;
                 let val_type =
                     match type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type) {
@@ -822,7 +808,7 @@ fn assign_locals_in_region(
                         }
                     };
                 let local_index = param_count + locals.len() as u32;
-                let result_value = ctx.op_result(op, 0);
+                let result_value = ctx.op_result(op, index as u32);
                 emit_ctx.value_locals.insert(result_value, local_index);
                 emit_ctx.effective_types.insert(result_value, effective_ty);
                 locals.push(val_type);
@@ -941,7 +927,7 @@ fn emit_op_nested(
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.types.get(result_ty);
             debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
-            if is_type(ctx, result_ty, "func", "func_sig")
+            if is_type(ctx, result_ty, "wasm", "func_sig")
                 || is_type(ctx, result_ty, "wasm", "funcref")
             {
                 debug!("wasm.nop: emitting ref.null func");
@@ -1122,14 +1108,18 @@ fn set_result_local(
     function: &mut Function,
 ) -> CompilationResult<()> {
     let results = ctx.op_result_types(op);
-    if results.is_empty() || helpers::is_nil_type(ctx, results[0]) {
-        return Ok(());
+    // Wasm leaves the final declared result at the top of the stack.
+    // Consume every result in reverse order so SSA result i keeps its slot.
+    for index in (0..results.len()).rev() {
+        if is_nil_type(ctx, results[index]) {
+            continue;
+        }
+        let local = emit_ctx
+            .value_locals
+            .get(&ctx.op_result(op, index as u32))
+            .ok_or_else(|| CompilationError::invalid_module("result missing local mapping"))?;
+        function.instruction(&Instruction::LocalSet(*local));
     }
-    let local = emit_ctx
-        .value_locals
-        .get(&ctx.op_result(op, 0))
-        .ok_or_else(|| CompilationError::invalid_module("result missing local mapping"))?;
-    function.instruction(&Instruction::LocalSet(*local));
     Ok(())
 }
 
@@ -1319,8 +1309,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func @main() -> func.func_sig<() -> core.nil> {
-    %null = wasm.nop : func.func_sig<() -> core.nil>
+  wasm.func @main() -> wasm.func_sig<() -> core.nil> {
+    %null = wasm.nop : wasm.func_sig<() -> core.nil>
     wasm.return %null
   }
 }"#,
@@ -1332,6 +1322,86 @@ mod tests {
         Validator::new()
             .validate_all(&bytes)
             .expect("signature-valued wasm.nop must validate");
+    }
+
+    #[test]
+    fn emits_and_validates_two_result_direct_call_with_both_results_used() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a = wasm.i32_const {value = 7} : core.i32
+    %b = wasm.i64_const {value = 9} : core.i64
+    wasm.return %a, %b
+  }
+  wasm.func {sym_name = @use_pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
+    wasm.return %a, %b
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("two-result direct call must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("two-result direct call must validate");
+    }
+
+    #[test]
+    fn emits_and_validates_two_result_exact_indirect_call() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @pair} : wasm.funcref
+  }
+  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a = wasm.i32_const {value = 7} : core.i32
+    %b = wasm.i64_const {value = 9} : core.i64
+    wasm.return %a, %b
+  }
+  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
+    ^entry(%table_index: core.i32):
+      %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
+      wasm.return %a, %b
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("two-result exact indirect call must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("two-result exact indirect call must validate");
+    }
+
+    #[test]
+    fn omits_nil_result_slots_without_reordering_other_results() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.nil, core.i64)>} {
+    %a = wasm.i32_const {value = 7} : core.i32
+    %b = wasm.i64_const {value = 9} : core.i64
+    wasm.return %a, %b
+  }
+  wasm.func {sym_name = @use_pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+    %a, %unit, %b = wasm.call {callee = @pair} : core.i32, core.nil, core.i64
+    wasm.return %a, %b
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("nil result slot compatibility must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("nil result slot compatibility must validate");
     }
 
     #[test]
@@ -1397,7 +1467,8 @@ mod tests {
             panic!("expected func.func_sig signature")
         };
         assert_eq!(ctx.types.get(params[0]).name, Symbol::new("anyref"));
-        assert_eq!(ctx.types.get(result).name, Symbol::new("i32"));
+        assert_eq!(result.len(), 1);
+        assert_eq!(ctx.types.get(result[0]).name, Symbol::new("i32"));
 
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("exact ordinary indirect call must emit")
@@ -1428,7 +1499,8 @@ mod tests {
         let Some((_, result)) = helpers::func_type_parts(&ctx, *signature) else {
             panic!("expected func.func_sig signature")
         };
-        assert!(helpers::is_type(&ctx, result, "wasm", "funcref"));
+        assert_eq!(result.len(), 1);
+        assert!(helpers::is_type(&ctx, result[0], "wasm", "funcref"));
     }
 
     #[test]

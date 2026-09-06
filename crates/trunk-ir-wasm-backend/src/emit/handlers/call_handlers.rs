@@ -359,7 +359,7 @@ fn find_func_type_in_registry(
     // Search through registered func types (from imports, funcs, and call_indirect collection)
     for &ty_ref in module_info.type_idx_by_type.keys() {
         if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
         {
             return Ok(ty_ref);
         }
@@ -367,7 +367,7 @@ fn find_func_type_in_registry(
     // Also check func_types map
     for &ty_ref in module_info.func_types.values() {
         if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
         {
             return Ok(ty_ref);
         }

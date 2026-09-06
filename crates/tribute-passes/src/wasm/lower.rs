@@ -272,7 +272,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                 && data.name == Symbol::new("func")
                 && let Some(fn_ty) = data.attributes.get_type("type")
             {
-                let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty) else {
+                let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty) else {
                     continue;
                 };
                 let params: Vec<_> = function
@@ -323,7 +323,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    func::func_sig(ctx, params, [result]).as_type_ref()
+    wasm_dialect::func_sig(ctx, params, [result]).as_type_ref()
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
@@ -485,7 +485,7 @@ impl<'a> WasmLowerer<'a> {
         self.main_exports.main_convention = get_calling_convention(ctx, op).unwrap_or_default();
 
         if let Some(fn_ty) = data.attributes.get_type("type")
-            && let Some(function) = func::FuncSig::from_type_ref(ctx, fn_ty)
+            && let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty)
         {
             self.main_exports.main_result_type = function.single_result(ctx);
             self.main_exports.main_param_types = function.inputs(ctx).to_vec();
@@ -815,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn review_resultless_evidence_main_preserves_inputs() {
+    fn resultless_evidence_main_preserves_inputs_and_reaches_body_validation() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -856,8 +856,8 @@ mod tests {
         let before = print_module(&ctx, module.op());
         let error = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .err()
-            .expect("resultless emission remains unsupported");
-        assert!(error.to_string().contains("one-result"), "{error}");
+            .expect("bodyless emission remains unsupported");
+        assert!(error.to_string().contains("entry block"), "{error}");
         assert_eq!(print_module(&ctx, module.op()), before);
     }
 

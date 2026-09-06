@@ -149,7 +149,7 @@ mod tests {
     wasm.return_call_indirect %table_index, %value {signature = core.i32, table = 0, type_idx = 0}
   }
 }"#,
-            "signature must be func.func_sig",
+            "signature must be wasm.func_sig",
         );
 
         rejects(

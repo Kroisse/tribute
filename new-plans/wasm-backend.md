@@ -90,6 +90,30 @@ Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect
 `(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
 emit하여 해당 operation을 제거하는 Wasm 경계다.
 
+### Wasm function signatures and result slots
+
+`wasm.func_sig` is the sole Wasm callable contract.  It owns separate ordered
+input and result lists, represented by `[inputs..., results...]` plus mandatory
+`num_inputs` and `num_results` `u32` storage delimiters.  It permits zero or
+multiple results and preserves non-reserved type attributes through all target
+conversion and assembly paths.  Counts delimit the interned vector only; they
+do not establish an ABI or calling convention.
+
+The target type is shared by `wasm.func`, `wasm.import_func`, calls, returns,
+exact indirect-call attributes, type-section collection, validation, and the
+encoder.  Each declared non-omitted Wasm result receives an SSA value and local;
+after a multi-result call locals are stored in reverse result order because the
+last result is on top of the Wasm stack.  Exact indirect signatures remain
+authoritative rather than being inferred from a table index.
+
+The established target slot mapping omits every `core.nil` result from binary
+result slots, including ordinary target `Unit` and the temporary physical-CPS
+`wasm.func_sig<(...)-> core.nil>` encoding.  It preserves the order of every
+non-nil result, while nil inputs and values still encode as nullable references.
+Ordinary empty result signatures are independently valid.  The atomic Cps
+`[core.nil]` to `[]` semantic change is deferred to the later physical-CPS
+stage and is checked at the Tribute boundary, not inferred by Wasm emission.
+
 ### Entrypoint contract
 
 The frontend accepts `main` only when its declared result is `Nil`. A frontend

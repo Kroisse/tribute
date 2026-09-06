@@ -24,7 +24,7 @@ use crate::{CompilationError, CompilationResult};
 #[derive(Debug)]
 pub(crate) struct FunctionDef {
     pub name: Symbol,
-    /// Validated `func.func_sig` signature.
+    /// Validated target-owned `wasm.func_sig` signature.
     pub func_type: TypeRef,
     pub op: OpRef,
 }
@@ -34,7 +34,7 @@ pub(crate) struct ImportFuncDef {
     pub sym: Symbol,
     pub module: Symbol,
     pub name: Symbol,
-    /// func.func_sig TypeRef
+    /// wasm.func_sig TypeRef
     pub func_type: TypeRef,
 }
 
@@ -98,8 +98,8 @@ pub(crate) fn extract_function_def(
     let name = func_op.sym_name(ctx);
     let ty = func_op.r#type(ctx);
 
-    let function = func::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
-        CompilationError::type_error("wasm.func requires valid func.func_sig type")
+    let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
+        CompilationError::type_error("wasm.func requires valid wasm.func_sig type")
     })?;
 
     if let Some(result_ty) = function.single_result(ctx) {
@@ -136,9 +136,9 @@ pub(crate) fn extract_import_def(
     let sym = import_op.sym_name(ctx);
     let ty = import_op.r#type(ctx);
 
-    if func::FuncSig::from_type_ref(ctx, ty).is_none() {
+    if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {
         return Err(CompilationError::type_error(
-            "wasm.import_func requires valid func.func_sig type",
+            "wasm.import_func requires valid wasm.func_sig type",
         ));
     }
 
@@ -317,7 +317,7 @@ mod tests {
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let malformed = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig")).build());
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("func_sig")).build());
         let import = wasm_dialect::import_func(
             &mut ctx,
             location,
@@ -331,7 +331,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("requires valid func.func_sig type"),
+                .contains("requires valid wasm.func_sig type"),
             "{error}"
         );
     }

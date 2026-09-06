@@ -22,7 +22,7 @@ use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeModel;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
@@ -177,6 +177,25 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
+/// Convert the complete shared callable contract once at the Wasm boundary.
+/// The shared type remains zero-or-one result; only the target-owned type may
+/// subsequently carry multiple results from low-level Wasm fixtures.
+fn convert_to_wasm_func_type(
+    ctx: &mut IrContext,
+    signature: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    let converted = convert_function_type(ctx, signature, converter)?;
+    let shared = func::FuncSig::from_type_ref(ctx, converted)?;
+    let inputs = shared.inputs(ctx).to_vec();
+    let results = shared.results(ctx).to_vec();
+    let attrs = shared
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
+    Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref())
+}
+
 impl RewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
@@ -190,7 +209,11 @@ impl RewritePattern for FuncFuncPattern {
 
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name(ctx);
-        let func_type = func_op.r#type(ctx);
+        let Some(func_type) =
+            convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())
+        else {
+            return false;
+        };
         let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
         // Generated Func::body() asserts for valid bodyless declarations.
@@ -271,7 +294,8 @@ impl RewritePattern for FuncCallIndirectPattern {
         let result_types = CallLike::call_result_types(&call, ctx).to_vec();
 
         let signature = if let Some(signature) = call.exact_signature(ctx) {
-            let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+            let Some(signature) =
+                convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
             else {
                 return false;
             };
@@ -366,7 +390,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
-        let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+        let Some(signature) = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
         else {
             return false;
         };
@@ -551,7 +575,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("!t0 = func.func_sig<(core.i32) -> core.i32>")
+            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
                 && output.contains("wasm.func {custom = 7, sym_name = @external, type = !t0}"),
             "{output}"
         );
@@ -624,7 +648,7 @@ mod tests {
         );
         assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("!t0 = func.func_sig<(core.i32) -> core.nil>")
+            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.nil>")
                 && output.contains("signature = !t0"),
             "{output}"
         );
@@ -648,7 +672,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0 {signature = func.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );
@@ -721,12 +745,12 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>"
+                "wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.nil>"
             ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
+            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
             "the converted transfer must retain its calling convention: {output}"
         );
         assert!(
@@ -782,7 +806,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );
