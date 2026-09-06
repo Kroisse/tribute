@@ -4348,8 +4348,10 @@ mod tests {
     fn source_signature_metadata_roundtrips_before_conversion() {
         let source = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  tribute_control.func @outer() -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @function]]} {
-    %lambda = tribute_control.lambda() -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [] {
+  !outer = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @function]], tribute.calling_convention = 0}
+  !lambda = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}
+  tribute_control.func {sym_name = @outer, type = !outer} {
+    %lambda = tribute_control.lambda : !lambda {
       %inner = arith.const {value = 1} : core.i32
       tribute_control.return %inner
     }
@@ -4360,11 +4362,11 @@ mod tests {
         let (ctx, module) = parse(source);
         let printed_source = print_module(&ctx, module.op());
         assert!(
-            printed_source.contains("signature_attributes {metadata = [[!inner, @function]]}"),
+            printed_source.contains("!outer = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @function]], tribute.calling_convention = 0}"),
             "{printed_source}"
         );
         assert!(
-            printed_source.contains("signature_attributes {metadata = [[!inner, @lambda]]}"),
+            printed_source.contains("!lambda = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}"),
             "{printed_source}"
         );
         let (mut ctx, module) = parse(&printed_source);

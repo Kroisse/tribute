@@ -222,6 +222,14 @@ impl FuncSig {
         attrs.remove(trunk_ir::dialect::func::NUM_RESULTS_ATTR);
         attrs.remove(CALLING_CONVENTION_ATTR);
     }
+
+    /// Whether this signature carries type-owned metadata beyond storage and
+    /// source convention fields.
+    pub(crate) fn has_nonreserved_attrs(self, ctx: &IrContext) -> bool {
+        let mut attrs = ctx.types.get(self.0).attrs.clone();
+        Self::remove_reserved_attrs(&mut attrs);
+        !attrs.is_empty()
+    }
 }
 
 fn read_count(attrs: &AttributeMap, key: &'static str) -> Result<u32, FuncSigTypeError> {
@@ -390,42 +398,6 @@ fn print_extra_attributes(
     write!(h, "}}")
 }
 
-fn print_signature_attributes(
-    h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
-    ty: TypeRef,
-) -> fmt::Result {
-    use fmt::Write;
-
-    if FuncSig::from_type_ref(h.ctx(), ty).is_none() {
-        return Ok(());
-    }
-    let attrs: Vec<_> = h
-        .ctx()
-        .types
-        .get(ty)
-        .attrs
-        .iter()
-        .filter(|(key, _)| {
-            **key != Symbol::new(trunk_ir::dialect::func::NUM_INPUTS_ATTR)
-                && **key != Symbol::new(trunk_ir::dialect::func::NUM_RESULTS_ATTR)
-                && **key != Symbol::new(CALLING_CONVENTION_ATTR)
-        })
-        .map(|(key, value)| (*key, value.clone()))
-        .collect();
-    if attrs.is_empty() {
-        return Ok(());
-    }
-    write!(h, " signature_attributes {{")?;
-    for (index, (key, value)) in attrs.iter().enumerate() {
-        if index > 0 {
-            write!(h, ", ")?;
-        }
-        write!(h, "{key} = ")?;
-        h.write_attribute(value)?;
-    }
-    write!(h, "}}")
-}
-
 fn print_signature_params(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     region: Option<RegionRef>,
@@ -472,6 +444,12 @@ fn print_func(
     let symbol = data.attributes.get_symbol("sym_name");
     let callable_ty = data.attributes.get_type("type");
     let region = data.regions.first().copied();
+    if callable_ty.is_some_and(|ty| {
+        FuncSig::from_type_ref(h.ctx(), ty)
+            .is_some_and(|signature| signature.has_nonreserved_attrs(h.ctx()))
+    }) {
+        return h.print_generic(op, indent);
+    }
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
@@ -492,9 +470,6 @@ fn print_func(
         write!(h, " -> ")?;
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
-    }
-    if let Some(callable_ty) = callable_ty {
-        print_signature_attributes(h, callable_ty)?;
     }
     print_extra_attributes(h, op, &["sym_name", "type", CALLING_CONVENTION_ATTR])?;
 
@@ -553,17 +528,6 @@ fn has_duplicate_convention_attr(
     attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
 }
 
-fn has_reserved_signature_attr(attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)]) -> bool {
-    attrs.iter().any(|(key, _)| {
-        matches!(
-            *key,
-            trunk_ir::dialect::func::NUM_INPUTS_ATTR
-                | trunk_ir::dialect::func::NUM_RESULTS_ATTR
-                | CALLING_CONVENTION_ATTR
-        )
-    })
-}
-
 fn parse_func<'a>(
     input: &mut &'a str,
     results: Vec<&'a str>,
@@ -583,16 +547,11 @@ fn parse_func<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
-    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_reserved_signature_attr(&signature_attributes)
-        || has_duplicate_convention_attr(&attributes)
+    if has_duplicate_convention_attr(&attributes)
         || attributes
             .iter()
             .any(|(key, _)| *key == "sym_name" || *key == "type")
@@ -614,7 +573,7 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let signature = func_sig_raw_type(result, &params, convention, signature_attributes);
+    let signature = func_sig_raw_type(result, &params, convention, vec![]);
     let mut attributes = attributes;
     attributes.push(("type", RawAttribute::Type(signature)));
 
@@ -658,6 +617,13 @@ fn print_lambda(
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
     let region = h.ctx().op(op).regions.first().copied();
 
+    if callable_ty.is_some_and(|ty| {
+        FuncSig::from_type_ref(h.ctx(), ty)
+            .is_some_and(|signature| signature.has_nonreserved_attrs(h.ctx()))
+    }) {
+        return h.print_generic(op, indent);
+    }
+
     write!(h, "{}", " ".repeat(indent))?;
     if let Some(name) = result_name {
         write!(h, "{name} = ")?;
@@ -674,10 +640,6 @@ fn print_lambda(
         h.write_type(result)?;
         write!(h, " convention({})", convention.keyword())?;
     }
-    if let Some(callable_ty) = callable_ty {
-        print_signature_attributes(h, callable_ty)?;
-    }
-
     write!(h, " captures [")?;
     let captures: Vec<String> = h
         .ctx()
@@ -738,18 +700,12 @@ fn parse_lambda<'a>(
     let params = func_params.parse_next(input)?;
     let result = return_type.parse_next(input)?;
     let convention = parse_convention(input)?;
-    let signature_attributes = opt((ws, "signature_attributes", ws, raw_attr_dict))
-        .parse_next(input)?
-        .map(|(_, _, _, attrs)| attrs)
-        .unwrap_or_default();
     let captures = parse_captures(input)?;
     let attributes = opt((ws, "attributes", ws, raw_attr_dict))
         .parse_next(input)?
         .map(|(_, _, _, attrs)| attrs)
         .unwrap_or_default();
-    if has_reserved_signature_attr(&signature_attributes)
-        || has_duplicate_convention_attr(&attributes)
-    {
+    if has_duplicate_convention_attr(&attributes) {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
         ));
@@ -773,12 +729,7 @@ fn parse_lambda<'a>(
         return_type: None,
         operands: captures,
         attributes,
-        result_types: vec![func_sig_raw_type(
-            result,
-            &params,
-            convention,
-            signature_attributes,
-        )],
+        result_types: vec![func_sig_raw_type(result, &params, convention, vec![])],
         regions: vec![region],
         successors: vec![],
     })
@@ -3797,13 +3748,22 @@ mod tests {
     fn custom_assembly_round_trips_declarations_definitions_and_lambdas() {
         let input = r#"core.module @test {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  tribute_control.func @decl(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}
+  !shared = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {metadata = [[!inner, @signature]], tribute.calling_convention = 0}
+  !lambda = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}
+  !distinct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {metadata = [[!inner, @distinct]], tribute.calling_convention = 0}
+  tribute_control.func {metadata = @declaration, sym_name = @decl, type = !shared, visibility = @private}
+  tribute_control.func {metadata = @definition, sym_name = @definition, type = !shared, visibility = @private} {
+    ^bb0(%left: core.i32, %right: core.i32):
+      tribute_control.return %left
+  }
+  tribute_control.func {sym_name = @different, type = !distinct}
   tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
     tribute_control.return %value
   }
   tribute_control.func @outer(%first: core.i32, %second: core.i32) -> core.i32 convention(direct) {
-    %captured = tribute_control.lambda(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%first, %second] attributes {debug_name = "apply", inline_hint = true} {
-      tribute_control.return %first
+    %captured = tribute_control.lambda %first, %second {debug_name = "apply", inline_hint = true, metadata = @operation} : !lambda {
+      ^bb0(%left: core.i32, %right: core.i32):
+        tribute_control.return %first
     }
     %empty = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
       %constant = arith.const {value = 1} : core.i32
@@ -3814,19 +3774,81 @@ mod tests {
 }"#;
         let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
-        assert!(printed.contains(
-            "tribute_control.func @decl(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct) signature_attributes {metadata = [[!inner, @decl]]} attributes {visibility = @private}"
-        ));
+        assert!(
+            printed.contains("!shared = tribute_control.func_sig"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("metadata = [[!inner, @signature]]"),
+            "{printed}"
+        );
+        assert!(printed.contains("type = !shared"), "{printed}");
+        assert!(printed.contains("sym_name = @decl"), "{printed}");
+        assert!(printed.contains("sym_name = @definition"), "{printed}");
+        assert!(printed.contains("metadata = @declaration"), "{printed}");
+        assert!(printed.contains("metadata = @definition"), "{printed}");
+        assert!(printed.contains(" : !lambda"), "{printed}");
+        assert!(printed.contains("metadata = @operation"), "{printed}");
         assert!(printed.contains("convention(evidence_direct)"));
         assert!(printed.contains("convention(cps) captures []"));
-        assert!(printed.contains("signature_attributes {metadata = [[!inner, @decl]]}"));
-        assert!(printed.contains("signature_attributes {metadata = [[!inner, @lambda]]}"));
-        assert!(printed.contains(
-            "convention(direct) signature_attributes {metadata = [[!inner, @lambda]]} captures [%0, %1] attributes {"
-        ));
         assert!(printed.contains("debug_name = \"apply\""));
         assert!(printed.contains("inline_hint = true"));
-        assert!(!printed.contains("^bb"));
+        assert!(
+            printed.contains("^bb"),
+            "generic regions retain entry args: {printed}"
+        );
+
+        let funcs: Vec<_> = module
+            .ops(&ctx)
+            .into_iter()
+            .filter(|op| Func::matches(&ctx, *op))
+            .collect();
+        let declaration = funcs
+            .iter()
+            .copied()
+            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("decl")))
+            .unwrap();
+        let definition = funcs
+            .iter()
+            .copied()
+            .find(|op| {
+                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("definition"))
+            })
+            .unwrap();
+        let shared = ctx.op(declaration).attributes.get_type("type").unwrap();
+        assert_eq!(
+            shared,
+            ctx.op(definition).attributes.get_type("type").unwrap()
+        );
+        let distinct = funcs
+            .iter()
+            .copied()
+            .find(|op| {
+                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("different"))
+            })
+            .and_then(|op| ctx.op(op).attributes.get_type("type"))
+            .unwrap();
+        assert_ne!(shared, distinct);
+        assert!(matches!(
+            ctx.types.get(shared).attrs.get("metadata"),
+            Some(Attribute::List(_))
+        ));
+        assert_eq!(
+            ctx.op(declaration).attributes.get_symbol("metadata"),
+            Some(Symbol::new("declaration"))
+        );
+
+        let inline = r#"core.module @test {
+  tribute_control.func {sym_name = @inline, type = tribute_control.func_sig<(core.i32) -> core.i32> {metadata = @inline, tribute.calling_convention = 0}}
+}"#;
+        let (inline_ctx, inline_module) = parse_fixture(inline);
+        let inline_printed = assert_round_trip(&inline_ctx, inline_module);
+        assert!(
+            inline_printed.contains(
+                "type = tribute_control.func_sig<(core.i32) -> core.i32> {metadata = @inline, tribute.calling_convention = 0}"
+            ),
+            "single-use attributed signature must stay inline: {inline_printed}"
+        );
     }
 
     #[test]
@@ -3867,10 +3889,10 @@ mod tests {
   }
 }"#,
             r#"core.module @test {
-  tribute_control.func @bad() -> core.i32 convention(direct) signature_attributes {num_inputs = 0}
+  tribute_control.func @bad() -> core.i32 convention(direct) signature_attributes {metadata = @retired}
 }"#,
             r#"core.module @test {
-  %0 = tribute_control.lambda() -> core.i32 convention(cps) signature_attributes {tribute.calling_convention = 2} captures [] {
+  %0 = tribute_control.lambda() -> core.i32 convention(cps) signature_attributes {metadata = @retired} captures [] {
     %1 = arith.const {value = 1} : core.i32
     tribute_control.return %1
   }

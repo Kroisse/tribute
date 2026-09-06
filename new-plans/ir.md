@@ -258,9 +258,17 @@ tribute_control.func @decl(%x: T) -> R convention(direct)
 parameter/result, 필수 convention, 명시적 `captures [...]`, 선택적 추가
 attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`는 capture가
 없어도 `captures []`로 항상 출력하며 canonical 순서는 convention, captures,
-선택적 attributes, body다. `func_ref`, `call`, `call_indirect`, `return`은
-generic assembly가 모든 정보를 손실 없이 표현하므로 custom format을 만들지
-않는다.
+선택적 attributes, body다.
+
+간결한 형식은 non-reserved type attribute가 없는 source signature에만 쓴다.
+그런 attribute가 있으면 `func`/`lambda`는 generic assembly를 써서 complete
+`type` attribute 또는 result type expression을 출력한다. Metadata의 소유자는
+항상 그 `tribute_control.func_sig` type/alias 하나이며, 같은 alias를 참조하는
+여러 operation이 operation-local override를 만들 수 없다. Alias가 없으면
+generic type-bearing 위치에 attributed `func_sig` 전체를 inline으로 출력한다.
+Operation attribute는 별개의 generic attribute dictionary에 남는다.
+`func_ref`, `call`, `call_indirect`, `return`은 generic assembly가 모든 정보를
+손실 없이 표현하므로 custom format을 만들지 않는다.
 
 #### `tribute_control.func`
 

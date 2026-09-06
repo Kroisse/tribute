@@ -298,6 +298,14 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.write_attribute(&mut *self.f, attr)
     }
 
+    /// Print an operation with generic assembly.
+    ///
+    /// Custom formats use this when their concise form cannot represent the
+    /// complete operation without loss.
+    pub fn print_generic(&mut self, op: OpRef, indent: usize) -> fmt::Result {
+        print_generic_op(self.state, &mut *self.f, op, indent)
+    }
+
     /// Reset value and block numbering (for func.func — each function restarts at %0).
     pub fn reset_numbering(&mut self) {
         self.state.reset_numbering();

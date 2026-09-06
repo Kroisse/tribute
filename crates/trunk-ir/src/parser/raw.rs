@@ -570,6 +570,10 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     ws.parse_next(input)?;
     // A bare attribute dictionary is generic syntax, even for func.func.
     let generic_func = dialect == "func" && op_name == "func" && input.starts_with('{');
+    // Generic operations begin with attributes or operands. Only those shapes
+    // may recover from a custom parser's Backtrack into generic parsing.
+    let generic_custom_shape =
+        input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check custom assembly format registry
     if let Some(fmt) = crate::op_interface::lookup_asm_format(
         crate::Symbol::from_dynamic(dialect),
@@ -577,7 +581,14 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     )
     .filter(|_| !generic_func)
     {
-        return (fmt.parse_fn)(input, results, sym_name);
+        let checkpoint = *input;
+        match (fmt.parse_fn)(input, results.clone(), sym_name.clone()) {
+            Ok(operation) => return Ok(operation),
+            Err(winnow::error::ErrMode::Backtrack(_)) if generic_custom_shape => {
+                *input = checkpoint;
+            }
+            Err(error) => return Err(error),
+        }
     }
 
     // Parse either func-style params (%arg: type, ...) or operands (%val, %val)

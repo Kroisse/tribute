@@ -1348,6 +1348,27 @@ core.module @test {
     }
 
     #[test]
+    fn generic_shared_func_assembly_remains_parseable() {
+        let input = r#"core.module @test {
+  !signature = func.func_sig<(core.i32) -> core.i32>
+  func.func {sym_name = @generic, type = !signature}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
+        let function = ctx
+            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .ops[0];
+        assert_eq!(
+            ctx.op(function).attributes.get_symbol("sym_name"),
+            Some(Symbol::new("generic"))
+        );
+        assert_eq!(
+            ctx.op(function).attributes.get_type("type"),
+            ctx.type_alias_by_name(Symbol::new("signature"))
+        );
+    }
+
+    #[test]
     fn test_legacy_func_type_normalizes_to_canonical_storage_and_text() {
         let input = r#"core.module @test {
   !legacy = core.func(core.i64, core.i32)
