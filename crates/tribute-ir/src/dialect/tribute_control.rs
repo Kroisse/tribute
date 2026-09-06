@@ -506,19 +506,17 @@ fn func_sig_raw_type<'a>(
     result: trunk_ir::parser::raw::RawType<'a>,
     params: &[(&'a str, trunk_ir::parser::raw::RawType<'a>)],
     convention: CallingConvention,
-    mut attrs: Vec<(&'a str, trunk_ir::parser::raw::RawAttribute<'a>)>,
 ) -> trunk_ir::parser::raw::RawType<'a> {
     use trunk_ir::parser::raw::{RawAttribute, RawType};
-    attrs.push((
-        CALLING_CONVENTION_ATTR,
-        RawAttribute::Int(convention as i128),
-    ));
     RawType::Function {
         dialect: "tribute_control",
         name: "func_sig",
         inputs: params.iter().map(|(_, ty)| ty.clone()).collect(),
         results: vec![result],
-        attrs,
+        attrs: vec![(
+            CALLING_CONVENTION_ATTR,
+            RawAttribute::Int(convention as i128),
+        )],
     }
 }
 
@@ -573,7 +571,7 @@ fn parse_func<'a>(
         regions.push(region);
     }
 
-    let signature = func_sig_raw_type(result, &params, convention, vec![]);
+    let signature = func_sig_raw_type(result, &params, convention);
     let mut attributes = attributes;
     attributes.push(("type", RawAttribute::Type(signature)));
 
@@ -611,18 +609,18 @@ fn print_lambda(
 ) -> fmt::Result {
     use fmt::Write;
 
-    let result = h.ctx().op_results(op).first().copied();
-    let result_name = result.map(|value| h.assign_value_name(value));
     let callable_ty = h.ctx().op_result_types(op).first().copied();
-    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
-    let region = h.ctx().op(op).regions.first().copied();
-
     if callable_ty.is_some_and(|ty| {
         FuncSig::from_type_ref(h.ctx(), ty)
             .is_some_and(|signature| signature.has_nonreserved_attrs(h.ctx()))
     }) {
         return h.print_generic(op, indent);
     }
+
+    let result = h.ctx().op_results(op).first().copied();
+    let result_name = result.map(|value| h.assign_value_name(value));
+    let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
+    let region = h.ctx().op(op).regions.first().copied();
 
     write!(h, "{}", " ".repeat(indent))?;
     if let Some(name) = result_name {
@@ -729,7 +727,7 @@ fn parse_lambda<'a>(
         return_type: None,
         operands: captures,
         attributes,
-        result_types: vec![func_sig_raw_type(result, &params, convention, vec![])],
+        result_types: vec![func_sig_raw_type(result, &params, convention)],
         regions: vec![region],
         successors: vec![],
     })
@@ -3789,6 +3787,10 @@ mod tests {
         assert!(printed.contains("metadata = @definition"), "{printed}");
         assert!(printed.contains(" : !lambda"), "{printed}");
         assert!(printed.contains("metadata = @operation"), "{printed}");
+        assert!(
+            printed.contains("%2 = tribute_control.lambda %0, %1"),
+            "generic fallback must not consume an extra lambda result name: {printed}"
+        );
         assert!(printed.contains("convention(evidence_direct)"));
         assert!(printed.contains("convention(cps) captures []"));
         assert!(printed.contains("debug_name = \"apply\""));
