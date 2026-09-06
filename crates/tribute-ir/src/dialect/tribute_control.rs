@@ -366,6 +366,15 @@ fn func_sig_parts(
     ))
 }
 
+/// Whether custom source assembly can represent the complete signature.
+///
+/// Invalid and metadata-bearing signatures must use generic assembly so
+/// printing never discards their storage.
+fn has_concise_func_sig(ctx: &IrContext, ty: Option<TypeRef>) -> bool {
+    ty.and_then(|ty| FuncSig::from_type_ref(ctx, ty))
+        .is_some_and(|signature| !signature.has_nonreserved_attrs(ctx))
+}
+
 fn print_extra_attributes(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     op: OpRef,
@@ -444,10 +453,7 @@ fn print_func(
     let symbol = data.attributes.get_symbol("sym_name");
     let callable_ty = data.attributes.get_type("type");
     let region = data.regions.first().copied();
-    if callable_ty.is_some_and(|ty| {
-        FuncSig::from_type_ref(h.ctx(), ty)
-            .is_some_and(|signature| signature.has_nonreserved_attrs(h.ctx()))
-    }) {
+    if !has_concise_func_sig(h.ctx(), callable_ty) {
         return h.print_generic(op, indent);
     }
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
@@ -609,11 +615,9 @@ fn print_lambda(
 ) -> fmt::Result {
     use fmt::Write;
 
-    let callable_ty = h.ctx().op_result_types(op).first().copied();
-    if callable_ty.is_some_and(|ty| {
-        FuncSig::from_type_ref(h.ctx(), ty)
-            .is_some_and(|signature| signature.has_nonreserved_attrs(h.ctx()))
-    }) {
+    let result_types = h.ctx().op_result_types(op);
+    let callable_ty = result_types.first().copied();
+    if result_types.len() != 1 || !has_concise_func_sig(h.ctx(), callable_ty) {
         return h.print_generic(op, indent);
     }
 
@@ -3850,6 +3854,44 @@ mod tests {
                 "type = tribute_control.func_sig<(core.i32) -> core.i32> {metadata = @inline, tribute.calling_convention = 0}"
             ),
             "single-use attributed signature must stay inline: {inline_printed}"
+        );
+    }
+
+    #[test]
+    fn malformed_func_sig_storage_uses_generic_assembly_without_loss() {
+        let input = r#"core.module @test {
+  tribute_control.func {sym_name = @missing}
+  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}}
+  %lambda = tribute_control.lambda : tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}
+}"#;
+        let (ctx, module) = parse_fixture(input);
+        let printed = assert_round_trip(&ctx, module);
+
+        assert!(
+            printed.contains("tribute_control.func {sym_name = @missing}"),
+            "missing source signatures must use generic assembly: {printed}"
+        );
+        assert!(
+            printed.contains(
+                "!t0 = tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}"
+            ),
+            "malformed signature type/count storage must remain intact: {printed}"
+        );
+        assert!(
+            printed.contains("tribute_control.func {sym_name = @broken, type = !t0}"),
+            "malformed function signature must remain attached to the function: {printed}"
+        );
+        assert!(
+            printed.contains("%0 = tribute_control.lambda : !t0"),
+            "malformed lambda signature must remain attached to the lambda: {printed}"
+        );
+
+        let errors = validate_local(&ctx, module);
+        let errors = messages(&errors);
+        assert!(errors.contains("requires 'type' attribute"), "{errors}");
+        assert!(
+            errors.contains("malformed tribute_control.func_sig"),
+            "{errors}"
         );
     }
 

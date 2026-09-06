@@ -4514,6 +4514,25 @@ mod tests {
     }
 
     #[test]
+    fn raw_malformed_source_signature_storage_fails_before_conversion() {
+        let input = r#"core.module @test {
+  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}}
+  %lambda = tribute_control.lambda : tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("malformed tribute_control.func_sig"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
     fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
         let malformed = [
             (
