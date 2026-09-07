@@ -162,8 +162,8 @@ mod tests {
     }
 
     #[test]
-    fn converts_wasm_zero_and_multiple_results_with_nested_metadata() {
-        for results in [0, 2] {
+    fn converts_wasm_results_inputs_and_metadata() {
+        for results in [0, 1, 2] {
             let (mut ctx, loc) = test_ctx();
             let i32 = type_ref(&mut ctx, "i32");
             let i64 = type_ref(&mut ctx, "i64");
@@ -179,12 +179,20 @@ mod tests {
             attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
             let signature = wasm::func_sig_with_attrs(
                 &mut ctx,
-                [i32],
-                (results == 2).then_some(vec![i32, ptr]).unwrap_or_default(),
+                [i32, ptr],
+                match results {
+                    0 => vec![],
+                    1 => vec![i32],
+                    2 => vec![i32, ptr],
+                    _ => unreachable!(),
+                },
                 attrs,
             )
             .as_type_ref();
-            let func = make_wasm_func(&mut ctx, loc, "f", signature, &[i32]);
+            let func = make_wasm_func(&mut ctx, loc, "f", signature, &[i32, ptr]);
+            ctx.op_mut(func)
+                .attributes
+                .insert(Symbol::new("custom"), Attribute::Int(7));
             let module = make_module(&mut ctx, loc, vec![func]);
 
             let result = PatternApplicator::new(i32_to_i64(i32, i64))
@@ -195,10 +203,15 @@ mod tests {
             assert!(result.reached_fixpoint);
             let function = wasm::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
             let signature = wasm::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
-            assert_eq!(signature.inputs(&ctx), [i64]);
+            assert_eq!(signature.inputs(&ctx), [i64, ptr]);
             assert_eq!(
                 signature.results(&ctx),
-                (results == 2).then_some(vec![i64, ptr]).unwrap_or_default()
+                match results {
+                    0 => vec![],
+                    1 => vec![i64],
+                    2 => vec![i64, ptr],
+                    _ => unreachable!(),
+                }
             );
             let attrs = signature
                 .non_reserved_attrs(&ctx)
@@ -213,6 +226,13 @@ mod tests {
             );
             assert_eq!(attrs.get_symbol("tag"), Some(Symbol::new("keep")),);
             assert_eq!(ctx.types.get(function.r#type(&ctx)).attrs.len(), 4);
+            assert_eq!(
+                ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),
+                Some(&Attribute::Int(7))
+            );
+            let entry = ctx.region(function.body(&ctx)).blocks[0];
+            assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i64);
+            assert_eq!(ctx.value_ty(ctx.block_arg(entry, 1)), ptr);
         }
     }
 
@@ -221,11 +241,27 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
-        let changed = wasm::func_sig(&mut ctx, [i32], [i32, i32]).as_type_ref();
         let unchanged = wasm::func_sig(&mut ctx, [i64], []).as_type_ref();
-        let declaration = make_bodyless_wasm_func(&mut ctx, loc, Symbol::new("extern"), changed);
+        let declarations: Vec<OpRef> = [vec![], vec![i32], vec![i32, i32]]
+            .into_iter()
+            .enumerate()
+            .map(|(index, results)| {
+                let signature = wasm::func_sig(&mut ctx, [i32], results).as_type_ref();
+                let name = match index {
+                    0 => "extern_zero",
+                    1 => "extern_one",
+                    2 => "extern_many",
+                    _ => unreachable!(),
+                };
+                make_bodyless_wasm_func(&mut ctx, loc, Symbol::new(name), signature)
+            })
+            .collect();
         let unchanged_func = make_wasm_func(&mut ctx, loc, "unchanged", unchanged, &[i64]);
-        let module = make_module(&mut ctx, loc, vec![declaration, unchanged_func]);
+        let module = make_module(
+            &mut ctx,
+            loc,
+            declarations.into_iter().chain([unchanged_func]).collect(),
+        );
 
         let result = PatternApplicator::new(i32_to_i64(i32, i64))
             .add_pattern(WasmFuncSignatureConversionPattern)
@@ -234,17 +270,21 @@ mod tests {
             .unwrap();
         assert!(result.reached_fixpoint);
         let ops = module.ops(&ctx);
-        assert!(ctx.op(ops[0]).regions.is_empty());
-        let converted =
-            wasm::FuncSig::from_type_ref(&ctx, ctx.op(ops[0]).attributes.get_type("type").unwrap())
-                .unwrap();
-        assert_eq!(converted.inputs(&ctx), [i64]);
-        assert_eq!(converted.results(&ctx), [i64, i64]);
+        for (op, results) in ops.iter().take(3).zip([vec![], vec![i64], vec![i64, i64]]) {
+            assert!(ctx.op(*op).regions.is_empty());
+            let converted = wasm::FuncSig::from_type_ref(
+                &ctx,
+                ctx.op(*op).attributes.get_type("type").unwrap(),
+            )
+            .unwrap();
+            assert_eq!(converted.inputs(&ctx), [i64]);
+            assert_eq!(converted.results(&ctx), results);
+        }
         assert_eq!(
-            wasm::Func::from_op(&ctx, ops[1]).unwrap().r#type(&ctx),
+            wasm::Func::from_op(&ctx, ops[3]).unwrap().r#type(&ctx),
             unchanged
         );
-        assert_eq!(result.total_changes, 1);
+        assert_eq!(result.total_changes, 3);
     }
 
     #[test]

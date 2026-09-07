@@ -157,12 +157,13 @@ fn make_bodyless_function_op(
     ctx.create_op(data)
 }
 
-/// Shared implementation for function signature conversion.
+/// Replace a callable operation after its adapter has prepared a signature.
 ///
-/// Converts parameter and result types using the type converter, updates
-/// entry block argument types, rebuilds the function type, and replaces
-/// the operation. Accepts a constructor closure to create the replacement op,
-/// allowing dialect adapters to reuse the operation update sequence.
+/// The caller must validate and decode the callable type, provide a prepared
+/// type whose inputs match `new_inputs`, and pass the callable's owned body
+/// region when it has one. This helper validates entry arity before mutation,
+/// updates entry arguments, preserves operation attributes, and transfers the
+/// body to the replacement created by `make_op`.
 pub fn rewrite_function_signature(
     ctx: &mut IrContext,
     op: OpRef,
