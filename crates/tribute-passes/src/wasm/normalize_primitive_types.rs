@@ -34,8 +34,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    WasmFuncSignatureConversionPattern,
 };
+use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 /// Normalize tribute_rt primitive types to core types.
 ///

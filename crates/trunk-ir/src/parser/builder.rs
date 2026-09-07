@@ -133,7 +133,45 @@ impl<'a> ArenaIrBuilder<'a> {
         if (dialect == "func" && name == "func_sig") || (dialect == "core" && name == "func") {
             return self.build_shared_function_type(inputs, results, attrs);
         }
+        if dialect == "wasm" && name == "func_sig" {
+            return self.build_wasm_function_type(inputs, results, attrs);
+        }
         self.build_foreign_function_type(dialect, name, inputs, results, attrs)
+    }
+
+    fn build_wasm_function_type(
+        &mut self,
+        inputs: &[RawType<'_>],
+        results: &[RawType<'_>],
+        attrs: &[(&str, RawAttribute<'_>)],
+    ) -> Result<TypeRef, ParseError> {
+        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
+            matches!(
+                *name,
+                crate::dialect::wasm::NUM_INPUTS_ATTR | crate::dialect::wasm::NUM_RESULTS_ATTR
+            )
+        }) {
+            return Err(ParseError {
+                message: format!("`{name}` is reserved by wasm.func_sig"),
+                offset: 0,
+            });
+        }
+        let inputs = inputs
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let results = results
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let attrs = attrs
+            .iter()
+            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
+            .collect::<Result<AttributeMap, ParseError>>()?;
+        Ok(
+            crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
+                .as_type_ref(),
+        )
     }
 
     /// Build the existing shared signature through its owning validated API.
@@ -535,8 +573,11 @@ impl<'a> ArenaIrBuilder<'a> {
                 .map(|(_, raw_ty)| self.build_type(raw_ty))
                 .collect::<Result<_, _>>()?;
 
-            let func_ty =
-                crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref();
+            let func_ty = if raw.dialect == "wasm" && raw.op_name == "func" {
+                crate::dialect::wasm::func_sig(self.ctx, param_types, results).as_type_ref()
+            } else {
+                crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref()
+            };
             if attributes.contains_key("type") && attributes.get_type("type").is_none() {
                 return Err(ParseError {
                     message: "explicit function type attribute must be a type".into(),
@@ -544,13 +585,27 @@ impl<'a> ArenaIrBuilder<'a> {
                 });
             }
             if let Some(explicit) = attributes.get_type("type") {
-                let signature = crate::dialect::func::FuncSig::from_type_ref(self.ctx, explicit);
-                let synthesized =
-                    crate::dialect::func::FuncSig::from_type_ref(self.ctx, func_ty).unwrap();
-                if signature.is_none_or(|signature| {
-                    signature.inputs(self.ctx) != synthesized.inputs(self.ctx)
-                        || signature.results(self.ctx) != synthesized.results(self.ctx)
-                }) {
+                let matches =
+                    if raw.dialect == "wasm" && raw.op_name == "func" {
+                        crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, explicit)
+                            .is_some_and(|signature| {
+                                let synthesized =
+                                    crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, func_ty)
+                                        .unwrap();
+                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
+                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
+                            })
+                    } else {
+                        crate::dialect::func::FuncSig::from_type_ref(self.ctx, explicit)
+                            .is_some_and(|signature| {
+                                let synthesized =
+                                    crate::dialect::func::FuncSig::from_type_ref(self.ctx, func_ty)
+                                        .unwrap();
+                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
+                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
+                            })
+                    };
+                if !matches {
                     return Err(ParseError {
                         message: "explicit function type does not match custom signature".into(),
                         offset: 0,
@@ -1365,6 +1420,25 @@ core.module @test {
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
             ctx.type_alias_by_name(Symbol::new("signature"))
+        );
+    }
+
+    #[test]
+    fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
+        let input = r#"core.module @test {
+  wasm.func {sym_name = @unlowered, type = func.func_sig<() -> core.nil>} { wasm.return }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
+        let function = ctx
+            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .ops[0];
+        let signature = ctx.op(function).attributes.get_type("type").unwrap();
+        assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
+        assert!(crate::dialect::wasm::FuncSig::from_type_ref(&ctx, signature).is_none());
+        assert!(
+            print_module(&ctx, module).contains("type = func.func_sig<() -> core.nil>"),
+            "the parser must not apply an implicit target conversion"
         );
     }
 

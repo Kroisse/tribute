@@ -16,19 +16,20 @@
 //! - Generates `wasm.table` and `wasm.elem` operations
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeModel;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, clone_attrs_except,
-    convert_function_type,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockData, RegionData};
 
 use trunk_ir::smallvec::smallvec;
@@ -38,6 +39,8 @@ use trunk_ir::smallvec::smallvec;
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    materialize_nested_callable_value_types(ctx, module, &type_converter);
+
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(ctx, module);
 
@@ -86,6 +89,74 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
     // 4. Add wasm.table and wasm.elem to the module
     add_function_table(ctx, module, &sorted_funcs, table_size);
+}
+
+/// The outer function signature is not the only type-bearing surface of a
+/// callable value. Before rewriting operations, materialize nested callable
+/// types consistently on block arguments, produced values, and attributes so
+/// a `func.func_sig` value can cross the boundary without leaving its body in
+/// the shared type system.
+fn materialize_nested_callable_value_types(
+    ctx: &mut IrContext,
+    module: Module,
+    converter: &TypeConverter,
+) {
+    let mut ops = Vec::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        ops.push(op);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    for op in ops {
+        let result_types = ctx.op_result_types(op).to_vec();
+        for (index, ty) in result_types.into_iter().enumerate() {
+            let Some(converted) = convert_nested_callable_type(ctx, ty, converter) else {
+                continue;
+            };
+            if converted != ty {
+                ctx.set_op_result_type(op, index as u32, converted);
+            }
+        }
+
+        let attributes = ctx.op(op).attributes.clone();
+        let is_func = func::Func::matches(ctx, op);
+        let is_indirect =
+            func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op);
+        let converted_attributes =
+            convert_nested_callable_attributes(ctx, &attributes, converter, |key| {
+                (key == Symbol::new("type") && is_func)
+                    || (key == Symbol::new("signature") && is_indirect)
+            });
+        if let Some(converted_attributes) = converted_attributes
+            && converted_attributes != attributes
+        {
+            ctx.op_mut(op).attributes = converted_attributes;
+        }
+
+        let regions = ctx.op(op).regions.to_vec();
+        for region in regions {
+            let blocks = ctx.region(region).blocks.to_vec();
+            for block in blocks {
+                let arguments = ctx.block_args(block).to_vec();
+                for (index, argument) in arguments.into_iter().enumerate() {
+                    let ty = ctx.value_ty(argument);
+                    let Some(converted) = convert_nested_callable_type(ctx, ty, converter) else {
+                        continue;
+                    };
+                    if converted != ty {
+                        ctx.set_block_arg_type(block, index as u32, converted);
+                    }
+                    let attributes = ctx.block(block).args[index].attrs.clone();
+                    let converted_attributes =
+                        convert_nested_callable_attributes(ctx, &attributes, converter, |_| false);
+                    if let Some(converted_attributes) = converted_attributes
+                        && converted_attributes != attributes
+                    {
+                        ctx.block_mut(block).args[index].attrs = converted_attributes;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Collect all function symbols referenced by func.constant operations.
@@ -177,6 +248,188 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
+/// Convert the complete shared callable contract once at the Wasm boundary.
+/// The shared type remains zero-or-one result; only the target-owned type may
+/// subsequently carry multiple results from low-level Wasm fixtures.
+fn convert_attribute_to_wasm(
+    ctx: &mut IrContext,
+    attribute: &Attribute,
+    converter: &TypeConverter,
+) -> Option<Attribute> {
+    match attribute {
+        Attribute::Type(ty) => Some(Attribute::Type(convert_type_to_wasm(ctx, *ty, converter)?)),
+        Attribute::List(values) => Some(Attribute::List(
+            values
+                .iter()
+                .map(|value| convert_attribute_to_wasm(ctx, value, converter))
+                .collect::<Option<_>>()?,
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+/// Recurse through a composite type only to materialize nested callable
+/// contracts. Rewriting every nested physical type would desynchronize an ADT
+/// layout from already-typed values that use that layout.
+fn convert_nested_callable_type(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    if func::FuncSig::from_type_ref(ctx, ty).is_some() {
+        return convert_type_to_wasm(ctx, ty, converter);
+    }
+    let data = ctx.types.get(ty).clone();
+    let params = data
+        .params
+        .iter()
+        .map(|parameter| convert_nested_callable_type(ctx, *parameter, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = data
+        .attrs
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                convert_nested_callable_attribute(ctx, value, converter)?,
+            ))
+        })
+        .collect::<Option<_>>()?;
+    if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
+        return Some(ty);
+    }
+    let mut converted_data = data;
+    converted_data.params = params.into();
+    converted_data.attrs = attrs;
+    Some(ctx.types.intern(converted_data))
+}
+
+fn convert_nested_callable_attribute(
+    ctx: &mut IrContext,
+    attribute: &Attribute,
+    converter: &TypeConverter,
+) -> Option<Attribute> {
+    match attribute {
+        Attribute::Type(ty) => Some(Attribute::Type(convert_nested_callable_type(
+            ctx, *ty, converter,
+        )?)),
+        Attribute::List(values) => Some(Attribute::List(
+            values
+                .iter()
+                .map(|value| convert_nested_callable_attribute(ctx, value, converter))
+                .collect::<Option<_>>()?,
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+fn convert_nested_callable_attributes(
+    ctx: &mut IrContext,
+    attributes: &trunk_ir::AttributeMap,
+    converter: &TypeConverter,
+    skip: impl Fn(Symbol) -> bool,
+) -> Option<trunk_ir::AttributeMap> {
+    attributes
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                if skip(*key) {
+                    value.clone()
+                } else {
+                    convert_nested_callable_attribute(ctx, value, converter)?
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Recursively materialize target types, including shared callable values and
+/// type-bearing attributes nested inside another Wasm type.
+fn convert_type_to_wasm(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    let converted = converter.convert_type_or_identity(ctx, ty);
+    if converted != ty {
+        return convert_type_to_wasm(ctx, converted, converter);
+    }
+
+    if let Some(shared) = func::FuncSig::from_type_ref(ctx, ty) {
+        let input_types = shared.inputs(ctx).to_vec();
+        let result_types = shared.results(ctx).to_vec();
+        let type_attrs = shared
+            .non_reserved_attrs(ctx)
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>();
+        let inputs = input_types
+            .iter()
+            .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
+            .collect::<Option<Vec<_>>>()?;
+        let results = result_types
+            .iter()
+            .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
+            .collect::<Option<Vec<_>>>()?;
+        let attrs = type_attrs
+            .iter()
+            .map(|(key, value)| Some((*key, convert_attribute_to_wasm(ctx, value, converter)?)))
+            .collect::<Option<_>>()?;
+        return Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref());
+    }
+
+    let data = ctx.types.get(ty).clone();
+    let params = data
+        .params
+        .iter()
+        .map(|parameter| convert_nested_callable_type(ctx, *parameter, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = data
+        .attrs
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                convert_nested_callable_attribute(ctx, value, converter)?,
+            ))
+        })
+        .collect::<Option<_>>()?;
+    if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
+        return Some(ty);
+    }
+    let mut converted_data = data;
+    converted_data.params = params.into();
+    converted_data.attrs = attrs;
+    Some(ctx.types.intern(converted_data))
+}
+
+fn convert_to_wasm_func_type(
+    ctx: &mut IrContext,
+    signature: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    let shared = func::FuncSig::from_type_ref(ctx, signature)?;
+    let input_types = shared.inputs(ctx).to_vec();
+    let result_types = shared.results(ctx).to_vec();
+    let type_attrs = shared
+        .non_reserved_attrs(ctx)
+        .map(|(key, value)| (*key, value.clone()))
+        .collect::<Vec<_>>();
+    let inputs = input_types
+        .iter()
+        .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let results = result_types
+        .iter()
+        .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = type_attrs
+        .iter()
+        .map(|(key, value)| Some((*key, convert_attribute_to_wasm(ctx, value, converter)?)))
+        .collect::<Option<_>>()?;
+    Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref())
+}
+
 impl RewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
@@ -190,7 +443,11 @@ impl RewritePattern for FuncFuncPattern {
 
         let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name(ctx);
-        let func_type = func_op.r#type(ctx);
+        let Some(func_type) =
+            convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())
+        else {
+            return false;
+        };
         let attrs_to_preserve = clone_attrs_except(ctx, op, &["sym_name", "type"]);
 
         // Generated Func::body() asserts for valid bodyless declarations.
@@ -271,7 +528,8 @@ impl RewritePattern for FuncCallIndirectPattern {
         let result_types = CallLike::call_result_types(&call, ctx).to_vec();
 
         let signature = if let Some(signature) = call.exact_signature(ctx) {
-            let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+            let Some(signature) =
+                convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
             else {
                 return false;
             };
@@ -366,7 +624,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
-        let Some(signature) = convert_function_type(ctx, signature, rewriter.type_converter())
+        let Some(signature) = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
         else {
             return false;
         };
@@ -512,6 +770,77 @@ mod tests {
     }
 
     #[test]
+    fn func_to_wasm_recursively_converts_nested_callable_types_and_attributes() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @identity(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
+    func.return %f
+  }
+  func.func @caller(%f: func.func_sig<() -> core.nil>) -> func.func_sig<() -> core.nil> {
+    %result = func.call %f {callee = @identity} : func.func_sig<() -> core.nil>
+    func.return %result
+  }
+}"#,
+        );
+        let function = module.ops(&ctx)[0];
+        let original = ctx
+            .op(function)
+            .attributes
+            .get_type("type")
+            .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
+            .unwrap();
+        let inputs = original.inputs(&ctx).to_vec();
+        let results = original.results(&ctx).to_vec();
+        let nested = inputs[0];
+        let mut attrs = trunk_ir::AttributeMap::new();
+        attrs.insert(
+            Symbol::new("metadata"),
+            Attribute::List(vec![Attribute::Type(nested)]),
+        );
+        let outer = func::func_sig_with_attrs(&mut ctx, inputs, results, attrs).as_type_ref();
+        ctx.op_mut(function)
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(outer));
+        let original_body = ctx.op(function).regions[0];
+        let original_block = ctx.region(original_body).blocks[0];
+        ctx.block_mut(original_block).args[0]
+            .attrs
+            .insert(Symbol::new("metadata"), Attribute::Type(nested));
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let lowered = module.ops(&ctx)[0];
+        let signature = wasm_dialect::Func::from_op(&ctx, lowered)
+            .unwrap()
+            .r#type(&ctx);
+        let signature = wasm_dialect::FuncSig::from_type_ref(&ctx, signature).unwrap();
+        let nested_input = signature.inputs(&ctx)[0];
+        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, nested_input).is_some());
+        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, signature.results(&ctx)[0]).is_some());
+        let body = ctx.op(lowered).regions[0];
+        let block = ctx.region(body).blocks[0];
+        assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
+        let block_metadata = ctx.block(block).args[0].attrs.get_type("metadata").unwrap();
+        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, block_metadata).is_some());
+        let metadata = signature
+            .non_reserved_attrs(&ctx)
+            .find_map(|(key, value)| (*key == Symbol::new("metadata")).then_some(value))
+            .unwrap();
+        let Attribute::List(values) = metadata else {
+            panic!("metadata must remain a list")
+        };
+        let Attribute::Type(nested_attribute) = &values[0] else {
+            panic!("nested metadata must remain a type")
+        };
+        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, *nested_attribute).is_some());
+        crate::validate_wasm_ir(&ctx, module).expect("nested callable identity must validate");
+        crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("nested callable identity and call must emit");
+    }
+
+    #[test]
     fn func_to_wasm_preserves_bodyless_declarations_and_definition_bodies() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -551,7 +880,7 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         assert!(
-            output.contains("!t0 = func.func_sig<(core.i32) -> core.i32>")
+            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
                 && output.contains("wasm.func {custom = 7, sym_name = @external, type = !t0}"),
             "{output}"
         );
@@ -624,7 +953,7 @@ mod tests {
         );
         assert!(output.contains(" = wasm.call_indirect "), "{output}");
         assert!(
-            output.contains("!t0 = func.func_sig<(core.i32) -> core.nil>")
+            output.contains("!t0 = wasm.func_sig<(core.i32) -> core.nil>")
                 && output.contains("signature = !t0"),
             "{output}"
         );
@@ -648,7 +977,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0 {signature = func.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0 {signature = wasm.func_sig<() -> core.nil>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );
@@ -721,12 +1050,12 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>"
+                "wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.nil>"
             ),
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
+            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
             "the converted transfer must retain its calling convention: {output}"
         );
         assert!(
@@ -782,7 +1111,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains(
-                "wasm.call_indirect %0, %1 {signature = func.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
+                "wasm.call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0}"
             ),
             "{output}"
         );

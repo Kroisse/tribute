@@ -162,15 +162,20 @@ pub(crate) fn handle_call_indirect(
         })
         .collect();
 
+    // The legacy inference path is scalar-only. Exact `wasm.func_sig`
+    // contracts own zero and multiple results.
+    let result_types = ctx.op_result_types(op);
+    let [result_ty] = result_types else {
+        return Err(CompilationError::invalid_module(
+            "legacy wasm.call_indirect requires exactly one result; attach an exact wasm.func_sig for zero or multiple results",
+        ));
+    };
+    let mut result_ty = *result_ty;
+
     // Get result type - use enclosing function's return type if it's funcref
     // and the call_indirect has anyref result. This is needed because
     // WebAssembly GC has separate type hierarchies for anyref and funcref,
     // so we can't cast between them.
-    let result_types = ctx.op_result_types(op);
-    let mut result_ty = result_types.first().copied().ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect must have a result type")
-    })?;
-
     // If result type is anyref but enclosing function returns funcref or Step,
     // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
     // type hierarchies, and effectful functions return Step for yield bubbling.
@@ -182,7 +187,7 @@ pub(crate) fn handle_call_indirect(
     if let Some(func_ret_ty) = emit_ctx.func_return_type {
         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
         let func_returns_funcref = helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
-            || helpers::is_type(ctx, func_ret_ty, "func", "func_sig");
+            || helpers::is_type(ctx, func_ret_ty, "wasm", "func_sig");
         // Check for Step type (trampoline-based effect system)
         let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
         if is_anyref_result && func_returns_funcref {
@@ -339,10 +344,10 @@ pub(crate) fn handle_return_call_indirect(
 
 use super::super::helpers::attr_u32;
 
-/// Find a func.func_sig type in the `type_idx_by_type` / `func_types` registries by
+/// Find a scalar `wasm.func_sig` type in the `type_idx_by_type` / `func_types` registries by
 /// matching params and result.
 ///
-/// `func.func_sig` stores inputs followed by its single result in `TypeData.params`;
+/// `wasm.func_sig` stores inputs followed by its single result in `TypeData.params`;
 /// callers use the validated accessor rather than depending on that flat layout.
 ///
 /// This performs a linear O(n) scan over the registries to avoid requiring
@@ -359,7 +364,7 @@ fn find_func_type_in_registry(
     // Search through registered func types (from imports, funcs, and call_indirect collection)
     for &ty_ref in module_info.type_idx_by_type.keys() {
         if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
         {
             return Ok(ty_ref);
         }
@@ -367,7 +372,7 @@ fn find_func_type_in_registry(
     // Also check func_types map
     for &ty_ref in module_info.func_types.values() {
         if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_result)| ty_result == result && ty_params == params)
+            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
         {
             return Ok(ty_ref);
         }

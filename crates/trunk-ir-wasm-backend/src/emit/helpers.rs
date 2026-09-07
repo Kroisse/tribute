@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::func;
+use trunk_ir::dialect::wasm;
 use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -93,21 +93,25 @@ pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
 // Type conversion
 // ============================================================================
 
-/// Get the params and return type of a func.func_sig TypeRef.
-/// Returns (param_types, return_type) or None if not a func.func_sig.
-pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], TypeRef)> {
-    let function = func::FuncSig::from_type_ref(ctx, ty)?;
-    Some((function.inputs(ctx), function.single_result(ctx)?))
+/// Get the ordered params and results of a target-owned `wasm.func_sig`.
+pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
+    let function = wasm::FuncSig::from_type_ref(ctx, ty)?;
+    Some((function.inputs(ctx), function.results(ctx)))
 }
 
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm
 /// backend's physical type mapping.
-fn is_wasm_physical_argument_assignable(
+pub(crate) fn is_wasm_physical_argument_assignable(
     ctx: &IrContext,
     argument: TypeRef,
     parameter: TypeRef,
 ) -> bool {
     if argument == parameter {
+        return true;
+    }
+
+    // `core.i1` is represented by an i32 in the Wasm value space.
+    if is_type(ctx, argument, "core", "i1") && is_type(ctx, parameter, "core", "i32") {
         return true;
     }
 
@@ -160,8 +164,8 @@ pub(crate) fn exact_call_indirect_signature_with(
     op: OpRef,
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
-    let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
-        CompilationError::invalid_module("wasm.call_indirect signature must be func.func_sig")
+    let (params, signature_results) = func_type_parts(ctx, signature).ok_or_else(|| {
+        CompilationError::invalid_module("wasm.call_indirect signature must be wasm.func_sig")
     })?;
     let Some(_table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
@@ -174,11 +178,12 @@ pub(crate) fn exact_call_indirect_signature_with(
         ));
     };
     let results = ctx.op_result_types(op);
-    let results_match = if is_nil_type(ctx, result) {
-        results.is_empty()
-    } else {
-        results == [result]
-    };
+    // The established omitted-result-slot compatibility allows a `[nil]`
+    // target signature for a resultless transfer. Ordinary empty signatures
+    // match only an empty result list; nil operands remain nullable refs.
+    let results_match = results == signature_results
+        || (results.is_empty()
+            && matches!(signature_results, [result] if is_nil_type(ctx, *result)));
     if params.len() != args.len()
         || params.iter().zip(args).any(|(param, arg)| {
             !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
@@ -212,12 +217,12 @@ pub(crate) fn exact_return_call_indirect_signature_with(
     op: OpRef,
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
-    let (params, result) = func_type_parts(ctx, signature).ok_or_else(|| {
+    let (params, results) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module(
-            "wasm.return_call_indirect signature must be func.func_sig",
+            "wasm.return_call_indirect signature must be wasm.func_sig",
         )
     })?;
-    if !is_nil_type(ctx, result) {
+    if !matches!(results, [result] if is_nil_type(ctx, *result)) {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect signature must have an empty result",
         ));
@@ -281,6 +286,8 @@ pub(crate) fn type_to_valtype(
             nullable: true,
             heap_type: HeapType::Concrete(type_idx),
         }))
+    } else if is_type(ctx, ty, "wasm", "func_sig") {
+        Ok(ValType::Ref(RefType::FUNCREF))
     } else if ctx.types.get(ty).dialect == Symbol::new("wasm") {
         let name = ctx.types.get(ty).name;
         if name == Symbol::new("structref") {
@@ -325,8 +332,6 @@ pub(crate) fn type_to_valtype(
                 ty: AbstractHeapType::Array,
             },
         }))
-    } else if is_type(ctx, ty, "func", "func_sig") {
-        Ok(ValType::Ref(RefType::FUNCREF))
     } else if is_closure_struct_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
@@ -374,18 +379,20 @@ fn is_bytes_array_ref(ctx: &IrContext, ty: TypeRef) -> bool {
         && is_type(ctx, array.params[0], "core", "i8")
 }
 
-/// Convert an IR return type to WebAssembly result types.
-/// Returns an empty vector for nil types (void functions).
-pub(crate) fn result_types(
+/// Convert an ordered Wasm signature result list to machine result slots.
+///
+/// Result `core.nil` remains the established omitted target slot rule. Nil in
+/// value or input positions is separately lowered as a nullable reference.
+pub(crate) fn signature_result_types(
     ctx: &IrContext,
-    ty: TypeRef,
+    results: &[TypeRef],
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<Vec<ValType>> {
-    if is_nil_type(ctx, ty) {
-        Ok(Vec::new())
-    } else {
-        Ok(vec![type_to_valtype(ctx, ty, type_idx_by_type)?])
-    }
+    results
+        .iter()
+        .filter(|ty| !is_nil_type(ctx, **ty))
+        .map(|ty| type_to_valtype(ctx, *ty, type_idx_by_type))
+        .collect()
 }
 
 // ============================================================================
@@ -531,7 +538,7 @@ mod tests {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let signature = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(
             type_to_valtype(&ctx, signature, &HashMap::new())

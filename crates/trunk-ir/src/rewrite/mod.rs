@@ -19,7 +19,8 @@ pub use helpers::{clone_attrs_except, erase_op, inline_region_blocks, split_bloc
 pub use pattern::RewritePattern;
 pub use rewriter::PatternRewriter;
 pub use signature_conversion::{
-    FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern, convert_function_type,
+    ConvertedSignatureComponents, FuncSignatureConversionPattern, convert_function_type,
+    convert_signature_components, rewrite_function_signature,
 };
 pub use type_converter::TypeConverter;
 

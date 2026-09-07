@@ -55,6 +55,10 @@ target ABI conversion may later change logical CPS `[core.never]` into the
 physical empty result list. Malformed raw `func.func_sig` types are permitted only
 in verifier tests and are rejected by whole-IR validation.
 
+공통 시그니처 구성요소 변환은 검증된 입력·결과 목록과 예약되지 않은 타입 속성만
+순회한다. 각 dialect 어댑터는 자신의 시그니처를 검증하고 해독한 뒤 자신의 생성자로
+다시 만들므로, 공통 순회가 dialect 정체성이나 ABI를 선택하지 않는다.
+
 The source-logical callable type is independently owned as
 `tribute_control.func_sig`. It uses the same flat input-first storage and
 mandatory u32 delimiters, but its validated API requires exactly one source
@@ -70,6 +74,12 @@ represent the source signature losslessly; otherwise generic operation assembly
 keeps the complete type-bearing attribute visible. The codec reconstructs that
 type metadata before source-to-shared conversion; no operation-local signature
 metadata clause or override exists.
+
+Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타입 메타데이터를
+`wasm.func_sig`로 변환한다. 입력·결과 개수와 예약되지 않은 타입 속성을
+보존한다. 저장 형식과 타입 동일성은
+[IR 계약](ir.md#wasmfunc_sig-wasm-호출-계약), 바이너리 결과 표현은
+[Wasm 백엔드 계약](wasm-backend.md#wasm-결과-슬롯)에서 정의한다.
 
 ## 직접형 제어 소유권
 

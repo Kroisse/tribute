@@ -90,6 +90,17 @@ Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect
 `(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
 emit하여 해당 operation을 제거하는 Wasm 경계다.
 
+### Wasm 결과 슬롯
+
+`wasm.func_sig`의 저장 형식과 간접 호출의 명시적 시그니처는
+[IR 호출 계약](ir.md#wasmfunc_sig-wasm-호출-계약)을 따른다.
+
+바이너리 코드 생성은 결과 위치의 `core.nil`만 생략하고 나머지 결과의 선언 순서를
+보존한다. 생략되지 않는 각 결과에는 SSA 값과 지역 변수를 할당한다. 다중 결과
+호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
+입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
+Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
+
 ### Entrypoint contract
 
 The frontend accepts `main` only when its declared result is `Nil`. A frontend

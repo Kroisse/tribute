@@ -887,10 +887,20 @@ nearest registered owner is authoritative, including when its signature is
 malformed. Shared validation does not infer a lambda signature from an attribute
 or an outer function, and does not select a physical CPS ABI.
 
-Existing source producers remain one-result. Backend zero-result readiness and
-the `[core.never]` to `[]` target switch follow in later atomic changes. Current
-target ABI lowering still uses temporary `[core.nil]` encoding for physical CPS;
-this migration state is not the final physical contract.
+### `wasm.func_sig` Wasm 호출 계약
+
+`wasm.func_sig`는 Wasm이 소유하는 함수 호출 계약이다. 공통 및 소스 시그니처와
+마찬가지로 입력 우선의 평탄한 `[inputs..., results...]` 벡터와 필수 `u32` 속성
+`num_inputs`·`num_results`를 사용하며, 결과는 0개 이상을 허용한다. 두 개수의
+합은 벡터 길이와 같아야 하고, 두 속성은 타입 동일성에 참여한다. 이 속성은 저장
+경계이지 ABI나 호출 규약의 증거가 아니다. 예약되지 않은 타입 속성도 타입
+동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다.
+
+Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션 수집, 검증 및 코드
+생성은 이 타입을 사용한다. 간접 호출의 명시적 시그니처는 `wasm.func_sig`이며,
+타입 정보가 지워진 테이블 인덱스에서 재구성하지 않는다. 빈 결과 목록만으로
+CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
+결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
 
 ## Open Questions
 
