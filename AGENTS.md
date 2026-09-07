@@ -23,6 +23,10 @@ Key design docs:
 
 - When changing language, type, ability, module, IR, or backend rules, update
   the relevant `new-plans/*.md` file first.
+- Design documents under `new-plans/` must stand independently of work progress:
+  state durable contracts and compiler-phase ownership, not issue or PR numbers,
+  temporary branches or commits, or task sequencing and status. Track
+  implementation and handoff work in GitHub.
 - Use `.claude/rules/` for crate structure, pipeline, IR, and code convention
   reference material.
 - Use the `tribute-testing` skill for test commands, Salsa test patterns,
