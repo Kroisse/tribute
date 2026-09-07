@@ -34,9 +34,8 @@ use trunk_ir::adt_layout::{
 };
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
-use trunk_ir::dialect::func;
 use trunk_ir::location::Span;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
@@ -234,7 +233,7 @@ fn generate_fixed_release_function(
     loc: Location,
 ) -> OpRef {
     let tys = ClifTypes::intern(ctx);
-    let func_ty = func::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
+    let func_ty = clif::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
     let entry_block = ctx.create_block(BlockData {
         location: loc,
         args: vec![BlockArgData {
@@ -293,7 +292,7 @@ fn generate_release_function_for_struct(
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
     // Function type: (core.ptr) -> core.nil
-    let func_ty = func::func_sig(ctx, [ptr_ty], [nil_ty]).as_type_ref();
+    let func_ty = clif::func_sig(ctx, [ptr_ty], [nil_ty]).as_type_ref();
 
     assert_eq!(fields.len(), managed_fields.len());
     let managed_field_offsets: Vec<i32> = fields
@@ -516,7 +515,7 @@ fn generate_release_function_for_enum(
     let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
-    let func_ty = func::func_sig(ctx, [ptr_ty], [nil_ty]).as_type_ref();
+    let func_ty = clif::func_sig(ctx, [ptr_ty], [nil_ty]).as_type_ref();
 
     let entry_block = ctx.create_block(BlockData {
         location: loc,

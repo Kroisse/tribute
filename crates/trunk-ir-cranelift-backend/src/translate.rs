@@ -749,33 +749,54 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = @call_target, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = @call_target, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return %value
   }
-  clif.func {sym_name = @direct_call, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = @direct_call, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @indirect_call, type = func.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = @indirect_call, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      %result = clif.call_indirect %callee, %value, %unit, %last {sig = func.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
+      %result = clif.call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return_call %value, %unit, %last {callee = @direct_tail}
   }
-  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = func.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
   }
-  clif.func {sym_name = @jump, type = func.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = @jump, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.jump %value, %unit, %last [^merge]
     ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):
       clif.return
+  }
+}"#;
+
+    const ORDERED_RESULT_LISTS_NATIVE: &str = r#"core.module @test {
+  clif.func {sym_name = @sink, type = clif.func_sig<() -> ()>} {
+    clif.return
+  }
+  clif.func {sym_name = @pair, type = clif.func_sig<() -> (core.i32, core.i32)>} {
+    %first = clif.iconst {value = 2} : core.i32
+    %second = clif.iconst {value = 40} : core.i32
+    clif.return %first, %second
+  }
+  clif.func {sym_name = @main, type = clif.func_sig<() -> core.i32>} {
+    %first, %second = clif.call {callee = @pair} : core.i32, core.i32
+    clif.call {callee = @sink}
+    %callee = clif.symbol_addr {sym = @pair} : core.ptr
+    %other_first, %other_second = clif.call_indirect %callee {sig = clif.func_sig<() -> (core.i32, core.i32)>} : core.i32, core.i32
+    %direct_pair = clif.iadd %first, %first : core.i32
+    %indirect_pair = clif.iadd %other_second, %other_second : core.i32
+    %sum = clif.iadd %direct_pair, %indirect_pair : core.i32
+    clif.return %sum
   }
 }"#;
 
@@ -812,5 +833,37 @@ mod tests {
         let module = parse_test_module(&mut ctx, NIL_ZERO_WIDTH_NATIVE);
         let object = emit_module_to_native(&ctx, module, &[]).unwrap();
         assert!(!object.is_empty());
+    }
+
+    #[test]
+    fn native_emission_preserves_zero_and_ordered_multiple_results() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ORDERED_RESULT_LISTS_NATIVE);
+        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        let temp =
+            std::env::temp_dir().join(format!("tribute-ordered-results-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let object_path = temp.join("ordered-results.o");
+        let executable = temp.join("ordered-results");
+        let runtime_shim = temp.join("runtime-shim.c");
+        std::fs::write(&object_path, object).unwrap();
+        std::fs::write(
+            &runtime_shim,
+            "void __tribute_dealloc(void *ptr, long size) {}\n",
+        )
+        .unwrap();
+        assert!(
+            std::process::Command::new("cc")
+                .arg(&object_path)
+                .arg(&runtime_shim)
+                .arg("-o")
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let status = std::process::Command::new(&executable).status().unwrap();
+        std::fs::remove_dir_all(temp).unwrap();
+        assert_eq!(status.code(), Some(84));
     }
 }

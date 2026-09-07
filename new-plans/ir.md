@@ -902,6 +902,23 @@ Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
 
+### `clif.func_sig` Native 호출 계약
+
+`clif.func_sig`는 Native가 소유하는 함수 호출 계약이다. 입력 우선의 평탄한
+`[inputs..., results...]` 벡터와 필수 `u32` 속성 `num_inputs`·`num_results`를
+사용하고 결과는 0개 이상을 허용한다. 두 개수의 합은 벡터 길이와 같아야 하며,
+두 속성과 예약되지 않은 type 속성은 모두 type 동일성에 참여한다. count는 저장
+경계일 뿐 ABI 또는 calling convention의 증거가 아니다. parser, printer, alias,
+재귀 type conversion은 예약되지 않은 속성과 중첩된 type-bearing metadata를 그
+소유 type에 보존한다.
+
+Native 함수와 declaration, 직접·간접 호출, 반환, proper tail transfer 및
+Cranelift code generation은 이 type을 사용한다. 간접 호출의 `sig`는 정확한
+`clif.func_sig`이어야 하며 erased function pointer, symbol, ABI 문자열 또는
+storage shape에서 재구성하지 않는다. 결과가 비었다는 사실만으로 CPS를 판정하지
+않는다. 논리 Unit `[core.nil]`, 논리 CPS `[core.never]`, 물리 CPS `[]`의 구분은
+[공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
+
 ## Open Questions
 
 - Final closure environment representation for each backend.

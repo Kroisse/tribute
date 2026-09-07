@@ -11,7 +11,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{clif, func};
+use trunk_ir::dialect::clif;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
@@ -38,7 +38,7 @@ pub(crate) fn call_conv_for_cps_signature(
 }
 
 fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
-    func::FuncSig::from_type_ref(ctx, signature)
+    clif::FuncSig::from_type_ref(ctx, signature)
         .and_then(|function| function.single_result(ctx))
         .is_some_and(|result| is_nil_type(ctx, result))
 }
@@ -136,7 +136,7 @@ pub(crate) fn translate_type(
     )))
 }
 
-/// Translate a TrunkIR `func.func_sig` type to a Cranelift `Signature`.
+/// Translate a target-owned `clif.func_sig` type to a Cranelift `Signature`.
 ///
 /// `ptr_ty` is the platform pointer type, obtained from `target_config().pointer_type()`.
 pub(crate) fn translate_signature(
@@ -145,17 +145,12 @@ pub(crate) fn translate_signature(
     call_conv: CallConv,
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_ir::Signature> {
-    let function = func::FuncSig::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
-        CompilationError::type_error("expected valid func.func_sig type for signature translation")
+    let function = clif::FuncSig::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
+        CompilationError::type_error("expected valid clif.func_sig type for signature translation")
     })?;
 
     let mut sig = cl_ir::Signature::new(call_conv);
 
-    let ret_type = function.single_result(ctx).ok_or_else(|| {
-        CompilationError::type_error(
-            "Cranelift signature translation currently requires one func.func_sig result",
-        )
-    })?;
     let param_types = function.inputs(ctx);
 
     for &param_ty in param_types {
@@ -166,10 +161,12 @@ pub(crate) fn translate_signature(
         sig.params.push(cl_ir::AbiParam::new(cl_ty));
     }
 
-    // Nil return type means void — no return values.
-    let ret_td = ctx.types.get(ret_type);
-    if !(ret_td.dialect == Symbol::new("core") && ret_td.name == Symbol::new("nil")) {
-        let cl_ty = translate_type(ctx, ret_type, ptr_ty)?;
+    // Nil results are zero-width; preserve every non-nil result in order.
+    for &result_ty in function.results(ctx) {
+        if is_nil_type(ctx, result_ty) {
+            continue;
+        }
+        let cl_ty = translate_type(ctx, result_ty, ptr_ty)?;
         sig.returns.push(cl_ir::AbiParam::new(cl_ty));
     }
 
@@ -248,6 +245,28 @@ impl<'a> FunctionTranslator<'a> {
     /// Check if a value has `core.nil` type.
     fn is_nil_typed(&self, val: ValueRef) -> bool {
         is_nil_type(self.ctx, self.ctx.value_ty(val))
+    }
+
+    fn map_call_results(&mut self, op: OpRef, results: &[cl_ir::Value]) -> CompilationResult<()> {
+        let mut runtime_results = results.iter().copied();
+        for index in 0..self.ctx.op_result_types(op).len() {
+            let ir_result = self.ctx.op_result(op, index as u32);
+            if self.is_nil_typed(ir_result) {
+                continue;
+            }
+            let Some(result) = runtime_results.next() else {
+                return Err(CompilationError::codegen(
+                    "call result count does not match non-Nil TrunkIR results",
+                ));
+            };
+            self.values.insert(ir_result, result);
+        }
+        if runtime_results.next().is_some() {
+            return Err(CompilationError::codegen(
+                "call produced more Cranelift results than TrunkIR declares",
+            ));
+        }
+        Ok(())
     }
 
     fn runtime_values(&self, values: &[ValueRef]) -> CompilationResult<Vec<cl_ir::Value>> {
@@ -364,12 +383,8 @@ impl<'a> FunctionTranslator<'a> {
             let args = self.runtime_values(operands)?;
 
             let inst = self.builder.ins().call(func_ref, &args);
-            let results = self.builder.inst_results(inst);
-            if !results.is_empty() {
-                let ir_result = ctx.op_result(op, 0);
-                self.values.insert(ir_result, results[0]);
-            }
-            return Ok(());
+            let results = self.builder.inst_results(inst).to_vec();
+            return self.map_call_results(op, &results);
         }
 
         // === Return ===
@@ -571,12 +586,8 @@ impl<'a> FunctionTranslator<'a> {
             let sig_ref = self.builder.import_signature(sig);
 
             let inst = self.builder.ins().call_indirect(sig_ref, callee, &args);
-            let results = self.builder.inst_results(inst);
-            if !results.is_empty() {
-                let ir_result = ctx.op_result(op, 0);
-                self.values.insert(ir_result, results[0]);
-            }
-            return Ok(());
+            let results = self.builder.inst_results(inst).to_vec();
+            return self.map_call_results(op, &results);
         }
 
         // === Type Conversions ===
@@ -794,7 +805,7 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        let func_ty = func::func_sig(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
+        let func_ty = clif::func_sig(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 2);
@@ -810,7 +821,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = func::func_sig(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
+        let func_ty = clif::func_sig(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 1);
@@ -825,7 +836,7 @@ mod tests {
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
 
-        let func_ty = func::func_sig(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
+        let func_ty = clif::func_sig(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(
@@ -844,7 +855,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        let func_ty = func::func_sig(&mut ctx, [], [i64_ty]).as_type_ref();
+        let func_ty = clif::func_sig(&mut ctx, [], [i64_ty]).as_type_ref();
 
         let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 0);
@@ -857,8 +868,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_core_type(&mut ctx, "i32");
         let nil_ty = make_core_type(&mut ctx, "nil");
-        let logical_signature = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let physical_signature = func::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
+        let logical_signature = clif::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let physical_signature = clif::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
 
         assert_eq!(
             call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),
@@ -874,16 +885,33 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    use trunk_ir::types::TypeData;
+
+    fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+        ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new(name),
+            params: Default::default(),
+            attrs: Default::default(),
+        })
+    }
+
     #[test]
-    fn unsupported_resultless_signature_is_rejected_without_panicking() {
+    fn translates_resultless_and_ordered_multi_result_signatures() {
         let mut ctx = IrContext::new();
-        let signature = func::func_sig(&mut ctx, [], []).as_type_ref();
-        let error =
-            translate_signature(&ctx, signature, CallConv::SystemV, cl_types::I64).unwrap_err();
+        let i32 = make_core_type(&mut ctx, "i32");
+        let i64 = make_core_type(&mut ctx, "i64");
+        let resultless = clif::func_sig(&mut ctx, [], []).as_type_ref();
+        let multiple = clif::func_sig(&mut ctx, [i32], [i64, i32]).as_type_ref();
         assert!(
-            error
-                .to_string()
-                .contains("currently requires one func.func_sig result")
+            translate_signature(&ctx, resultless, CallConv::SystemV, cl_types::I64)
+                .unwrap()
+                .returns
+                .is_empty()
         );
+        let translated =
+            translate_signature(&ctx, multiple, CallConv::SystemV, cl_types::I64).unwrap();
+        assert_eq!(translated.returns[0].value_type, cl_types::I64);
+        assert_eq!(translated.returns[1].value_type, cl_types::I32);
     }
 }

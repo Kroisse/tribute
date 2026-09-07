@@ -140,6 +140,17 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
 
+### `clif.func_sig` Native callable contract
+
+Native lowering은 공통 callable type을 유지하지 않고 `clif.func_sig`를 소유한다.
+계약은 순서 있는 입력 뒤에 순서 있는 결과를 평탄한 벡터에 저장하고, 필수 `u32`
+`num_inputs`와 `num_results` 속성으로 경계를 구분한다. 두 delimiter와 모든
+non-reserved type 속성은 identity에 참여하며, delimiter는 ABI나 CPS marker가 아니다.
+Native 함수 정의와 declaration, 직접·exact indirect call, return, tail transfer,
+emission은 이 target-owned contract를 소비한다. Conversion은 중첩 type-bearing
+metadata를 보존하고 erased function pointer, symbol, ABI string, storage shape에서
+exact contract를 추론하지 않는다.
+
 ### Zero-width `core.nil`
 
 `core.nil` is a logical TrunkIR `Unit` SSA value but has no runtime
