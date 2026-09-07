@@ -71,17 +71,11 @@ keeps the complete type-bearing attribute visible. The codec reconstructs that
 type metadata before source-to-shared conversion; no operation-local signature
 metadata clause or override exists.
 
-The Wasm target owns `wasm.func_sig`, whose validated input/result lists permit
-zero or multiple results.  Wasm lowering converts a complete shared signature
-once at the target boundary and preserves nested type-bearing metadata; Wasm
-functions, imports, exact indirect signatures, collection, validation, and
-emission consume that type directly.  An empty target result list is ordinary
-and is not an ABI marker.  Binary emission preserves the established target
-slot rule by omitting every `core.nil` result and retaining each non-nil result
-in order; this includes ordinary target `Unit` and the temporary physical-CPS
-`[core.nil]` encoding.  The atomic physical-CPS transition owns the semantic
-change to `[]`.
-Value and input `core.nil` continue to map to nullable reference slots.
+Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타입 메타데이터를
+`wasm.func_sig`로 변환한다. 입력·결과 개수와 예약되지 않은 타입 속성을
+보존한다. 저장 형식과 타입 동일성은
+[IR 계약](ir.md#wasmfunc_sig-wasm-호출-계약), 바이너리 결과 표현은
+[Wasm 백엔드 계약](wasm-backend.md#wasm-결과-슬롯)에서 정의한다.
 
 ## 직접형 제어 소유권
 

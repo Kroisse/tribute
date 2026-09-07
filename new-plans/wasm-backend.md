@@ -90,29 +90,16 @@ Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect
 `(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
 emit하여 해당 operation을 제거하는 Wasm 경계다.
 
-### Wasm function signatures and result slots
+### Wasm 결과 슬롯
 
-`wasm.func_sig` is the sole Wasm callable contract.  It owns separate ordered
-input and result lists, represented by `[inputs..., results...]` plus mandatory
-`num_inputs` and `num_results` `u32` storage delimiters.  It permits zero or
-multiple results and preserves non-reserved type attributes through all target
-conversion and assembly paths.  Counts delimit the interned vector only; they
-do not establish an ABI or calling convention.
+`wasm.func_sig`의 저장 형식과 간접 호출의 명시적 시그니처는
+[IR 호출 계약](ir.md#wasmfunc_sig-wasm-호출-계약)을 따른다.
 
-The target type is shared by `wasm.func`, `wasm.import_func`, calls, returns,
-exact indirect-call attributes, type-section collection, validation, and the
-encoder.  Each declared non-omitted Wasm result receives an SSA value and local;
-after a multi-result call locals are stored in reverse result order because the
-last result is on top of the Wasm stack.  Exact indirect signatures remain
-authoritative rather than being inferred from a table index.
-
-The established target slot mapping omits every `core.nil` result from binary
-result slots, including ordinary target `Unit` and the temporary physical-CPS
-`wasm.func_sig<(...)-> core.nil>` encoding.  It preserves the order of every
-non-nil result, while nil inputs and values still encode as nullable references.
-Ordinary empty result signatures are independently valid.  The atomic Cps
-`[core.nil]` to `[]` semantic change is deferred to the later physical-CPS
-stage and is checked at the Tribute boundary, not inferred by Wasm emission.
+바이너리 코드 생성은 결과 위치의 `core.nil`만 생략하고 나머지 결과의 선언 순서를
+보존한다. 생략되지 않는 각 결과에는 SSA 값과 지역 변수를 할당한다. 다중 결과
+호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
+입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
+Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
 ### Entrypoint contract
 
