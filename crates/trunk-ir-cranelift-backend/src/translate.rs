@@ -745,8 +745,36 @@ fn declare_runtime_functions(
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
     use trunk_ir::parser::parse_test_module;
+
+    struct TestTempDir(PathBuf);
+
+    impl TestTempDir {
+        fn new(prefix: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
   clif.func {sym_name = @call_target, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
@@ -783,18 +811,28 @@ mod tests {
   clif.func {sym_name = @sink, type = clif.func_sig<() -> ()>} {
     clif.return
   }
-  clif.func {sym_name = @pair, type = clif.func_sig<() -> (core.i32, core.i32)>} {
-    %first = clif.iconst {value = 2} : core.i32
-    %second = clif.iconst {value = 40} : core.i32
+  clif.func {sym_name = @pair, type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} {
+    %first = clif.iconst {value = 3} : core.i32
+    %second = clif.iconst {value = 17} : core.i32
     clif.return %first, %second
   }
   clif.func {sym_name = @main, type = clif.func_sig<() -> core.i32>} {
     %first, %second = clif.call {callee = @pair} : core.i32, core.i32
     clif.call {callee = @sink}
+    %sink = clif.symbol_addr {sym = @sink} : core.ptr
+    clif.call_indirect %sink {sig = clif.func_sig<() -> ()>}
     %callee = clif.symbol_addr {sym = @pair} : core.ptr
-    %other_first, %other_second = clif.call_indirect %callee {sig = clif.func_sig<() -> (core.i32, core.i32)>} : core.i32, core.i32
-    %direct_pair = clif.iadd %first, %first : core.i32
-    %indirect_pair = clif.iadd %other_second, %other_second : core.i32
+    %other_first, %other_second = clif.call_indirect %callee {sig = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} : core.i32, core.i32
+    %seven = clif.iconst {value = 7} : core.i32
+    %eleven = clif.iconst {value = 11} : core.i32
+    %thirteen = clif.iconst {value = 13} : core.i32
+    %seventeen = clif.iconst {value = 17} : core.i32
+    %direct_left = clif.imul %first, %seven : core.i32
+    %direct_right = clif.imul %second, %eleven : core.i32
+    %direct_pair = clif.iadd %direct_left, %direct_right : core.i32
+    %indirect_left = clif.imul %other_first, %thirteen : core.i32
+    %indirect_right = clif.imul %other_second, %seventeen : core.i32
+    %indirect_pair = clif.iadd %indirect_left, %indirect_right : core.i32
     %sum = clif.iadd %direct_pair, %indirect_pair : core.i32
     clif.return %sum
   }
@@ -836,16 +874,30 @@ mod tests {
     }
 
     #[test]
+    fn native_emission_accepts_short_form_clif_function_signature() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @main() -> core.i32 {
+    %result = clif.iconst {value = 0} : core.i32
+    clif.return %result
+  }
+}"#,
+        );
+        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        assert!(!object.is_empty());
+    }
+
+    #[test]
     fn native_emission_preserves_zero_and_ordered_multiple_results() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ORDERED_RESULT_LISTS_NATIVE);
         let object = emit_module_to_native(&ctx, module, &[]).unwrap();
-        let temp =
-            std::env::temp_dir().join(format!("tribute-ordered-results-{}", std::process::id()));
-        std::fs::create_dir_all(&temp).unwrap();
-        let object_path = temp.join("ordered-results.o");
-        let executable = temp.join("ordered-results");
-        let runtime_shim = temp.join("runtime-shim.c");
+        let temp = TestTempDir::new("tribute-ordered-results");
+        let object_path = temp.path().join("ordered-results.o");
+        let executable = temp.path().join("ordered-results");
+        let runtime_shim = temp.path().join("runtime-shim.c");
         std::fs::write(&object_path, object).unwrap();
         std::fs::write(
             &runtime_shim,
@@ -863,7 +915,6 @@ mod tests {
                 .success()
         );
         let status = std::process::Command::new(&executable).status().unwrap();
-        std::fs::remove_dir_all(temp).unwrap();
-        assert_eq!(status.code(), Some(84));
+        assert_eq!(status.code(), Some(24));
     }
 }

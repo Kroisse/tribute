@@ -140,27 +140,29 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
 
-### `clif.func_sig` Native callable contract
+### `clif.func_sig` 네이티브 호출 계약
 
-Native lowering은 공통 callable type을 유지하지 않고 `clif.func_sig`를 소유한다.
+네이티브 lowering은 공통 callable type을 유지하지 않고 `clif.func_sig`를 소유한다.
 계약은 순서 있는 입력 뒤에 순서 있는 결과를 평탄한 벡터에 저장하고, 필수 `u32`
-`num_inputs`와 `num_results` 속성으로 경계를 구분한다. 두 delimiter와 모든
-non-reserved type 속성은 identity에 참여하며, delimiter는 ABI나 CPS marker가 아니다.
-Native 함수 정의와 declaration, 직접·exact indirect call, return, tail transfer,
-emission은 이 target-owned contract를 소비한다. Conversion은 중첩 type-bearing
-metadata를 보존하고 erased function pointer, symbol, ABI string, storage shape에서
-exact contract를 추론하지 않는다.
+`num_inputs`와 `num_results` 속성으로 경계를 구분한다. 두 delimiter와 예약되지 않은
+타입 속성은 타입 동일성에 참여하며, delimiter는 ABI나 CPS marker가 아니다. 네이티브
+함수 정의와 선언, 직접·exact indirect call, return, tail transfer, emission은 이
+target-owned contract를 소비한다. 호출 계약 변환은 그 내부의 중첩 타입 메타데이터를
+보존하고, 타입이 지워진 함수 포인터, 심볼, ABI 문자열, 저장 형태에서 exact contract를
+추론하지 않는다.
+
+계약의 `core.ptr` slot에는 native representation이 pointer인 semantic SSA 값이 올 수
+있다. 이 값은 개별 use마다 type을 지워서 바꾸지 않으며, 검증과 emission은 이 제한된
+ABI 동치를 `core.ptr` 계약에만 적용한다. 다른 계약 type과의 동치는 허용하지 않는다.
 
 ### Zero-width `core.nil`
 
-`core.nil` is a logical TrunkIR `Unit` SSA value but has no runtime
-representation in Cranelift. The native emitter therefore omits nil values
-from function signatures, entry and non-entry block parameters, CFG edge
-operands, direct and indirect call operands, and direct and indirect tail-call
-operands. It preserves the ordering of all non-nil parameters and operands,
-including the non-nil indirect callee, while leaving logical TrunkIR
-unchanged. Nil returns, constants, and return operands follow the same
-zero-width convention.
+`core.nil`은 논리 TrunkIR `Unit` SSA 값이지만 Cranelift runtime representation은 없다.
+따라서 native emitter는 함수 시그니처, entry와 non-entry block parameter, CFG edge
+operand, 직접·간접 call operand, 직접·간접 tail-call operand에서 nil을 생략한다.
+논리 TrunkIR는 바꾸지 않은 채 non-nil parameter와 operand의 순서(간접 호출의 non-nil
+callee 포함)를 보존한다. Nil return, constant, return operand에도 같은 zero-width
+규칙이 적용된다.
 
 ---
 

@@ -841,6 +841,36 @@ mod tests {
     }
 
     #[test]
+    fn callable_value_is_erased_while_its_exact_contract_stays_target_owned() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @target() -> core.i32 {
+    %value = arith.const {value = 7} : core.i32
+    func.return %value
+  }
+  func.func @caller() -> core.i32 {
+    %callee = func.constant {func_ref = @target} : func.func_sig<() -> core.i32>
+    %value = func.call_indirect %callee {signature = func.func_sig<() -> core.i32>} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+        assert!(
+            result.contains("clif.symbol_addr {sym = @target} : core.ptr"),
+            "{result}"
+        );
+        assert!(
+            result.contains("clif.call_indirect %0 {sig = !t0} : core.i32"),
+            "{result}"
+        );
+        assert!(
+            result.contains("!t0 = clif.func_sig<() -> core.i32>"),
+            "{result}"
+        );
+        assert!(!result.contains("func.func_sig"), "{result}");
+    }
+
+    #[test]
     fn test_tail_transfers_to_clif() {
         let result = run_pass(TAIL_TRANSFERS);
         insta::assert_snapshot!(result);

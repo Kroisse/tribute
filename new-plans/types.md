@@ -47,9 +47,9 @@ empty function result lists, distinct from both
 logical types. An empty list alone does not prove physical CPS: that requires
 the Cps calling convention together with the exact empty result list.
 
-타겟 callable contract는 각각 독립적으로 소유한다. 특히 Native 타겟은
-`clif.func_sig`로 순서 있는 0개 이상의 결과 목록을 표현할 수 있지만, 이것이
-source function의 결과 하나 또는 공통 `func.func_sig` 계약을 넓히지는 않는다.
+각 타겟은 callable contract를 독립적으로 소유한다. 특히 네이티브 타겟은
+`clif.func_sig`로 순서 있는 0개 이상의 결과 목록을 표현할 수 있지만, 이 사실이
+소스 함수의 단일 결과나 공통 `func.func_sig` 계약을 넓히지는 않는다.
 
 ### Struct (Product Type)
 
