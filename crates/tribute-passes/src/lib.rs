@@ -12,7 +12,6 @@
 pub mod diagnostic;
 
 // === TrunkIR passes ===
-pub mod backend_ready;
 pub mod boxing;
 pub mod closure_lower;
 pub mod evidence;

@@ -54,8 +54,8 @@ operations.
 | ---- | ---- | ---- |
 | `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
 | `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
-| `tribute-backend-ready-native` | Tribute full 경계 뒤 generic Cranelift 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, conversion cast가 없다. 명시적으로 열거한 native infrastructure와 `clif.*` operation만 남는다. |
-| `tribute-backend-ready-wasm` | emission-ready full 경계 | `tribute_control`, `ability`, `effect`, `closure`, `list`, `tribute_io`, `wasm_gc`, `core.unrealized_conversion_cast`가 없다. 명시적으로 열거한 Wasm infrastructure와 `wasm.*` operation만 legal이며 unknown operation은 illegal이다. |
+| `tribute-backend-ready-native` | desired final emission contract | Native final emission must reject residual logical control and validate target operation/type and physical callable contracts when #825 wires the real production route. |
+| `tribute-backend-ready-wasm` | desired final emission contract | Wasm final emission must enforce the analogous contract when #825 wires the real production route. The current `verify_wasm_backend_ready` remains a distinct partial check. |
 
 Post-CPS helper는
 `ConversionTarget::new().illegal_dialect("tribute_control")`와 partial
@@ -64,20 +64,17 @@ unknown operation이 legal하지 않으므로 frontend 적합성 target과 backe
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
 `func.func_sig`/`closure.closure`와 post-CPS의
-`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. 같은 walk는
-`tribute-backend-ready-native`와 `tribute-backend-ready-wasm`에서도 필수이며
-남은 두 `tribute_control` type을 거부한다. 함수·호출 signature, operand/result,
-block argument, type attribute와 nested type parameter를 재귀적으로 검사하며,
-operation 적법성 검사와 모두 통과해야 named boundary가 성립한다. Region 소유
-operation을 recursively legal로 표시해서 nested illegal operation을 가려서는
-안 된다. Generic `trunk-ir`의 Cranelift 경계는 Tribute에 독립적으로 유지하며,
-그 전에 Tribute pipeline이 high-level dialect와 type을 거부한다.
-
-최종 native/Wasm 경계는 `tribute.calling_convention = 2` (`Cps`)인 worker와 생성된
-continuation/`done_k`/handler-dispatch의 result가 비어 있는지도 검사한다.
-CPS control result 역할의 `anyref`, nominal `__tribute_cps_control` enum과
-result-producing CPS dispatch는 illegal이다. Boxed source value, effect payload,
-closure environment와 dispatch field의 일반 `anyref` 사용은 허용한다.
+`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. Final emission safety
+is a desired #825 production-route contract, not a guarantee from the removed
+centralized `backend_ready` implementation. It must distinguish retained metadata
+from emitted values and signature slots. Historical rejection alone does not show
+that a metadata representation is invalid. Existing target-specific emitter checks
+and the partial Wasm `verify_wasm_backend_ready` check are unchanged by removal.
+Issue #961 alone changes the eventual physical CPS result vector to `[]`.
+Logical Unit remains `[core.nil]` and logical CPS remains `[core.never]`.
+Region 소유 operation을
+recursively legal로 표시해서 nested illegal operation을
+가려서는 안 된다.
 
 하나의 rewrite 도중에는 source `tribute_control.*`과 새
 `ability.*`/`effect.*` 결과가 일시적으로 공존할 수 있다. 이는 partial

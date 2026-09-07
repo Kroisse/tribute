@@ -112,9 +112,16 @@ tribute        -> tribute-front + tribute-passes
   함께 호출한다. 세부 검증 계약은 [ir.md](ir.md#direct-style-control)를 따른다.
 - Whole-IR verifier는 static affine path를, converted resumption runtime은
   closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
-- `tribute-passes`와 backend pipeline은 각각 post-CPS 및 backend-ready target을
-  검증한다. 성공한 경계에는 residual `tribute_control` operation/type이 없고
-  backend-ready 경계에는 `tribute_control.*`, `ability.*`, `effect.*`이 없다.
+- Final emission safety remains a desired contract. Target-specific final checks
+  must distinguish retained metadata from emitted values and signature slots.
+  They must reject residual logical control before emission. #825 owns selecting
+  and wiring those checks on the real production route. Removing the unused
+  centralized `backend_ready` implementation changes neither today's production
+  pipeline nor the validity of a retained metadata representation in an emitted
+  slot.
+- The current Wasm `verify_wasm_backend_ready` check remains intermediate and
+  partial: it rejects residual `ability.*` and `effect.*` while allowing unknown
+  later-stage operations. It is not the final emission contract.
 
 Typed frontend output은 operation declaration metadata와 같은 out-of-band 경계에
 compiler intrinsic declaration metadata를 둔다. 각 entry는 canonical semantic
@@ -134,10 +141,10 @@ private target runtime helper는 사용할 수 없다.
 현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기
 전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
 
-Logical CPS result는 `core.never`, physical CPS ABI는 empty result다. 모든 CPS
-이전은 direct/indirect proper tail call이며 backend-ready IR은 CPS control-result
-`anyref`, private control enum, `Step`과 trampoline을 거부한다. Boxed source
-value, effect payload, closure environment의 일반 reference erasure에는
+Logical CPS result는 `core.never`, final physical CPS ABI는 empty result다. 모든 CPS
+이전은 direct/indirect proper tail call이다. Desired final backend-ready IR은
+CPS control-result `anyref`, private control enum, `Step`과 trampoline을 거부한다.
+Boxed source value, effect payload, closure environment의 일반 reference erasure에는
 `anyref`를 사용할 수 있다. Source `op -> Never`의 canonical `core.never`와 typed
 zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 [cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
