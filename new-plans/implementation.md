@@ -112,16 +112,16 @@ tribute        -> tribute-front + tribute-passes
   함께 호출한다. 세부 검증 계약은 [ir.md](ir.md#direct-style-control)를 따른다.
 - Whole-IR verifier는 static affine path를, converted resumption runtime은
   closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
-- Final emission safety remains a desired contract. Target-specific final checks
-  must distinguish retained metadata from emitted values and signature slots.
-  They must reject residual logical control before emission. #825 owns selecting
-  and wiring those checks on the real production route. Removing the unused
-  centralized `backend_ready` implementation changes neither today's production
-  pipeline nor the validity of a retained metadata representation in an emitted
-  slot.
-- The current Wasm `verify_wasm_backend_ready` check remains intermediate and
-  partial: it rejects residual `ability.*` and `effect.*` while allowing unknown
-  later-stage operations. It is not the final emission contract.
+- 최종 코드 생성의 안전성은 목표 계약으로 남는다. 대상별 최종 검사는 보존된
+  메타데이터와 실제로 생성되는 값 및 함수 시그니처의 입출력 항목을 구분해야 한다.
+  또한 코드 생성 전에 남아 있는 논리적 제어 표현을 거부해야 한다. #825는 실제
+  컴파일 경로에서 이 검사를 선택하고 연결하는 책임을 진다. 미사용 중앙 검증기
+  구현인 `backend_ready`를 제거해도 현재 컴파일 경로의 동작은 달라지지 않는다.
+  또한 보존된 메타데이터를 실제 값이나 시그니처 항목에 사용할 수 있다는 뜻은
+  아니다.
+- 현재 Wasm `verify_wasm_backend_ready` 검사는 중간 단계의 부분 검증이다.
+  남아 있는 `ability.*`와 `effect.*`는 거부하지만, 알 수 없는 이후 단계 연산은
+  허용한다. 이는 최종 코드 생성 계약이 아니다.
 
 Typed frontend output은 operation declaration metadata와 같은 out-of-band 경계에
 compiler intrinsic declaration metadata를 둔다. 각 entry는 canonical semantic
@@ -141,11 +141,12 @@ private target runtime helper는 사용할 수 없다.
 현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기
 전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
 
-Logical CPS result는 `core.never`, final physical CPS ABI는 empty result다. 모든 CPS
-이전은 direct/indirect proper tail call이다. Desired final backend-ready IR은
-CPS control-result `anyref`, private control enum, `Step`과 trampoline을 거부한다.
-Boxed source value, effect payload, closure environment의 일반 reference erasure에는
-`anyref`를 사용할 수 있다. Source `op -> Never`의 canonical `core.never`와 typed
+논리 CPS 결과는 `core.never`이고, 최종 물리적 CPS ABI의 결과 목록은 비어 있다.
+모든 CPS 제어 이전은 직접 또는 간접 꼬리 호출로 이루어진다. 목표인 최종
+backend-ready IR은 CPS 제어 결과로 쓰이는 `anyref`, 비공개 제어 열거형, `Step`,
+트램펄린을 거부한다. 박싱된 소스 값, 이펙트 페이로드, 클로저 환경의
+일반적인 참조 타입 소거에는 `anyref`를 사용할 수 있다. Source `op -> Never`의
+canonical `core.never`와 typed
 zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 [cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
 

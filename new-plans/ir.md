@@ -54,8 +54,8 @@ operations.
 | ---- | ---- | ---- |
 | `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
 | `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
-| `tribute-backend-ready-native` | desired final emission contract | Native final emission must reject residual logical control and validate target operation/type and physical callable contracts when #825 wires the real production route. |
-| `tribute-backend-ready-wasm` | desired final emission contract | Wasm final emission must enforce the analogous contract when #825 wires the real production route. The current `verify_wasm_backend_ready` remains a distinct partial check. |
+| `tribute-backend-ready-native` | 목표 최종 코드 생성 계약 | #825가 실제 컴파일 경로에 연결할 때 Native 최종 코드 생성은 남아 있는 논리적 제어 표현을 거부하고 대상 연산/타입 및 물리적 함수 호출 규약을 검증해야 한다. |
+| `tribute-backend-ready-wasm` | 목표 최종 코드 생성 계약 | #825가 실제 컴파일 경로에 연결할 때 Wasm 최종 코드 생성은 같은 계약을 강제해야 한다. 현재 `verify_wasm_backend_ready`는 별개의 부분 검증으로 남는다. |
 
 Post-CPS helper는
 `ConversionTarget::new().illegal_dialect("tribute_control")`와 partial
@@ -64,14 +64,14 @@ unknown operation이 legal하지 않으므로 frontend 적합성 target과 backe
 target이 legal dialect와 operation을 열거해야 한다. `ConversionTarget`은
 operation 적법성만 검사하므로 Tribute whole-IR type walk가 pre-CPS의
 `func.func_sig`/`closure.closure`와 post-CPS의
-`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. Final emission safety
-is a desired #825 production-route contract, not a guarantee from the removed
-centralized `backend_ready` implementation. It must distinguish retained metadata
-from emitted values and signature slots. Historical rejection alone does not show
-that a metadata representation is invalid. Existing target-specific emitter checks
-and the partial Wasm `verify_wasm_backend_ready` check are unchanged by removal.
-Issue #961 alone changes the eventual physical CPS result vector to `[]`.
-Logical Unit remains `[core.nil]` and logical CPS remains `[core.never]`.
+`tribute_control.func_sig`/`resume_token`을 별도로 거부한다. 최종 코드 생성의
+안전성은 #825가 실제 컴파일 경로에 연결할 목표 계약일 뿐, 제거된 중앙 검증기 구현
+`backend_ready`가 보장하던 사항이 아니다. 이 계약은 보존된 메타데이터를 실제로
+생성되는 값 및 함수 시그니처의 입출력 항목과 구분해야 한다. 과거에 거부했다는
+사실만으로 메타데이터 표현이 유효하지 않음을 보일 수는 없다. 기존 대상별 코드 생성기
+검사와 Wasm의 부분 `verify_wasm_backend_ready` 검사는 이 제거로 바뀌지 않는다.
+궁극적인 물리적 CPS 결과 목록은 #961만이 `[]`로 바꾼다. 논리 Unit은
+`[core.nil]`로, 논리 CPS는 `[core.never]`로 남는다.
 Region 소유 operation을
 recursively legal로 표시해서 nested illegal operation을
 가려서는 안 된다.
