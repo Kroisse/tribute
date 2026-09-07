@@ -55,6 +55,10 @@ target ABI conversion may later change logical CPS `[core.never]` into the
 physical empty result list. Malformed raw `func.func_sig` types are permitted only
 in verifier tests and are rejected by whole-IR validation.
 
+공통 signature component 변환은 검증된 입력·결과 slice와 예약되지 않은 type
+attribute만 순회한다. 각 dialect adapter는 자기 signature를 검증·해독하고 자기
+constructor로 다시 만들므로, 공통 traversal이 dialect identity나 ABI를 선택하지 않는다.
+
 The source-logical callable type is independently owned as
 `tribute_control.func_sig`. It uses the same flat input-first storage and
 mandatory u32 delimiters, but its validated API requires exactly one source

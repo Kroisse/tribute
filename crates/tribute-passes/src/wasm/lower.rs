@@ -19,10 +19,10 @@ use trunk_ir::pass::{PassError, PassManager};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
-    WasmFuncSignatureConversionPattern,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::const_to_wasm::ConstAnalysis;
 use super::io::IoAnalysis;
