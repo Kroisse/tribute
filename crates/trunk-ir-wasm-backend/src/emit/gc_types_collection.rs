@@ -142,6 +142,29 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
     Ok(())
 }
 
+/// Register a validated retained declaration for an indexed evidence operation.
+fn register_builtin_evidence_type(
+    ctx: &IrContext,
+    map: &mut HashMap<TypeRef, u32>,
+    index: u32,
+    ty: TypeRef,
+) -> CompilationResult<()> {
+    // Builtins bypass user builders, but retained full declarations still need
+    // local/signature mappings. Abstract refs must not acquire an indexed type.
+    if matches!(index, MARKER_IDX | EVIDENCE_IDX)
+        && crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) == Some(index)
+    {
+        let marker = if index == MARKER_IDX {
+            ty
+        } else {
+            ctx.types.get(ty).params[0]
+        };
+        validate_marker_layout(ctx, marker)?;
+        register_type(map, index, ty);
+    }
+    Ok(())
+}
+
 /// Normalize a type for GC struct field comparison.
 ///
 /// Normalizes tribute_rt types and variant instances to their canonical form.
@@ -426,56 +449,6 @@ pub(crate) fn collect_gc_types(
             continue;
         }
 
-        // Builtin layouts do not have builders, but their complete nominal IR
-        // types still need entries for function signatures and local types.
-        // Evidence lookup produces a full Marker declaration, which is distinct
-        // from the name-only declaration registered above. Reuse the typed GC
-        // lowering's builtin identity check; never specialize an abstract ref
-        // merely because an indexed instruction consumes it.
-        let marker_ty = if let Ok(new) = wasm_dialect::StructNew::from_op(ctx, op) {
-            (new.type_idx(ctx) == MARKER_IDX)
-                .then(|| ctx.op_result_types(op).first().copied())
-                .flatten()
-        } else if let Ok(get) = wasm_dialect::StructGet::from_op(ctx, op) {
-            (get.type_idx(ctx) == MARKER_IDX)
-                .then(|| {
-                    ctx.op_operands(op)
-                        .first()
-                        .map(|&v| helpers::value_type(ctx, v))
-                })
-                .flatten()
-        } else if let Ok(set) = wasm_dialect::StructSet::from_op(ctx, op) {
-            (set.type_idx(ctx) == MARKER_IDX)
-                .then(|| {
-                    ctx.op_operands(op)
-                        .first()
-                        .map(|&v| helpers::value_type(ctx, v))
-                })
-                .flatten()
-        } else {
-            None
-        };
-        if let Some(ty) = marker_ty
-            && crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) == Some(MARKER_IDX)
-        {
-            validate_marker_layout(ctx, ty)?;
-            register_type(&mut type_idx_by_type, MARKER_IDX, ty);
-        }
-        // The Evidence array retains that same full Marker element type.
-        // Its builtin layout likewise bypasses the user-type builder below.
-        let evidence_idx = wasm_dialect::ArrayNew::from_op(ctx, op)
-            .map(|array| array.type_idx(ctx))
-            .or_else(|_| {
-                wasm_dialect::ArrayNewDefault::from_op(ctx, op).map(|array| array.type_idx(ctx))
-            });
-        if evidence_idx == Ok(EVIDENCE_IDX)
-            && let Some(&ty) = ctx.op_result_types(op).first()
-            && crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) == Some(EVIDENCE_IDX)
-        {
-            validate_marker_layout(ctx, ctx.types.get(ty).params[0])?;
-            register_type(&mut type_idx_by_type, EVIDENCE_IDX, ty);
-        }
-
         if wasm_dialect::StructNew::matches(ctx, op) {
             let struct_new =
                 wasm_dialect::StructNew::from_op(ctx, op).expect("matched wasm.struct_new");
@@ -484,6 +457,12 @@ pub(crate) fn collect_gc_types(
             let result_types = ctx.op_result_types(op).to_vec();
             let result_type = result_types.first().copied();
             let type_idx = struct_new.type_idx(ctx);
+
+            if type_idx == MARKER_IDX
+                && let Some(ty) = result_type
+            {
+                register_builtin_evidence_type(ctx, &mut type_idx_by_type, type_idx, ty)?;
+            }
 
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
@@ -522,6 +501,17 @@ pub(crate) fn collect_gc_types(
                 wasm_dialect::StructGet::from_op(ctx, op).expect("matched wasm.struct_get");
             let type_idx = struct_get.type_idx(ctx);
             let field_idx = struct_get.field_idx(ctx);
+            let operands = ctx.op_operands(op).to_vec();
+            if type_idx == MARKER_IDX
+                && let Some(&value) = operands.first()
+            {
+                register_builtin_evidence_type(
+                    ctx,
+                    &mut type_idx_by_type,
+                    type_idx,
+                    helpers::value_type(ctx, value),
+                )?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
 
@@ -531,7 +521,6 @@ pub(crate) fn collect_gc_types(
                         "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
                     )));
                 }
-                let operands = ctx.op_operands(op).to_vec();
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
                     register_type(&mut type_idx_by_type, type_idx, ty);
@@ -554,6 +543,16 @@ pub(crate) fn collect_gc_types(
             let operands = ctx.op_operands(op).to_vec();
             let type_idx = struct_set.type_idx(ctx);
             let field_idx = struct_set.field_idx(ctx);
+            if type_idx == MARKER_IDX
+                && let Some(&value) = operands.first()
+            {
+                register_builtin_evidence_type(
+                    ctx,
+                    &mut type_idx_by_type,
+                    type_idx,
+                    helpers::value_type(ctx, value),
+                )?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
                 if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
@@ -581,6 +580,11 @@ pub(crate) fn collect_gc_types(
                     wasm_dialect::ArrayNewDefault::from_op(ctx, op).map(|op| op.type_idx(ctx))
                 })
                 .expect("matched indexed array.new operation");
+            if type_idx == EVIDENCE_IDX
+                && let Some(&ty) = result_types.first()
+            {
+                register_builtin_evidence_type(ctx, &mut type_idx_by_type, type_idx, ty)?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Array;
                 if let Some(&result_ty) = result_types.first() {

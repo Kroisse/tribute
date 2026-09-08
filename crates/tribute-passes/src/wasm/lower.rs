@@ -36,6 +36,7 @@ pub enum WasmLowerError {
     Conversion(ConversionError),
     Pass(PassError),
     Const(super::const_to_wasm::ConstValidationError),
+    Evidence(&'static str),
 }
 
 impl fmt::Display for WasmLowerError {
@@ -44,6 +45,7 @@ impl fmt::Display for WasmLowerError {
             Self::Conversion(error) => error.fmt(f),
             Self::Pass(error) => error.fmt(f),
             Self::Const(error) => error.fmt(f),
+            Self::Evidence(error) => f.write_str(error),
         }
     }
 }
@@ -54,6 +56,7 @@ impl std::error::Error for WasmLowerError {
             Self::Conversion(error) => Some(error),
             Self::Pass(error) => Some(error),
             Self::Const(error) => Some(error),
+            Self::Evidence(_) => None,
         }
     }
 }
@@ -168,13 +171,15 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
         if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {
-            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module);
+            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module)
+                .map_err(WasmLowerError::Evidence)?;
             let mut pm = PassManager::new();
             pm.nest::<wasm_dialect::Func>()
                 .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
             pm.run(ctx, core_module)?;
         } else {
-            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
+            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)
+                .map_err(WasmLowerError::Evidence)?;
         }
     }
 

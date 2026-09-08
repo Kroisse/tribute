@@ -967,7 +967,8 @@ pub(super) fn validate_result_contract(
             "{subject} differs from the exact callable signature"
         )));
     }
-    if !is_typed_managed_reference(ctx, expected, managed_layouts)
+    if values.len() == 1
+        && !is_typed_managed_reference(ctx, expected, managed_layouts)
         && !values
             .iter()
             .any(|&value| is_managed_value(ctx, value, managed_layouts))

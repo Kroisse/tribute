@@ -691,10 +691,10 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 ///
 /// This compatibility entry point prepares module-level function signatures,
 /// then lowers every function body in the module tree.
-pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
     prepare_closure_lowering(ctx, module);
 
-    lower_prepared_closures(ctx, module);
+    lower_prepared_closures(ctx, module)
 }
 
 /// Lower every already-prepared function body in a module to closure storage.
@@ -703,26 +703,35 @@ pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
 /// earlier transformation are lowered once as well. Processing each function
 /// operation at most once keeps this traversal bounded without relying on
 /// function names or target-specific pipeline ordering.
-pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) {
+pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
     let mut lowered = HashSet::new();
     let mut worklist = Vec::new();
 
     loop {
+        let mut discovered = Vec::new();
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if let Ok(func_op) = func::Func::from_op(ctx, op)
                 && lowered.insert(op)
             {
-                worklist.push(func_op);
+                discovered.push(func_op);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+
+        // Validate the initial module as a whole before rewriting any body.
+        // Later batches include newly generated functions and follow the same gate.
+        for &function in &discovered {
+            validate_closure_transfers(ctx, function)?;
+        }
+        worklist.extend(discovered);
 
         let Some(func_op) = worklist.pop() else {
             break;
         };
 
-        lower_closures_in_func(ctx, func_op);
+        rewrite_validated_closures_in_func(ctx, func_op);
     }
+    Ok(())
 }
 
 /// Prepare module-level closure lowering state.
@@ -736,15 +745,23 @@ pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
     applicator.apply_partial(ctx, module);
 }
 
-/// Lower closure operations in one function body.
-///
-/// Closure calls already carry convention-specific hidden operands. This pass
-/// only interposes the physical closure environment.
-pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
-    if ctx.op(func_op.op_ref()).regions.is_empty() {
-        return;
+fn validate_closure_transfers(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
+    if tagged_closure_transfers_are_legal(ctx, func_op) {
+        Ok(())
+    } else {
+        Err("closure lowering: exact caller/callee/indirect result contract mismatch".into())
     }
-    if !tagged_closure_transfers_are_legal(ctx, func_op) {
+}
+
+/// Validate and lower a function's closures, interposing the physical environment.
+pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
+    validate_closure_transfers(ctx, func_op)?;
+    rewrite_validated_closures_in_func(ctx, func_op);
+    Ok(())
+}
+
+fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
+    if ctx.op(func_op.op_ref()).regions.is_empty() {
         return;
     }
     let legacy_evidence = evidence_param_for_func(ctx, func_op);
@@ -967,8 +984,7 @@ impl Pass for LowerClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        lower_closures(ctx, target.into());
-        Ok(())
+        lower_closures(ctx, target.into())
     }
 }
 
@@ -984,18 +1000,7 @@ impl Pass for LowerPreparedClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        for op in collect_ops(ctx, target.op_ref()) {
-            if let Ok(function) = func::Func::from_op(ctx, op)
-                && !tagged_closure_transfers_are_legal(ctx, function)
-            {
-                return Err(
-                    "closure lowering: exact caller/callee/indirect result contract mismatch"
-                        .into(),
-                );
-            }
-        }
-        lower_prepared_closures(ctx, target.into());
-        Ok(())
+        lower_prepared_closures(ctx, target.into())
     }
 }
 
@@ -1026,13 +1031,7 @@ impl Pass for LowerClosuresInFunc {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
-        if !tagged_closure_transfers_are_legal(ctx, target) {
-            return Err(
-                "closure lowering: exact caller/callee/indirect result contract mismatch".into(),
-            );
-        }
-        lower_closures_in_func(ctx, target);
-        Ok(())
+        lower_closures_in_func(ctx, target)
     }
 }
 
@@ -1218,7 +1217,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = closure_test_module(&mut ctx);
 
-        lower_closures(&mut ctx, module);
+        lower_closures(&mut ctx, module).unwrap();
 
         let ir = print_module(&ctx, module.op());
         assert!(
@@ -1256,7 +1255,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = nested_closure_test_module(&mut ctx);
 
-        lower_closures(&mut ctx, module);
+        lower_closures(&mut ctx, module).unwrap();
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
@@ -1269,6 +1268,29 @@ mod tests {
             !inner_ir.contains("closure.func") && !inner_ir.contains("closure.env"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
         );
+    }
+
+    #[test]
+    fn prepared_module_rejects_invalid_transfer_before_rewriting_other_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Cps = closure.closure(func.func_sig<(core.i32) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+            func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+                func.tail_call_indirect %callee, %value
+            }
+            func.func @otherwise_lowerable(%callee: !Cps) -> tribute_rt.anyref {
+                %env = closure.env %callee : tribute_rt.anyref
+                func.return %env
+            }
+        }"#,
+        );
+        let before = print_module(&ctx, module.op());
+        let ops = collect_ops(&ctx, module.op());
+        assert!(lower_prepared_closures(&mut ctx, module).is_err());
+        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(collect_ops(&ctx, module.op()), ops);
     }
 
     #[test]
@@ -1359,7 +1381,7 @@ mod tests {
         let module = nested_closure_test_module(&mut ctx);
         let outer = func_by_name_recursive(&ctx, module, "outer");
 
-        lower_closures_in_func(&mut ctx, outer);
+        lower_closures_in_func(&mut ctx, outer).unwrap();
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
         let inner_after_outer = print_module(&ctx, inner.op_ref());
@@ -1368,7 +1390,7 @@ mod tests {
             "outer function pass should not lower nested function body:\n{inner_after_outer}"
         );
 
-        lower_closures_in_func(&mut ctx, inner);
+        lower_closures_in_func(&mut ctx, inner).unwrap();
 
         let inner_calls = call_indirect_operands_in_func(&ctx, inner);
         assert_eq!(inner_calls.len(), 1);
@@ -1403,7 +1425,7 @@ mod tests {
         let dispatch = entry_args[3];
         let value = entry_args[4];
 
-        lower_closures_in_func(&mut ctx, run);
+        lower_closures_in_func(&mut ctx, run).unwrap();
 
         let tail = ctx
             .block(ctx.region(run.body(&ctx)).blocks[0])
@@ -1468,7 +1490,7 @@ mod tests {
         let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, run);
+        assert!(lower_closures_in_func(&mut ctx, run).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1485,7 +1507,7 @@ mod tests {
         let external = func_by_name(&ctx, module, "external");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, external);
+        lower_closures_in_func(&mut ctx, external).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1507,7 +1529,7 @@ mod tests {
         let caller = func_by_name(&ctx, module, "caller");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, caller);
+        lower_closures_in_func(&mut ctx, caller).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1540,7 +1562,7 @@ mod tests {
         let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, run);
+        assert!(lower_closures_in_func(&mut ctx, run).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }

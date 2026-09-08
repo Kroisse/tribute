@@ -1586,64 +1586,28 @@ mod tests {
     }
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {
-        use tribute_core::calling_convention::*;
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
-            func.func @run(%ev: core.i32, %dispatch: core.i32, %resume: core.i32, %payload: core.i32) -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
-        }"#,
+            &format!(
+                r#"core.module @test {{
+            !Answer = core.{answer_name}
+            !Evidence = core.array(adt.struct() {{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}})
+            !Frame = adt.typeref() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}
+            !Done = closure.closure(func.func_sig<(!Answer) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
+            !Resume = closure.closure(func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
+            !Dispatch = closure.closure(func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
+            !{frame_name} = adt.struct() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}
+            func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = !Answer}}
+            }}
+        }}"#
+            ),
         );
-        let answer = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::from_dynamic(answer_name)).build(),
-        );
-        let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let frame_name = Symbol::from_dynamic(frame_name);
-        let frame = cps_continuation_frame_ref_type(&mut ctx, frame_name, answer);
-        let done = cps_done_type(&mut ctx, answer);
-        let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
-        let resume =
-            func::FuncSig::from_type_ref(&ctx, cps_closure_function_type(&ctx, dispatch).unwrap())
-                .unwrap()
-                .inputs(&ctx)[1];
-        let layout =
-            cps_continuation_frame_layout_type(&mut ctx, frame_name, answer, done, dispatch);
-        ctx.register_type_alias(frame_name, layout);
-        let run = function(&ctx, module, "run");
-        let entry = ctx.region(run.body(&ctx)).blocks[0];
-        let inputs = [evidence, dispatch, resume, anyref];
-        let never = core::never(&mut ctx).as_type_ref();
-        let signature = func::func_sig(&mut ctx, inputs, [never]).as_type_ref();
-        ctx.op_mut(run.op_ref())
-            .attributes
-            .insert(Symbol::new("type"), Attribute::Type(signature));
-        for (index, ty) in inputs.into_iter().enumerate() {
-            ctx.set_block_arg_type(entry, index as u32, ty);
-        }
-        let args = ctx.block_args(entry).to_vec();
-        let loc = ctx.op(run.op_ref()).location;
-        let ability = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("State")))
-                .build(),
-        );
-        let dispatch = effect::dispatch_cps(
-            &mut ctx,
-            loc,
-            args[0],
-            args[1],
-            args[2],
-            args[3],
-            ability,
-            Symbol::new("get"),
-            answer,
-        )
-        .op_ref();
-        ctx.push_op(entry, dispatch);
+        let dispatch = collect_ops(&ctx, module.op())
+            .into_iter()
+            .find(|&op| effect::DispatchCps::matches(&ctx, op))
+            .unwrap();
         (ctx, module, dispatch)
     }
 
@@ -1651,7 +1615,7 @@ mod tests {
     fn semantic_dispatch_reaches_the_canonical_wasm_target_signature() {
         let (mut ctx, module, _) = dispatch_fixture("i32", "frame");
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
-        crate::closure_lower::lower_prepared_closures(&mut ctx, module);
+        crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module);
         let printed = print_module(&ctx, module.op());

@@ -112,6 +112,36 @@ fn assert_plan_error_unchanged(ir: &str, expected: &str) {
 }
 
 #[test]
+fn ordinary_result_contract_requires_one_value_and_preserves_zero_width_results() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+        func.func @values(%one: core.i32, %two: core.i32, %nil: core.nil, %never: core.never) { func.unreachable }
+    }"#,
+    );
+    let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+    let entry = ctx.region(function.body(&ctx)).blocks[0];
+    let values = ctx.block_args(entry);
+    let managed = HashSet::new();
+    let check = |values: &[ValueRef], expected: &[TypeRef]| {
+        actions::validate_result_contract(&ctx, values, expected, &managed, "test result")
+    };
+    let scalar = ctx.value_ty(values[0]);
+    assert!(check(&[], &[scalar]).is_err());
+    assert!(check(&values[..1], &[scalar]).is_ok());
+    assert!(check(&values[..2], &[scalar]).is_err());
+    assert!(check(&[], &[]).is_ok());
+    assert!(check(&values[..1], &[]).is_err());
+    for &value in &values[2..] {
+        let ty = ctx.value_ty(value);
+        assert!(check(&[], &[ty]).is_ok());
+        assert!(check(&[value], &[ty]).is_ok());
+        assert!(check(&[value, value], &[ty]).is_err());
+    }
+}
+
+#[test]
 fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows() {
     let ir = r#"core.module @test {
   !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
@@ -1161,7 +1191,7 @@ fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
   }
 }"#,
     );
-    crate::closure_lower::lower_closures(&mut ctx, module);
+    crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
 
     let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");

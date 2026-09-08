@@ -43,14 +43,20 @@ use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_I
 /// 1. Replaces stub function declarations with real binary search implementations
 /// 2. Lowers `effect.extend` and remaining legacy `ability.evidence_lookup` /
 ///    `ability.evidence_extend` operations to calls to the generated functions.
-pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) {
-    prepare_wasm_evidence_runtime(ctx, module);
+pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), &'static str> {
+    prepare_wasm_evidence_runtime(ctx, module)?;
     rewrite_evidence_ops_in_scope(ctx, module);
+    Ok(())
 }
 
 /// Prepare module-scope WASM evidence runtime helper functions.
-pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
+pub fn prepare_wasm_evidence_runtime(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), &'static str> {
+    validate_final_dispatches(ctx, module.op())?;
     replace_evidence_function_stubs(ctx, module);
+    Ok(())
 }
 
 /// Lower evidence operations in one WASM function body.
@@ -58,8 +64,13 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
 /// Precondition: [`prepare_wasm_evidence_runtime`] must already have run for
 /// the containing module so the `__tribute_evidence_lookup` and
 /// `__tribute_evidence_extend` stubs exist as WASM runtime helpers.
-pub fn lower_evidence_to_wasm_func(ctx: &mut IrContext, func_op: wasm_dialect::Func) {
+pub fn lower_evidence_to_wasm_func(
+    ctx: &mut IrContext,
+    func_op: wasm_dialect::Func,
+) -> Result<(), &'static str> {
+    validate_final_dispatches(ctx, func_op.op_ref())?;
     rewrite_evidence_ops_in_scope(ctx, func_op);
+    Ok(())
 }
 
 /// PassManager-friendly WASM evidence lowering pass.
@@ -77,8 +88,7 @@ impl Pass for LowerEvidenceToWasm {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: wasm_dialect::Func) -> PassRunResult {
-        lower_evidence_to_wasm_func(ctx, target);
-        Ok(())
+        lower_evidence_to_wasm_func(ctx, target).map_err(Into::into)
     }
 }
 
@@ -436,6 +446,58 @@ impl RewritePattern for EffectDispatchTailPattern {
 /// lookup plus a wasm indirect call through the stored CPS dispatch closure.
 struct EffectDispatchCpsPattern;
 
+fn validate_final_dispatches(ctx: &mut IrContext, root: OpRef) -> Result<(), &'static str> {
+    let mut dispatches = Vec::new();
+    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
+        if effect::DispatchCps::matches(ctx, op) {
+            dispatches.push(op);
+        }
+        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+    });
+    for op in dispatches {
+        final_dispatch_signature(ctx, op)?;
+    }
+    Ok(())
+}
+
+fn final_dispatch_signature(ctx: &mut IrContext, op: OpRef) -> Result<TypeRef, &'static str> {
+    if !ctx.op_result_types(op).is_empty()
+        || ctx.op(op).attributes.get_type("answer_type").is_none()
+        || ctx.op(op).attributes.get_type("ability_ref").is_none()
+        || ctx.op(op).attributes.get_symbol("op_name").is_none()
+        || ctx.op_operands(op).len() != 4
+    {
+        return Err("Wasm CPS dispatch requires four operands, no results and typed metadata");
+    }
+    let evidence_ty = evidence_ref_type(ctx);
+    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+    let closure_ty = super::type_converter::closure_adt_type(ctx);
+    let i32_ty = intern_i32(ctx);
+    let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
+    if ctx
+        .op_operands(op)
+        .iter()
+        .zip(expected)
+        .any(|(value, expected)| ctx.value_ty(*value) != expected)
+    {
+        return Err("Wasm CPS dispatch operands differ from the fixed target ABI");
+    }
+    Ok(wasm_dialect::func_sig(
+        ctx,
+        [
+            evidence_ty,
+            anyref_ty,
+            closure_ty,
+            i32_ty,
+            i32_ty,
+            i32_ty,
+            anyref_ty,
+        ],
+        [],
+    )
+    .as_type_ref())
+}
+
 impl RewritePattern for EffectDispatchCpsPattern {
     fn match_and_rewrite(
         &self,
@@ -448,39 +510,9 @@ impl RewritePattern for EffectDispatchCpsPattern {
         };
 
         let loc = ctx.op(op).location;
-        if !ctx.op_result_types(op).is_empty()
-            || ctx.op(op).attributes.get_type("answer_type").is_none()
-            || ctx.op_operands(op).len() != 4
-        {
+        let Ok(signature) = final_dispatch_signature(ctx, op) else {
             return false;
-        }
-        let evidence_ty = evidence_ref_type(ctx);
-        let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
-        let closure_ty = super::type_converter::closure_adt_type(ctx);
-        let i32_ty = intern_i32(ctx);
-        let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
-        if ctx
-            .op_operands(op)
-            .iter()
-            .zip(expected)
-            .any(|(value, expected)| ctx.value_ty(*value) != expected)
-        {
-            return false;
-        }
-        let signature = wasm_dialect::func_sig(
-            ctx,
-            [
-                evidence_ty,
-                anyref_ty,
-                closure_ty,
-                i32_ty,
-                i32_ty,
-                i32_ty,
-                anyref_ty,
-            ],
-            [],
-        )
-        .as_type_ref();
+        };
         let ability_ref = dispatch_op.ability_ref(ctx);
         let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
         let i32_ty = intern_i32(ctx);
@@ -1430,7 +1462,7 @@ mod tests {
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        lower_evidence_to_wasm(&mut ctx, module);
+        lower_evidence_to_wasm(&mut ctx, module).unwrap();
         print_module(&ctx, module.op())
     }
 
@@ -1483,6 +1515,14 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.contains("wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>"), "{first}");
         assert!(!first.contains("answer_type"));
+        let mut invalid_inputs = vec![
+            source.replace("answer_type = core.i32", "answer_type = 0"),
+            source.replace(", answer_type = core.i32", ""),
+            source.replace(
+                "%ev, %dispatch, %resume, %payload",
+                "%ev, %dispatch, %resume",
+            ),
+        ];
         for original in [
             "%ev: wasm.arrayref",
             "%dispatch: !closure",
@@ -1493,9 +1533,23 @@ mod tests {
                 original,
                 &format!("{}: core.i64", original.split(':').next().unwrap()),
             );
-            let output = lower_text(&changed);
-            assert!(output.contains("effect.dispatch_cps"), "{output}");
-            assert!(!output.contains("wasm.return_call_indirect"), "{output}");
+            invalid_inputs.push(changed);
+        }
+        for changed in invalid_inputs {
+            for stub in [
+                "",
+                "func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }",
+            ] {
+                let source =
+                    changed.replacen("func.func @run", &format!("{stub}\nfunc.func @run"), 1);
+                let mut ctx = IrContext::new();
+                let module = parse_test_module(&mut ctx, &source);
+                let before = print_module(&ctx, module.op());
+                let ops = module.ops(&ctx);
+                assert!(lower_evidence_to_wasm(&mut ctx, module).is_err());
+                assert_eq!(print_module(&ctx, module.op()), before);
+                assert_eq!(module.ops(&ctx), ops);
+            }
         }
     }
 
@@ -1611,7 +1665,7 @@ mod tests {
             .next()
             .expect("test module should contain a selected wasm function");
 
-        lower_evidence_to_wasm_func(&mut ctx, selected);
+        lower_evidence_to_wasm_func(&mut ctx, selected).unwrap();
 
         let output = print_module(&ctx, module.op());
         assert_eq!(output.matches("effect.dispatch_tail").count(), 1);
