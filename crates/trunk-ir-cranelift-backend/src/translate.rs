@@ -745,36 +745,8 @@ fn declare_runtime_functions(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
     use trunk_ir::parser::parse_test_module;
-
-    struct TestTempDir(PathBuf);
-
-    impl TestTempDir {
-        fn new(prefix: &str) -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system time after epoch")
-                .as_nanos();
-            let path =
-                std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
-            std::fs::create_dir_all(&path).expect("create test directory");
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
   clif.func {sym_name = @call_target, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
@@ -894,7 +866,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ORDERED_RESULT_LISTS_NATIVE);
         let object = emit_module_to_native(&ctx, module, &[]).unwrap();
-        let temp = TestTempDir::new("tribute-ordered-results");
+        let temp = tempfile::Builder::new()
+            .prefix("tribute-ordered-results")
+            .tempdir()
+            .expect("create isolated temporary directory");
         let object_path = temp.path().join("ordered-results.o");
         let executable = temp.path().join("ordered-results");
         let runtime_shim = temp.path().join("runtime-shim.c");
@@ -911,7 +886,7 @@ mod tests {
                 .arg("-o")
                 .arg(&executable)
                 .status()
-                .unwrap()
+                .expect("C toolchain `cc` is required to link the native execution witness")
                 .success()
         );
         let status = std::process::Command::new(&executable).status().unwrap();

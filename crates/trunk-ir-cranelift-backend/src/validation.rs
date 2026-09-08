@@ -175,11 +175,11 @@ fn check_result_types(
     }
 }
 
-/// Direct calls and returns may retain their logical `core.nil` slots from
+/// Calls and returns may retain their logical `core.nil` slots from
 /// source-level `func` operations. The emitter treats those slots as
 /// zero-width, so hand-written native IR may instead use the projected runtime
 /// result list. Both forms must otherwise match the declared contract exactly.
-fn check_direct_result_types(
+fn check_call_result_types(
     ctx: &IrContext,
     op: OpRef,
     expected: &[TypeRef],
@@ -200,7 +200,7 @@ fn values_match_types(ctx: &IrContext, values: &[ValueRef], expected: &[TypeRef]
             .all(|(&value, &ty)| ty == ctx.value_ty(value))
 }
 
-/// See [`check_direct_result_types`]. A direct return may use the full logical
+/// See [`check_call_result_types`]. A direct return may use the full logical
 /// result list or its zero-width `core.nil` projection.
 fn check_direct_return_types(
     ctx: &IrContext,
@@ -311,7 +311,7 @@ fn validate_clif_region(
                         "call argument",
                         errors,
                     );
-                    check_direct_result_types(
+                    check_call_result_types(
                         ctx,
                         op,
                         signature.results(ctx),
@@ -333,10 +333,10 @@ fn validate_clif_region(
                         "call argument",
                         errors,
                     );
-                    check_result_types(
+                    check_call_result_types(
                         ctx,
                         op,
-                        &runtime_types(ctx, signature.results(ctx)),
+                        signature.results(ctx),
                         "call result list",
                         errors,
                     );

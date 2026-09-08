@@ -403,7 +403,8 @@ impl RewritePattern for FuncCallIndirectPattern {
                 .iter()
                 .zip(CallLike::call_args(&call, ctx))
                 .any(|(&param, &arg)| param != ctx.value_ty(arg))
-            || runtime_result_types != result_types
+            || (result_types.as_slice() != callable.results(ctx)
+                && result_types != runtime_result_types)
         {
             return false;
         }
@@ -838,6 +839,75 @@ mod tests {
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
+    }
+
+    #[test]
+    fn indirect_call_preserves_live_logical_nil_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee {signature = func.func_sig<() -> core.nil>} : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        super::lower(&mut ctx, module, TypeConverter::new()).expect("func-to-clif lowering");
+        crate::validate_clif_ir(&ctx, module).expect("logical nil call result is valid native IR");
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed
+                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>} : core.nil"),
+            "{printed}"
+        );
+        assert!(printed.contains("clif.return %1"), "{printed}");
+        assert!(
+            !crate::emit_module_to_native(&ctx, module, &[])
+                .expect("native emitter projects nil to zero-width")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn indirect_call_without_exact_signature_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(error.to_string().contains("func.call_indirect"), "{error}");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("func.call_indirect"), "{printed}");
+        assert!(!printed.contains("clif.call_indirect"), "{printed}");
+    }
+
+    #[test]
+    fn indirect_call_does_not_equate_nil_contract_with_no_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee {signature = func.func_sig<() -> ()>} : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(error.to_string().contains("func.call_indirect"), "{error}");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("func.call_indirect"), "{printed}");
+        assert!(!printed.contains("clif.call_indirect"), "{printed}");
     }
 
     #[test]
