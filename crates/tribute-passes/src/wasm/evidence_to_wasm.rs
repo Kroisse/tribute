@@ -37,13 +37,37 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_IDX};
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum EvidenceValidationError {
+    InvalidDispatchMetadata,
+    DispatchOperandMismatch,
+}
+
+impl std::fmt::Display for EvidenceValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidDispatchMetadata => f.write_str(
+                "Wasm CPS dispatch requires four operands, no results and typed metadata",
+            ),
+            Self::DispatchOperandMismatch => {
+                f.write_str("Wasm CPS dispatch operands differ from the fixed target ABI")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EvidenceValidationError {}
+
 /// Lower evidence runtime functions to WASM implementations.
 ///
 /// This pass:
 /// 1. Replaces stub function declarations with real binary search implementations
 /// 2. Lowers `effect.extend` and remaining legacy `ability.evidence_lookup` /
 ///    `ability.evidence_extend` operations to calls to the generated functions.
-pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), &'static str> {
+pub fn lower_evidence_to_wasm(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), EvidenceValidationError> {
     prepare_wasm_evidence_runtime(ctx, module)?;
     rewrite_evidence_ops_in_scope(ctx, module);
     Ok(())
@@ -53,7 +77,7 @@ pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(),
 pub fn prepare_wasm_evidence_runtime(
     ctx: &mut IrContext,
     module: Module,
-) -> Result<(), &'static str> {
+) -> Result<(), EvidenceValidationError> {
     validate_final_dispatches(ctx, module.op())?;
     replace_evidence_function_stubs(ctx, module);
     Ok(())
@@ -67,7 +91,7 @@ pub fn prepare_wasm_evidence_runtime(
 pub fn lower_evidence_to_wasm_func(
     ctx: &mut IrContext,
     func_op: wasm_dialect::Func,
-) -> Result<(), &'static str> {
+) -> Result<(), EvidenceValidationError> {
     validate_final_dispatches(ctx, func_op.op_ref())?;
     rewrite_evidence_ops_in_scope(ctx, func_op);
     Ok(())
@@ -446,7 +470,10 @@ impl RewritePattern for EffectDispatchTailPattern {
 /// lookup plus a wasm indirect call through the stored CPS dispatch closure.
 struct EffectDispatchCpsPattern;
 
-fn validate_final_dispatches(ctx: &mut IrContext, root: OpRef) -> Result<(), &'static str> {
+fn validate_final_dispatches(
+    ctx: &mut IrContext,
+    root: OpRef,
+) -> Result<(), EvidenceValidationError> {
     let mut dispatches = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
         if effect::DispatchCps::matches(ctx, op) {
@@ -460,14 +487,17 @@ fn validate_final_dispatches(ctx: &mut IrContext, root: OpRef) -> Result<(), &'s
     Ok(())
 }
 
-fn final_dispatch_signature(ctx: &mut IrContext, op: OpRef) -> Result<TypeRef, &'static str> {
+fn final_dispatch_signature(
+    ctx: &mut IrContext,
+    op: OpRef,
+) -> Result<TypeRef, EvidenceValidationError> {
     if !ctx.op_result_types(op).is_empty()
         || ctx.op(op).attributes.get_type("answer_type").is_none()
         || ctx.op(op).attributes.get_type("ability_ref").is_none()
         || ctx.op(op).attributes.get_symbol("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
-        return Err("Wasm CPS dispatch requires four operands, no results and typed metadata");
+        return Err(EvidenceValidationError::InvalidDispatchMetadata);
     }
     let evidence_ty = evidence_ref_type(ctx);
     let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
@@ -480,7 +510,7 @@ fn final_dispatch_signature(ctx: &mut IrContext, op: OpRef) -> Result<TypeRef, &
         .zip(expected)
         .any(|(value, expected)| ctx.value_ty(*value) != expected)
     {
-        return Err("Wasm CPS dispatch operands differ from the fixed target ABI");
+        return Err(EvidenceValidationError::DispatchOperandMismatch);
     }
     Ok(wasm_dialect::func_sig(
         ctx,
@@ -1515,14 +1545,17 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.contains("wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>"), "{first}");
         assert!(!first.contains("answer_type"));
-        let mut invalid_inputs = vec![
+        let mut invalid_inputs: Vec<_> = [
             source.replace("answer_type = core.i32", "answer_type = 0"),
             source.replace(", answer_type = core.i32", ""),
             source.replace(
                 "%ev, %dispatch, %resume, %payload",
                 "%ev, %dispatch, %resume",
             ),
-        ];
+        ]
+        .into_iter()
+        .map(|source| (source, EvidenceValidationError::InvalidDispatchMetadata))
+        .collect();
         for original in [
             "%ev: wasm.arrayref",
             "%dispatch: !closure",
@@ -1533,9 +1566,9 @@ mod tests {
                 original,
                 &format!("{}: core.i64", original.split(':').next().unwrap()),
             );
-            invalid_inputs.push(changed);
+            invalid_inputs.push((changed, EvidenceValidationError::DispatchOperandMismatch));
         }
-        for changed in invalid_inputs {
+        for (changed, expected) in invalid_inputs {
             for stub in [
                 "",
                 "func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }",
@@ -1546,11 +1579,40 @@ mod tests {
                 let module = parse_test_module(&mut ctx, &source);
                 let before = print_module(&ctx, module.op());
                 let ops = module.ops(&ctx);
-                assert!(lower_evidence_to_wasm(&mut ctx, module).is_err());
+                assert_eq!(
+                    prepare_wasm_evidence_runtime(&mut ctx, module).unwrap_err(),
+                    expected
+                );
+                assert_eq!(
+                    lower_evidence_to_wasm(&mut ctx, module).unwrap_err(),
+                    expected
+                );
                 assert_eq!(print_module(&ctx, module.op()), before);
                 assert_eq!(module.ops(&ctx), ops);
             }
         }
+    }
+
+    #[test]
+    fn pass_adapter_preserves_concrete_validation_error() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
+            wasm.func @run(%ev: wasm.arrayref, %dispatch: !Closure, %resume: !Closure, %payload: core.i64) {
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+            }
+        }"#,
+        );
+        let function = wasm_dialect::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let before = print_module(&ctx, module.op());
+        let error = LowerEvidenceToWasm.run(&mut ctx, function).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<EvidenceValidationError>(),
+            Some(&EvidenceValidationError::DispatchOperandMismatch)
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
