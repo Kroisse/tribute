@@ -115,7 +115,6 @@ pub fn lower(
 ) -> Result<(), ConversionError> {
     // Pre-intern types for patterns
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -131,28 +130,24 @@ pub fn lower(
             ptr_ty,
             i64_ty,
             i32_ty,
-            anyref_ty,
         })
         .add_pattern(UnboxIntPattern { i32_ty })
         .add_pattern(BoxNatPattern {
             ptr_ty,
             i64_ty,
             i32_ty,
-            anyref_ty,
         })
         .add_pattern(UnboxNatPattern { i32_ty })
         .add_pattern(BoxFloatPattern {
             ptr_ty,
             i64_ty,
             i32_ty,
-            anyref_ty,
         })
         .add_pattern(UnboxFloatPattern { f64_ty })
         .add_pattern(BoxBoolPattern {
             ptr_ty,
             i64_ty,
             i32_ty,
-            anyref_ty,
         })
         .add_pattern(UnboxBoolPattern { i32_ty })
         .add_pattern(IntoRawPattern { ptr_ty });
@@ -211,7 +206,6 @@ struct BoxIntPattern {
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    anyref_ty: TypeRef,
 }
 
 impl RewritePattern for BoxIntPattern {
@@ -235,7 +229,7 @@ impl RewritePattern for BoxIntPattern {
             self.ptr_ty,
             self.i64_ty,
             self.i32_ty,
-            self.anyref_ty,
+            self.ptr_ty,
         );
         let last = ops.pop().unwrap();
         for o in ops {
@@ -250,7 +244,6 @@ struct BoxNatPattern {
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    anyref_ty: TypeRef,
 }
 
 impl RewritePattern for BoxNatPattern {
@@ -274,7 +267,7 @@ impl RewritePattern for BoxNatPattern {
             self.ptr_ty,
             self.i64_ty,
             self.i32_ty,
-            self.anyref_ty,
+            self.ptr_ty,
         );
         let last = ops.pop().unwrap();
         for o in ops {
@@ -289,7 +282,6 @@ struct BoxBoolPattern {
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    anyref_ty: TypeRef,
 }
 
 impl RewritePattern for BoxBoolPattern {
@@ -313,7 +305,7 @@ impl RewritePattern for BoxBoolPattern {
             self.ptr_ty,
             self.i64_ty,
             self.i32_ty,
-            self.anyref_ty,
+            self.ptr_ty,
         );
         let last = ops.pop().unwrap();
         for o in ops {
@@ -328,7 +320,6 @@ struct BoxFloatPattern {
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-    anyref_ty: TypeRef,
 }
 
 impl RewritePattern for BoxFloatPattern {
@@ -352,7 +343,7 @@ impl RewritePattern for BoxFloatPattern {
             self.ptr_ty,
             self.i64_ty,
             self.i32_ty,
-            self.anyref_ty,
+            self.ptr_ty,
         );
         let last = ops.pop().unwrap();
         for o in ops {

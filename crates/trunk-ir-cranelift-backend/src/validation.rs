@@ -120,35 +120,8 @@ fn runtime_types(ctx: &IrContext, types: &[TypeRef]) -> Vec<TypeRef> {
         .collect()
 }
 
-/// Whether a value retains a semantic type whose native ABI representation is
-/// a raw pointer. These values can flow into a `core.ptr` slot in a target
-/// callable contract without a runtime cast; native lowering records that
-/// representation change in the contract, not in every SSA value.
-fn has_native_pointer_representation(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    let core = Symbol::new("core");
-    let tribute_rt = Symbol::new("tribute_rt");
-
-    (data.dialect == core
-        && (data.name == Symbol::new("ptr")
-            || data.name == Symbol::new("bytes")
-            || data.name == Symbol::new("array")))
-        || (data.dialect == tribute_rt
-            && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref")))
-        || (data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig"))
-        || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
-        || (data.dialect == Symbol::new("adt")
-            && (data.name == Symbol::new("typeref")
-                || data.attrs.contains_key("fields")
-                || data.attrs.contains_key("variants")
-                || data.attrs.get_bool("is_variant") == Some(true)))
-}
-
-fn types_match_native_abi(ctx: &IrContext, expected: TypeRef, actual: TypeRef) -> bool {
+fn types_match_native_abi(_ctx: &IrContext, expected: TypeRef, actual: TypeRef) -> bool {
     expected == actual
-        || (ctx.types.get(expected).dialect == Symbol::new("core")
-            && ctx.types.get(expected).name == Symbol::new("ptr")
-            && has_native_pointer_representation(ctx, actual))
 }
 
 fn type_lists_match_native_abi(ctx: &IrContext, expected: &[TypeRef], actual: &[TypeRef]) -> bool {
@@ -583,21 +556,37 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_accepts_semantic_values_in_pointer_contract_slots() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
+    fn native_boundary_rejects_semantic_and_shape_matched_values_in_pointer_slots() {
+        let error = validation_error(
             r#"core.module @test {
+  !shaped = adt.struct() {fields = [[@field, core.i32]], name = @Impostor}
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
-  clif.func @caller(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
+  clif.func @semantic(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
     %direct = clif.call %value {callee = @target} : tribute_rt.anyref
     %indirect = clif.call_indirect %callee, %direct {sig = clif.func_sig<(core.ptr) -> core.ptr>} : tribute_rt.anyref
     clif.return %indirect
   }
+  clif.func @shaped(%value: !shaped) -> core.ptr {
+    %direct = clif.call %value {callee = @target} : !shaped
+    clif.return %direct
+  }
 }"#,
         );
 
-        validate_clif_ir(&ctx, module).unwrap();
+        assert!(
+            error.contains("clif.call call argument #0 type mismatch: expected core.ptr, found tribute_rt.anyref"),
+            "{error}"
+        );
+        assert!(
+            error.contains("clif.call_indirect call argument #0 type mismatch: expected core.ptr, found tribute_rt.anyref"),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                "clif.call call argument #0 type mismatch: expected core.ptr, found adt.struct()"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

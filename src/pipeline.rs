@@ -1723,10 +1723,13 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use std::collections::HashMap;
     use tribute_core::calling_convention::{
         cps_continuation_frame_layout_type, cps_continuation_frame_ref_type, cps_dispatch_type,
         cps_done_type,
     };
+    use trunk_ir::dialect::clif;
+    use trunk_ir::ops::DialectType;
 
     fn source_logical_cps_root_module() -> (IrContext, Module) {
         let mut ctx = IrContext::new();
@@ -1866,6 +1869,171 @@ mod tests {
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))
             .expect("attached db")
+    }
+
+    fn assert_exact_indirect_call_operands(
+        ctx: &IrContext,
+        region: trunk_ir::RegionRef,
+        pointer_type: trunk_ir::TypeRef,
+        saw_pointer_argument: &mut bool,
+        ir: &str,
+    ) {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if clif::CallIndirect::matches(ctx, op) {
+                    let signature = ctx
+                        .op(op)
+                        .attributes
+                        .get_type("sig")
+                        .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
+                        .expect("prepared clif.call_indirect must retain an exact signature");
+                    let operands = ctx.op_operands(op);
+                    let arguments = operands
+                        .get(1..)
+                        .expect("clif.call_indirect must retain its callee operand");
+                    assert_eq!(arguments.len(), signature.inputs(ctx).len());
+                    for (index, (argument, expected)) in
+                        arguments.iter().zip(signature.inputs(ctx)).enumerate()
+                    {
+                        assert_eq!(
+                            ctx.value_ty(*argument),
+                            *expected,
+                            "clif.call_indirect argument #{index}: expected {:?}, found {:?}\n{ir}",
+                            ctx.types.get(*expected),
+                            ctx.types.get(ctx.value_ty(*argument)),
+                        );
+                        if *expected == pointer_type {
+                            *saw_pointer_argument = true;
+                        }
+                    }
+                    let expected_results = signature
+                        .results(ctx)
+                        .iter()
+                        .copied()
+                        .filter(|ty| {
+                            let data = ctx.types.get(*ty);
+                            data.dialect != trunk_ir::Symbol::new("core")
+                                || data.name != trunk_ir::Symbol::new("nil")
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(ctx.op_result_types(op), expected_results, "{ir}");
+                }
+                for &nested in &ctx.op(op).regions {
+                    assert_exact_indirect_call_operands(
+                        ctx,
+                        nested,
+                        pointer_type,
+                        saw_pointer_argument,
+                        ir,
+                    );
+                }
+            }
+        }
+    }
+
+    fn collect_clif_function_signatures(
+        ctx: &IrContext,
+        region: trunk_ir::RegionRef,
+        functions: &mut HashMap<trunk_ir::Symbol, clif::FuncSig>,
+    ) {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if clif::Func::matches(ctx, op) {
+                    let name = ctx
+                        .op(op)
+                        .attributes
+                        .get_symbol("sym_name")
+                        .expect("prepared clif.func must have a symbol name");
+                    let signature = ctx
+                        .op(op)
+                        .attributes
+                        .get_type("type")
+                        .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
+                        .expect("prepared clif.func must have a valid signature");
+                    functions.insert(name, signature);
+                }
+                for &nested in &ctx.op(op).regions {
+                    collect_clif_function_signatures(ctx, nested, functions);
+                }
+            }
+        }
+    }
+
+    fn assert_exact_direct_call_operands(
+        ctx: &IrContext,
+        region: trunk_ir::RegionRef,
+        functions: &HashMap<trunk_ir::Symbol, clif::FuncSig>,
+        ir: &str,
+    ) {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if clif::Call::matches(ctx, op) {
+                    let callee = ctx
+                        .op(op)
+                        .attributes
+                        .get_symbol("callee")
+                        .expect("prepared clif.call must have a symbol callee");
+                    if let Some(signature) = functions.get(&callee) {
+                        let arguments = ctx.op_operands(op);
+                        assert_eq!(arguments.len(), signature.inputs(ctx).len(), "{ir}");
+                        for (argument, expected) in arguments.iter().zip(signature.inputs(ctx)) {
+                            assert_eq!(ctx.value_ty(*argument), *expected, "{ir}");
+                        }
+                        assert_eq!(ctx.op_result_types(op), signature.results(ctx), "{ir}");
+                    }
+                }
+                for &nested in &ctx.op(op).regions {
+                    assert_exact_direct_call_operands(ctx, nested, functions, ir);
+                }
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn native_preparation_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+        let source = source_from_str(
+            "closure_exec_simple.trb",
+            r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn main() {
+    let f = fn(x) { x + 1 }
+    __tribute_print_nat(f(41))
+}
+"#,
+        );
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        validate_and_report_arity(db, &ctx, module);
+        run_native_target_pipeline(&mut ctx, module).expect("native target lowering must succeed");
+        prepare_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+            None,
+        )
+        .expect("native preparation must succeed");
+
+        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let prepared_ir = trunk_ir::printer::print_module(&ctx, module.op());
+        let mut functions = HashMap::new();
+        let body = module.body(&ctx).expect("module must have a body");
+        collect_clif_function_signatures(&ctx, body, &mut functions);
+        let mut saw_pointer_argument = false;
+        assert_exact_indirect_call_operands(
+            &ctx,
+            body,
+            pointer_type,
+            &mut saw_pointer_argument,
+            &prepared_ir,
+        );
+        assert_exact_direct_call_operands(&ctx, body, &functions, &prepared_ir);
+        assert!(
+            saw_pointer_argument,
+            "closure execution fixture must exercise a core.ptr indirect-call slot"
+        );
     }
 
     #[cfg(unix)]
