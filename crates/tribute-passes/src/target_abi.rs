@@ -713,9 +713,15 @@ pub(crate) fn validate_dispatch_contracts(
             continue;
         }
         let operands = ctx.op_operands(op).to_vec();
-        let [evidence, dispatch, resume, _payload] = operands.as_slice() else {
+        let [evidence, dispatch, resume, payload] = operands.as_slice() else {
             return Err(TargetAbiError::new("CPS dispatch requires four operands"));
         };
+        let packed_payload = tribute_rt::anyref(ctx).as_type_ref();
+        if ctx.value_ty(*payload) != packed_payload {
+            return Err(TargetAbiError::new(
+                "CPS dispatch packed payload must have exact tribute_rt.anyref type",
+            ));
+        }
         let answer = ctx
             .op(op)
             .attributes
@@ -1058,13 +1064,7 @@ fn collect_functions(
         let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: tagged function must have a func.func_sig signature")
         })?;
-        let result = callable.single_result(ctx).ok_or_else(|| {
-            TargetAbiError::new(format!(
-                "target ABI: tagged function `{}` must have one logical result",
-                function.sym_name(ctx)
-            ))
-        })?;
-        if convention == CallingConvention::Cps && result != never {
+        if convention == CallingConvention::Cps && callable.results(ctx) != [never] {
             return Err(TargetAbiError::new(format!(
                 "target ABI: Cps function `{}` must have logical core.never result",
                 function.sym_name(ctx)
@@ -1429,10 +1429,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
             TargetAbiError::new("target ABI: proven callable is not a valid func.func_sig")
         })?;
-        let result = callable.single_result(self.ctx).ok_or_else(|| {
-            TargetAbiError::new("target ABI: proven callable has no logical result")
-        })?;
-        if convention == CallingConvention::Cps && result != self.never {
+        if convention == CallingConvention::Cps && callable.results(self.ctx) != [self.never] {
             return Err(TargetAbiError::new(
                 "target ABI: Cps callable must have logical core.never result",
             ));
@@ -1445,7 +1442,12 @@ impl<'a> PhysicalTypeConverter<'a> {
         let results = if convention == CallingConvention::Cps {
             vec![]
         } else {
-            vec![self.convert_embedded(result)?]
+            callable
+                .results(self.ctx)
+                .to_vec()
+                .into_iter()
+                .map(|result| self.convert_embedded(result))
+                .collect::<Result<Vec<_>, _>>()?
         };
         let attrs = self.convert_func_attributes(callable)?;
         let converted = func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
@@ -1478,10 +1480,8 @@ impl<'a> PhysicalTypeConverter<'a> {
             let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
                 TargetAbiError::new("target ABI: malformed nested func.func_sig type")
             })?;
-            let result = callable.single_result(self.ctx).ok_or_else(|| {
-                TargetAbiError::new("target ABI: nested func.func_sig type has no logical result")
-            })?;
-            if result == self.never {
+            let source_results = callable.results(self.ctx).to_vec();
+            if source_results.contains(&self.never) {
                 return Err(TargetAbiError::new(
                     "target ABI: untagged nested func.func_sig<(...)->core.never>",
                 ));
@@ -1491,10 +1491,13 @@ impl<'a> PhysicalTypeConverter<'a> {
                 .into_iter()
                 .map(|input| self.convert_embedded(input))
                 .collect::<Result<Vec<_>, _>>()?;
-            let result = self.convert_embedded(result)?;
+            let results = source_results
+                .into_iter()
+                .map(|result| self.convert_embedded(result))
+                .collect::<Result<Vec<_>, _>>()?;
             let attrs = self.convert_func_attributes(callable)?;
             let converted =
-                func::func_sig_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
+                func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
@@ -1679,7 +1682,7 @@ mod tests {
 
     #[test]
     fn malformed_dispatch_is_rejected_without_mutating_any_surface() {
-        for mutation in 0..7 {
+        for mutation in 0..9 {
             let (mut ctx, module, dispatch) = dispatch_fixture("i32", "frame");
             match mutation {
                 0 => {
@@ -1725,6 +1728,17 @@ mod tests {
                     let entry = ctx.op(dispatch).parent_block.unwrap();
                     ctx.set_block_arg_type(entry, index as u32, ty);
                 }
+                7 | 8 => {
+                    let ty = if mutation == 7 {
+                        ctx.types.intern(
+                            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+                        )
+                    } else {
+                        core::ptr(&mut ctx).as_type_ref()
+                    };
+                    let entry = ctx.op(dispatch).parent_block.unwrap();
+                    ctx.set_block_arg_type(entry, 3, ty);
+                }
                 _ => unreachable!(),
             }
             let before = print_module(&ctx, module.op());
@@ -1734,15 +1748,88 @@ mod tests {
                 .iter()
                 .map(|&op| ctx.op_result_types(op).to_vec())
                 .collect();
-            assert!(
-                lower_cps_signatures_to_physical(&mut ctx, module).is_err(),
-                "mutation {mutation}"
-            );
+            let error = lower_cps_signatures_to_physical(&mut ctx, module)
+                .expect_err(&format!("mutation {mutation}"));
+            if mutation >= 7 {
+                assert!(error.to_string().contains("packed payload"), "{error}");
+            }
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(ctx.type_aliases(), aliases);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             for (op, expected) in ops.into_iter().zip(result_types) {
                 assert_eq!(ctx.op_result_types(op), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_direct_results_survive_mixed_cps_physicalization() {
+        let mut ctx = IrContext::new();
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+            !direct_closure = closure.closure(func.func_sig<() -> ()>) {tribute.calling_convention = 0}
+            !evidence_closure = closure.closure(func.func_sig<(!Evidence) -> ()>) {tribute.calling_convention = 1}
+            func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
+            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = 1} { func.return }
+            func.func @unit() -> core.nil attributes {tribute.calling_convention = 0} {
+                %nil = arith.const {value = unit} : core.nil
+                func.return %nil
+            }
+            func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = 1} {
+                func.call {callee = @direct, tribute.calling_convention = 0}
+                func.call %ev {callee = @evidence, tribute.calling_convention = 1}
+                %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
+                %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
+                func.call_indirect %direct {signature = func.func_sig<() -> ()>, tribute.calling_convention = 0}
+                func.call_indirect %evidence, %ev {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = 1}
+                %nil = func.call {callee = @unit, tribute.calling_convention = 0} : core.nil
+                func.return
+            }
+            func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
+        }"#,
+        );
+        assert_eq!(
+            ctx.type_alias_by_name(Symbol::new("Evidence")),
+            Some(evidence)
+        );
+        let cps = function(&ctx, module, "cps");
+        let unchanged: Vec<_> = collect_ops(&ctx, module.op())
+            .into_iter()
+            .filter(|&op| op != cps.op_ref())
+            .map(|op| {
+                (
+                    op,
+                    ctx.op(op).attributes.clone(),
+                    ctx.op_result_types(op).to_vec(),
+                )
+            })
+            .collect();
+        let aliases = ctx.type_aliases().to_vec();
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        for (op, before, results) in unchanged {
+            assert_eq!(ctx.op(op).attributes, before);
+            assert_eq!(ctx.op_result_types(op), results);
+        }
+        assert_eq!(ctx.type_aliases(), aliases);
+        assert!(
+            func::FuncSig::from_type_ref(&ctx, cps.r#type(&ctx))
+                .unwrap()
+                .results(&ctx)
+                .is_empty()
+        );
+        for op in collect_ops(&ctx, module.op()) {
+            if func::CallIndirect::matches(&ctx, op) {
+                assert!(ctx.op_result_types(op).is_empty());
+                let signature = IndirectCallLikeOps::exact_signature(&ctx, op).unwrap();
+                assert!(
+                    func::FuncSig::from_type_ref(&ctx, signature)
+                        .unwrap()
+                        .results(&ctx)
+                        .is_empty()
+                );
             }
         }
     }
@@ -2432,12 +2519,12 @@ mod tests {
     }
 
     #[test]
-    fn tagged_resultless_function_fails_before_target_abi_mutation() {
+    fn already_physical_cps_function_fails_before_target_abi_mutation() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @broken() -> core.nil attributes {tribute.calling_convention = 0} { func.unreachable }
+  func.func @broken() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
 }"#,
         );
         let broken = function(&ctx, module, "broken");
@@ -2452,7 +2539,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("tagged function `broken` must have one logical result"),
+                .contains("must have logical core.never result"),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);

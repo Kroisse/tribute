@@ -1808,6 +1808,96 @@ mod tests {
     }
 
     #[test]
+    fn empty_result_cps_root_executes_native_done_continuation() {
+        use tribute_core::calling_convention::cps_closure_function_type;
+        use trunk_ir::dialect::{adt, arith};
+        use trunk_ir::{Attribute, Symbol};
+        let (mut ctx, module) = source_logical_cps_root_module();
+        let worker = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| func_dialect::Func::from_op(&ctx, op).ok())
+            .unwrap();
+        let entry = ctx.region(worker.body(&ctx)).blocks[0];
+        let frame_value = ctx.block_args(entry)[1];
+        let layout = ctx
+            .type_alias_by_name(Symbol::new("__tribute_continuation_frame_root_nil"))
+            .unwrap();
+        let Attribute::List(fields) = ctx.types.get(layout).attrs.get("fields").unwrap() else {
+            panic!("frame fields")
+        };
+        let Attribute::List(done_field) = &fields[0] else {
+            panic!("Done field")
+        };
+        let Attribute::Type(done_type) = done_field[1] else {
+            panic!("Done type")
+        };
+        let signature = cps_closure_function_type(&ctx, done_type).unwrap();
+        let location = ctx.op(worker.op_ref()).location;
+        let unreachable = ctx.block(entry).ops[0];
+        trunk_ir::rewrite::helpers::erase_op(&mut ctx, unreachable);
+        let done = adt::struct_get(&mut ctx, location, frame_value, done_type, layout, 0);
+        ctx.push_op(entry, done.op_ref());
+        let nil = core_dialect::nil(&mut ctx).as_type_ref();
+        let value = arith::r#const(&mut ctx, location, nil, Attribute::Unit);
+        ctx.push_op(entry, value.op_ref());
+        let callee = done.result(&ctx);
+        let answer = value.result(&ctx);
+        let tail =
+            func_dialect::tail_call_indirect(&mut ctx, location, callee, [answer], Some(signature));
+        ctx.op_mut(tail.op_ref())
+            .attributes
+            .insert(Symbol::new("tribute.calling_convention"), Attribute::Int(2));
+        ctx.push_op(entry, tail.op_ref());
+
+        run_native_target_pipeline(&mut ctx, module)
+            .expect("logical CPS root crosses native boundary");
+        for name in [
+            "__tribute_cps_main",
+            "__tribute_root_done_k",
+            "__tribute_root_dispatch",
+        ] {
+            let function = module
+                .ops(&ctx)
+                .into_iter()
+                .find_map(|op| {
+                    let function = func_dialect::Func::from_op(&ctx, op).ok()?;
+                    (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
+                })
+                .expect("root bridge function remains present");
+            assert_eq!(
+                tribute_core::get_calling_convention(&ctx, function.op_ref()),
+                Some(tribute_core::CallingConvention::Cps)
+            );
+            assert!(
+                func_dialect::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
+                    .unwrap()
+                    .results(&ctx)
+                    .is_empty()
+            );
+        }
+        let object = compile_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+        )
+        .expect("empty-result root emits native code");
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("empty-result-cps-root");
+        link_native_binary(&object, &executable).expect("empty-result root links");
+        let output = std::process::Command::new(executable)
+            .output()
+            .expect("empty-result root starts");
+        assert!(
+            output.status.success(),
+            "native root failed: {:?}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn evidence_lookup_preserves_marker_type_in_emitted_binary() {
         let mut ctx = trunk_ir::IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
