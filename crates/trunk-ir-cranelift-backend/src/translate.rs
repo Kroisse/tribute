@@ -763,13 +763,13 @@ mod tests {
       %result = clif.call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.i32, core.nil, core.i64) -> ()>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return_call %value, %unit, %last {callee = @direct_tail}
   }
-  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> ()>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>}
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> ()>}
   }
   clif.func {sym_name = @jump, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):

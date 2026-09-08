@@ -36,6 +36,7 @@ pub enum WasmLowerError {
     Conversion(ConversionError),
     Pass(PassError),
     Const(super::const_to_wasm::ConstValidationError),
+    Evidence(super::evidence_to_wasm::EvidenceValidationError),
 }
 
 impl fmt::Display for WasmLowerError {
@@ -44,6 +45,7 @@ impl fmt::Display for WasmLowerError {
             Self::Conversion(error) => error.fmt(f),
             Self::Pass(error) => error.fmt(f),
             Self::Const(error) => error.fmt(f),
+            Self::Evidence(error) => error.fmt(f),
         }
     }
 }
@@ -54,6 +56,7 @@ impl std::error::Error for WasmLowerError {
             Self::Conversion(error) => Some(error),
             Self::Pass(error) => Some(error),
             Self::Const(error) => Some(error),
+            Self::Evidence(error) => Some(error),
         }
     }
 }
@@ -76,6 +79,12 @@ impl From<super::const_to_wasm::ConstValidationError> for WasmLowerError {
     }
 }
 
+impl From<super::evidence_to_wasm::EvidenceValidationError> for WasmLowerError {
+    fn from(error: super::evidence_to_wasm::EvidenceValidationError) -> Self {
+        Self::Evidence(error)
+    }
+}
+
 /// Conversion target for IR after Wasm-specific lowering has removed shared
 /// ability/effect ABI operations.
 pub fn wasm_backend_ready_target() -> ConversionTarget {
@@ -92,6 +101,7 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
     trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_switches(ctx, module)?;
+    super::type_converter::convert_canonical_closure_storage(ctx, module);
 
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
     let io_analysis = IoAnalysis::analyze(ctx, module, const_analysis.total_size());
@@ -167,13 +177,13 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
         if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {
-            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module);
+            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module)?;
             let mut pm = PassManager::new();
             pm.nest::<wasm_dialect::Func>()
                 .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
             pm.run(ctx, core_module)?;
         } else {
-            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module);
+            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)?;
         }
     }
 
@@ -1325,6 +1335,33 @@ mod tests {
         assert!(!output.contains("effect.dispatch_tail"), "{output}");
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
         assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn wasm_lower_error_preserves_evidence_source_and_diagnostics() {
+        use super::super::evidence_to_wasm::EvidenceValidationError;
+        for (validation, message) in [
+            (
+                EvidenceValidationError::InvalidDispatchMetadata,
+                "Wasm CPS dispatch requires four operands, no results and typed metadata",
+            ),
+            (
+                EvidenceValidationError::DispatchOperandMismatch,
+                "Wasm CPS dispatch operands differ from the fixed target ABI",
+            ),
+        ] {
+            let error = WasmLowerError::from(validation);
+            let WasmLowerError::Evidence(expected) = &error else {
+                panic!("evidence variant");
+            };
+            let source = std::error::Error::source(&error).unwrap();
+            assert_eq!(
+                source.downcast_ref::<EvidenceValidationError>(),
+                Some(expected)
+            );
+            assert_eq!(error.to_string(), message);
+            assert_eq!(source.to_string(), message);
+        }
     }
 
     #[test]

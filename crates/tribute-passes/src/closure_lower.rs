@@ -249,7 +249,10 @@ impl RewritePattern for LowerClosureCallArena {
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
-        let caller_result_ty = ctx.op_result_types(op)[0];
+        // Ordinary closure calls currently lower exactly one result.
+        let &[caller_result_ty] = ctx.op_result_types(op) else {
+            return false;
+        };
 
         let i32_ty = ctx
             .types
@@ -264,7 +267,7 @@ impl RewritePattern for LowerClosureCallArena {
                 callee,
                 convention,
                 &args,
-                caller_result_ty,
+                &[caller_result_ty],
                 anyref_ty,
             ) else {
                 return false;
@@ -398,9 +401,11 @@ impl RewritePattern for LowerClosureTailCallArena {
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let never = core::never(ctx).as_type_ref();
+        let Some(results) = exact_tail_results(ctx, op, callee) else {
+            return false;
+        };
         let Some(contract) =
-            exact_physical_call_contract(ctx, callee, convention, args, never, anyref_ty)
+            exact_physical_call_contract(ctx, callee, convention, args, &results, anyref_ty)
         else {
             return false;
         };
@@ -440,7 +445,10 @@ fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination
     ctx.op_mut(destination).attributes.extend(attributes);
 }
 
-fn physical_closure_type_for_callee(ctx: &IrContext, callee: ValueRef) -> Option<TypeRef> {
+pub(crate) fn physical_closure_type_for_callee(
+    ctx: &IrContext,
+    callee: ValueRef,
+) -> Option<TypeRef> {
     let ty = ctx.value_ty(callee);
     if get_physical_closure_convention(ctx, ty).is_some() {
         return Some(ty);
@@ -479,6 +487,27 @@ fn is_lowered_closure_pack(ctx: &IrContext, op: OpRef, closure_ty: TypeRef) -> b
     ctx.value_ty(*function) == closure.func_type(ctx)
 }
 
+fn exact_tail_results(ctx: &IrContext, op: OpRef, callee: ValueRef) -> Option<Vec<TypeRef>> {
+    let closure = physical_closure_type_for_callee(ctx, callee)?;
+    let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
+    let exact = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(ctx, op)?;
+    if exact != signature {
+        return None;
+    }
+    let results = func::FuncSig::from_type_ref(ctx, signature)?.results(ctx);
+    let mut parent = ctx.op(op).parent_block?;
+    loop {
+        let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
+        if let Ok(function) = func::Func::from_op(ctx, owner) {
+            let caller = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
+            return (get_calling_convention(ctx, owner) == Some(CallingConvention::Cps)
+                && caller.results(ctx) == results)
+                .then(|| results.to_vec());
+        }
+        parent = ctx.op(owner).parent_block?;
+    }
+}
+
 struct PhysicalCallContract {
     environment_index: usize,
     signature: TypeRef,
@@ -490,14 +519,14 @@ fn exact_physical_call_contract(
     callee: ValueRef,
     convention: CallingConvention,
     args: &[ValueRef],
-    result: TypeRef,
+    results: &[TypeRef],
     environment: TypeRef,
 ) -> Option<PhysicalCallContract> {
     let closure_ty = physical_closure_type_for_callee(ctx, callee)?;
     (get_physical_closure_convention(ctx, closure_ty) == Some(convention)).then_some(())?;
     let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
     let callable = func::FuncSig::from_type_ref(ctx, function)?;
-    if callable.results(ctx) != [result] || callable.inputs(ctx).len() != args.len() {
+    if callable.results(ctx) != results || callable.inputs(ctx).len() != args.len() {
         return None;
     }
     let mut casts = Vec::new();
@@ -528,7 +557,8 @@ fn exact_physical_call_contract(
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
         environment_index,
-        signature: func::func_sig_with_attrs(ctx, params, [result], type_attrs).as_type_ref(),
+        signature: func::func_sig_with_attrs(ctx, params, results.iter().copied(), type_attrs)
+            .as_type_ref(),
         argument_casts: casts,
     })
 }
@@ -633,7 +663,6 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
     }
 
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let never = core::never(ctx).as_type_ref();
     transfers.into_iter().all(|op| {
         let operands = ctx.op_operands(op).to_vec();
         let Some((&callee, args)) = operands.split_first() else {
@@ -646,13 +675,16 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             return false;
         };
         if func::CallIndirect::matches(ctx, op) {
-            let Some(&result) = ctx.op_result_types(op).first() else {
+            let results = ctx.op_result_types(op).to_vec();
+            results.len() == 1
+                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
+                    .is_some()
+        } else {
+            let Some(results) = exact_tail_results(ctx, op, callee) else {
                 return false;
             };
-            exact_physical_call_contract(ctx, callee, convention, args, result, anyref).is_some()
-        } else {
             convention == CallingConvention::Cps
-                && exact_physical_call_contract(ctx, callee, convention, args, never, anyref)
+                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
                     .is_some()
         }
     })
@@ -662,10 +694,10 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 ///
 /// This compatibility entry point prepares module-level function signatures,
 /// then lowers every function body in the module tree.
-pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
     prepare_closure_lowering(ctx, module);
 
-    lower_prepared_closures(ctx, module);
+    lower_prepared_closures(ctx, module)
 }
 
 /// Lower every already-prepared function body in a module to closure storage.
@@ -674,26 +706,35 @@ pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
 /// earlier transformation are lowered once as well. Processing each function
 /// operation at most once keeps this traversal bounded without relying on
 /// function names or target-specific pipeline ordering.
-pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) {
+pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
     let mut lowered = HashSet::new();
     let mut worklist = Vec::new();
 
     loop {
+        let mut discovered = Vec::new();
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             if let Ok(func_op) = func::Func::from_op(ctx, op)
                 && lowered.insert(op)
             {
-                worklist.push(func_op);
+                discovered.push(func_op);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+
+        // Validate the initial module as a whole before rewriting any body.
+        // Later batches include newly generated functions and follow the same gate.
+        for &function in &discovered {
+            validate_closure_transfers(ctx, function)?;
+        }
+        worklist.extend(discovered);
 
         let Some(func_op) = worklist.pop() else {
             break;
         };
 
-        lower_closures_in_func(ctx, func_op);
+        rewrite_validated_closures_in_func(ctx, func_op);
     }
+    Ok(())
 }
 
 /// Prepare module-level closure lowering state.
@@ -707,15 +748,23 @@ pub(crate) fn prepare_closure_lowering(ctx: &mut IrContext, module: Module) {
     applicator.apply_partial(ctx, module);
 }
 
-/// Lower closure operations in one function body.
-///
-/// Closure calls already carry convention-specific hidden operands. This pass
-/// only interposes the physical closure environment.
-pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
-    if ctx.op(func_op.op_ref()).regions.is_empty() {
-        return;
+fn validate_closure_transfers(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
+    if tagged_closure_transfers_are_legal(ctx, func_op) {
+        Ok(())
+    } else {
+        Err("closure lowering: exact caller/callee/indirect result contract mismatch".into())
     }
-    if !tagged_closure_transfers_are_legal(ctx, func_op) {
+}
+
+/// Validate and lower a function's closures, interposing the physical environment.
+pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
+    validate_closure_transfers(ctx, func_op)?;
+    rewrite_validated_closures_in_func(ctx, func_op);
+    Ok(())
+}
+
+fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
+    if ctx.op(func_op.op_ref()).regions.is_empty() {
         return;
     }
     let legacy_evidence = evidence_param_for_func(ctx, func_op);
@@ -742,14 +791,35 @@ pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
 /// not a type-equivalence rule or final physical-IR contract.
 pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
+    rewrite_closure_storage_types(ctx, module, None, closure_struct);
+}
+
+/// Convert only the exact canonical storage identity through the existing
+/// recursive closure type surfaces; target ownership remains at the caller.
+pub(crate) fn convert_canonical_closure_storage(
+    ctx: &mut IrContext,
+    module: Module,
+    source: TypeRef,
+    target: TypeRef,
+) {
+    rewrite_closure_storage_types(ctx, module, Some(source), target);
+}
+
+fn rewrite_closure_storage_types(
+    ctx: &mut IrContext,
+    module: Module,
+    source_storage: Option<TypeRef>,
+    closure_struct: TypeRef,
+) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
-    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct);
+    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct, source_storage);
     let mut alias_updates = Vec::new();
     let mut attribute_removals = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
     let mut block_arg_updates = Vec::new();
+    let mut block_attribute_updates = Vec::new();
 
     for (name, ty) in aliases {
         let converted = physicalizer.convert_type(ty);
@@ -759,7 +829,7 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     }
     for op in ops {
         for (name, value) in physicalizer.ctx.op(op).attributes.clone() {
-            if name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
+            if source_storage.is_none() && name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
                 attribute_removals.push(op);
                 continue;
             }
@@ -782,14 +852,16 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
         }
         for region in physicalizer.ctx.op(op).regions.clone() {
             for block in physicalizer.ctx.region(region).blocks.clone() {
-                let args = physicalizer
-                    .ctx
-                    .block(block)
-                    .args
-                    .iter()
-                    .map(|argument| argument.ty)
-                    .collect::<Vec<_>>();
-                for (index, ty) in args.into_iter().enumerate() {
+                let args = physicalizer.ctx.block(block).args.to_vec();
+                for (index, argument) in args.into_iter().enumerate() {
+                    let mut attrs = argument.attrs.clone();
+                    for (name, value) in argument.attrs.iter() {
+                        attrs.insert(*name, physicalizer.convert_attribute(value.clone()));
+                    }
+                    if attrs != argument.attrs {
+                        block_attribute_updates.push((block, index, attrs));
+                    }
+                    let ty = argument.ty;
                     let converted = physicalizer.convert_type(ty);
                     if converted != ty {
                         block_arg_updates.push((block, index as u32, converted));
@@ -817,27 +889,39 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     for (block, index, ty) in block_arg_updates {
         ctx.set_block_arg_type(block, index, ty);
     }
+    for (block, index, attrs) in block_attribute_updates {
+        ctx.block_mut(block).args[index].attrs = attrs;
+    }
 }
 
 struct ClosureTypePhysicalizer<'a> {
     ctx: &'a mut IrContext,
     closure_struct: TypeRef,
+    source_storage: Option<TypeRef>,
     cache: HashMap<TypeRef, TypeRef>,
     visiting: HashSet<TypeRef>,
 }
 
 impl<'a> ClosureTypePhysicalizer<'a> {
-    fn new(ctx: &'a mut IrContext, closure_struct: TypeRef) -> Self {
+    fn new(
+        ctx: &'a mut IrContext,
+        closure_struct: TypeRef,
+        source_storage: Option<TypeRef>,
+    ) -> Self {
         Self {
             ctx,
             closure_struct,
+            source_storage,
             cache: HashMap::new(),
             visiting: HashSet::new(),
         }
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if closure::Closure::matches(self.ctx, ty) {
+        if self.source_storage.map_or_else(
+            || closure::Closure::matches(self.ctx, ty),
+            |source| ty == source,
+        ) {
             return self.closure_struct;
         }
         if let Some(&converted) = self.cache.get(&ty) {
@@ -903,8 +987,7 @@ impl Pass for LowerClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        lower_closures(ctx, target.into());
-        Ok(())
+        lower_closures(ctx, target.into())
     }
 }
 
@@ -920,8 +1003,7 @@ impl Pass for LowerPreparedClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        lower_prepared_closures(ctx, target.into());
-        Ok(())
+        lower_prepared_closures(ctx, target.into())
     }
 }
 
@@ -952,8 +1034,7 @@ impl Pass for LowerClosuresInFunc {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
-        lower_closures_in_func(ctx, target);
-        Ok(())
+        lower_closures_in_func(ctx, target)
     }
 }
 
@@ -1139,7 +1220,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = closure_test_module(&mut ctx);
 
-        lower_closures(&mut ctx, module);
+        lower_closures(&mut ctx, module).unwrap();
 
         let ir = print_module(&ctx, module.op());
         assert!(
@@ -1177,7 +1258,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = nested_closure_test_module(&mut ctx);
 
-        lower_closures(&mut ctx, module);
+        lower_closures(&mut ctx, module).unwrap();
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
@@ -1190,6 +1271,104 @@ mod tests {
             !inner_ir.contains("closure.func") && !inner_ir.contains("closure.env"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
         );
+    }
+
+    #[test]
+    fn prepared_module_rejects_invalid_transfer_before_rewriting_other_functions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Cps = closure.closure(func.func_sig<(core.i32) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+            func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+                func.tail_call_indirect %callee, %value
+            }
+            func.func @otherwise_lowerable(%callee: !Cps) -> tribute_rt.anyref {
+                %env = closure.env %callee : tribute_rt.anyref
+                func.return %env
+            }
+        }"#,
+        );
+        let before = print_module(&ctx, module.op());
+        let ops = collect_ops(&ctx, module.op());
+        assert!(lower_prepared_closures(&mut ctx, module).is_err());
+        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(collect_ops(&ctx, module.op()), ops);
+    }
+
+    #[test]
+    fn ordinary_closure_call_result_counts_are_checked_before_mutation() {
+        for (signature_results, call, supported) in [
+            (
+                "core.i32",
+                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                false,
+            ),
+            (
+                "core.i32",
+                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32, core.i32",
+                false,
+            ),
+            (
+                "()",
+                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                false,
+            ),
+            (
+                "core.i32",
+                "%result = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32",
+                true,
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+            !Callback = closure.closure(func.func_sig<() -> {signature_results}>) {{tribute.calling_convention = 0, tribute.closure_environment_index = 0}}
+            func.func @invalid(%callee: !Callback) -> core.i32 {{
+                {call}
+                %zero = arith.constant {{value = 0}} : core.i32
+                func.return %zero
+            }}
+            func.func @otherwise_lowerable(%callee: !Callback) -> tribute_rt.anyref {{
+                %env = closure.env %callee : tribute_rt.anyref
+                func.return %env
+            }}
+        }}"#,
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+            let ops = collect_ops(&ctx, module.op());
+            let invalid = func_by_name(&ctx, module, "invalid");
+            if supported {
+                lower_prepared_closures(&mut ctx, module).unwrap();
+                assert_module_is_structurally_valid(&ctx, module);
+                let call = collect_ops(&ctx, invalid.op_ref())
+                    .into_iter()
+                    .find(|&op| func::CallIndirect::matches(&ctx, op))
+                    .unwrap();
+                assert_eq!(ctx.op_result_types(call).len(), 1);
+                assert_eq!(ctx.op_operands(call).len(), 2);
+                assert!(print_module(&ctx, invalid.op_ref()).contains("signature"));
+                continue;
+            }
+            for error in [
+                lower_closures_in_func(&mut ctx, invalid).unwrap_err(),
+                lower_prepared_closures(&mut ctx, module).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.to_string(),
+                    "closure lowering: exact caller/callee/indirect result contract mismatch"
+                );
+            }
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(collect_ops(&ctx, module.op()), ops);
+            // The rewrite pattern must also decline unsupported arities safely.
+            rewrite_validated_closures_in_func(&mut ctx, invalid);
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(collect_ops(&ctx, module.op()), ops);
+        }
     }
 
     #[test]
@@ -1280,7 +1459,7 @@ mod tests {
         let module = nested_closure_test_module(&mut ctx);
         let outer = func_by_name_recursive(&ctx, module, "outer");
 
-        lower_closures_in_func(&mut ctx, outer);
+        lower_closures_in_func(&mut ctx, outer).unwrap();
 
         let inner = func_by_name_recursive(&ctx, module, "inner");
         let inner_after_outer = print_module(&ctx, inner.op_ref());
@@ -1289,7 +1468,7 @@ mod tests {
             "outer function pass should not lower nested function body:\n{inner_after_outer}"
         );
 
-        lower_closures_in_func(&mut ctx, inner);
+        lower_closures_in_func(&mut ctx, inner).unwrap();
 
         let inner_calls = call_indirect_operands_in_func(&ctx, inner);
         assert_eq!(inner_calls.len(), 1);
@@ -1300,8 +1479,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tagged_dispatch_aware_tail_retains_exact_physical_signature() {
+    fn check_tagged_dispatch_tail(physical: bool) {
         let mut ctx = IrContext::new();
         let ev = evidence_type_str();
         let module = parse_test_module(
@@ -1315,6 +1493,9 @@ mod tests {
 }}"#
             ),
         );
+        if physical {
+            crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        }
         let run = func_by_name(&ctx, module, "run");
         let entry_args = ctx.block_args(ctx.region(run.body(&ctx)).blocks[0]);
         let evidence = entry_args[1];
@@ -1322,7 +1503,7 @@ mod tests {
         let dispatch = entry_args[3];
         let value = entry_args[4];
 
-        lower_closures_in_func(&mut ctx, run);
+        lower_closures_in_func(&mut ctx, run).unwrap();
 
         let tail = ctx
             .block(ctx.region(run.body(&ctx)).blocks[0])
@@ -1334,6 +1515,7 @@ mod tests {
         let signature =
             trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail).unwrap();
         let callable = func::FuncSig::from_type_ref(&ctx, signature).unwrap();
+        assert_eq!(callable.results(&ctx).is_empty(), physical);
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
         assert_eq!(
@@ -1351,6 +1533,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             "the physical signature must include the inserted environment operand"
         );
+    }
+
+    #[test]
+    fn logical_dispatch_tail_preserves_never_results() {
+        check_tagged_dispatch_tail(false);
+    }
+
+    #[test]
+    fn physical_dispatch_tail_preserves_empty_results() {
+        check_tagged_dispatch_tail(true);
     }
 
     #[test]
@@ -1376,7 +1568,7 @@ mod tests {
         let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, run);
+        assert!(lower_closures_in_func(&mut ctx, run).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1393,7 +1585,7 @@ mod tests {
         let external = func_by_name(&ctx, module, "external");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, external);
+        lower_closures_in_func(&mut ctx, external).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1415,7 +1607,7 @@ mod tests {
         let caller = func_by_name(&ctx, module, "caller");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, caller);
+        lower_closures_in_func(&mut ctx, caller).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1448,7 +1640,7 @@ mod tests {
         let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, run);
+        assert!(lower_closures_in_func(&mut ctx, run).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }

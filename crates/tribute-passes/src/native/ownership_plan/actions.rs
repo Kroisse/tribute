@@ -933,9 +933,7 @@ fn validate_call_contract(
     validate_result_contract(
         ctx,
         ctx.op_results(op),
-        signature.single_result(ctx).ok_or_else(|| {
-            OwnershipPlanError::new("native ownership requires one logical result")
-        })?,
+        signature.results(ctx),
         managed_layouts,
         "call result",
     )
@@ -944,10 +942,20 @@ fn validate_call_contract(
 pub(super) fn validate_result_contract(
     ctx: &IrContext,
     values: &[ValueRef],
-    expected: TypeRef,
+    expected: &[TypeRef],
     managed_layouts: &HashSet<TypeRef>,
     subject: &str,
 ) -> Result<(), OwnershipPlanError> {
+    let [expected] = expected else {
+        return if expected.is_empty() && values.is_empty() {
+            Ok(())
+        } else {
+            Err(OwnershipPlanError::new(format!(
+                "{subject} differs from the exact callable signature"
+            )))
+        };
+    };
+    let expected = *expected;
     let expected_data = ctx.types.get(expected);
     let physically_empty = expected_data.dialect == Symbol::new("core")
         && (expected_data.name == Symbol::new("nil") || expected_data.name == Symbol::new("never"));
@@ -959,7 +967,8 @@ pub(super) fn validate_result_contract(
             "{subject} differs from the exact callable signature"
         )));
     }
-    if !is_typed_managed_reference(ctx, expected, managed_layouts)
+    if values.len() == 1
+        && !is_typed_managed_reference(ctx, expected, managed_layouts)
         && !values
             .iter()
             .any(|&value| is_managed_value(ctx, value, managed_layouts))

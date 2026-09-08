@@ -48,7 +48,7 @@ fn is_evidence_array(ctx: &IrContext, ty: TypeRef) -> bool {
         && named_adt(ctx, array.params[0], "_Marker")
 }
 
-fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     let data = ctx.types.get(ty);
     if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
         Some(BYTES_STRUCT_IDX)

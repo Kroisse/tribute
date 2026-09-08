@@ -1,9 +1,8 @@
 //! Shared target-neutral physicalization of convention-proven CPS signatures.
 //!
-//! The pass is intentionally not wired into the production pipeline here. It
-//! consumes exact callable metadata, validates the whole transfer surface, and
+//! The pass consumes exact callable metadata, validates the whole transfer surface, and
 //! only then maps logical CPS `core.never` results to the shared empty-result
-//! marker used by target backends.
+//! list used by target backends.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -18,7 +17,7 @@ use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
 };
-use tribute_ir::dialect::{ability, tribute_rt};
+use tribute_ir::dialect::{ability, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func};
@@ -81,19 +80,21 @@ pub fn lower_cps_signatures_to_physical(
 ) -> Result<(), TargetAbiError> {
     let ops = collect_ops(ctx, module.op());
     let never = core::never(ctx).as_type_ref();
-    let nil = core::nil(ctx).as_type_ref();
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
     let functions = collect_functions(ctx, &ops, never, anyref)?;
     validate_transfers(ctx, &ops, &functions, never)?;
+    validate_dispatch_contracts(ctx, module)?;
+    validate_root_entry(ctx, module, &[never])?;
 
     let aliases = ctx.type_aliases().to_vec();
-    let mut converter = PhysicalTypeConverter::new(ctx, never, nil);
+    let mut converter = PhysicalTypeConverter::new(ctx, never);
     let mut alias_updates = Vec::new();
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
     let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
+    let mut block_attributes = Vec::new();
 
     for (name, ty) in aliases {
         let converted = converter.convert_embedded(ty)?;
@@ -214,6 +215,13 @@ pub fn lower_cps_signatures_to_physical(
                     .into_iter()
                     .enumerate()
                 {
+                    let mut converted_attrs = argument.attrs.clone();
+                    for (name, value) in argument.attrs.iter() {
+                        converted_attrs.insert(*name, converter.convert_attribute(value.clone())?);
+                    }
+                    if converted_attrs != argument.attrs {
+                        block_attributes.push((block, index, converted_attrs));
+                    }
                     let converted = converter.convert_embedded(argument.ty)?;
                     if converted != argument.ty {
                         block_args.push((block, index as u32, converted));
@@ -244,6 +252,9 @@ pub fn lower_cps_signatures_to_physical(
     for (block, index, ty) in block_args {
         ctx.set_block_arg_type(block, index, ty);
     }
+    for (block, index, attributes) in block_attributes {
+        ctx.block_mut(block).args[index].attrs = attributes;
+    }
     Ok(())
 }
 
@@ -267,19 +278,21 @@ pub fn has_root_entry_contract(ctx: &IrContext, module: Module) -> bool {
     })
 }
 
-/// Construct the target-independent export delimiter for a root worker that
-/// was promoted from Direct or EvidenceDirect to Cps.
-///
-/// This runs after physical signature lowering: the worker and the exact
-/// `ContinuationFrame<R>` members use the target's empty `core.nil` result,
-/// while the wrapper keeps the exact source ABI and performs one ordinary
-/// call. Legacy modules carry no root metadata, so they are left unchanged.
-pub fn compose_root_entry_bridge(
+struct RootEntryContract {
+    worker_op: OpRef,
+    export_convention: CallingConvention,
+    source_result: TypeRef,
+    evidence_ty: TypeRef,
+    frame: RootFrameContract,
+}
+
+fn validate_root_entry(
     ctx: &mut IrContext,
     module: Module,
-) -> Result<(), TargetAbiError> {
+    expected_results: &[TypeRef],
+) -> Result<Option<RootEntryContract>, TargetAbiError> {
     let Some(module_block) = module.first_block(ctx) else {
-        return Ok(());
+        return Ok(None);
     };
     let top_level_ops = ctx.block(module_block).ops.to_vec();
     let roots: Vec<_> = top_level_ops
@@ -296,7 +309,7 @@ pub fn compose_root_entry_bridge(
         ));
     }
     let Some(&worker_op) = roots.first() else {
-        return Ok(());
+        return Ok(None);
     };
 
     let export_convention = root_export_convention(ctx, worker_op)?;
@@ -307,7 +320,7 @@ pub fn compose_root_entry_bridge(
         ));
     }
     let Some(export_convention) = export_convention else {
-        return Ok(());
+        return Ok(None);
     };
     let source_result = source_result.expect("paired root metadata checked above");
     if matches!(export_convention, CallingConvention::Cps) {
@@ -333,12 +346,12 @@ pub fn compose_root_entry_bridge(
         .ok_or_else(|| TargetAbiError::new("target root bridge: main is not func.func_sig"))?;
     let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let worker_params = worker_callable.inputs(ctx);
-    if worker_callable.single_result(ctx) != Some(nil_ty)
+    if worker_callable.results(ctx) != expected_results
         || worker_params.len() != 2
         || worker_params[0] != evidence_ty
     {
         return Err(TargetAbiError::new(
-            "target root bridge: Cps root must have exact physical evidence and ContinuationFrame ABI",
+            "target root bridge: Cps root must have exact evidence and ContinuationFrame ABI",
         ));
     }
     let frame = validate_root_continuation_frame(
@@ -346,7 +359,7 @@ pub fn compose_root_entry_bridge(
         worker_params[1],
         source_result,
         evidence_ty,
-        nil_ty,
+        expected_results,
     )?;
     if ctx.op(worker_op).regions.is_empty() {
         return Err(TargetAbiError::new(
@@ -369,6 +382,37 @@ pub fn compose_root_entry_bridge(
         }
     }
 
+    Ok(Some(RootEntryContract {
+        worker_op,
+        export_convention,
+        source_result,
+        evidence_ty,
+        frame,
+    }))
+}
+
+/// Construct the target-independent export delimiter after physicalization.
+/// The worker and exact frame members have empty results; the wrapper retains
+/// the source ABI and performs one ordinary call. Legacy roots are unchanged.
+pub fn compose_root_entry_bridge(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), TargetAbiError> {
+    let Some(RootEntryContract {
+        worker_op,
+        export_convention,
+        source_result,
+        evidence_ty,
+        frame,
+    }) = validate_root_entry(ctx, module, &[])?
+    else {
+        return Ok(());
+    };
+    let module_block = module.first_block(ctx).expect("validated root module");
+    let top_level_ops = ctx.block(module_block).ops.to_vec();
+    let cps_main = Symbol::new(CPS_MAIN_SYMBOL);
+    let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
+    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
     let location = ctx.op(worker_op).location;
     ctx.op_mut(worker_op)
         .attributes
@@ -380,8 +424,8 @@ pub fn compose_root_entry_bridge(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let done_callable_ty = func::func_sig(ctx, [source_result], [nil_ty]).as_type_ref();
-    let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], [nil_ty]).as_type_ref();
+    let done_callable_ty = func::func_sig(ctx, [source_result], []).as_type_ref();
+    let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], []).as_type_ref();
     let done_entry = ctx.create_block(BlockData {
         location,
         args: vec![
@@ -402,9 +446,7 @@ pub fn compose_root_entry_bridge(
     ctx.push_op(done_entry, cell.op_ref());
     let store = adt::struct_set(ctx, location, cell.result(ctx), done_args[1], cell_ty, 0);
     ctx.push_op(done_entry, store.op_ref());
-    let done_nil = arith::r#const(ctx, location, nil_ty, Attribute::Unit);
-    ctx.push_op(done_entry, done_nil.op_ref());
-    let done_return = func::r#return(ctx, location, [done_nil.result(ctx)]);
+    let done_return = func::r#return(ctx, location, []);
     ctx.push_op(done_entry, done_return.op_ref());
     let done_region = ctx.create_region(RegionData {
         location,
@@ -538,7 +580,7 @@ pub fn compose_root_entry_bridge(
         ctx,
         location,
         [evidence, frame_value.result(ctx)],
-        [nil_ty],
+        [],
         cps_main,
     );
     set_root_convention(ctx, worker_call.op_ref(), CallingConvention::Cps);
@@ -602,12 +644,106 @@ fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef 
     })
 }
 
+/// Recover semantic R only from authenticated callable and nominal frame metadata.
+pub(crate) fn dispatch_answer_type(
+    ctx: &mut IrContext,
+    evidence: ValueRef,
+    dispatch: ValueRef,
+    resume: ValueRef,
+) -> Result<TypeRef, TargetAbiError> {
+    let evidence_type = ability::evidence_adt_type_ref(ctx);
+    if ctx.value_ty(evidence) != evidence_type {
+        return Err(TargetAbiError::new(
+            "CPS dispatch evidence differs from canonical Evidence type",
+        ));
+    }
+    let dispatch = crate::closure_lower::physical_closure_type_for_callee(ctx, dispatch)
+        .ok_or_else(|| {
+            TargetAbiError::new("CPS dispatch lacks authenticated callable provenance")
+        })?;
+    let resume = crate::closure_lower::physical_closure_type_for_callee(ctx, resume)
+        .ok_or_else(|| TargetAbiError::new("CPS resume lacks authenticated callable provenance"))?;
+    let resume_signature = cps_closure_function_type(ctx, resume)
+        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
+        .ok_or_else(|| TargetAbiError::new("CPS resume lacks exact callable signature"))?;
+    let frame = *resume_signature
+        .inputs(ctx)
+        .get(1)
+        .ok_or_else(|| TargetAbiError::new("CPS resume lacks frame input"))?;
+    let answer = cps_continuation_frame_result_type(ctx, frame)
+        .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
+    let results = resume_signature.results(ctx);
+    if !(results.is_empty()
+        || (results.len() == 1
+            && is_parameterless_dialect_type(
+                ctx,
+                results[0],
+                Symbol::new("core"),
+                Symbol::new("never"),
+            )))
+    {
+        return Err(TargetAbiError::new(
+            "CPS resume must have logical never or physical empty results",
+        ));
+    }
+    let contract =
+        validate_root_continuation_frame(ctx, frame, answer, ctx.value_ty(evidence), results)?;
+    if contract.dispatch != dispatch {
+        return Err(TargetAbiError::new(
+            "CPS dispatch differs from exact nominal frame Dispatch",
+        ));
+    }
+    let signature = dispatch_callable_function_type(ctx, dispatch)?;
+    let signature = func::FuncSig::from_type_ref(ctx, signature).unwrap();
+    if signature.inputs(ctx).get(1) != Some(&resume) {
+        return Err(TargetAbiError::new(
+            "CPS dispatch resume differs from exact required resume",
+        ));
+    }
+    Ok(answer)
+}
+
+/// Validate before closure storage erasure or physicalization changes any surface.
+pub(crate) fn validate_dispatch_contracts(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<(), TargetAbiError> {
+    for op in collect_ops(ctx, module.op()) {
+        if !effect::DispatchCps::matches(ctx, op) {
+            continue;
+        }
+        let operands = ctx.op_operands(op).to_vec();
+        let [evidence, dispatch, resume, payload] = operands.as_slice() else {
+            return Err(TargetAbiError::new("CPS dispatch requires four operands"));
+        };
+        let packed_payload = tribute_rt::anyref(ctx).as_type_ref();
+        if ctx.value_ty(*payload) != packed_payload {
+            return Err(TargetAbiError::new(
+                "CPS dispatch packed payload must have exact tribute_rt.anyref type",
+            ));
+        }
+        let answer = ctx
+            .op(op)
+            .attributes
+            .get_type("answer_type")
+            .ok_or_else(|| TargetAbiError::new("CPS dispatch requires answer_type: Type"))?;
+        if !ctx.op_result_types(op).is_empty()
+            || dispatch_answer_type(ctx, *evidence, *dispatch, *resume)? != answer
+        {
+            return Err(TargetAbiError::new(
+                "CPS dispatch answer_type differs from resume frame R",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_root_continuation_frame(
     ctx: &IrContext,
     frame: TypeRef,
     source_result: TypeRef,
     evidence: TypeRef,
-    physical_result: TypeRef,
+    physical_results: &[TypeRef],
 ) -> Result<RootFrameContract, TargetAbiError> {
     let reference_data = ctx.types.get(frame);
     if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
@@ -666,8 +802,8 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame field roles must be exact Done then Dispatch",
         ));
     }
-    validate_root_done_type(ctx, *done, source_result, physical_result)?;
-    validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_result)?;
+    validate_root_done_type(ctx, *done, source_result, physical_results)?;
+    validate_root_dispatch_type(ctx, *dispatch, frame, evidence, physical_results)?;
     Ok(RootFrameContract {
         reference: frame,
         layout,
@@ -680,7 +816,7 @@ fn validate_root_done_type(
     ctx: &IrContext,
     done: TypeRef,
     source_result: TypeRef,
-    physical_result: TypeRef,
+    physical_results: &[TypeRef],
 ) -> Result<(), TargetAbiError> {
     if get_physical_closure_convention(ctx, done) != Some(CallingConvention::Cps)
         || get_physical_closure_environment_index(ctx, done) != Some(0)
@@ -695,9 +831,7 @@ fn validate_root_done_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Done callable is not func.func_sig")
     })?;
-    if callable.single_result(ctx) != Some(physical_result)
-        || callable.inputs(ctx) != [source_result]
-    {
+    if callable.results(ctx) != physical_results || callable.inputs(ctx) != [source_result] {
         return Err(TargetAbiError::new(
             "target root bridge: frame Done must accept the exact source result and return empty",
         ));
@@ -710,7 +844,7 @@ fn validate_root_dispatch_type(
     dispatch: TypeRef,
     frame: TypeRef,
     evidence: TypeRef,
-    physical_result: TypeRef,
+    physical_results: &[TypeRef],
 ) -> Result<(), TargetAbiError> {
     if get_physical_closure_convention(ctx, dispatch) != Some(CallingConvention::Cps)
         || get_physical_closure_environment_index(ctx, dispatch) != Some(1)
@@ -728,7 +862,7 @@ fn validate_root_dispatch_type(
             "target root bridge: frame Dispatch must have the exact terminal dispatch ABI",
         ));
     };
-    if callable.single_result(ctx) != Some(physical_result)
+    if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
         || !is_parameterless_dialect_type(ctx, *prompt, Symbol::new("core"), Symbol::new("i32"))
         || !is_parameterless_dialect_type(ctx, *ability, Symbol::new("core"), Symbol::new("i32"))
@@ -759,7 +893,7 @@ fn validate_root_dispatch_type(
             "target root bridge: frame Dispatch resume callable is not func.func_sig",
         )
     })?;
-    if resume.single_result(ctx) != Some(physical_result)
+    if resume.results(ctx) != physical_results
         || resume.inputs(ctx).len() != 3
         || resume.inputs(ctx)[0] != evidence
         || resume.inputs(ctx)[1] != frame
@@ -811,7 +945,9 @@ fn is_parameterless_dialect_type(
     dialect: Symbol,
     name: Symbol,
 ) -> bool {
-    ctx.types.is_dialect(ty, dialect, name) && ctx.types.get(ty).params.is_empty()
+    ctx.types.is_dialect(ty, dialect, name)
+        && ctx.types.get(ty).params.is_empty()
+        && ctx.types.get(ty).attrs.is_empty()
 }
 
 fn root_export_convention(
@@ -928,13 +1064,7 @@ fn collect_functions(
         let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: tagged function must have a func.func_sig signature")
         })?;
-        let result = callable.single_result(ctx).ok_or_else(|| {
-            TargetAbiError::new(format!(
-                "target ABI: tagged function `{}` must have one logical result",
-                function.sym_name(ctx)
-            ))
-        })?;
-        if convention == CallingConvention::Cps && result != never {
+        if convention == CallingConvention::Cps && callable.results(ctx) != [never] {
             return Err(TargetAbiError::new(format!(
                 "target ABI: Cps function `{}` must have logical core.never result",
                 function.sym_name(ctx)
@@ -963,12 +1093,20 @@ fn validate_transfers(
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
         if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
-            let Some(convention) = exact_convention(ctx, op)? else {
-                continue;
-            };
+            let convention = exact_convention(ctx, op)?;
             let callee = ctx.op(op).attributes.get_symbol("callee").ok_or_else(|| {
                 TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
             })?;
+            let Some(convention) = convention else {
+                if function_for_symbol_optional(ctx, op, callee, functions)?
+                    .is_some_and(|identity| identity.convention == CallingConvention::Cps)
+                {
+                    return Err(TargetAbiError::new(
+                        "target ABI: transfer to Cps callee lacks convention metadata",
+                    ));
+                }
+                continue;
+            };
             let identity = function_for_symbol(ctx, op, callee, functions)?;
             if identity.convention != convention {
                 return Err(TargetAbiError::new(
@@ -1020,6 +1158,30 @@ fn validate_transfers(
         let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect callable signature is not func.func_sig")
         })?;
+        let callee = IndirectCallLikeOps::callee(ctx, op)
+            .ok_or_else(|| TargetAbiError::new("target ABI: indirect transfer lacks callee"))?;
+        let callee_type = ctx.value_ty(callee);
+        if let Some(closure_type) =
+            crate::closure_lower::physical_closure_type_for_callee(ctx, callee)
+        {
+            let closure_signature =
+                tribute_ir::dialect::closure::Closure::from_type_ref(ctx, closure_type)
+                    .unwrap()
+                    .func_type(ctx);
+            if closure_signature != signature
+                || get_physical_closure_convention(ctx, closure_type) != Some(convention)
+            {
+                return Err(TargetAbiError::new(
+                    "target ABI: indirect signature differs from exact closure contract",
+                ));
+            }
+        } else if func::FuncSig::from_type_ref(ctx, callee_type).is_some()
+            && callee_type != signature
+        {
+            return Err(TargetAbiError::new(
+                "target ABI: indirect signature differs from typed callee",
+            ));
+        }
         let args = IndirectCallLikeOps::arguments(ctx, op).ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect transfer has malformed operands")
         })?;
@@ -1242,17 +1404,15 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 struct PhysicalTypeConverter<'a> {
     ctx: &'a mut IrContext,
     never: TypeRef,
-    nil: TypeRef,
     embedded: HashMap<TypeRef, TypeRef>,
     callable: HashMap<(TypeRef, CallingConvention), TypeRef>,
 }
 
 impl<'a> PhysicalTypeConverter<'a> {
-    fn new(ctx: &'a mut IrContext, never: TypeRef, nil: TypeRef) -> Self {
+    fn new(ctx: &'a mut IrContext, never: TypeRef) -> Self {
         Self {
             ctx,
             never,
-            nil,
             embedded: HashMap::new(),
             callable: HashMap::new(),
         }
@@ -1269,10 +1429,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
             TargetAbiError::new("target ABI: proven callable is not a valid func.func_sig")
         })?;
-        let result = callable.single_result(self.ctx).ok_or_else(|| {
-            TargetAbiError::new("target ABI: proven callable has no logical result")
-        })?;
-        if convention == CallingConvention::Cps && result != self.never {
+        if convention == CallingConvention::Cps && callable.results(self.ctx) != [self.never] {
             return Err(TargetAbiError::new(
                 "target ABI: Cps callable must have logical core.never result",
             ));
@@ -1282,13 +1439,18 @@ impl<'a> PhysicalTypeConverter<'a> {
             .into_iter()
             .map(|input| self.convert_embedded(input))
             .collect::<Result<Vec<_>, _>>()?;
-        let result = if convention == CallingConvention::Cps {
-            self.nil
+        let results = if convention == CallingConvention::Cps {
+            vec![]
         } else {
-            self.convert_embedded(result)?
+            callable
+                .results(self.ctx)
+                .to_vec()
+                .into_iter()
+                .map(|result| self.convert_embedded(result))
+                .collect::<Result<Vec<_>, _>>()?
         };
         let attrs = self.convert_func_attributes(callable)?;
-        let converted = func::func_sig_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
+        let converted = func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
         self.callable.insert((ty, convention), converted);
         Ok(converted)
     }
@@ -1318,10 +1480,8 @@ impl<'a> PhysicalTypeConverter<'a> {
             let callable = func::FuncSig::from_type_ref(self.ctx, ty).ok_or_else(|| {
                 TargetAbiError::new("target ABI: malformed nested func.func_sig type")
             })?;
-            let result = callable.single_result(self.ctx).ok_or_else(|| {
-                TargetAbiError::new("target ABI: nested func.func_sig type has no logical result")
-            })?;
-            if result == self.never {
+            let source_results = callable.results(self.ctx).to_vec();
+            if source_results.contains(&self.never) {
                 return Err(TargetAbiError::new(
                     "target ABI: untagged nested func.func_sig<(...)->core.never>",
                 ));
@@ -1331,10 +1491,13 @@ impl<'a> PhysicalTypeConverter<'a> {
                 .into_iter()
                 .map(|input| self.convert_embedded(input))
                 .collect::<Result<Vec<_>, _>>()?;
-            let result = self.convert_embedded(result)?;
+            let results = source_results
+                .into_iter()
+                .map(|result| self.convert_embedded(result))
+                .collect::<Result<Vec<_>, _>>()?;
             let attrs = self.convert_func_attributes(callable)?;
             let converted =
-                func::func_sig_with_attrs(self.ctx, inputs, [result], attrs).as_type_ref();
+                func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
@@ -1422,6 +1585,219 @@ mod tests {
             .unwrap()
     }
 
+    fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+            !Answer = core.{answer_name}
+            !Evidence = core.array(adt.struct() {{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}})
+            !Frame = adt.typeref() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}
+            !Done = closure.closure(func.func_sig<(!Answer) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
+            !Resume = closure.closure(func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
+            !Dispatch = closure.closure(func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
+            !{frame_name} = adt.struct() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}
+            func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = !Answer}}
+            }}
+        }}"#
+            ),
+        );
+        let dispatch = collect_ops(&ctx, module.op())
+            .into_iter()
+            .find(|&op| effect::DispatchCps::matches(&ctx, op))
+            .unwrap();
+        (ctx, module, dispatch)
+    }
+
+    #[test]
+    fn semantic_dispatch_reaches_the_canonical_wasm_target_signature() {
+        let (mut ctx, module, _) = dispatch_fixture("i32", "frame");
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+        crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
+        let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module);
+        let printed = print_module(&ctx, module.op());
+        assert!(result.is_ok(), "{result:?}\n{printed}");
+        assert!(!printed.contains("effect.dispatch_cps"), "{printed}");
+    }
+
+    #[test]
+    fn dispatch_answer_contract_survives_atomic_physicalization() {
+        for answer in ["i32", "i64", "nil"] {
+            let (mut ctx, module, dispatch) = dispatch_fixture(answer, "frame");
+            let semantic_answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
+            validate_dispatch_contracts(&mut ctx, module).unwrap();
+            lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+            validate_dispatch_contracts(&mut ctx, module).unwrap();
+            assert_eq!(
+                ctx.op(dispatch).attributes.get_type("answer_type"),
+                Some(semantic_answer)
+            );
+            assert!(
+                func::FuncSig::from_type_ref(&ctx, function(&ctx, module, "run").r#type(&ctx))
+                    .unwrap()
+                    .results(&ctx)
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_dispatch_is_rejected_without_mutating_any_surface() {
+        for mutation in 0..9 {
+            let (mut ctx, module, dispatch) = dispatch_fixture("i32", "frame");
+            match mutation {
+                0 => {
+                    ctx.op_mut(dispatch).attributes.remove("answer_type");
+                }
+                1 => {
+                    ctx.op_mut(dispatch)
+                        .attributes
+                        .insert(Symbol::new("answer_type"), Attribute::Int(0));
+                }
+                2 => {
+                    let wrong = core::nil(&mut ctx).as_type_ref();
+                    ctx.op_mut(dispatch)
+                        .attributes
+                        .insert(Symbol::new("answer_type"), Attribute::Type(wrong));
+                }
+                3..=6 => {
+                    let index = if mutation == 3 { 1 } else { 2 };
+                    let value = ctx.op_operands(dispatch)[index];
+                    let mut ty = ctx.types.get(ctx.value_ty(value)).clone();
+                    if mutation == 3 || mutation == 4 {
+                        ty.attrs.insert(
+                            Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+                            Attribute::Int(9),
+                        );
+                    } else if mutation == 5 {
+                        ty.attrs
+                            .insert(Symbol::new(CALLING_CONVENTION_ATTR), Attribute::Int(0));
+                    } else {
+                        let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
+                        let mut inputs = signature.inputs(&ctx).to_vec();
+                        let answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
+                        inputs[1] =
+                            tribute_core::calling_convention::cps_continuation_frame_ref_type(
+                                &mut ctx,
+                                Symbol::new("other_nominal_frame"),
+                                answer,
+                            );
+                        let results = signature.results(&ctx).to_vec();
+                        ty.params[0] = func::func_sig(&mut ctx, inputs, results).as_type_ref();
+                    }
+                    let ty = ctx.types.intern(ty);
+                    let entry = ctx.op(dispatch).parent_block.unwrap();
+                    ctx.set_block_arg_type(entry, index as u32, ty);
+                }
+                7 | 8 => {
+                    let ty = if mutation == 7 {
+                        ctx.types.intern(
+                            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+                        )
+                    } else {
+                        core::ptr(&mut ctx).as_type_ref()
+                    };
+                    let entry = ctx.op(dispatch).parent_block.unwrap();
+                    ctx.set_block_arg_type(entry, 3, ty);
+                }
+                _ => unreachable!(),
+            }
+            let before = print_module(&ctx, module.op());
+            let aliases = ctx.type_aliases().to_vec();
+            let ops = collect_ops(&ctx, module.op());
+            let result_types: Vec<_> = ops
+                .iter()
+                .map(|&op| ctx.op_result_types(op).to_vec())
+                .collect();
+            let error = lower_cps_signatures_to_physical(&mut ctx, module)
+                .expect_err(&format!("mutation {mutation}"));
+            if mutation >= 7 {
+                assert!(error.to_string().contains("packed payload"), "{error}");
+            }
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(ctx.type_aliases(), aliases);
+            assert_eq!(collect_ops(&ctx, module.op()), ops);
+            for (op, expected) in ops.into_iter().zip(result_types) {
+                assert_eq!(ctx.op_result_types(op), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_direct_results_survive_mixed_cps_physicalization() {
+        let mut ctx = IrContext::new();
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+            !direct_closure = closure.closure(func.func_sig<() -> ()>) {tribute.calling_convention = 0}
+            !evidence_closure = closure.closure(func.func_sig<(!Evidence) -> ()>) {tribute.calling_convention = 1}
+            func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
+            func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = 1} { func.return }
+            func.func @unit() -> core.nil attributes {tribute.calling_convention = 0} {
+                %nil = arith.const {value = unit} : core.nil
+                func.return %nil
+            }
+            func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = 1} {
+                func.call {callee = @direct, tribute.calling_convention = 0}
+                func.call %ev {callee = @evidence, tribute.calling_convention = 1}
+                %direct = func.constant {func_ref = @direct} : func.func_sig<() -> ()>
+                %evidence = func.constant {func_ref = @evidence} : func.func_sig<(!Evidence) -> ()>
+                func.call_indirect %direct {signature = func.func_sig<() -> ()>, tribute.calling_convention = 0}
+                func.call_indirect %evidence, %ev {signature = func.func_sig<(!Evidence) -> ()>, tribute.calling_convention = 1}
+                %nil = func.call {callee = @unit, tribute.calling_convention = 0} : core.nil
+                func.return
+            }
+            func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
+        }"#,
+        );
+        assert_eq!(
+            ctx.type_alias_by_name(Symbol::new("Evidence")),
+            Some(evidence)
+        );
+        let cps = function(&ctx, module, "cps");
+        let unchanged: Vec<_> = collect_ops(&ctx, module.op())
+            .into_iter()
+            .filter(|&op| op != cps.op_ref())
+            .map(|op| {
+                (
+                    op,
+                    ctx.op(op).attributes.clone(),
+                    ctx.op_result_types(op).to_vec(),
+                )
+            })
+            .collect();
+        let aliases = ctx.type_aliases().to_vec();
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        for (op, before, results) in unchanged {
+            assert_eq!(ctx.op(op).attributes, before);
+            assert_eq!(ctx.op_result_types(op), results);
+        }
+        assert_eq!(ctx.type_aliases(), aliases);
+        assert!(
+            func::FuncSig::from_type_ref(&ctx, cps.r#type(&ctx))
+                .unwrap()
+                .results(&ctx)
+                .is_empty()
+        );
+        for op in collect_ops(&ctx, module.op()) {
+            if func::CallIndirect::matches(&ctx, op) {
+                assert!(ctx.op_result_types(op).is_empty());
+                let signature = IndirectCallLikeOps::exact_signature(&ctx, op).unwrap();
+                assert!(
+                    func::FuncSig::from_type_ref(&ctx, signature)
+                        .unwrap()
+                        .results(&ctx)
+                        .is_empty()
+                );
+            }
+        }
+    }
+
     #[test]
     fn physicalizes_dispatch_aware_exact_cps_contracts_only() {
         let mut ctx = IrContext::new();
@@ -1441,32 +1817,30 @@ mod tests {
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
         let never = core::never(&mut ctx).as_type_ref();
-        let nil = core::nil(&mut ctx).as_type_ref();
         for (name, expected) in [
-            ("direct", never),
-            ("evidence", never),
-            ("cps", nil),
-            ("run", nil),
+            ("direct", Some(never)),
+            ("evidence", Some(never)),
+            ("cps", None),
+            ("run", None),
         ] {
             let signature = function(&ctx, module, name).r#type(&ctx);
             assert_eq!(
                 func::FuncSig::from_type_ref(&ctx, signature)
                     .unwrap()
-                    .single_result(&ctx)
-                    .unwrap(),
+                    .single_result(&ctx),
                 expected
             );
         }
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> core.nil>"
+                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()>"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.nil>)"
+                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()>)"
             ),
             "{printed}"
         );
@@ -1562,8 +1936,7 @@ mod tests {
 
     #[test]
     fn promoted_direct_root_uses_typed_completion_and_ordinary_call() {
-        let (mut ctx, module) = compose_promoted_root(CallingConvention::Direct);
-        let nil = core::nil(&mut ctx).as_type_ref();
+        let (ctx, module) = compose_promoted_root(CallingConvention::Direct);
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, CPS_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
@@ -1578,12 +1951,11 @@ mod tests {
                 get_calling_convention(&ctx, function.op_ref()),
                 Some(CallingConvention::Cps)
             );
-            assert_eq!(
+            assert!(
                 func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
                     .unwrap()
-                    .single_result(&ctx)
-                    .unwrap(),
-                nil
+                    .results(&ctx)
+                    .is_empty()
             );
         }
         assert_eq!(
@@ -1790,12 +2162,13 @@ mod tests {
                 .attributes
                 .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
 
-            lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
             let before = print_module(&ctx, module.op());
-            let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+            let aliases = ctx.type_aliases().to_vec();
+            let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
 
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(ctx.type_aliases(), aliases);
         }
     }
 
@@ -1851,9 +2224,8 @@ mod tests {
             .attributes
             .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
 
-        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         let before = print_module(&ctx, module.op());
-        let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
 
         assert!(
             error
@@ -1958,14 +2330,14 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "func.func @external(%arg0: core.i32, %arg1: tribute_rt.anyref, %arg2: core.i32) -> core.nil"
+                "func.func @external(%arg0: core.i32, %arg1: tribute_rt.anyref, %arg2: core.i32)"
             ),
             "{printed}"
         );
         assert!(
             printed.contains("func.func @defined")
                 && printed.matches("func.constant").count() == 2
-                && printed.contains("!t0 = func.func_sig<(core.i32, core.i32) -> core.nil>")
+                && printed.contains("!t0 = func.func_sig<(core.i32, core.i32) -> ()>")
                 && printed.matches(": !t0").count() == 2,
             "{printed}"
         );
@@ -1994,21 +2366,17 @@ mod tests {
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
 
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let nil = core::nil(&mut ctx).as_type_ref();
         for (name, parameter_count) in [("generated_zero", 1), ("generated_one", 2)] {
             let function = function(&ctx, module, name);
             let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
-            assert_eq!(signature.single_result(&ctx).unwrap(), nil);
+            assert!(signature.results(&ctx).is_empty());
             assert_eq!(signature.inputs(&ctx).len(), parameter_count);
             assert_eq!(signature.inputs(&ctx)[0], anyref);
         }
         let printed = print_module(&ctx, module.op());
+        assert!(printed.contains(": func.func_sig<() -> ()>"), "{printed}");
         assert!(
-            printed.contains(": func.func_sig<() -> core.nil>"),
-            "{printed}"
-        );
-        assert!(
-            printed.contains(": func.func_sig<(core.i32) -> core.nil>"),
+            printed.contains(": func.func_sig<(core.i32) -> ()>"),
             "{printed}"
         );
     }
@@ -2115,12 +2483,12 @@ mod tests {
     }
 
     #[test]
-    fn tagged_resultless_function_fails_before_target_abi_mutation() {
+    fn already_physical_cps_function_fails_before_target_abi_mutation() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @broken() -> core.nil attributes {tribute.calling_convention = 0} { func.unreachable }
+  func.func @broken() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
 }"#,
         );
         let broken = function(&ctx, module, "broken");
@@ -2135,7 +2503,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("tagged function `broken` must have one logical result"),
+                .contains("must have logical core.never result"),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);

@@ -321,6 +321,17 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
+/// Keep exact compiler-owned closure storage consistent across ADT layouts,
+/// aliases, signatures, attributes, and SSA types before target instructions.
+pub(crate) fn convert_canonical_closure_storage(
+    ctx: &mut IrContext,
+    module: trunk_ir::rewrite::Module,
+) {
+    let source = crate::closure_lower::closure_struct_type_ref(ctx);
+    let target = closure_adt_type(ctx);
+    crate::closure_lower::convert_canonical_closure_storage(ctx, module, source, target);
+}
+
 /// Create a TypeConverter configured for WASM backend type conversions.
 ///
 /// This converter handles the IR-level type transformations needed during
@@ -335,6 +346,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let structref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("structref"));
     let arrayref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"));
     let closure_ty = closure_adt_type(ctx);
+    let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let step_ty = step_adt_type(ctx);
     let cont_ty = continuation_adt_type(ctx);
     let rw_ty = resume_wrapper_adt_type(ctx);
@@ -455,6 +467,10 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             None
         }
     });
+
+    // Exact compiler-owned shared closure storage has the same target contract
+    // as a semantic closure. Do not infer this identity from ADT names or shape.
+    tc.add_conversion(move |_, ty| (ty == shared_closure_ty).then_some(closure_ty));
 
     // Convert closure.closure -> adt.struct(name="_closure")
     // This ensures emit can identify closures by ADT name rather than tribute-ir type
@@ -862,4 +878,72 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     });
 
     tc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::ops::DialectOp;
+
+    #[test]
+    fn canonical_storage_conversion_updates_nested_block_argument_attributes() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            func.func @test(%value: core.i32) -> core.i32 { func.return %value }
+        }"#,
+        );
+        let function = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let block = ctx.region(function.body(&ctx)).blocks[0];
+        let source = crate::closure_lower::closure_struct_type_ref(&mut ctx);
+        let target = closure_adt_type(&mut ctx);
+        let nested = |ty| Attribute::List(vec![Attribute::List(vec![Attribute::Type(ty)])]);
+        ctx.block_mut(block).args[0]
+            .attrs
+            .insert(Symbol::new("storage"), nested(source));
+        convert_canonical_closure_storage(&mut ctx, module);
+        assert_eq!(
+            ctx.block(block).args[0].attrs.get("storage"),
+            Some(&nested(target))
+        );
+    }
+
+    #[test]
+    fn canonical_closure_storage_conversion_requires_exact_shared_identity() {
+        let mut ctx = IrContext::new();
+        let shared = crate::closure_lower::closure_struct_type_ref(&mut ctx);
+        let target = closure_adt_type(&mut ctx);
+        let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
+        let mut near = ctx.types.get(shared).clone();
+        near.attrs
+            .insert(Symbol::new("unrelated"), Attribute::Bool(true));
+        let near = ctx.types.intern(near);
+        let converter = wasm_type_converter(&mut ctx);
+        assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
+        assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
+        assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
+        let data = ctx.types.get(target);
+        let Attribute::List(fields) = data.attrs.get("fields").unwrap() else {
+            panic!("fields")
+        };
+        assert!(
+            matches!(&fields[0], Attribute::List(field) if field[0] == Attribute::Symbol(Symbol::new("table_idx")))
+        );
+        let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
+        let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
+        assert_eq!(
+            ctx.types.get(target).attrs.get("fields"),
+            Some(&Attribute::List(vec![
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("table_idx")),
+                    Attribute::Type(i32_ty)
+                ]),
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("env")),
+                    Attribute::Type(anyref)
+                ]),
+            ]))
+        );
+    }
 }

@@ -176,6 +176,12 @@ Effect handling은 tail-call CPS 방식으로 처리된다.
 `lower_ability_perform`과 `lower_handle_dispatch` pass가
 ability 연산을 handler_dispatch 클로저 호출로 변환한다.
 
+물리 CPS 판정은 exact `Cps` convention과 빈 결과 목록의 조합이다. 실제
+Direct/EvidenceDirect Unit 결과와 살아 있는 nil SSA 값의 zero-width 처리는 유지한다.
+최종 dispatch는 operand와 독립적인 compiler-owned canonical shared signature를
+기존 Native 변환으로 낮추며 machine 입력은 `ptr, ptr, ptr, i32, i32, i32, ptr`,
+결과는 빈 목록이다. Operand는 이 고정 계약과 정확히 대조한다.
+
 상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 
 ---

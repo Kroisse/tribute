@@ -1724,68 +1724,31 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use std::ops::ControlFlow;
-    use tribute_core::calling_convention::{
-        cps_continuation_frame_layout_type, cps_continuation_frame_ref_type, cps_dispatch_type,
-        cps_done_type,
-    };
     use trunk_ir::dialect::clif;
     use trunk_ir::ops::DialectType;
     use trunk_ir::walk::{WalkAction, walk_region};
 
-    fn source_logical_cps_root_module() -> (IrContext, Module) {
+    fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
-        let module = trunk_ir::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @main(%evidence: core.i32, %frame: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
-    func.unreachable
-  }
-}"#,
-        );
-        let main = module
-            .ops(&ctx)
-            .into_iter()
-            .find_map(|op| func_dialect::Func::from_op(&ctx, op).ok())
-            .expect("test module must define main");
-        let nil = core_dialect::nil(&mut ctx).as_type_ref();
-        let never = core_dialect::never(&mut ctx).as_type_ref();
-        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
-        let frame_name = trunk_ir::Symbol::new("__tribute_continuation_frame_root_nil");
-        let frame = cps_continuation_frame_ref_type(&mut ctx, frame_name, nil);
-        let done = cps_done_type(&mut ctx, nil);
-        let anyref = tribute_ir::dialect::tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty = ctx.types.intern(
-            trunk_ir::TypeDataBuilder::new(
-                trunk_ir::Symbol::new("core"),
-                trunk_ir::Symbol::new("i32"),
-            )
-            .build(),
-        );
-        let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
-        let layout = cps_continuation_frame_layout_type(&mut ctx, frame_name, nil, done, dispatch);
-        ctx.register_type_alias(frame_name, layout);
-        let worker = func_dialect::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
-        ctx.op_mut(main.op_ref()).attributes.insert(
-            trunk_ir::Symbol::new("type"),
-            trunk_ir::Attribute::Type(worker),
-        );
-        let entry = ctx.region(main.body(&ctx)).blocks[0];
-        ctx.set_block_arg_type(entry, 0, evidence);
-        ctx.set_block_arg_type(entry, 1, frame);
-        ctx.op_mut(main.op_ref()).attributes.insert(
-            trunk_ir::Symbol::new("tribute.root_export_convention"),
-            trunk_ir::Attribute::Int(0),
-        );
-        ctx.op_mut(main.op_ref()).attributes.insert(
-            trunk_ir::Symbol::new("tribute.root_source_result"),
-            trunk_ir::Attribute::Type(nil),
-        );
+        let source = r#"core.module @test {
+            !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+            !Frame = adt.typeref() {name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil}
+            !Done = closure.closure(func.func_sig<(core.nil) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+            !Resume = closure.closure(func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+            !Dispatch = closure.closure(func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
+            !__tribute_continuation_frame_root_nil = adt.struct() {name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil, fields = [[@done, !Done], [@dispatch, !Dispatch]]}
+            !Payload = adt.struct() {name = @__tribute_ability_payload_7590c57e, fields = []}
+            func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2, tribute.root_export_convention = 0, tribute.root_source_result = core.nil} {
+                BODY
+            }
+        }"#.replace("BODY", body);
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, &source);
         (ctx, module)
     }
 
     #[test]
     fn source_logical_root_defers_closure_storage_until_target_finalization() {
-        let (mut ctx, module) = source_logical_cps_root_module();
+        let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
         let core_module = core_dialect::Module::from_op(&ctx, module.op())
             .expect("test module must be a core.module");
         let before = trunk_ir::printer::print_module(&ctx, module.op());
@@ -1805,6 +1768,172 @@ mod tests {
 
         let physical = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(!physical.contains("closure.closure"), "{physical}");
+    }
+
+    #[test]
+    fn empty_result_cps_root_executes_native_done_continuation() {
+        use trunk_ir::Symbol;
+        let (mut ctx, module) = source_logical_cps_root_module(
+            r#"
+            %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
+            %nil = arith.const {value = unit} : core.nil
+            func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
+        "#,
+        );
+
+        run_native_target_pipeline(&mut ctx, module)
+            .expect("logical CPS root crosses native boundary");
+        for name in [
+            "__tribute_cps_main",
+            "__tribute_root_done_k",
+            "__tribute_root_dispatch",
+        ] {
+            let function = module
+                .ops(&ctx)
+                .into_iter()
+                .find_map(|op| {
+                    let function = func_dialect::Func::from_op(&ctx, op).ok()?;
+                    (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
+                })
+                .expect("root bridge function remains present");
+            assert_eq!(
+                tribute_core::get_calling_convention(&ctx, function.op_ref()),
+                Some(tribute_core::CallingConvention::Cps)
+            );
+            assert!(
+                func_dialect::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
+                    .unwrap()
+                    .results(&ctx)
+                    .is_empty()
+            );
+        }
+        let object = compile_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+        )
+        .expect("empty-result root emits native code");
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("empty-result-cps-root");
+        link_native_binary(&object, &executable).expect("empty-result root links");
+        let output = std::process::Command::new(executable)
+            .output()
+            .expect("empty-result root starts");
+        assert!(
+            output.status.success(),
+            "native root failed: {:?}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn evidence_lookup_preserves_marker_type_in_emitted_binary() {
+        let mut ctx = trunk_ir::IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+                func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }
+            }"#,
+        );
+        tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module)
+            .unwrap();
+        tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+        let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary.bytes)
+            .expect("evidence lookup must retain concrete Marker locals and return type");
+    }
+
+    #[test]
+    fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_binary() {
+        use trunk_ir::Symbol;
+        use trunk_ir::dialect::wasm;
+        let (mut ctx, module) = source_logical_cps_root_module(
+            r#"
+            %dispatch = adt.struct_get %frame {field = 1, type = !__tribute_continuation_frame_root_nil} : !Dispatch
+            %resume = adt.ref_null {type = !Resume} : !Resume
+            %product = adt.struct_new {type = !Payload} : !Payload
+            %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
+            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
+        "#,
+        );
+        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        finalize_target_closure_storage(&mut ctx, module, boundary);
+        let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
+            panic!(
+                "{error}\n{}",
+                trunk_ir::printer::print_module(&ctx, module.op())
+            )
+        });
+        let dispatch_definition = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| {
+                let function = wasm::Func::from_op(&ctx, op).ok()?;
+                (function.sym_name(&ctx) == Symbol::new("__tribute_root_dispatch"))
+                    .then_some(function.r#type(&ctx))
+            })
+            .unwrap();
+        let mut signatures = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if wasm::ReturnCallIndirect::matches(&ctx, op) {
+                signatures.push(
+                    trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, op).unwrap(),
+                );
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert!(signatures.contains(&dispatch_definition));
+        let canonical_closure = tribute_passes::wasm::type_converter::closure_adt_type(&mut ctx);
+        let signature = wasm::FuncSig::from_type_ref(&ctx, dispatch_definition).unwrap();
+        assert_eq!(signature.inputs(&ctx)[2], canonical_closure);
+        assert!(signature.results(&ctx).is_empty());
+        let mut binary_dispatch_signatures = 0;
+        for payload in wasmparser::Parser::new(0).parse_all(&binary.bytes) {
+            if let wasmparser::Payload::TypeSection(types) = payload.unwrap() {
+                for group in types {
+                    for ty in group.unwrap().into_types() {
+                        if let wasmparser::CompositeInnerType::Func(signature) =
+                            ty.composite_type.inner
+                            && signature.params().len() == 7
+                        {
+                            use wasmparser::{RefType, ValType};
+                            let concrete = |index| {
+                                ValType::Ref(
+                                    RefType::new(
+                                        true,
+                                        wasmparser::HeapType::Concrete(
+                                            wasmparser::UnpackedIndex::Module(index),
+                                        ),
+                                    )
+                                    .unwrap(),
+                                )
+                            };
+                            assert_eq!(
+                                signature.params(),
+                                [
+                                    concrete(6),
+                                    ValType::Ref(RefType::ANYREF),
+                                    concrete(4),
+                                    ValType::I32,
+                                    ValType::I32,
+                                    ValType::I32,
+                                    ValType::Ref(RefType::ANYREF)
+                                ]
+                            );
+                            assert!(signature.results().is_empty());
+                            binary_dispatch_signatures += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(binary_dispatch_signatures, 1);
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary.bytes)
+            .expect("canonical root dispatch binary validates");
     }
 
     #[test]

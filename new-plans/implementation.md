@@ -120,8 +120,8 @@ tribute        -> tribute-front + tribute-passes
   조합 계약만 정한다.
 - 최종 계약에서 Native/Wasm signature lowering은 `core.never` CPS signature를
   target empty-result signature로 내린 뒤 external Direct/EvidenceDirect wrapper와
-  ordinary call을 합성한다. 이 atomic physical CPS switch는 후속 작업이며 현재
-  target ABI는 임시 `[core.nil]` encoding을 쓴다.
+  결과 없는 ordinary call을 합성한다. 변환은 모든 callable과 transfer 계약을
+  사전 검증한 뒤 원자적으로 적용하며 Direct/EvidenceDirect의 실제 Unit 결과는 보존한다.
 
 검증 책임은 구현 계층과 분리한다:
 
@@ -489,15 +489,14 @@ entrypoint 전에 거부한다. Frontend는 root body도 direct-style control로
 shared conversion은 typed completion cell과 `core.never` root `done_k`의 추상
 계약을 만든다. 최종 계약에서는 atomic physical CPS switch 이후 target signature
 lowering이 CPS entry를 empty result로 바꾼 뒤에만 Direct/EvidenceDirect export
-wrapper의 ordinary call을 합성한다. 현재 target ABI는 임시 `[core.nil]`을 쓴다. Wrapper는
+wrapper의 결과 없는 ordinary call을 합성한다. Wrapper는
 completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
 `Dispatch<R>`를 exact nominal `ContinuationFrame<R>`에 materialize해 worker에
 전달한다. `done_k`가 cell을 쓴 뒤 target call이 돌아오면 wrapper가 cell을 읽는다.
 worker frame 계약은 명시적 frame result/layout provenance로 검사하며 closure 이름,
 arity, raw storage, `anyref`에서 추론하지 않는다.
-Shared `func.call` supports zero or one result independently of CPS. Nested-module
-`main` remains ordinary. Target ABI still uses temporary `[core.nil]` encoding
-until the later atomic physical CPS switch.
+공통 `func.call`은 CPS 여부와 독립적으로 0개 또는 1개 결과를 지원한다.
+Nested-module `main`은 일반 함수로 유지한다.
 
 기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
 Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와

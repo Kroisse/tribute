@@ -888,12 +888,14 @@ fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
         return false;
     };
     func::FuncSig::from_type_ref(ctx, signature).is_some_and(|callable| {
+        if callable.results(ctx).is_empty() {
+            return true;
+        }
         let Some(result) = callable.single_result(ctx) else {
             return false;
         };
         let result = ctx.types.get(result);
-        result.dialect == Symbol::new("core")
-            && (result.name == Symbol::new("nil") || result.name == Symbol::new("never"))
+        result.dialect == Symbol::new("core") && result.name == Symbol::new("never")
     })
 }
 
@@ -999,9 +1001,7 @@ fn validate_function_contract(
             validate_result_contract(
                 ctx,
                 ctx.op_operands(terminator),
-                signature.single_result(ctx).ok_or_else(|| {
-                    OwnershipPlanError::new("native ownership requires one logical result")
-                })?,
+                signature.results(ctx),
                 managed_layouts,
                 "function return",
             )?;

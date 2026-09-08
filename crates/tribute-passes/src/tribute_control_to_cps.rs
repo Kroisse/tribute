@@ -4251,7 +4251,7 @@ mod tests {
             Some(0)
         );
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-        crate::closure_lower::lower_closures(&mut ctx, module);
+        crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
         let lowered = print_module(&ctx, module.op());
         assert!(
             !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
@@ -5450,7 +5450,7 @@ mod tests {
             lifted.contains("tribute.closure_environment_index = 0"),
             "{lifted}"
         );
-        crate::closure_lower::lower_closures(&mut ctx, module);
+        crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
         let lowered = print_module(&ctx, module.op());
         assert!(!lowered.contains("closure.new"), "{lowered}");
         assert!(lowered.contains("signature"), "{lowered}");

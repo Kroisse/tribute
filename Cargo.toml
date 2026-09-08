@@ -96,6 +96,7 @@ trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
+wasmparser.workspace = true
 insta.workspace = true
 itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }

@@ -84,6 +84,87 @@ fn register_type(type_idx_by_type: &mut HashMap<TypeRef, u32>, idx: u32, ty: Typ
     type_idx_by_type.entry(ty).or_insert(idx);
 }
 
+/// Check retained Marker declarations against the predefined evidence layout.
+/// The nominal builtin lookup selects the layout; it does not validate fields.
+fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
+    use trunk_ir::Attribute;
+    let data = ctx.types.get(ty);
+    let invalid = || CompilationError::type_error("Marker declaration differs from builtin layout");
+    if data.name != Symbol::new("struct") || !data.params.is_empty() {
+        return Err(invalid());
+    }
+    let Some(fields) = data.attrs.get("fields") else {
+        // Existing name-only builtin references carry no layout declaration.
+        return Ok(());
+    };
+    let Attribute::List(fields) = fields else {
+        return Err(invalid());
+    };
+    let GcTypeDef::Struct(expected) = &gc_types::builtin_types()[MARKER_IDX as usize] else {
+        unreachable!("Marker is a builtin struct")
+    };
+    if fields.len() != expected.len() {
+        return Err(invalid());
+    }
+    for ((field, expected), role) in fields.iter().zip(expected).zip([
+        "ability_id",
+        "prompt_tag",
+        "tr_dispatch_fn",
+        "handler_dispatch",
+    ]) {
+        let Attribute::List(parts) = field else {
+            return Err(invalid());
+        };
+        let [Attribute::Symbol(name), Attribute::Type(ty)] = parts.as_slice() else {
+            return Err(invalid());
+        };
+        let field_type = ctx.types.get(*ty);
+        if *name != Symbol::new(role)
+            || !field_type.params.is_empty()
+            || !field_type.attrs.is_empty()
+            || !(helpers::is_type(ctx, *ty, "core", "i32")
+                || helpers::is_type(ctx, *ty, "core", "ptr")
+                || helpers::is_type(ctx, *ty, "wasm", "anyref"))
+        {
+            return Err(invalid());
+        }
+        // Marker pointer fields are target-owned GC references, as specified
+        // by the builtin layout, even in the retained pre-target declaration.
+        let actual = if helpers::is_type(ctx, *ty, "core", "ptr") {
+            ValType::Ref(wasm_encoder::RefType::ANYREF)
+        } else {
+            helpers::type_to_valtype(ctx, *ty, &HashMap::new())?
+        };
+        if StorageType::Val(actual) != expected.element_type {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+/// Register a validated retained declaration for an indexed evidence operation.
+fn register_builtin_evidence_type(
+    ctx: &IrContext,
+    map: &mut HashMap<TypeRef, u32>,
+    index: u32,
+    ty: TypeRef,
+) -> CompilationResult<()> {
+    // Builtins bypass user builders, but retained full declarations still need
+    // local/signature mappings. Abstract refs must not acquire an indexed type.
+    if matches!(index, MARKER_IDX | EVIDENCE_IDX)
+        && crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) == Some(index)
+    {
+        let marker = if index == MARKER_IDX {
+            ty
+        } else {
+            ctx.types.get(ty).params[0]
+        };
+        validate_marker_layout(ctx, marker)?;
+        register_type(map, index, ty);
+    }
+    Ok(())
+}
+
 /// Normalize a type for GC struct field comparison.
 ///
 /// Normalizes tribute_rt types and variant instances to their canonical form.
@@ -377,6 +458,12 @@ pub(crate) fn collect_gc_types(
             let result_type = result_types.first().copied();
             let type_idx = struct_new.type_idx(ctx);
 
+            if type_idx == MARKER_IDX
+                && let Some(ty) = result_type
+            {
+                register_builtin_evidence_type(ctx, &mut type_idx_by_type, type_idx, ty)?;
+            }
+
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
 
@@ -414,6 +501,17 @@ pub(crate) fn collect_gc_types(
                 wasm_dialect::StructGet::from_op(ctx, op).expect("matched wasm.struct_get");
             let type_idx = struct_get.type_idx(ctx);
             let field_idx = struct_get.field_idx(ctx);
+            let operands = ctx.op_operands(op).to_vec();
+            if type_idx == MARKER_IDX
+                && let Some(&value) = operands.first()
+            {
+                register_builtin_evidence_type(
+                    ctx,
+                    &mut type_idx_by_type,
+                    type_idx,
+                    helpers::value_type(ctx, value),
+                )?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
 
@@ -423,7 +521,6 @@ pub(crate) fn collect_gc_types(
                         "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
                     )));
                 }
-                let operands = ctx.op_operands(op).to_vec();
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
                     register_type(&mut type_idx_by_type, type_idx, ty);
@@ -446,6 +543,16 @@ pub(crate) fn collect_gc_types(
             let operands = ctx.op_operands(op).to_vec();
             let type_idx = struct_set.type_idx(ctx);
             let field_idx = struct_set.field_idx(ctx);
+            if type_idx == MARKER_IDX
+                && let Some(&value) = operands.first()
+            {
+                register_builtin_evidence_type(
+                    ctx,
+                    &mut type_idx_by_type,
+                    type_idx,
+                    helpers::value_type(ctx, value),
+                )?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Struct;
                 if matches!(builder.field_count, Some(count) if field_idx as usize >= count) {
@@ -473,6 +580,11 @@ pub(crate) fn collect_gc_types(
                     wasm_dialect::ArrayNewDefault::from_op(ctx, op).map(|op| op.type_idx(ctx))
                 })
                 .expect("matched indexed array.new operation");
+            if type_idx == EVIDENCE_IDX
+                && let Some(&ty) = result_types.first()
+            {
+                register_builtin_evidence_type(ctx, &mut type_idx_by_type, type_idx, ty)?;
+            }
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Array;
                 if let Some(&result_ty) = result_types.first() {
@@ -598,6 +710,85 @@ pub(crate) fn collect_gc_types(
 mod tests {
     use super::*;
     use trunk_ir::types::{Attribute, TypeDataBuilder};
+
+    #[test]
+    fn incompatible_named_marker_and_evidence_layouts_are_rejected_before_emission() {
+        for field_type in ["core.i64", "wasm.anyref"] {
+            for evidence in [false, true] {
+                let mut ctx = IrContext::new();
+                let producer = if evidence {
+                    "%size = wasm.i32_const {value = 0} : core.i32\n%value = wasm.array_new_default %size {type_idx = 6} : core.array(!Marker)"
+                } else {
+                    "%value = wasm.struct_get %marker {type_idx = 5, field_idx = 0} : core.i32"
+                };
+                let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
+                    "core.module @test {{
+                        !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}
+                        wasm.func @test(%marker: !Marker) -> core.i32 {{
+                            {producer}
+                            wasm.unreachable
+                        }}
+                    }}"
+                ));
+                let error = crate::emit_module_to_wasm(&mut ctx, module)
+                    .err()
+                    .expect("incompatible Marker layout must fail before emission");
+                assert!(
+                    error.to_string().contains("Marker declaration differs"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_marker_access_does_not_specialize_abstract_or_unrelated_references() {
+        for reference in [
+            "wasm.anyref",
+            "wasm.structref",
+            "wasm.arrayref",
+            "adt.struct() {name = @Other}",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{
+                    wasm.func @test(%marker: {reference}) -> core.i32 {{
+                        %value = wasm.struct_get %marker {{type_idx = 5, field_idx = 0}} : core.i32
+                        wasm.return %value
+                    }}
+                }}"
+                ),
+            );
+            let function = wasm_dialect::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+            let entry = ctx.region(function.body(&ctx)).blocks[0];
+            let ty = ctx.value_ty(ctx.block_args(entry)[0]);
+            let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
+            // Abstract arrayref retains its existing Evidence mapping; none of
+            // these references may acquire the Marker index from struct_get.
+            let expected = (reference == "wasm.arrayref").then_some(&EVIDENCE_IDX);
+            assert_eq!(map.get(&ty), expected);
+        }
+    }
+
+    #[test]
+    fn marker_declaration_at_a_different_builtin_index_is_not_registered() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            !Marker = adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}
+            wasm.func @test(%marker: !Marker) -> core.i32 {
+                %value = wasm.struct_get %marker {type_idx = 4, field_idx = 0} : core.i32
+                wasm.return %value
+            }
+        }"#,
+        );
+        let ty = ctx.type_alias_by_name(Symbol::new("Marker")).unwrap();
+        let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
+        assert!(!map.contains_key(&ty));
+    }
 
     #[test]
     fn record_struct_field_widens_concrete_to_anyref() {

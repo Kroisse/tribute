@@ -34,7 +34,7 @@ mod effect {
     /// types. `payload` is the single packed operation argument value. The
     /// operation is resultless: backend lowering performs the final proper tail
     /// transfer.
-    #[attr(ability_ref: Type, op_name: Symbol)]
+    #[attr(ability_ref: Type, op_name: Symbol, answer_type: Type)]
     fn dispatch_cps(evidence: (), dispatch: (), resume: (), payload: ()) {}
 
     /// Dispatch the explicitly legacy carrier-based general ability operation.
@@ -147,6 +147,7 @@ mod tests {
             payload,
             ability,
             Symbol::new("get"),
+            anyref_ty,
         );
 
         let tail_wrapper =
