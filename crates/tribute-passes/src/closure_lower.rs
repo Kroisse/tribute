@@ -249,7 +249,10 @@ impl RewritePattern for LowerClosureCallArena {
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
-        let caller_result_ty = ctx.op_result_types(op)[0];
+        // Ordinary closure calls currently lower exactly one result.
+        let &[caller_result_ty] = ctx.op_result_types(op) else {
+            return false;
+        };
 
         let i32_ty = ctx
             .types
@@ -672,10 +675,10 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             return false;
         };
         if func::CallIndirect::matches(ctx, op) {
-            let Some(&result) = ctx.op_result_types(op).first() else {
-                return false;
-            };
-            exact_physical_call_contract(ctx, callee, convention, args, &[result], anyref).is_some()
+            let results = ctx.op_result_types(op).to_vec();
+            results.len() == 1
+                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
+                    .is_some()
         } else {
             let Some(results) = exact_tail_results(ctx, op, callee) else {
                 return false;
@@ -1291,6 +1294,81 @@ mod tests {
         assert!(lower_prepared_closures(&mut ctx, module).is_err());
         assert_eq!(print_module(&ctx, module.op()), before);
         assert_eq!(collect_ops(&ctx, module.op()), ops);
+    }
+
+    #[test]
+    fn ordinary_closure_call_result_counts_are_checked_before_mutation() {
+        for (signature_results, call, supported) in [
+            (
+                "core.i32",
+                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                false,
+            ),
+            (
+                "core.i32",
+                "%first, %extra = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32, core.i32",
+                false,
+            ),
+            (
+                "()",
+                "func.call_indirect %callee {tribute.calling_convention = 0}",
+                false,
+            ),
+            (
+                "core.i32",
+                "%result = func.call_indirect %callee {tribute.calling_convention = 0} : core.i32",
+                true,
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+            !Callback = closure.closure(func.func_sig<() -> {signature_results}>) {{tribute.calling_convention = 0, tribute.closure_environment_index = 0}}
+            func.func @invalid(%callee: !Callback) -> core.i32 {{
+                {call}
+                %zero = arith.constant {{value = 0}} : core.i32
+                func.return %zero
+            }}
+            func.func @otherwise_lowerable(%callee: !Callback) -> tribute_rt.anyref {{
+                %env = closure.env %callee : tribute_rt.anyref
+                func.return %env
+            }}
+        }}"#,
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+            let ops = collect_ops(&ctx, module.op());
+            let invalid = func_by_name(&ctx, module, "invalid");
+            if supported {
+                lower_prepared_closures(&mut ctx, module).unwrap();
+                assert_module_is_structurally_valid(&ctx, module);
+                let call = collect_ops(&ctx, invalid.op_ref())
+                    .into_iter()
+                    .find(|&op| func::CallIndirect::matches(&ctx, op))
+                    .unwrap();
+                assert_eq!(ctx.op_result_types(call).len(), 1);
+                assert_eq!(ctx.op_operands(call).len(), 2);
+                assert!(print_module(&ctx, invalid.op_ref()).contains("signature"));
+                continue;
+            }
+            for error in [
+                lower_closures_in_func(&mut ctx, invalid).unwrap_err(),
+                lower_prepared_closures(&mut ctx, module).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.to_string(),
+                    "closure lowering: exact caller/callee/indirect result contract mismatch"
+                );
+            }
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(collect_ops(&ctx, module.op()), ops);
+            // The rewrite pattern must also decline unsupported arities safely.
+            rewrite_validated_closures_in_func(&mut ctx, invalid);
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert_eq!(collect_ops(&ctx, module.op()), ops);
+        }
     }
 
     #[test]
