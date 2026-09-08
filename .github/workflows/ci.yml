@@ -230,7 +230,7 @@ jobs:
           tool: cargo-llvm-cov,nextest,wasmtime
 
       - name: Generate coverage report
-        run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --workspace --run-ignored all --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
