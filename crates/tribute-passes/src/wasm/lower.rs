@@ -92,6 +92,7 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
     trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_switches(ctx, module)?;
+    super::type_converter::convert_canonical_closure_storage(ctx, module);
 
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
     let io_analysis = IoAnalysis::analyze(ctx, module, const_analysis.total_size());

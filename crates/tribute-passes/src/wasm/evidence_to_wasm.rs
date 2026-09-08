@@ -25,7 +25,6 @@ use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::ops::DialectType;
@@ -449,9 +448,39 @@ impl RewritePattern for EffectDispatchCpsPattern {
         };
 
         let loc = ctx.op(op).location;
-        if !ctx.op_result_types(op).is_empty() {
+        if !ctx.op_result_types(op).is_empty()
+            || ctx.op(op).attributes.get_type("answer_type").is_none()
+            || ctx.op_operands(op).len() != 4
+        {
             return false;
         }
+        let evidence_ty = evidence_ref_type(ctx);
+        let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
+        let closure_ty = super::type_converter::closure_adt_type(ctx);
+        let i32_ty = intern_i32(ctx);
+        let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
+        if ctx
+            .op_operands(op)
+            .iter()
+            .zip(expected)
+            .any(|(value, expected)| ctx.value_ty(*value) != expected)
+        {
+            return false;
+        }
+        let signature = wasm_dialect::func_sig(
+            ctx,
+            [
+                evidence_ty,
+                anyref_ty,
+                closure_ty,
+                i32_ty,
+                i32_ty,
+                i32_ty,
+                anyref_ty,
+            ],
+            [],
+        )
+        .as_type_ref();
         let ability_ref = dispatch_op.ability_ref(ctx);
         let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
         let i32_ty = intern_i32(ctx);
@@ -495,9 +524,8 @@ impl RewritePattern for EffectDispatchCpsPattern {
             ],
             0,
             0,
-            None,
+            Some(signature),
         );
-        attach_exact_indirect_signature(ctx, tail.op_ref());
         set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
@@ -506,16 +534,6 @@ impl RewritePattern for EffectDispatchCpsPattern {
     fn name(&self) -> &'static str {
         "EffectDispatchCpsPattern"
     }
-}
-
-fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
-    let parameters = ctx.op_operands(call)[1..]
-        .iter()
-        .map(|&value| ctx.value_ty(value))
-        .collect::<Vec<_>>();
-    let result = core::nil(ctx).as_type_ref();
-    let signature = wasm_dialect::func_sig(ctx, parameters, [result]).as_type_ref();
-    let _ = wasm_dialect::set_indirect_call_signature(ctx, call, signature);
 }
 
 /// Pattern that matches `ability.evidence_extend` and replaces it with
@@ -1452,11 +1470,42 @@ mod tests {
     }
 
     #[test]
+    fn fixed_dispatch_signature_is_independent_of_answer_and_rejects_operand_mutations() {
+        let source = r#"core.module @test {
+          !closure = adt.struct() {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}
+          func.func @run(%ev: wasm.arrayref, %dispatch: !closure, %resume: !closure, %payload: wasm.anyref) {
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+          }
+        }"#;
+        let first = lower_text(source);
+        let second =
+            lower_text(&source.replace("answer_type = core.i32", "answer_type = core.i64"));
+        assert_eq!(first, second);
+        assert!(first.contains("wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>"), "{first}");
+        assert!(!first.contains("answer_type"));
+        for original in [
+            "%ev: wasm.arrayref",
+            "%dispatch: !closure",
+            "%resume: !closure",
+            "%payload: wasm.anyref",
+        ] {
+            let changed = source.replace(
+                original,
+                &format!("{}: core.i64", original.split(':').next().unwrap()),
+            );
+            let output = lower_text(&changed);
+            assert!(output.contains("effect.dispatch_cps"), "{output}");
+            assert!(!output.contains("wasm.return_call_indirect"), "{output}");
+        }
+    }
+
+    #[test]
     fn textual_dispatch_cps_lowers_to_wasm_indirect_call() {
         let output = lower_text(
             r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %dispatch: wasm.anyref, %resume: wasm.anyref, %payload: wasm.anyref) -> core.never {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
+          !closure = adt.struct() {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}
+  func.func @run(%ev: wasm.arrayref, %dispatch: !closure, %resume: !closure, %payload: wasm.anyref) {
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
   }
 }"#,
         );

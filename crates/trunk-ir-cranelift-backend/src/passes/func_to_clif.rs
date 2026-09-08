@@ -516,7 +516,7 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
             return false;
         };
-        if callable.single_result(ctx) != Some(core::nil(ctx).as_type_ref())
+        if !callable.results(ctx).is_empty()
             || !TailCallLike::is_resultless(&tail, ctx)
             || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
             || callable
@@ -667,14 +667,14 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap, Symbol};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @direct_target(%value: core.i32) attributes {tribute.calling_convention = 2} {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @direct_caller(%value: core.i32) attributes {tribute.calling_convention = 2} {
     func.tail_call %value {callee = @direct_target, tribute.calling_convention = 2}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>, tribute.calling_convention = 2}
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>, tribute.calling_convention = 2}
   }
 }"#;
 
@@ -953,8 +953,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array(core.i32)
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) -> core.nil attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> core.nil>, tribute.calling_convention = 2}
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> ()>, tribute.calling_convention = 2}
   }
 }"#,
         );
@@ -970,11 +970,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = clif.func_sig<(core.ptr) -> core.nil>"),
+                && printed.contains("sig = clif.func_sig<(core.ptr) -> ()>"),
             "{printed}"
         );
         assert!(
-            !printed.contains("sig = clif.func_sig<(!evidence) -> core.nil>"),
+            !printed.contains("sig = clif.func_sig<(!evidence) -> ()>"),
             "{printed}"
         );
     }

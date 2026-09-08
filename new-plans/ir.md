@@ -713,8 +713,8 @@ result operand로 이를 추론해서는 안 된다.
 `func.tail_call_indirect`는 callable operand와 argument를 받고 result가 없는
 terminator다. Shared verifier checks complete caller/callee result-list agreement;
 logical CPS callables both retain `[core.never]` despite the resultless transfer
-operation. Final Native/Wasm signature lowering will change these to empty
-result lists; the current target ABI still uses temporary `[core.nil]` encoding.
+operation. 대상 ABI 변환은 검증된 CPS callable의 결과 목록을 원자적으로
+`[]`로 바꾸며 실제 Unit `[core.nil]`은 보존한다.
 
 `scf.*` represents structured control flow, including pattern/case regions and
 region yields. Loop-like forms may be introduced by optimization passes such as

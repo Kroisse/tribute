@@ -39,8 +39,7 @@ pub(crate) fn call_conv_for_cps_signature(
 
 fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
     clif::FuncSig::from_type_ref(ctx, signature)
-        .and_then(|function| function.single_result(ctx))
-        .is_some_and(|result| is_nil_type(ctx, result))
+        .is_some_and(|function| function.results(ctx).is_empty())
 }
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -869,7 +868,12 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let nil_ty = make_core_type(&mut ctx, "nil");
         let logical_signature = clif::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let physical_signature = clif::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
+        let physical_signature = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
+        let unit_signature = clif::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
+        assert_eq!(
+            call_conv_for_cps_signature(&ctx, unit_signature, true, CallConv::SystemV),
+            CallConv::SystemV
+        );
 
         assert_eq!(
             call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),

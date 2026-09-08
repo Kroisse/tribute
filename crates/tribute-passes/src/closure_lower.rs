@@ -264,7 +264,7 @@ impl RewritePattern for LowerClosureCallArena {
                 callee,
                 convention,
                 &args,
-                caller_result_ty,
+                &[caller_result_ty],
                 anyref_ty,
             ) else {
                 return false;
@@ -398,9 +398,11 @@ impl RewritePattern for LowerClosureTailCallArena {
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let never = core::never(ctx).as_type_ref();
+        let Some(results) = exact_tail_results(ctx, op, callee) else {
+            return false;
+        };
         let Some(contract) =
-            exact_physical_call_contract(ctx, callee, convention, args, never, anyref_ty)
+            exact_physical_call_contract(ctx, callee, convention, args, &results, anyref_ty)
         else {
             return false;
         };
@@ -440,7 +442,10 @@ fn copy_indirect_call_attributes(ctx: &mut IrContext, source: OpRef, destination
     ctx.op_mut(destination).attributes.extend(attributes);
 }
 
-fn physical_closure_type_for_callee(ctx: &IrContext, callee: ValueRef) -> Option<TypeRef> {
+pub(crate) fn physical_closure_type_for_callee(
+    ctx: &IrContext,
+    callee: ValueRef,
+) -> Option<TypeRef> {
     let ty = ctx.value_ty(callee);
     if get_physical_closure_convention(ctx, ty).is_some() {
         return Some(ty);
@@ -479,6 +484,27 @@ fn is_lowered_closure_pack(ctx: &IrContext, op: OpRef, closure_ty: TypeRef) -> b
     ctx.value_ty(*function) == closure.func_type(ctx)
 }
 
+fn exact_tail_results(ctx: &IrContext, op: OpRef, callee: ValueRef) -> Option<Vec<TypeRef>> {
+    let closure = physical_closure_type_for_callee(ctx, callee)?;
+    let signature = closure::Closure::from_type_ref(ctx, closure)?.func_type(ctx);
+    let exact = trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(ctx, op)?;
+    if exact != signature {
+        return None;
+    }
+    let results = func::FuncSig::from_type_ref(ctx, signature)?.results(ctx);
+    let mut parent = ctx.op(op).parent_block?;
+    loop {
+        let owner = ctx.region(ctx.block(parent).parent_region?).parent_op?;
+        if let Ok(function) = func::Func::from_op(ctx, owner) {
+            let caller = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
+            return (get_calling_convention(ctx, owner) == Some(CallingConvention::Cps)
+                && caller.results(ctx) == results)
+                .then(|| results.to_vec());
+        }
+        parent = ctx.op(owner).parent_block?;
+    }
+}
+
 struct PhysicalCallContract {
     environment_index: usize,
     signature: TypeRef,
@@ -490,14 +516,14 @@ fn exact_physical_call_contract(
     callee: ValueRef,
     convention: CallingConvention,
     args: &[ValueRef],
-    result: TypeRef,
+    results: &[TypeRef],
     environment: TypeRef,
 ) -> Option<PhysicalCallContract> {
     let closure_ty = physical_closure_type_for_callee(ctx, callee)?;
     (get_physical_closure_convention(ctx, closure_ty) == Some(convention)).then_some(())?;
     let function = closure::Closure::from_type_ref(ctx, closure_ty)?.func_type(ctx);
     let callable = func::FuncSig::from_type_ref(ctx, function)?;
-    if callable.results(ctx) != [result] || callable.inputs(ctx).len() != args.len() {
+    if callable.results(ctx) != results || callable.inputs(ctx).len() != args.len() {
         return None;
     }
     let mut casts = Vec::new();
@@ -528,7 +554,8 @@ fn exact_physical_call_contract(
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
         environment_index,
-        signature: func::func_sig_with_attrs(ctx, params, [result], type_attrs).as_type_ref(),
+        signature: func::func_sig_with_attrs(ctx, params, results.iter().copied(), type_attrs)
+            .as_type_ref(),
         argument_casts: casts,
     })
 }
@@ -633,7 +660,6 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
     }
 
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let never = core::never(ctx).as_type_ref();
     transfers.into_iter().all(|op| {
         let operands = ctx.op_operands(op).to_vec();
         let Some((&callee, args)) = operands.split_first() else {
@@ -649,10 +675,13 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
             let Some(&result) = ctx.op_result_types(op).first() else {
                 return false;
             };
-            exact_physical_call_contract(ctx, callee, convention, args, result, anyref).is_some()
+            exact_physical_call_contract(ctx, callee, convention, args, &[result], anyref).is_some()
         } else {
+            let Some(results) = exact_tail_results(ctx, op, callee) else {
+                return false;
+            };
             convention == CallingConvention::Cps
-                && exact_physical_call_contract(ctx, callee, convention, args, never, anyref)
+                && exact_physical_call_contract(ctx, callee, convention, args, &results, anyref)
                     .is_some()
         }
     })
@@ -742,14 +771,35 @@ pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
 /// not a type-equivalence rule or final physical-IR contract.
 pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
+    rewrite_closure_storage_types(ctx, module, None, closure_struct);
+}
+
+/// Convert only the exact canonical storage identity through the existing
+/// recursive closure type surfaces; target ownership remains at the caller.
+pub(crate) fn convert_canonical_closure_storage(
+    ctx: &mut IrContext,
+    module: Module,
+    source: TypeRef,
+    target: TypeRef,
+) {
+    rewrite_closure_storage_types(ctx, module, Some(source), target);
+}
+
+fn rewrite_closure_storage_types(
+    ctx: &mut IrContext,
+    module: Module,
+    source_storage: Option<TypeRef>,
+    closure_struct: TypeRef,
+) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
-    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct);
+    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct, source_storage);
     let mut alias_updates = Vec::new();
     let mut attribute_removals = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
     let mut block_arg_updates = Vec::new();
+    let mut block_attribute_updates = Vec::new();
 
     for (name, ty) in aliases {
         let converted = physicalizer.convert_type(ty);
@@ -759,7 +809,7 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     }
     for op in ops {
         for (name, value) in physicalizer.ctx.op(op).attributes.clone() {
-            if name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
+            if source_storage.is_none() && name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
                 attribute_removals.push(op);
                 continue;
             }
@@ -782,14 +832,16 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
         }
         for region in physicalizer.ctx.op(op).regions.clone() {
             for block in physicalizer.ctx.region(region).blocks.clone() {
-                let args = physicalizer
-                    .ctx
-                    .block(block)
-                    .args
-                    .iter()
-                    .map(|argument| argument.ty)
-                    .collect::<Vec<_>>();
-                for (index, ty) in args.into_iter().enumerate() {
+                let args = physicalizer.ctx.block(block).args.to_vec();
+                for (index, argument) in args.into_iter().enumerate() {
+                    let mut attrs = argument.attrs.clone();
+                    for (name, value) in argument.attrs.iter() {
+                        attrs.insert(*name, physicalizer.convert_attribute(value.clone()));
+                    }
+                    if attrs != argument.attrs {
+                        block_attribute_updates.push((block, index, attrs));
+                    }
+                    let ty = argument.ty;
                     let converted = physicalizer.convert_type(ty);
                     if converted != ty {
                         block_arg_updates.push((block, index as u32, converted));
@@ -817,27 +869,39 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     for (block, index, ty) in block_arg_updates {
         ctx.set_block_arg_type(block, index, ty);
     }
+    for (block, index, attrs) in block_attribute_updates {
+        ctx.block_mut(block).args[index].attrs = attrs;
+    }
 }
 
 struct ClosureTypePhysicalizer<'a> {
     ctx: &'a mut IrContext,
     closure_struct: TypeRef,
+    source_storage: Option<TypeRef>,
     cache: HashMap<TypeRef, TypeRef>,
     visiting: HashSet<TypeRef>,
 }
 
 impl<'a> ClosureTypePhysicalizer<'a> {
-    fn new(ctx: &'a mut IrContext, closure_struct: TypeRef) -> Self {
+    fn new(
+        ctx: &'a mut IrContext,
+        closure_struct: TypeRef,
+        source_storage: Option<TypeRef>,
+    ) -> Self {
         Self {
             ctx,
             closure_struct,
+            source_storage,
             cache: HashMap::new(),
             visiting: HashSet::new(),
         }
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if closure::Closure::matches(self.ctx, ty) {
+        if self.source_storage.map_or_else(
+            || closure::Closure::matches(self.ctx, ty),
+            |source| ty == source,
+        ) {
             return self.closure_struct;
         }
         if let Some(&converted) = self.cache.get(&ty) {
@@ -920,6 +984,16 @@ impl Pass for LowerPreparedClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+        for op in collect_ops(ctx, target.op_ref()) {
+            if let Ok(function) = func::Func::from_op(ctx, op)
+                && !tagged_closure_transfers_are_legal(ctx, function)
+            {
+                return Err(
+                    "closure lowering: exact caller/callee/indirect result contract mismatch"
+                        .into(),
+                );
+            }
+        }
         lower_prepared_closures(ctx, target.into());
         Ok(())
     }
@@ -952,6 +1026,11 @@ impl Pass for LowerClosuresInFunc {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+        if !tagged_closure_transfers_are_legal(ctx, target) {
+            return Err(
+                "closure lowering: exact caller/callee/indirect result contract mismatch".into(),
+            );
+        }
         lower_closures_in_func(ctx, target);
         Ok(())
     }
@@ -1300,8 +1379,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn tagged_dispatch_aware_tail_retains_exact_physical_signature() {
+    fn check_tagged_dispatch_tail(physical: bool) {
         let mut ctx = IrContext::new();
         let ev = evidence_type_str();
         let module = parse_test_module(
@@ -1315,6 +1393,9 @@ mod tests {
 }}"#
             ),
         );
+        if physical {
+            crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        }
         let run = func_by_name(&ctx, module, "run");
         let entry_args = ctx.block_args(ctx.region(run.body(&ctx)).blocks[0]);
         let evidence = entry_args[1];
@@ -1334,6 +1415,7 @@ mod tests {
         let signature =
             trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, tail).unwrap();
         let callable = func::FuncSig::from_type_ref(&ctx, signature).unwrap();
+        assert_eq!(callable.results(&ctx).is_empty(), physical);
         assert_eq!(ctx.op_operands(tail).len(), 6);
         assert_eq!(ctx.op_operands(tail)[1], evidence);
         assert_eq!(
@@ -1351,6 +1433,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             "the physical signature must include the inserted environment operand"
         );
+    }
+
+    #[test]
+    fn logical_dispatch_tail_preserves_never_results() {
+        check_tagged_dispatch_tail(false);
+    }
+
+    #[test]
+    fn physical_dispatch_tail_preserves_empty_results() {
+        check_tagged_dispatch_tail(true);
     }
 
     #[test]

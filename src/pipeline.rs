@@ -1808,6 +1808,170 @@ mod tests {
     }
 
     #[test]
+    fn evidence_lookup_preserves_marker_type_in_emitted_binary() {
+        let mut ctx = trunk_ir::IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+                func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }
+            }"#,
+        );
+        tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
+        tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+        let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary.bytes)
+            .expect("evidence lookup must retain concrete Marker locals and return type");
+    }
+
+    #[test]
+    fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_binary() {
+        use tribute_core::calling_convention::cps_closure_function_type;
+        use tribute_ir::dialect::{ability, effect, tribute_rt};
+        use trunk_ir::dialect::{adt, wasm};
+        use trunk_ir::{Attribute, Symbol, TypeDataBuilder};
+        let (mut ctx, module) = source_logical_cps_root_module();
+        let worker = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| func_dialect::Func::from_op(&ctx, op).ok())
+            .unwrap();
+        let entry = ctx.region(worker.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+        let frame = ctx.value_ty(args[1]);
+        let layout = ctx
+            .type_alias_by_name(ctx.types.get(frame).attrs.get_symbol("name").unwrap())
+            .unwrap();
+        let Attribute::List(fields) = ctx.types.get(layout).attrs.get("fields").unwrap() else {
+            panic!("frame fields")
+        };
+        let Attribute::List(dispatch_field) = &fields[1] else {
+            panic!("dispatch field")
+        };
+        let Attribute::Type(dispatch_type) = dispatch_field[1] else {
+            panic!("dispatch type")
+        };
+        let signature = cps_closure_function_type(&ctx, dispatch_type).unwrap();
+        let resume_type = func_dialect::FuncSig::from_type_ref(&ctx, signature)
+            .unwrap()
+            .inputs(&ctx)[1];
+        let location = ctx.op(worker.op_ref()).location;
+        let unreachable = ctx.block(entry).ops[0];
+        trunk_ir::rewrite::helpers::erase_op(&mut ctx, unreachable);
+        let dispatch = adt::struct_get(&mut ctx, location, args[1], dispatch_type, layout, 1);
+        ctx.push_op(entry, dispatch.op_ref());
+        let resume = adt::ref_null(&mut ctx, location, resume_type, resume_type);
+        ctx.push_op(entry, resume.op_ref());
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let ability_type = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .build(),
+        );
+        // Match the canonical payload product and erasure used by perform lowering.
+        let payload_type =
+            ability::operation_payload_type_ref(&mut ctx, ability_type, Symbol::new("get"), []);
+        let product = adt::struct_new(&mut ctx, location, [], payload_type, payload_type);
+        ctx.push_op(entry, product.op_ref());
+        let value = product.result(&ctx);
+        let payload = core_dialect::unrealized_conversion_cast(&mut ctx, location, value, anyref);
+        ctx.push_op(entry, payload.op_ref());
+        let nil = core_dialect::nil(&mut ctx).as_type_ref();
+        let values = [
+            dispatch.result(&ctx),
+            resume.result(&ctx),
+            payload.result(&ctx),
+        ];
+        let transfer = effect::dispatch_cps(
+            &mut ctx,
+            location,
+            args[0],
+            values[0],
+            values[1],
+            values[2],
+            ability_type,
+            Symbol::new("get"),
+            nil,
+        );
+        ctx.push_op(entry, transfer.op_ref());
+        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        finalize_target_closure_storage(&mut ctx, module, boundary);
+        let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
+            panic!(
+                "{error}\n{}",
+                trunk_ir::printer::print_module(&ctx, module.op())
+            )
+        });
+        let dispatch_definition = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| {
+                let function = wasm::Func::from_op(&ctx, op).ok()?;
+                (function.sym_name(&ctx) == Symbol::new("__tribute_root_dispatch"))
+                    .then_some(function.r#type(&ctx))
+            })
+            .unwrap();
+        let mut signatures = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if wasm::ReturnCallIndirect::matches(&ctx, op) {
+                signatures.push(
+                    trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, op).unwrap(),
+                );
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert!(signatures.contains(&dispatch_definition));
+        let canonical_closure = tribute_passes::wasm::type_converter::closure_adt_type(&mut ctx);
+        let signature = wasm::FuncSig::from_type_ref(&ctx, dispatch_definition).unwrap();
+        assert_eq!(signature.inputs(&ctx)[2], canonical_closure);
+        assert!(signature.results(&ctx).is_empty());
+        let mut binary_dispatch_signatures = 0;
+        for payload in wasmparser::Parser::new(0).parse_all(&binary.bytes) {
+            if let wasmparser::Payload::TypeSection(types) = payload.unwrap() {
+                for group in types {
+                    for ty in group.unwrap().into_types() {
+                        if let wasmparser::CompositeInnerType::Func(signature) =
+                            ty.composite_type.inner
+                            && signature.params().len() == 7
+                        {
+                            use wasmparser::{RefType, ValType};
+                            let concrete = |index| {
+                                ValType::Ref(
+                                    RefType::new(
+                                        true,
+                                        wasmparser::HeapType::Concrete(
+                                            wasmparser::UnpackedIndex::Module(index),
+                                        ),
+                                    )
+                                    .unwrap(),
+                                )
+                            };
+                            assert_eq!(
+                                signature.params(),
+                                [
+                                    concrete(6),
+                                    ValType::Ref(RefType::ANYREF),
+                                    concrete(4),
+                                    ValType::I32,
+                                    ValType::I32,
+                                    ValType::I32,
+                                    ValType::Ref(RefType::ANYREF)
+                                ]
+                            );
+                            assert!(signature.results().is_empty());
+                            binary_dispatch_signatures += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(binary_dispatch_signatures, 1);
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary.bytes)
+            .expect("canonical root dispatch binary validates");
+    }
+
+    #[test]
     fn native_ownership_plan_options_follow_stage_policy_table() {
         let parameter_elision_only = NativeOptimizationOptions {
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,

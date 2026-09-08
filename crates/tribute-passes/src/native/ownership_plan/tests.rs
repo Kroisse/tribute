@@ -992,16 +992,16 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
-  func.func @branch(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @branch(%value: !R) attributes {tribute.calling_convention = 2} {
     ^entry:
       cf.br %value, %value [^merge]
     ^merge(%left: !R, %right: !R):
       func.unreachable
   }
-  func.func @tail(%sent: !R, %dying: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @tail(%sent: !R, %dying: !R) attributes {tribute.calling_convention = 2} {
     func.tail_call %sent {callee = @sink, tribute.calling_convention = 2}
   }
-  func.func @sink(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @sink(%value: !R) attributes {tribute.calling_convention = 2} {
     func.unreachable
   }
 }"#,
@@ -1047,7 +1047,7 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
         r#"core.module @test {
   !R = adt.typeref() {name = @R}
   !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
-  func.func @duplicate_successor(%condition: core.i1, %value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @duplicate_successor(%condition: core.i1, %value: !R) attributes {tribute.calling_convention = 2} {
     ^entry:
       cf.cond_br %condition [^exit, ^exit]
     ^exit:
@@ -1191,10 +1191,10 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     %indirect = func.call_indirect %callee, %direct {signature = func.func_sig<(!R) -> !R>} : !R
     func.return %indirect
   }
-  func.func @tail(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @tail(%value: !R) attributes {tribute.calling_convention = 2} {
     func.tail_call %value {callee = @sink, tribute.calling_convention = 2}
   }
-  func.func @sink(%value: !R) -> core.nil attributes {tribute.calling_convention = 2} {
+  func.func @sink(%value: !R) attributes {tribute.calling_convention = 2} {
     func.unreachable
   }
 }"#,

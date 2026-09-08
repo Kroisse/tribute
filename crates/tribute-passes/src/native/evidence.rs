@@ -603,13 +603,40 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let loc = ctx.op(op).location;
         // A result-bearing final dispatch is malformed. Reject it before any
         // helper op is inserted so partial conversion leaves the IR unchanged.
-        if !ctx.op_result_types(op).is_empty() {
+        if !ctx.op_result_types(op).is_empty()
+            || ctx.op(op).attributes.get_type("answer_type").is_none()
+            || ctx.op_operands(op).len() != 4
+        {
             return false;
         }
         let i32_ty = core_i32_type(ctx);
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let ability_ref = dispatch_op.ability_ref(ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(ctx);
+        let signature = func::func_sig(
+            ctx,
+            [
+                evidence_ty,
+                anyref_ty,
+                closure_ty,
+                i32_ty,
+                i32_ty,
+                i32_ty,
+                anyref_ty,
+            ],
+            [],
+        )
+        .as_type_ref();
+        let (converter, _) = super::type_converter::native_type_converter(ctx);
+        let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
+        for (value, expected) in ctx.op_operands(op).to_vec().into_iter().zip(expected) {
+            if converter.convert_type_or_identity(ctx, ctx.value_ty(value))
+                != converter.convert_type_or_identity(ctx, expected)
+            {
+                return false;
+            }
+        }
 
         let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
         let ability_id_val = ability_id_op.result(ctx);
@@ -658,9 +685,8 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
-            None,
+            Some(signature),
         );
-        attach_exact_indirect_signature(ctx, tail.op_ref());
         set_calling_convention(ctx, tail.op_ref(), tribute_core::CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
@@ -926,6 +952,8 @@ mod tests {
     use std::ops::ControlFlow;
     use trunk_ir::Span;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::op_interface::IndirectCallLikeModel;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::smallvec::smallvec;
@@ -1224,13 +1252,64 @@ mod tests {
     }
 
     #[test]
+    fn final_dispatch_uses_one_canonical_signature_for_distinct_answers() {
+        let mut ctx = IrContext::new();
+        let source = r#"core.module @test {
+          func.func @first(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+          }
+          func.func @second(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i64}
+          }
+        }"#;
+        let module = parse_test_module(&mut ctx, source);
+        let mut signatures = Vec::new();
+        for name in ["first", "second"] {
+            let function = func_by_name_recursive(&ctx, module, name);
+            lower_evidence_to_native_func(&mut ctx, function);
+            let block = ctx.region(function.body(&ctx)).blocks[0];
+            let tail = *ctx.block(block).ops.last().unwrap();
+            assert!(!ctx.op(tail).attributes.contains_key("answer_type"));
+            signatures.push(
+                func::TailCallIndirect::from_op(&ctx, tail)
+                    .unwrap()
+                    .exact_signature(&ctx)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(signatures[0], signatures[1]);
+        let signature = func::FuncSig::from_type_ref(&ctx, signatures[0]).unwrap();
+        assert!(signature.results(&ctx).is_empty());
+        let (converter, _) = super::super::type_converter::native_type_converter(&mut ctx);
+        let actual: Vec<_> = signature
+            .inputs(&ctx)
+            .iter()
+            .map(|ty| converter.convert_type_or_identity(&ctx, *ty))
+            .collect();
+        let ptr = core::ptr(&mut ctx).as_type_ref();
+        let i32_ty = core_i32_type(&mut ctx);
+        assert_eq!(actual, [ptr, ptr, ptr, i32_ty, i32_ty, i32_ty, ptr]);
+        for index in 0..4 {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, source);
+            let function = func_by_name_recursive(&ctx, module, "first");
+            let entry = ctx.region(function.body(&ctx)).blocks[0];
+            let wrong = core_i32_type(&mut ctx);
+            ctx.set_block_arg_type(entry, index, wrong);
+            let before = print_module(&ctx, module.op());
+            assert!(try_lower_evidence_to_native_func(&mut ctx, function).is_err());
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
     fn resultless_final_dispatch_lowers_to_a_native_proper_tail() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.never {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
   }
 }"#,
         );

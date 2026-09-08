@@ -166,6 +166,11 @@ impl RewritePattern for LowerPerformPattern {
         let resume_val = operands[2];
         let value_operands = &operands[3..];
 
+        let Ok(answer_type) =
+            crate::target_abi::dispatch_answer_type(ctx, evidence_val, dispatch_val, resume_val)
+        else {
+            return false;
+        };
         let t = &self.types;
 
         let shift_value_val = pack_payload(
@@ -190,6 +195,7 @@ impl RewritePattern for LowerPerformPattern {
             shift_value_val,
             ability_ref_type,
             op_name_sym,
+            answer_type,
         );
         rewriter.insert_op(dispatch_op.op_ref());
         rewriter.erase_op(vec![]);
@@ -398,6 +404,7 @@ fn find_evidence_from_op(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
 mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
@@ -409,6 +416,44 @@ mod tests {
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
         "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})"
+    }
+
+    fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+        use tribute_core::calling_convention::*;
+        let answer = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+        );
+        let evidence = ability::evidence_adt_type_ref(ctx);
+        let anyref = tribute_rt::anyref(ctx).as_type_ref();
+        let frame_name = Symbol::new("test_frame");
+        let frame = cps_continuation_frame_ref_type(ctx, frame_name, answer);
+        let done = cps_done_type(ctx, answer);
+        let dispatch = cps_dispatch_type(ctx, evidence, frame, anyref, answer);
+        let resume =
+            func::FuncSig::from_type_ref(ctx, cps_closure_function_type(ctx, dispatch).unwrap())
+                .unwrap()
+                .inputs(ctx)[1];
+        let layout = cps_continuation_frame_layout_type(ctx, frame_name, answer, done, dispatch);
+        ctx.register_type_alias(frame_name, layout);
+        let mut performs = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
+            if ability::Perform::matches(ctx, op) {
+                performs.push(op);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        for op in performs {
+            for (value, ty) in [
+                (ctx.op_operands(op)[1], dispatch),
+                (ctx.op_operands(op)[2], resume),
+            ] {
+                let trunk_ir::refs::ValueDef::OpResult(producer, index) = ctx.value_def(value)
+                else {
+                    panic!("fixture constant")
+                };
+                ctx.set_op_result_type(producer, index, ty);
+            }
+        }
     }
 
     #[test]
@@ -430,6 +475,7 @@ mod tests {
             ),
         );
 
+        attach_exact_perform_types(&mut ctx, module);
         lower_ability_perform(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());
@@ -460,6 +506,7 @@ mod tests {
             ),
         );
 
+        attach_exact_perform_types(&mut ctx, module);
         lower_ability_perform(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());

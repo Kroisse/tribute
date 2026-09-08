@@ -220,6 +220,13 @@ control value를 만들지 않는다. Resume하지 않는 handler arm도
 `Escape`를 반환하는 대신 해당 handle의 exit continuation으로 직접 tail
 transfer하므로 completion region과 포기한 suffix를 구조적으로 건너뛴다.
 
+물리화는 전체 callable과 dispatch/frame/R 계약을 검증하고 변환을 계획한 뒤 적용한다.
+실패하면 기존 operation, 타입 참조, attribute와 alias를 변경하지 않는다. Alias,
+closure signature, function constant, exact indirect signature, SSA 결과와 block
+argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 치환은 하지 않는다.
+Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
+비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
+
 Final native/Wasm backend-ready 경계는 `Cps` worker, continuation, `done_k`,
 handler-dispatch의 result vector가 비어 있고 모든 CPS transfer가
 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한다.
@@ -241,61 +248,22 @@ payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`
   { ability_ref = @Logger, op_name = @log }
 ```
 
-Shared lowering converts it to a target-independent effect ABI operation:
+공통 lowering은 payload packing 전에 exact resume의 frame 입력과 frame metadata에서
+답 타입 `R`을 구하고 evidence·dispatch·resume의 연결을 검증한다.
 
 ```text
 %payload = cast %arg to anyref
-%result = effect.dispatch_tail %ev, %payload
-  { ability_ref = @Logger, op_name = @log }
+effect.dispatch_cps %ev, %dispatch, %resume, %payload
+  { ability_ref = @State, op_name = @get, answer_type = R }
 ```
 
-Native lowering then lowers that ABI operation to the evidence lookup
-and indirect-call representation:
-
-```text
-%marker = ability.evidence_lookup %ev { ability_ref = @Logger }
-%tr_dispatch = adt.struct_get %marker, MarkerField::TrDispatchFn
-%fn = adt.struct_get %tr_dispatch, 0
-%env = adt.struct_get %tr_dispatch, 1
-%op_idx = arith.const <hash(Logger, log)>
-%result = func.call_indirect %fn(%ev, %env, %op_idx, %arg_anyref)
-```
-
-즉 `fn` operation은 CPS 변환, continuation allocation, resume dispatch를
-우회한다.
-
-### `op` operation: tail-call CPS dispatch
-
-직접형 입력은 위 규칙의 `operation_kind = @op` perform이며,
-`tribute_control_to_cps`는 block suffix에서 continuation closure를 구성해
-`ability.perform`으로 내린다.
-
-```text
-ability.perform %continuation, %arg
-  { ability_ref = @State, op_name = @get }
-```
-
-Shared lowering converts it to a target-independent effect ABI operation:
-
-```text
-%payload = cast %arg to anyref
-%cont = cast %continuation to anyref
-effect.dispatch_cps %ev, %cont, %payload
-  { ability_ref = @State, op_name = @get }
-```
-
-Native lowering then finds the `handler_dispatch` closure in evidence and
-tail-calls it:
-
-```text
-%marker = ability.evidence_lookup %ev { ability_ref = @State }
-%handler = adt.struct_get %marker, MarkerField::HandlerDispatch
-%fn = adt.struct_get %handler, 0
-%env = adt.struct_get %handler, 1
-%op_idx = arith.const <hash(State, get)>
-func.tail_call_indirect %fn(
-  %ev, %env, %continuation_anyref, %op_idx, %arg_anyref)
-```
+필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
+물리화 완료 marker 또는 callable provenance가 아니며 `ability.perform`에 중복하지
+않는다. Dispatch가 요구하는 resume과 실제 resume의 exact 타입이 같아야 한다.
+같은 `R`을 가진 서로 다른 nominal frame도 호환되지 않는다. Dispatch와 resume의
+convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 closure는
+기존에 인증된 callable provenance만 사용하며 이름이나 저장 형태에서 추론하지 않는다.
+누락되거나 잘못된 attribute 및 frame·R 불일치는 명시적 lowering 오류다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="dispatch-layers"></a>
@@ -306,11 +274,22 @@ func.tail_call_indirect %fn(
 
 1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 resume에서 어휘적 dispatcher를 재구성하는
    CPS closure이며 `(evidence, resume, prompt, ability_id, op_id, payload)`를 받는다.
-2. `effect.dispatch_cps(evidence, continuation, payload)`는 대상 독립적이고
-   result가 없는 effect operation이다.
-3. 대상 handler tail ABI는
-   `(evidence, env, continuation, op_idx, payload)`이며 handler closure를 직접
-   호출한다.
+2. `effect.dispatch_cps(evidence, dispatch, resume, payload)`는 필수
+   `answer_type = R`을 보존하는 결과 없는 대상 독립적 operation이다.
+3. 대상 dispatch ABI는 compiler-owned
+   `(Evidence, Environment, Resume, Prompt, AbilityId, OperationIndex, Payload)`
+   입력과 빈 결과 목록을 갖는다.
+   Native는 canonical shared signature에 기존 Native 변환을 적용하여
+   `(ptr, ptr, ptr, i32, i32, i32, ptr) -> ()`를 얻는다. Wasm은 대상의 canonical
+   evidence/environment/closure 저장 타입, 세 i32와 payload 타입을 사용한다.
+   Closure 입력은 canonical `_closure` ADT이며 일반 `wasm.structref`로 대체하지
+   않는다. 기존 대상 타입 변환은 정확한 공통 closure 저장 타입을 이 ADT로 변환한다.
+
+의미 계약은 closure 타입 소거와 physicalization 변경 전에 검증한다. 최종 target
+lowering은 실제 operand와 독립적으로 고정 signature를 구성하고 operand를 대조한다.
+서로 다른 유효한 `R`도 동일한 물리 ABI를 가지며 resume의 frame은 별도 dispatch
+입력이 아니다. `answer_type`은 일반 재귀 타입 변환에 참여하고 effect operation 제거
+시 소비한다. Raw target call에 복제하지 않으며 legacy dispatch 계약은 유지한다.
 
 정의, lambda, adapter, direct/indirect call, return, suffix, resume, handle은
 ContinuationFrame을 같은 callable provenance로 전달한다. 내부 Dispatch를 effect operation이나
@@ -340,15 +319,13 @@ CPS entry와 `done_k`의 result는 `core.never`이며,
 
 최종 계약에서는 atomic physical CPS switch 이후 target signature lowering이
 이 CPS signature를 native/Wasm empty-result signature로 바꾼 뒤 실제 wrapper와
-ordinary call을 합성한다. 현재 구현은 임시 `[core.nil]` target encoding을 쓴다. Wasm은 nil/void
-machinery처럼 target이 지원하는 표현을 사용한다. Root `done_k`는 source result를
+결과 없는 ordinary call을 합성한다. Root `done_k`는 source result를
 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
 전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다.
-Shared `func.func_sig` and `func.call` support zero or one result. Logical CPS
-producers retain `[core.never]`; current target ABI uses temporary `[core.nil]`
-until the later atomic empty-result switch. No second control carrier is
-introduced. 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
+공통 `func.func_sig`와 `func.call`은 0개 또는 1개 결과를 지원한다. 논리 CPS
+producer는 `[core.never]`를 유지하고 물리화는 정확한 Cps 결과만 `[]`로 바꾼다.
+이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
 control carrier가 아니다.
 
 ### `handle`: evidence extension + handler closures
@@ -483,8 +460,8 @@ Initial operations:
 - `effect.extend(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
   { ability_ref } -> evidence`
 - `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
-- `effect.dispatch_cps(evidence, continuation, payload)
-  { ability_ref, op_name } -> ()`
+- `effect.dispatch_cps(evidence, dispatch, resume, payload)
+  { ability_ref, op_name, answer_type } -> ()`
 
 Rules:
 
