@@ -1606,6 +1606,64 @@ mod tests {
 
     #[test]
     #[ignore = "requires the Wasmtime CLI runtime"]
+    fn zero_result_direct_and_exact_indirect_calls_execute_in_order_in_wasmtime() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.global {valtype = @i32, mutable = true, init = 0}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @add_two} : wasm.funcref
+  }
+  wasm.func {sym_name = @set_one, type = wasm.func_sig<() -> ()>} {
+    %one = wasm.i32_const {value = 1} : core.i32
+    wasm.global_set %one {index = 0}
+    wasm.return
+  }
+  wasm.func {sym_name = @add_two, type = wasm.func_sig<() -> ()>} {
+    %current = wasm.global_get {index = 0} : core.i32
+    %two = wasm.i32_const {value = 2} : core.i32
+    %next = wasm.i32_add %current, %two : core.i32
+    wasm.global_set %next {index = 0}
+    wasm.return
+  }
+  wasm.func {sym_name = @caller, type = wasm.func_sig<() -> core.i32>} {
+    wasm.call {callee = @set_one}
+    %table_index = wasm.i32_const {value = 0} : core.i32
+    wasm.call_indirect %table_index {signature = wasm.func_sig<() -> ()>, table = 0, type_idx = 0}
+    %result = wasm.global_get {index = 0} : core.i32
+    wasm.return %result
+  }
+  wasm.export_func {name = "zero_pair", func = @caller}
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("zero-result direct and exact-indirect module must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("zero-result direct and exact-indirect module must validate");
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        fs::write(file.path(), bytes).expect("write Wasm module");
+        let output = Command::new("wasmtime")
+            .args(["-W", "gc=y", "--invoke", "zero_pair"])
+            .arg(file.path())
+            .output()
+            .expect("run Wasmtime");
+        assert!(
+            output.status.success(),
+            "Wasmtime failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("Wasmtime stdout is UTF-8"),
+            "3\n"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the Wasmtime CLI runtime"]
     fn multi_result_direct_and_exact_indirect_calls_execute_in_wasmtime() {
         let invoke = |source: &str, export: &str, args: &[&str]| {
             let mut ctx = IrContext::new();
