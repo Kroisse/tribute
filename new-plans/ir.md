@@ -919,9 +919,13 @@ CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물�
 CPS `[core.never]`, 물리 CPS `[]`의 구분은
 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
 
-Native contract의 `core.ptr` 입력·결과 slot은 pointer representation을 공유하는
-semantic SSA type과 ABI 동치일 수 있다. 이 예외는 `core.ptr` contract에만 적용하며,
-다른 target contract type은 exact type 일치를 요구한다.
+네이티브 최종 호출 계약의 각 operand와 result slot은 `clif.func_sig`의 같은 순서
+slot과 정확히 같은 TrunkIR type이어야 한다. semantic reference SSA 값은 native
+lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 낮춘 뒤에만
+`core.ptr` slot을 채울 수 있다. 검증과 emission은 dialect 이름, type attribute, ABI
+문자열, symbol, erased representation에서 pointer 동치를 추론하지 않는다. 이 규칙은
+`core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
+호환성 규칙을 만들지 않는다.
 
 ## Open Questions
 

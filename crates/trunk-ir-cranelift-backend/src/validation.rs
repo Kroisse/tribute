@@ -120,16 +120,12 @@ fn runtime_types(ctx: &IrContext, types: &[TypeRef]) -> Vec<TypeRef> {
         .collect()
 }
 
-fn types_match_native_abi(_ctx: &IrContext, expected: TypeRef, actual: TypeRef) -> bool {
-    expected == actual
-}
-
-fn type_lists_match_native_abi(ctx: &IrContext, expected: &[TypeRef], actual: &[TypeRef]) -> bool {
+fn type_lists_match(expected: &[TypeRef], actual: &[TypeRef]) -> bool {
     expected.len() == actual.len()
         && expected
             .iter()
             .zip(actual)
-            .all(|(&expected, &actual)| types_match_native_abi(ctx, expected, actual))
+            .all(|(&expected, &actual)| expected == actual)
 }
 
 fn check_value_types(
@@ -150,7 +146,7 @@ fn check_value_types(
         return;
     }
     for (index, (&value, &ty)) in values.iter().zip(expected).enumerate() {
-        if !types_match_native_abi(ctx, ty, ctx.value_ty(value)) {
+        if ty != ctx.value_ty(value) {
             errors.push(format!(
                 "clif.{} {role} #{index} type mismatch: expected {}, found {}",
                 ctx.op(op).name,
@@ -169,7 +165,7 @@ fn check_result_types(
     errors: &mut Vec<String>,
 ) {
     let actual = ctx.op_result_types(op);
-    if !type_lists_match_native_abi(ctx, expected, actual) {
+    if !type_lists_match(expected, actual) {
         errors.push(format!(
             "clif.{} {role} mismatch: expected {:?}, found {:?}",
             ctx.op(op).name,
@@ -190,7 +186,7 @@ fn check_direct_result_types(
     role: &str,
     errors: &mut Vec<String>,
 ) {
-    if type_lists_match_native_abi(ctx, expected, ctx.op_result_types(op)) {
+    if type_lists_match(expected, ctx.op_result_types(op)) {
         return;
     }
     check_result_types(ctx, op, &runtime_types(ctx, expected), role, errors);
@@ -201,7 +197,7 @@ fn values_match_types(ctx: &IrContext, values: &[ValueRef], expected: &[TypeRef]
         && values
             .iter()
             .zip(expected)
-            .all(|(&value, &ty)| types_match_native_abi(ctx, ty, ctx.value_ty(value)))
+            .all(|(&value, &ty)| ty == ctx.value_ty(value))
 }
 
 /// See [`check_direct_result_types`]. A direct return may use the full logical

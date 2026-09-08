@@ -151,13 +151,13 @@ target-owned contract를 소비한다. 호출 계약 변환은 그 내부의 중
 보존하고, 타입이 지워진 함수 포인터, 심볼, ABI 문자열, 저장 형태에서 exact contract를
 추론하지 않는다.
 
-Native 최종 호출 계약의 각 operand와 result slot은 `clif.func_sig`의 같은 순서 slot과
-정확히 같은 TrunkIR type이어야 한다. semantic reference SSA 값은 native lowering이 그
-producer 또는 block argument를 `core.ptr`로 명시적으로 낮춘 뒤에만 `core.ptr` slot을
-채울 수 있다. 검증과 emission은 dialect 이름, type attribute, ABI 문자열, symbol,
-erased representation으로 pointer 동치를 추론하지 않는다. 이 규칙은 `core.nil`의
-정해진 zero-width projection과 별개이며, 다른 contract type 사이의 호환성 규칙을
-만들지 않는다.
+네이티브 최종 호출 계약의 각 operand와 result slot은 `clif.func_sig`의 같은 순서
+slot과 정확히 같은 TrunkIR type이어야 한다. semantic reference SSA 값은 native
+lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 낮춘 뒤에만
+`core.ptr` slot을 채울 수 있다. 검증과 emission은 dialect 이름, type attribute, ABI
+문자열, symbol, erased representation에서 pointer 동치를 추론하지 않는다. 이 규칙은
+`core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
+호환성 규칙을 만들지 않는다.
 
 ### Zero-width `core.nil`
 
