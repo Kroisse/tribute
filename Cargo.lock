@@ -1601,6 +1601,7 @@ dependencies = [
  "insta",
  "rustc-hash",
  "target-lexicon",
+ "tempfile",
  "tracing",
  "trunk-ir",
 ]

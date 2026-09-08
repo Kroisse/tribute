@@ -1723,10 +1723,14 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use std::ops::ControlFlow;
     use tribute_core::calling_convention::{
         cps_continuation_frame_layout_type, cps_continuation_frame_ref_type, cps_dispatch_type,
         cps_done_type,
     };
+    use trunk_ir::dialect::clif;
+    use trunk_ir::ops::DialectType;
+    use trunk_ir::walk::{WalkAction, walk_region};
 
     fn source_logical_cps_root_module() -> (IrContext, Module) {
         let mut ctx = IrContext::new();
@@ -1866,6 +1870,76 @@ mod tests {
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))
             .expect("attached db")
+    }
+
+    fn has_boxed_closure_call_pointer_witness(
+        ctx: &IrContext,
+        module: Module,
+        pointer_type: trunk_ir::TypeRef,
+    ) -> bool {
+        let body = module.body(ctx).expect("module must have a body");
+        let mut found = false;
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if clif::CallIndirect::matches(ctx, op) {
+                let signature = ctx
+                    .op(op)
+                    .attributes
+                    .get_type("sig")
+                    .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
+                let operands = ctx.op_operands(op);
+                if let (Some(signature), Some(&argument)) = (signature, operands.get(3))
+                    && operands.len() == 4
+                    && signature.inputs(ctx).len() == 3
+                    && signature.inputs(ctx)[2] == pointer_type
+                    && ctx.value_ty(argument) == pointer_type
+                    && matches!(
+                        ctx.value_def(argument),
+                        trunk_ir::refs::ValueDef::OpResult(producer, _)
+                            if clif::Iadd::matches(ctx, producer)
+                    )
+                {
+                    found = true;
+                }
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        found
+    }
+
+    #[salsa_test]
+    fn native_preparation_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+        let source = source_from_str(
+            "closure_exec_simple.trb",
+            r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn main() {
+    let f = fn(x) { x + 1 }
+    __tribute_print_nat(f(41))
+}
+"#,
+        );
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        validate_and_report_arity(db, &ctx, module);
+        run_native_target_pipeline(&mut ctx, module).expect("native target lowering must succeed");
+        prepare_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+            None,
+        )
+        .expect("native preparation must succeed");
+
+        trunk_ir_cranelift_backend::validate_clif_ir(&ctx, module)
+            .expect("prepared native IR must satisfy exact callable slot contracts");
+        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        assert!(
+            has_boxed_closure_call_pointer_witness(&ctx, module, pointer_type),
+            "closure execution fixture must pass a core.ptr boxed value to its indirect call"
+        );
     }
 
     #[cfg(unix)]

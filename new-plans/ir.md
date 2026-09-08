@@ -902,6 +902,31 @@ Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
 
+### `clif.func_sig` 네이티브 호출 계약
+
+`clif.func_sig`는 네이티브가 소유하는 함수 호출 계약이다. 입력 우선의 평탄한
+`[inputs..., results...]` 벡터와 필수 `u32` 속성 `num_inputs`·`num_results`를
+사용하고 결과는 0개 이상을 허용한다. 두 개수의 합은 벡터 길이와 같아야 하며,
+두 속성과 예약되지 않은 타입 속성은 모두 타입 동일성에 참여한다. count는 저장
+경계일 뿐 ABI 또는 calling convention의 증거가 아니다. parser, printer, alias는
+예약되지 않은 속성을 보존하며, 호출 계약 내부의 재귀 타입 변환도 중첩 메타데이터를
+그 소유 타입에 보존한다.
+
+네이티브 함수와 선언, 직접·간접 호출, 반환, proper tail transfer 및 Cranelift 코드
+생성은 이 타입을 사용한다. 간접 호출의 `sig`는 정확한 `clif.func_sig`이어야 하며,
+타입이 지워진 함수 포인터, 심볼, ABI 문자열 또는 저장 형태에서 재구성하지 않는다.
+결과가 비었다는 사실만으로 CPS를 판정하지 않는다. 논리 Unit `[core.nil]`, 논리
+CPS `[core.never]`, 물리 CPS `[]`의 구분은
+[공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
+
+네이티브 최종 호출 계약의 각 operand와 result slot은 `clif.func_sig`의 같은 순서
+slot과 정확히 같은 TrunkIR type이어야 한다. semantic reference SSA 값은 native
+lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 낮춘 뒤에만
+`core.ptr` slot을 채울 수 있다. 검증과 emission은 dialect 이름, type attribute, ABI
+문자열, symbol, erased representation에서 pointer 동치를 추론하지 않는다. 이 규칙은
+`core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
+호환성 규칙을 만들지 않는다.
+
 ## Open Questions
 
 - Final closure environment representation for each backend.

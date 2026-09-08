@@ -514,7 +514,7 @@ struct NativeTypeRefsCopy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::dialect::{clif, func};
+    use trunk_ir::dialect::clif;
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -563,10 +563,10 @@ mod tests {
 
         assert_eq!(ctx.op(declaration.op_ref()).regions.len(), 0);
         let declaration_type =
-            func::FuncSig::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
+            clif::FuncSig::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
         assert_eq!(declaration_type.inputs(&ctx), [refs.core_ptr]);
         assert_eq!(declaration_type.single_result(&ctx), Some(refs.core_ptr));
-        let definition_type = func::FuncSig::from_type_ref(&ctx, definition.r#type(&ctx)).unwrap();
+        let definition_type = clif::FuncSig::from_type_ref(&ctx, definition.r#type(&ctx)).unwrap();
         assert_eq!(definition_type.inputs(&ctx), [refs.core_ptr]);
         assert_eq!(definition_type.single_result(&ctx), Some(refs.core_ptr));
 

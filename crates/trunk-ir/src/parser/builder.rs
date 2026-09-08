@@ -136,6 +136,9 @@ impl<'a> ArenaIrBuilder<'a> {
         if dialect == "wasm" && name == "func_sig" {
             return self.build_wasm_function_type(inputs, results, attrs);
         }
+        if dialect == "clif" && name == "func_sig" {
+            return self.build_clif_function_type(inputs, results, attrs);
+        }
         self.build_foreign_function_type(dialect, name, inputs, results, attrs)
     }
 
@@ -170,6 +173,42 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<AttributeMap, ParseError>>()?;
         Ok(
             crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
+                .as_type_ref(),
+        )
+    }
+
+    /// Build the native target signature through its owning validated API.
+    fn build_clif_function_type(
+        &mut self,
+        inputs: &[RawType<'_>],
+        results: &[RawType<'_>],
+        attrs: &[(&str, RawAttribute<'_>)],
+    ) -> Result<TypeRef, ParseError> {
+        if let Some((name, _)) = attrs.iter().find(|(name, _)| {
+            matches!(
+                *name,
+                crate::dialect::clif::NUM_INPUTS_ATTR | crate::dialect::clif::NUM_RESULTS_ATTR
+            )
+        }) {
+            return Err(ParseError {
+                message: format!("`{name}` is reserved by clif.func_sig"),
+                offset: 0,
+            });
+        }
+        let inputs = inputs
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let results = results
+            .iter()
+            .map(|ty| self.build_type(ty))
+            .collect::<Result<Vec<_>, _>>()?;
+        let attrs = attrs
+            .iter()
+            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
+            .collect::<Result<AttributeMap, ParseError>>()?;
+        Ok(
+            crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
         )
     }
@@ -573,10 +612,14 @@ impl<'a> ArenaIrBuilder<'a> {
                 .map(|(_, raw_ty)| self.build_type(raw_ty))
                 .collect::<Result<_, _>>()?;
 
-            let func_ty = if raw.dialect == "wasm" && raw.op_name == "func" {
-                crate::dialect::wasm::func_sig(self.ctx, param_types, results).as_type_ref()
-            } else {
-                crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref()
+            let func_ty = match (raw.dialect, raw.op_name) {
+                ("wasm", "func") => {
+                    crate::dialect::wasm::func_sig(self.ctx, param_types, results).as_type_ref()
+                }
+                ("clif", "func") => {
+                    crate::dialect::clif::func_sig(self.ctx, param_types, results).as_type_ref()
+                }
+                _ => crate::dialect::func::func_sig(self.ctx, param_types, results).as_type_ref(),
             };
             if attributes.contains_key("type") && attributes.get_type("type").is_none() {
                 return Err(ParseError {
@@ -591,6 +634,15 @@ impl<'a> ArenaIrBuilder<'a> {
                             .is_some_and(|signature| {
                                 let synthesized =
                                     crate::dialect::wasm::FuncSig::from_type_ref(self.ctx, func_ty)
+                                        .unwrap();
+                                signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
+                                    && signature.results(self.ctx) == synthesized.results(self.ctx)
+                            })
+                    } else if raw.dialect == "clif" && raw.op_name == "func" {
+                        crate::dialect::clif::FuncSig::from_type_ref(self.ctx, explicit)
+                            .is_some_and(|signature| {
+                                let synthesized =
+                                    crate::dialect::clif::FuncSig::from_type_ref(self.ctx, func_ty)
                                         .unwrap();
                                 signature.inputs(self.ctx) == synthesized.inputs(self.ctx)
                                     && signature.results(self.ctx) == synthesized.results(self.ctx)
@@ -761,7 +813,7 @@ pub fn parse_test_module(ctx: &mut IrContext, input: &str) -> Module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{arith, core, func};
+    use crate::dialect::{arith, clif, core, func};
     use crate::ops::{DialectOp, DialectType};
     use crate::printer::print_module;
     use crate::validation;
@@ -1439,6 +1491,39 @@ core.module @test {
         assert!(
             print_module(&ctx, module).contains("type = func.func_sig<() -> core.nil>"),
             "the parser must not apply an implicit target conversion"
+        );
+    }
+
+    #[test]
+    fn clif_syntax_uses_the_target_owned_signature() {
+        let input = r#"core.module @test {
+  !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64)> {tag = @native}
+  clif.func @id(%value: core.i32) -> core.i32 {
+    clif.return %value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("native assembly should parse");
+        let contract = ctx.type_alias_by_name(Symbol::new("contract")).unwrap();
+        assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
+        assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
+        let function = ctx
+            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .ops[0];
+        let signature = ctx.op(function).attributes.get_type("type").unwrap();
+        assert!(clif::FuncSig::from_type_ref(&ctx, signature).is_some());
+        assert!(func::FuncSig::from_type_ref(&ctx, signature).is_none());
+        assert_roundtrip(&ctx, module);
+
+        let mut rejected = IrContext::new();
+        let error = parse_module(
+            &mut rejected,
+            "core.module @test { !bad = clif.func_sig<() -> ()> {num_inputs = 0} }",
+        )
+        .expect_err("target count delimiters are constructor-owned");
+        assert!(
+            error.message.contains("reserved by clif.func_sig"),
+            "{error}"
         );
     }
 

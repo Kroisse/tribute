@@ -55,10 +55,10 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<LoweringResult, ConversionError> {
-    // Phase 1: Adapt closure structs for native backend
+    // Phase 1: Adapt closure structs for native backend. This identity rewrite
+    // must see the semantic layout recorded by the typed ownership plan.
     let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
 
-    // Phase 2: Lower func dialect to clif dialect
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(FuncFuncPattern)
@@ -74,6 +74,139 @@ pub fn lower(
     Ok(LoweringResult {
         rtti_layout_rewrites,
     })
+}
+
+fn convert_attribute_to_clif(
+    ctx: &mut IrContext,
+    attribute: &Attribute,
+    converter: &TypeConverter,
+) -> Option<Attribute> {
+    match attribute {
+        Attribute::Type(ty) => Some(Attribute::Type(convert_type_to_clif(ctx, *ty, converter)?)),
+        Attribute::List(values) => Some(Attribute::List(
+            values
+                .iter()
+                .map(|value| convert_attribute_to_clif(ctx, value, converter))
+                .collect::<Option<_>>()?,
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+fn convert_nested_callable_type(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    if func::FuncSig::from_type_ref(ctx, ty).is_some() {
+        return convert_type_to_clif(ctx, ty, converter);
+    }
+    let data = ctx.types.get(ty).clone();
+    let params = data
+        .params
+        .iter()
+        .map(|parameter| convert_nested_callable_type(ctx, *parameter, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = data
+        .attrs
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                convert_nested_callable_attribute(ctx, value, converter)?,
+            ))
+        })
+        .collect::<Option<_>>()?;
+    if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
+        return Some(ty);
+    }
+    let mut converted_data = data;
+    converted_data.params = params.into();
+    converted_data.attrs = attrs;
+    Some(ctx.types.intern(converted_data))
+}
+
+fn convert_nested_callable_attribute(
+    ctx: &mut IrContext,
+    attribute: &Attribute,
+    converter: &TypeConverter,
+) -> Option<Attribute> {
+    match attribute {
+        Attribute::Type(ty) => Some(Attribute::Type(convert_nested_callable_type(
+            ctx, *ty, converter,
+        )?)),
+        Attribute::List(values) => Some(Attribute::List(
+            values
+                .iter()
+                .map(|value| convert_nested_callable_attribute(ctx, value, converter))
+                .collect::<Option<_>>()?,
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+fn convert_type_to_clif(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    if let Some(shared) = func::FuncSig::from_type_ref(ctx, ty) {
+        let inputs = shared.inputs(ctx).to_vec();
+        let results = shared.results(ctx).to_vec();
+        let type_attrs = shared
+            .non_reserved_attrs(ctx)
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>();
+        let attrs = type_attrs
+            .into_iter()
+            .map(|(key, value)| Some((key, convert_attribute_to_clif(ctx, &value, converter)?)))
+            .collect::<Option<_>>()?;
+        let inputs = inputs
+            .into_iter()
+            .map(|ty| convert_type_to_clif(ctx, ty, converter))
+            .collect::<Option<Vec<_>>>()?;
+        let results = results
+            .into_iter()
+            .map(|ty| convert_type_to_clif(ctx, ty, converter))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(clif::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref());
+    }
+    let converted = converter.convert_type_or_identity(ctx, ty);
+    if converted != ty {
+        return convert_type_to_clif(ctx, converted, converter);
+    }
+    let data = ctx.types.get(ty).clone();
+    let params = data
+        .params
+        .iter()
+        .map(|parameter| convert_nested_callable_type(ctx, *parameter, converter))
+        .collect::<Option<Vec<_>>>()?;
+    let attrs = data
+        .attrs
+        .iter()
+        .map(|(key, value)| {
+            Some((
+                *key,
+                convert_nested_callable_attribute(ctx, value, converter)?,
+            ))
+        })
+        .collect::<Option<_>>()?;
+    if params.as_slice() == data.params.as_slice() && attrs == data.attrs {
+        return Some(ty);
+    }
+    let mut converted_data = data;
+    converted_data.params = params.into();
+    converted_data.attrs = attrs;
+    Some(ctx.types.intern(converted_data))
+}
+
+fn convert_to_clif_func_type(
+    ctx: &mut IrContext,
+    signature: TypeRef,
+    converter: &TypeConverter,
+) -> Option<TypeRef> {
+    func::FuncSig::from_type_ref(ctx, signature)?;
+    convert_type_to_clif(ctx, signature, converter)
 }
 
 fn func_to_clif_target() -> ConversionTarget {
@@ -182,7 +315,7 @@ impl RewritePattern for FuncFuncPattern {
         let Some(func_ty) = func_type_attr else {
             return false;
         };
-        let Some(new_func_ty) = trunk_ir::rewrite::convert_function_type(ctx, func_ty, tc) else {
+        let Some(new_func_ty) = convert_to_clif_func_type(ctx, func_ty, tc) else {
             return false;
         };
         new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
@@ -248,45 +381,33 @@ impl RewritePattern for FuncCallIndirectPattern {
         };
 
         let result_types = rewriter.result_types(ctx, op);
-        let sig_ty = if let Some(signature) = call.exact_signature(ctx) {
-            let Some(signature) =
-                trunk_ir::rewrite::convert_function_type(ctx, signature, rewriter.type_converter())
-            else {
-                return false;
-            };
-            let Some(callable) = func::FuncSig::from_type_ref(ctx, signature) else {
-                return false;
-            };
-            let Some(callable_result) = callable.single_result(ctx) else {
-                return false;
-            };
-            let results_match = if crate::function::is_nil_type(ctx, callable_result) {
-                result_types.is_empty()
-            } else {
-                result_types == [callable_result]
-            };
-            if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
-                || callable
-                    .inputs(ctx)
-                    .iter()
-                    .zip(CallLike::call_args(&call, ctx))
-                    .any(|(&param, &arg)| param != ctx.value_ty(arg))
-                || !results_match
-            {
-                return false;
-            }
-            signature
-        } else {
-            let param_types: Vec<TypeRef> = CallLike::call_args(&call, ctx)
-                .iter()
-                .map(|&value| ctx.value_ty(value))
-                .collect();
-            let result = result_types
-                .first()
-                .copied()
-                .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-            func::func_sig(ctx, param_types, [result]).as_type_ref()
+        let Some(signature) = call.exact_signature(ctx) else {
+            return false;
         };
+        let Some(sig_ty) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
+        else {
+            return false;
+        };
+        let Some(callable) = clif::FuncSig::from_type_ref(ctx, sig_ty) else {
+            return false;
+        };
+        let runtime_result_types = callable
+            .results(ctx)
+            .iter()
+            .copied()
+            .filter(|ty| !crate::function::is_nil_type(ctx, *ty))
+            .collect::<Vec<_>>();
+        if callable.inputs(ctx).len() != CallLike::call_args(&call, ctx).len()
+            || callable
+                .inputs(ctx)
+                .iter()
+                .zip(CallLike::call_args(&call, ctx))
+                .any(|(&param, &arg)| param != ctx.value_ty(arg))
+            || (result_types.as_slice() != callable.results(ctx)
+                && result_types != runtime_result_types)
+        {
+            return false;
+        }
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
@@ -388,12 +509,11 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
-        let Some(signature) =
-            trunk_ir::rewrite::convert_function_type(ctx, signature, rewriter.type_converter())
+        let Some(signature) = convert_to_clif_func_type(ctx, signature, rewriter.type_converter())
         else {
             return false;
         };
-        let Some(callable) = func::FuncSig::from_type_ref(ctx, signature) else {
+        let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
             return false;
         };
         if callable.single_result(ctx) != Some(core::nil(ctx).as_type_ref())
@@ -537,13 +657,14 @@ impl RewritePattern for ClosureStructAdaptPattern {
 
 #[cfg(test)]
 mod tests {
-    use trunk_ir::Symbol;
     use trunk_ir::context::IrContext;
-    use trunk_ir::dialect::core;
+    use trunk_ir::dialect::{clif, core, func};
+    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::TypeConverter;
     use trunk_ir::types::TypeDataBuilder;
+    use trunk_ir::{Attribute, AttributeMap, Symbol};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
   func.func @direct_target(%value: core.i32) -> core.nil attributes {tribute.calling_convention = 2} {
@@ -640,13 +761,61 @@ mod tests {
     }
 
     #[test]
+    fn nested_callable_metadata_uses_the_native_owned_signature() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
+
+        let mut inner_attrs = AttributeMap::new();
+        inner_attrs.insert(
+            Symbol::new("tag"),
+            Attribute::Symbol(Symbol::new("preserved")),
+        );
+        inner_attrs.insert(
+            Symbol::new("nested"),
+            Attribute::List(vec![Attribute::Type(i32_ty)]),
+        );
+        let nested =
+            func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], inner_attrs).as_type_ref();
+        let mut attrs = AttributeMap::new();
+        attrs.insert(
+            Symbol::new("evidence"),
+            Attribute::List(vec![Attribute::Type(nested)]),
+        );
+        let source = func::func_sig_with_attrs(&mut ctx, [i32_ty], [i32_ty], attrs).as_type_ref();
+        let converted = super::convert_to_clif_func_type(&mut ctx, source, &type_converter)
+            .expect("target callable contract");
+        let signature = clif::FuncSig::from_type_ref(&ctx, converted).expect("clif.func_sig");
+        assert!(signature.inputs(&ctx) == [i64_ty] && signature.results(&ctx) == [i64_ty]);
+        let Some(Attribute::List(evidence)) = signature
+            .non_reserved_attrs(&ctx)
+            .find_map(|(key, value)| (*key == Symbol::new("evidence")).then_some(value))
+        else {
+            panic!("missing nested target contract");
+        };
+        let [Attribute::Type(nested)] = evidence.as_slice() else {
+            panic!("nested target contract must be a one-element type list");
+        };
+        let nested = clif::FuncSig::from_type_ref(&ctx, *nested).expect("nested clif.func_sig");
+        assert_eq!(nested.inputs(&ctx), [i64_ty]);
+        assert_eq!(nested.results(&ctx), [i64_ty]);
+        assert_eq!(nested.non_reserved_attrs(&ctx).count(), 2);
+    }
+
+    #[test]
     fn test_call_indirect_to_clif() {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = arith.const {value = 0} : core.i32
     %1 = arith.const {value = 42} : core.i32
-    %2 = func.call_indirect %0, %1 : core.i32
+    %2 = func.call_indirect %0, %1 {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
     func.return %2
   }
 }"#,
@@ -666,10 +835,109 @@ mod tests {
         );
 
         assert!(
-            result.contains("clif.call_indirect %0 {sig = func.func_sig<() -> core.nil>}"),
+            result.contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>}"),
             "{result}"
         );
         assert!(!result.contains("func.call_indirect"), "{result}");
+    }
+
+    #[test]
+    fn indirect_call_preserves_live_logical_nil_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee {signature = func.func_sig<() -> core.nil>} : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        super::lower(&mut ctx, module, TypeConverter::new()).expect("func-to-clif lowering");
+        crate::validate_clif_ir(&ctx, module).expect("logical nil call result is valid native IR");
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed
+                .contains("clif.call_indirect %0 {sig = clif.func_sig<() -> core.nil>} : core.nil"),
+            "{printed}"
+        );
+        assert!(printed.contains("clif.return %1"), "{printed}");
+        assert!(
+            !crate::emit_module_to_native(&ctx, module, &[])
+                .expect("native emitter projects nil to zero-width")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn indirect_call_without_exact_signature_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(error.to_string().contains("func.call_indirect"), "{error}");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("func.call_indirect"), "{printed}");
+        assert!(!printed.contains("clif.call_indirect"), "{printed}");
+    }
+
+    #[test]
+    fn indirect_call_does_not_equate_nil_contract_with_no_result() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr) -> core.nil {
+    %unit = func.call_indirect %callee {signature = func.func_sig<() -> ()>} : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(error.to_string().contains("func.call_indirect"), "{error}");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("func.call_indirect"), "{printed}");
+        assert!(!printed.contains("clif.call_indirect"), "{printed}");
+    }
+
+    #[test]
+    fn callable_value_is_erased_while_its_exact_contract_stays_target_owned() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @target() -> core.i32 {
+    %value = arith.const {value = 7} : core.i32
+    func.return %value
+  }
+  func.func @caller() -> core.i32 {
+    %callee = func.constant {func_ref = @target} : func.func_sig<() -> core.i32>
+    %value = func.call_indirect %callee {signature = func.func_sig<() -> core.i32>} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+        assert!(
+            result.contains("clif.symbol_addr {sym = @target} : core.ptr"),
+            "{result}"
+        );
+        assert!(
+            result.contains("clif.call_indirect %0 {sig = !t0} : core.i32"),
+            "{result}"
+        );
+        assert!(
+            result.contains("!t0 = clif.func_sig<() -> core.i32>"),
+            "{result}"
+        );
+        assert!(!result.contains("func.func_sig"), "{result}");
     }
 
     #[test]
@@ -702,11 +970,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = func.func_sig<(core.ptr) -> core.nil>"),
+                && printed.contains("sig = clif.func_sig<(core.ptr) -> core.nil>"),
             "{printed}"
         );
         assert!(
-            !printed.contains("sig = func.func_sig<(!evidence) -> core.nil>"),
+            !printed.contains("sig = clif.func_sig<(!evidence) -> core.nil>"),
             "{printed}"
         );
     }
@@ -742,7 +1010,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.call_indirect")
-                && printed.contains("sig = func.func_sig<(core.ptr) -> core.i32>"),
+                && printed.contains("sig = clif.func_sig<(core.ptr) -> core.i32>"),
             "{printed}"
         );
         assert!(
@@ -875,7 +1143,7 @@ mod tests {
     %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}
     %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
     %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.ptr
-    %5 = func.call_indirect %3, %4 : core.i32
+    %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
 }"#,
@@ -893,7 +1161,7 @@ mod tests {
     %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}
     %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
     %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : wasm.anyref
-    %5 = func.call_indirect %3, %4 : core.i32
+    %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
 }"#,

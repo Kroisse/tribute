@@ -81,6 +81,13 @@ Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타
 [IR 계약](ir.md#wasmfunc_sig-wasm-호출-계약), 바이너리 결과 표현은
 [Wasm 백엔드 계약](wasm-backend.md#wasm-결과-슬롯)에서 정의한다.
 
+네이티브 대상 변환 경계도 공통 callable과 그 호출 계약 내부의 중첩 타입 메타데이터를
+`clif.func_sig`로 변환한다. 입력·결과의 순서와 개수, 예약되지 않은 타입 속성을
+보존하며, 타입이 지워진 함수 포인터나 심볼 이름에서 callable contract를 다시
+구성하지 않는다. `clif.func_sig`의 저장 형식과 타입 동일성은
+[IR 계약](ir.md#cliffunc_sig-네이티브-호출-계약), nil의 machine 표현은
+[Cranelift 백엔드 계약](cranelift-backend.md#zero-width-corenil)을 따른다.
+
 ## 직접형 제어 소유권
 
 구조와 의미의 source of truth는
