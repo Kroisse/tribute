@@ -112,6 +112,24 @@ and successors are explicit values: a point is either `Parent` or a concrete
 nested-region terminator, and a successor is either a concrete region or
 `Parent`.
 
+`CallableExit` is a separate dialect-registered operation interface for an
+operation that ends execution of the current callable and therefore cannot
+continue after its enclosing structured region. It is not a generic
+terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
+structured control flow and do not satisfy it. Dialects register only their
+verified callable exits, including ordinary `func.return`, proper tail
+transfers, and unreachable control flow. The typed model and its dynamic query
+are fallible. An unregistered operation, malformed registered operation, or
+query error is never evidence that a region is terminal.
+
+Structured-to-CFG lowering may use `CallableExit` only after preserving its
+own structural rules: the region must have one block, the exit must be that
+block's final operation, and a nested structured operation must expose every
+possible entry successor through `RegionBranch`. A `Parent` successor, a
+missing mapping, or an incomplete query leaves a reachable continuation and
+must retain the merge path. This does not imply arbitrary multi-block or loop
+CFG termination analysis.
+
 These interfaces are queried through TrunkIR's operation registry and remain
 object-safe. Their dyn-facing methods return named concrete small collections;
 they do not use RPITIT, GATs, caller-visible tuples, or dialect-specific

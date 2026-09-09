@@ -33,7 +33,7 @@ use smallvec::SmallVec;
 
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
-use crate::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
+use crate::op_interface::{CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
@@ -131,7 +131,7 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
 }
 
 /// Whether a one-block region has only terminal structured control or a
-/// proper-tail transfer, so lowering it cannot need a continuation block.
+/// registered callable exit, so lowering it cannot need a continuation block.
 fn is_terminal_region(ctx: &IrContext, region: RegionRef) -> bool {
     let [branch] = ctx.region(region).blocks.as_slice() else {
         return false;
@@ -146,7 +146,7 @@ fn is_terminal_region(ctx: &IrContext, region: RegionRef) -> bool {
             && has_only_terminal_region_successors(ctx, terminator)
     } else {
         !is_scf_control_flow(ctx, terminator)
-            && crate::validation::is_proper_tail_terminator(ctx, terminator)
+            && CallableExitOps::exits_callable(ctx, terminator).is_ok()
     }
 }
 
@@ -399,18 +399,8 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
 
 /// Whether a resultless switch is the final operation in its block and every
 /// selectable arm transfers control, leaving no continuation to merge into.
-fn is_terminal_resultless_switch(
-    ctx: &IrContext,
-    block: BlockRef,
-    scf_op: OpRef,
-    cases: &[(Attribute, RegionRef)],
-    default_region: Option<RegionRef>,
-) -> bool {
-    ctx.block(block).ops.last() == Some(&scf_op)
-        && default_region.is_some_and(|region| is_terminal_region(ctx, region))
-        && cases
-            .iter()
-            .all(|(_, region)| is_terminal_region(ctx, *region))
+fn is_terminal_resultless_switch(ctx: &IrContext, block: BlockRef, scf_op: OpRef) -> bool {
+    ctx.block(block).ops.last() == Some(&scf_op) && has_only_terminal_region_successors(ctx, scf_op)
 }
 
 /// Lower a terminal resultless switch without manufacturing an unreachable
@@ -468,7 +458,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         return;
     };
 
-    if is_terminal_resultless_switch(ctx, block, scf_op, &arms.cases, arms.default_region) {
+    if is_terminal_resultless_switch(ctx, block, scf_op) {
         lower_terminal_resultless_switch(
             ctx,
             block,
@@ -727,6 +717,34 @@ fn replace_continue_break(
 }
 
 #[cfg(test)]
+#[trunk_ir::dialect]
+mod test_exit_dialect {
+    fn exit() {}
+    fn malformed_exit() {}
+}
+
+#[cfg(test)]
+impl crate::op_interface::CallableExitModel for Exit {}
+
+#[cfg(test)]
+impl crate::op_interface::CallableExitModel for MalformedExit {
+    fn verify_callable_exit(
+        &self,
+        _ctx: &crate::IrContext,
+    ) -> Result<(), crate::op_interface::ControlFlowInterfaceError> {
+        Err(crate::op_interface::ControlFlowInterfaceError::new(
+            "test CallableExit query failed",
+        ))
+    }
+}
+
+#[cfg(test)]
+inventory::submit! { crate::op_interface::CallableExitOps::register::<Exit>() }
+
+#[cfg(test)]
+inventory::submit! { crate::op_interface::CallableExitOps::register::<MalformedExit>() }
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::dialect::{arith, core, func, scf};
@@ -785,6 +803,22 @@ mod tests {
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).unwrap()
+    }
+
+    fn first_switch_and_arm_region(ctx: &IrContext, module: Module) -> (OpRef, RegionRef) {
+        let function = func::Func::from_op(ctx, module.ops(ctx)[0]).expect("function");
+        let body = function.body(ctx);
+        let entry = ctx.region(body).blocks[0];
+        let switch = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .copied()
+            .find(|&op| scf::Switch::matches(ctx, op))
+            .expect("switch");
+        let switch_body = ctx.op(switch).regions[0];
+        let arm = ctx.block(ctx.region(switch_body).blocks[0]).ops[0];
+        (switch, ctx.op(arm).regions[0])
     }
 
     /// Collect all op names from a region (dialect.name format).
@@ -1267,6 +1301,265 @@ mod tests {
         assert!(use_chains.is_ok(), "{use_chains}");
         let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_with_ordinary_return_preserves_operands() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %first: core.i32, %second: core.i32) -> core.i32 {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        func.return %first
+      }
+      scf.default {
+        func.return %second
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let returns: Vec<_> = ctx
+            .region(function.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .filter(|&op| func::Return::matches(&ctx, op))
+            .map(|op| ctx.op_operands(op).to_vec())
+            .collect();
+        assert_eq!(returns, vec![vec![args[1]], vec![args[2]]]);
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
+        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn lower_nested_terminal_scf_switch_with_ordinary_returns_has_no_merge_blocks() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        scf.switch %nested_choice {
+          scf.case {value = 0} {
+            func.return %first
+          }
+          scf.default {
+            func.return %second
+          }
+        }
+      }
+      scf.default {
+        func.return %third
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let returns: Vec<_> = ctx
+            .region(function.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .filter(|&op| func::Return::matches(&ctx, op))
+            .map(|op| ctx.op_operands(op).to_vec())
+            .collect();
+        assert_eq!(returns, vec![vec![args[2]], vec![args[3]], vec![args[4]]]);
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 5);
+        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn lower_terminal_scf_switch_with_zero_operand_return_has_no_merge_block() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        func.return
+      }
+      scf.default {
+        func.unreachable
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let returns: Vec<_> = ctx
+            .region(function.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .filter(|&op| func::Return::matches(&ctx, op))
+            .collect();
+        assert_eq!(returns.len(), 1);
+        assert!(ctx.op_operands(returns[0]).is_empty());
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
+        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn callable_exit_interface_drives_terminal_switch_lowering() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        test_exit_dialect.exit
+      }
+      scf.default {
+        func.unreachable
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
+        assert!(
+            !collect_op_names(&ctx, function.body(&ctx))
+                .iter()
+                .any(|name| name.starts_with("scf."))
+        );
+        assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+    }
+
+    #[test]
+    fn terminal_detection_fails_closed_for_non_exit_and_incomplete_paths() {
+        for (input, arm_must_be_nonterminal) in [
+            (
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} { scf.yield }
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                true,
+            ),
+            (
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} { func.unreachable }
+    }
+  }
+}"#,
+                false,
+            ),
+            (
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        func.return
+        arith.const {value = 0} : core.nil
+      }
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                true,
+            ),
+            (
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        ^first:
+          cf.br [^second]
+        ^second:
+          func.unreachable
+      }
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                true,
+            ),
+            (
+                r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} { test_exit_dialect.malformed_exit }
+      scf.default { func.unreachable }
+    }
+  }
+}"#,
+                true,
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = crate::parser::parse_test_module(&mut ctx, input);
+            let (switch, arm) = first_switch_and_arm_region(&ctx, module);
+            assert_eq!(
+                is_terminal_region(&ctx, arm),
+                !arm_must_be_nonterminal,
+                "unexpected arm termination proof: {input}"
+            );
+            let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+            let entry = ctx.region(function.body(&ctx)).blocks[0];
+            assert!(
+                !is_terminal_resultless_switch(&ctx, entry, switch),
+                "switch must retain a continuation: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn callable_exit_query_rejects_unregistered_and_malformed_operations() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%choice: core.i32) -> core.nil {
+    scf.switch %choice {
+      scf.case {value = 0} { arith.const {value = 0} : core.nil }
+      scf.default { test_exit_dialect.malformed_exit }
+    }
+  }
+}"#,
+        );
+        let (switch, arm) = first_switch_and_arm_region(&ctx, module);
+        let unregistered = ctx.block(ctx.region(arm).blocks[0]).ops[0];
+        let switch_body = ctx.op(switch).regions[0];
+        let malformed_wrapper = ctx.block(ctx.region(switch_body).blocks[0]).ops[1];
+        let malformed_region = ctx.op(malformed_wrapper).regions[0];
+        let malformed = ctx.block(ctx.region(malformed_region).blocks[0]).ops[0];
+        let malformed_func_exit_data = OperationDataBuilder::new(
+            ctx.op(unregistered).location,
+            Symbol::new("func"),
+            Symbol::new("unreachable"),
+        )
+        .result(ctx.value_ty(ctx.op_results(unregistered)[0]))
+        .build(&mut ctx);
+        let malformed_func_exit = ctx.create_op(malformed_func_exit_data);
+
+        assert!(crate::op_interface::CallableExitOps::exits_callable(&ctx, unregistered).is_err());
+        assert!(crate::op_interface::CallableExitOps::exits_callable(&ctx, malformed).is_err());
+        assert!(
+            crate::op_interface::CallableExitOps::exits_callable(&ctx, malformed_func_exit)
+                .is_err()
+        );
     }
 
     #[test]

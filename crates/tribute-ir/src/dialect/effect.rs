@@ -48,6 +48,28 @@ mod effect {
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
 
+impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
+    fn verify_callable_exit(
+        &self,
+        ctx: &trunk_ir::IrContext,
+    ) -> Result<(), trunk_ir::op_interface::ControlFlowInterfaceError> {
+        let data = ctx.op(self.op_ref());
+        if ctx.op_operands(self.op_ref()).len() == 4
+            && data.attributes.get_type("ability_ref").is_some()
+            && data.attributes.get_symbol("op_name").is_some()
+            && data.attributes.get_type("answer_type").is_some()
+        {
+            Ok(())
+        } else {
+            Err(trunk_ir::op_interface::ControlFlowInterfaceError::new(
+                "effect.dispatch_cps CallableExit has an invalid final CPS shape",
+            ))
+        }
+    }
+}
+
+inventory::submit! { trunk_ir::op_interface::CallableExitOps::register::<DispatchCps>() }
+
 #[cfg(test)]
 mod tests {
     use trunk_ir::ops::DialectOp;
