@@ -1,6 +1,9 @@
 //! Arena-based func dialect.
 
-use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::op_interface::{
+    CallableExitModel, CallableExitOps, ControlFlowInterfaceError, IndirectCallLikeModel,
+    IndirectCallLikeOps,
+};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
@@ -344,6 +347,83 @@ impl IndirectCallLikeModel for TailCallIndirect {
 }
 
 impl TailCallLike for TailCallIndirect {}
+
+fn resultless_callable_exit(
+    ctx: &crate::IrContext,
+    op: crate::OpRef,
+) -> Result<(), ControlFlowInterfaceError> {
+    if !ctx.op_results(op).is_empty() {
+        Err(ControlFlowInterfaceError::new(
+            "CallableExit must not produce SSA results",
+        ))
+    } else if !ctx.op(op).regions.is_empty() || !ctx.op(op).successors.is_empty() {
+        Err(ControlFlowInterfaceError::new(
+            "CallableExit must not contain nested regions or block successors",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+impl CallableExitModel for Return {
+    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())
+    }
+}
+
+impl CallableExitModel for TailCall {
+    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())?;
+        if ctx
+            .op(self.op_ref())
+            .attributes
+            .get_symbol("callee")
+            .is_some()
+        {
+            Ok(())
+        } else {
+            Err(ControlFlowInterfaceError::new(
+                "func.tail_call CallableExit requires a callee symbol",
+            ))
+        }
+    }
+}
+
+impl CallableExitModel for TailCallIndirect {
+    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())?;
+        if ctx.op_operands(self.op_ref()).is_empty() {
+            return Err(ControlFlowInterfaceError::new(
+                "func.tail_call_indirect CallableExit requires a callee operand",
+            ));
+        }
+        match ctx.op(self.op_ref()).attributes.get_type("signature") {
+            None => Ok(()),
+            Some(signature) if FuncSig::from_type_ref(ctx, signature).is_some() => Ok(()),
+            Some(_) => Err(ControlFlowInterfaceError::new(
+                "func.tail_call_indirect CallableExit has an invalid exact signature",
+            )),
+        }
+    }
+}
+
+impl CallableExitModel for Unreachable {
+    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())?;
+        if ctx.op_operands(self.op_ref()).is_empty() {
+            Ok(())
+        } else {
+            Err(ControlFlowInterfaceError::new(
+                "func.unreachable CallableExit must not have operands",
+            ))
+        }
+    }
+}
+
+inventory::submit! { CallableExitOps::register::<Return>() }
+inventory::submit! { CallableExitOps::register::<TailCall>() }
+inventory::submit! { CallableExitOps::register::<TailCallIndirect>() }
+inventory::submit! { CallableExitOps::register::<Unreachable>() }
 
 inventory::submit! {
     IndirectCallLikeOps::register::<CallIndirect>()

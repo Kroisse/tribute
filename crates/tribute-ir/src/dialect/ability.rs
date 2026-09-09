@@ -249,6 +249,64 @@ fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
 
 // === Pure operation registrations ===
 
+use trunk_ir::op_interface::{CallableExitModel, CallableExitOps, ControlFlowInterfaceError};
+
+fn resultless_callable_exit(
+    ctx: &trunk_ir::IrContext,
+    op: trunk_ir::OpRef,
+) -> Result<(), ControlFlowInterfaceError> {
+    if !ctx.op_results(op).is_empty() {
+        Err(ControlFlowInterfaceError::new(
+            "CallableExit must not produce SSA results",
+        ))
+    } else if !ctx.op(op).successors.is_empty() {
+        Err(ControlFlowInterfaceError::new(
+            "CallableExit must not have block successors",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+impl CallableExitModel for Perform {
+    fn exits_callable(self, ctx: &trunk_ir::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())?;
+        let data = ctx.op(self.op_ref());
+        if data.regions.is_empty()
+            && ctx.op_operands(self.op_ref()).len() >= 3
+            && data.attributes.get_type("ability_ref").is_some()
+            && data.attributes.get_symbol("op_name").is_some()
+        {
+            Ok(())
+        } else {
+            Err(ControlFlowInterfaceError::new(
+                "ability.perform CallableExit has an invalid final CPS shape",
+            ))
+        }
+    }
+}
+
+impl CallableExitModel for HandleDispatch {
+    fn exits_callable(self, ctx: &trunk_ir::IrContext) -> Result<(), ControlFlowInterfaceError> {
+        resultless_callable_exit(ctx, self.op_ref())?;
+        let data = ctx.op(self.op_ref());
+        if data.regions.len() == 1
+            && ctx.region(data.regions[0]).blocks.len() == 1
+            && ctx.op_operands(self.op_ref()).len() >= 2
+            && data.attributes.contains_key("ability_refs")
+        {
+            Ok(())
+        } else {
+            Err(ControlFlowInterfaceError::new(
+                "ability.handle_dispatch CallableExit has an invalid final delimiter shape",
+            ))
+        }
+    }
+}
+
+inventory::submit! { CallableExitOps::register::<Perform>() }
+inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
+
 inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_lookup") }
 inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_extend") }
 

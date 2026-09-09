@@ -456,6 +456,104 @@ impl CallableOwnerOps {
     }
 }
 
+/// Object-safe semantic query for operations that leave the current callable.
+///
+/// Callable exits are distinct from generic structured-region terminators:
+/// a yield, break, or continue can transfer control to an enclosing structured
+/// operation, while a callable exit cannot execute a following operation in
+/// that callable.
+pub trait CallableExit: Sync {
+    fn exits_callable(&self, ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError>;
+}
+
+/// Typed callable-exit semantics supplied by a generated dialect operation
+/// wrapper. Implementations must reject malformed operations rather than
+/// treating registration alone as proof of termination.
+pub trait CallableExitModel: DialectOp {
+    fn exits_callable(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError>;
+}
+
+fn callable_exit_model<T: CallableExitModel>(
+    ctx: &IrContext,
+    op: OpRef,
+) -> Result<(), ControlFlowInterfaceError> {
+    let model = T::from_op(ctx, op).map_err(|error| {
+        ControlFlowInterfaceError::new(format!(
+            "malformed {}.{}: {error:?}",
+            T::DIALECT_NAME,
+            T::OP_NAME
+        ))
+    })?;
+    model.exits_callable(ctx)
+}
+
+/// Registry entry for [`CallableExit`].
+pub struct CallableExitRegistration {
+    dialect: &'static str,
+    op_name: &'static str,
+    exits_callable: fn(&IrContext, OpRef) -> Result<(), ControlFlowInterfaceError>,
+}
+
+impl CallableExit for CallableExitRegistration {
+    fn exits_callable(&self, ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
+        (self.exits_callable)(ctx, op)
+    }
+}
+
+inventory::collect!(CallableExitRegistration);
+
+static CALLABLE_EXIT_REGISTRY: LazyLock<
+    HashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
+> = LazyLock::new(|| {
+    let mut registry = HashMap::new();
+    for registration in inventory::iter::<CallableExitRegistration> {
+        let key = (
+            Symbol::from_dynamic(registration.dialect),
+            Symbol::from_dynamic(registration.op_name),
+        );
+        assert!(
+            registry.insert(key, registration).is_none(),
+            "duplicate CallableExit registration for '{}.{}'",
+            registration.dialect,
+            registration.op_name,
+        );
+    }
+    registry
+});
+
+/// Dynamic query and registration entry point for [`CallableExit`].
+pub struct CallableExitOps;
+
+impl CallableExitOps {
+    #[doc(hidden)]
+    pub const fn register<T: CallableExitModel>() -> CallableExitRegistration {
+        CallableExitRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            exits_callable: callable_exit_model::<T>,
+        }
+    }
+
+    pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn CallableExit> {
+        let data = ctx.op(op);
+        CALLABLE_EXIT_REGISTRY
+            .get(&(data.dialect, data.name))
+            .map(|registration| *registration as &dyn CallableExit)
+    }
+
+    /// Prove that an operation leaves the current callable.
+    ///
+    /// A missing registration and a failed typed query are both errors so
+    /// generic consumers remain conservative.
+    pub fn exits_callable(ctx: &IrContext, op: OpRef) -> Result<(), ControlFlowInterfaceError> {
+        Self::get(ctx, op)
+            .ok_or_else(|| {
+                ControlFlowInterfaceError::new("operation has no CallableExit registration")
+            })?
+            .exits_callable(ctx, op)
+    }
+}
+
 /// Object-safe semantic accessors for indirect calls.
 ///
 /// An exact signature is optional on otherwise valid ordinary indirect
