@@ -10,7 +10,7 @@ use std::fmt;
 
 use tribute_core::calling_convention::{
     cps_closure_function_type, cps_completion_type, cps_continuation_frame_layout_type,
-    cps_continuation_frame_ref_type, cps_done_type, cps_resume_exact_type,
+    cps_continuation_frame_ref_type, cps_done_type, cps_resume_exact_type, cps_resume_type,
     physical_closure_function_type, physical_closure_type_with_environment_index,
 };
 use tribute_core::{
@@ -2750,18 +2750,17 @@ impl<'a> Converter<'a> {
 
     fn build_reject_continuation(
         &mut self,
-        input_type: TypeRef,
         answer_type: TypeRef,
         location: Location,
     ) -> (OpRef, ValueRef) {
-        let input_type = self.convert_type(input_type);
         let evidence_type = self.evidence_type();
         let frame_type = self.frame_types(answer_type).reference;
-        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
+        let anyref = self.anyref_type();
+        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
         let unreachable = func::unreachable(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
-        let closure_type = self.resumption_type(input_type, answer_type);
+        let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
         let lambda = closure::lambda(
             self.ctx,
             location,
@@ -2794,8 +2793,7 @@ impl<'a> Converter<'a> {
         let old_result = self.ctx.op_result(source, 0);
         let input_type = self.ctx.op_result_types(source)[0];
         let continuation = if type_is(self.ctx, input_type, "core", "never") {
-            let (op, value) =
-                self.build_reject_continuation(input_type, flow.answer_type, location);
+            let (op, value) = self.build_reject_continuation(flow.answer_type, location);
             self.ctx.push_op(block, op);
             value
         } else {
@@ -5813,8 +5811,81 @@ mod tests {
             never_type,
         )];
         tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        let mut perform = None;
+        fn find_perform(ctx: &IrContext, op: OpRef, found: &mut Option<ability::Perform>) {
+            if let Ok(candidate) = ability::Perform::from_op(ctx, op) {
+                assert!(
+                    found.replace(candidate).is_none(),
+                    "expected one ability.perform"
+                );
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        find_perform(ctx, child, found);
+                    }
+                }
+            }
+        }
+        find_perform(&ctx, module.op(), &mut perform);
+        let perform = perform.expect("op -> Never emits ability.perform");
+        let resume = perform.resume(&ctx);
+        let dispatch = perform.dispatch(&ctx);
+        let dispatch_signature = cps_closure_function_type(&ctx, ctx.value_ty(dispatch))
+            .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
+            .expect("ability.perform dispatch has a CPS callable signature");
+        assert_eq!(
+            dispatch_signature.inputs(&ctx).get(1),
+            Some(&ctx.value_ty(resume)),
+            "reject continuation must have the exact resume type required by dispatch"
+        );
+        let resume_signature = cps_closure_function_type(&ctx, ctx.value_ty(resume))
+            .and_then(|ty| func::FuncSig::from_type_ref(&ctx, ty))
+            .expect("reject continuation has a CPS callable signature");
+        assert!(
+            type_is(
+                &ctx,
+                resume_signature.inputs(&ctx)[2],
+                "tribute_rt",
+                "anyref"
+            ),
+            "reject continuation must accept the canonical erased resume input"
+        );
+        let trunk_ir::ValueDef::OpResult(reject, _) = ctx.value_def(resume) else {
+            panic!("reject continuation must be a closure.lambda");
+        };
+        assert!(closure::Lambda::matches(&ctx, reject));
+        assert!(ctx.op_operands(reject).is_empty());
+        let body = ctx.op(reject).regions[0];
+        let body = ctx.region(body).blocks[0];
+        assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
+        crate::lower_ability_perform::lower_ability_perform(&mut ctx, module);
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("ability.perform"));
+        assert!(!printed.contains("ability.perform"), "{printed}");
+        assert!(printed.contains("effect.dispatch_cps"), "{printed}");
+        let mut dispatch_cps = None;
+        fn find_dispatch_cps(ctx: &IrContext, op: OpRef, found: &mut Option<OpRef>) {
+            if effect::DispatchCps::matches(ctx, op) {
+                assert!(
+                    found.replace(op).is_none(),
+                    "expected one effect.dispatch_cps"
+                );
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        find_dispatch_cps(ctx, child, found);
+                    }
+                }
+            }
+        }
+        find_dispatch_cps(&ctx, module.op(), &mut dispatch_cps);
+        let dispatch_cps = dispatch_cps.expect("ability.perform lowers to effect.dispatch_cps");
+        assert!(ctx.op_results(dispatch_cps).is_empty());
+        assert_eq!(
+            ctx.op(dispatch_cps).attributes.get_type("answer_type"),
+            Some(i32_type)
+        );
         assert!(printed.contains("func.unreachable"));
         assert!(!printed.contains("value = 99"));
         assert!(!printed.contains("@consumed"));

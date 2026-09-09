@@ -140,8 +140,16 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
   `ability.perform`을 만든다. 후속 `lower_ability_perform`이 각각
   `effect.dispatch_tail`과 `effect.dispatch_cps`로 낮춘다. Operand packing은
   이 lower 경계에서만 수행한다.
-  `op -> Never`에는 suffix를 capture하지 않고 기존 필수 ABI operand에 실제
-  zero-capture reject continuation을 공급한다.
+  `op -> Never`에는 suffix를 capture하지 않는다.
+  기존 필수 ABI operand에는 zero-capture reject continuation을 공급한다.
+  Reject closure의 callable type은 canonical `Resume<R>`이며 다음과 같다.
+
+  ```text
+  (Evidence, exact ContinuationFrame<R>, anyref) -> Never
+  ```
+
+  세 번째 formal은 읽지 않는다.
+  Source operation result는 `Never`로 남는다.
 - `tribute_control.yield value`는 region의 `exit_k(value)`를 호출한다.
 
 일반 structured control은 기존 `scf.*` dialect에 남고
@@ -186,8 +194,10 @@ conversion은 runtime consumed state를 만들고 두 번째 호출을 continuat
 
 Canonical `core.never`인 source `op -> Never`는 token과 source suffix
 continuation을 만들지 않는다. 기존 ABI에는 capture가 없고 body가
-`func.unreachable`인 typed reject continuation을 전달한다. Null, in-band
-sentinel, 임의의 `anyref`는 대체할 수 없으며 호출되면 trap한다.
+`func.unreachable`인 typed reject continuation을 전달한다.
+이 closure는 dispatch가 요구하는 canonical `Resume<R>` type을 정확히 사용한다.
+`anyref` formal은 읽지 않는다. Null, in-band sentinel, 임의의 `anyref`는
+대체할 수 없으며 호출되면 trap한다.
 
 ### 적법화 경계
 
