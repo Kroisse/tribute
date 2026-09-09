@@ -68,6 +68,9 @@ The repository does not pin cargo-nextest. CI installs Wasmtime as a prebuilt
 binary. For local Wasm runtime tests, install the prebuilt Wasmtime 45.0.1 CLI
 without a source-build fallback:
 
+Install [cargo-binstall](https://github.com/cargo-bins/cargo-binstall#installation)
+first, then run:
+
 ```bash
 cargo binstall --strategies crate-meta-data,quick-install wasmtime-cli@45.0.1
 ```
