@@ -1213,24 +1213,14 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
+
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use wasmparser::{Operator, Parser, Payload, Validator, WasmFeatures};
-    use wasmtime::{Config, Engine, Instance, Module, Store};
 
-    fn instantiate_in_wasmtime(bytes: &[u8]) -> (Store<()>, Instance) {
-        let mut config = Config::new();
-        config
-            .gc_support(true)
-            .wasm_gc(true)
-            .wasm_function_references(true)
-            .wasm_tail_call(true);
-        let engine = Engine::new(&config).expect("create Wasmtime engine");
-        let module = Module::new(&engine, bytes).expect("compile Wasm module in Wasmtime");
-        let mut store = Store::new(&engine, ());
-        let instance = Instance::new(&mut store, &module, &[]).expect("instantiate Wasm module");
-        (store, instance)
-    }
+    const WASMTIME_CLI_REQUIRED: &str = "Wasmtime CLI is required; install the prebuilt 45.0.1 release with `cargo binstall --strategies crate-meta-data,quick-install wasmtime-cli@45.0.1`";
 
     fn return_call_indirect_module(ctx: &mut IrContext) -> IrModule {
         parse_test_module(
@@ -1603,13 +1593,16 @@ mod tests {
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("valid tail-transfer module")
             .bytes;
-        let (mut store, instance) = instantiate_in_wasmtime(&bytes);
-        let caller = instance
-            .get_typed_func::<(i32, i32), ()>(&mut store, "caller")
-            .expect("get caller export");
-        caller
-            .call(&mut store, (0, 42))
-            .expect("execute return_call_indirect export");
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        fs::write(file.path(), bytes).expect("write Wasm module");
+
+        let status = Command::new("wasmtime")
+            .args(["-W", "gc=y", "-W", "tail-call=y", "--invoke", "caller"])
+            .arg(file.path())
+            .args(["0", "42"])
+            .status()
+            .expect(WASMTIME_CLI_REQUIRED);
+        assert!(status.success(), "Wasmtime returned {status}");
     }
 
     #[test]
@@ -1651,23 +1644,52 @@ mod tests {
         Validator::new()
             .validate_all(&bytes)
             .expect("zero-result direct and exact-indirect module must validate");
-        let (mut store, instance) = instantiate_in_wasmtime(&bytes);
-        let zero_pair = instance
-            .get_typed_func::<(), i32>(&mut store, "zero_pair")
-            .expect("get zero-result witness export");
+        let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+        fs::write(file.path(), bytes).expect("write Wasm module");
+        let output = Command::new("wasmtime")
+            .args(["-W", "gc=y", "--invoke", "zero_pair"])
+            .arg(file.path())
+            .output()
+            .expect(WASMTIME_CLI_REQUIRED);
+        assert!(
+            output.status.success(),
+            "Wasmtime failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(
-            zero_pair
-                .call(&mut store, ())
-                .expect("execute zero-result witness export"),
-            3
+            String::from_utf8(output.stdout).expect("Wasmtime stdout is UTF-8"),
+            "3\n"
         );
     }
 
     #[test]
     fn multi_result_direct_and_exact_indirect_calls_execute_in_wasmtime() {
-        let mut direct_ctx = IrContext::new();
-        let direct_module = parse_test_module(
-            &mut direct_ctx,
+        let invoke = |source: &str, export: &str, args: &[&str]| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, source);
+            let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+                .expect("multi-result module must emit")
+                .bytes;
+            let file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+            fs::write(file.path(), bytes).expect("write Wasm module");
+            let output = Command::new("wasmtime")
+                .args(["-W", "gc=y", "--invoke", export])
+                .arg(file.path())
+                .args(args)
+                .output()
+                .expect(WASMTIME_CLI_REQUIRED);
+            assert!(
+                output.status.success(),
+                "Wasmtime failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("Wasmtime stdout is UTF-8"),
+                "7\n9\n"
+            );
+        };
+
+        invoke(
             r#"core.module @test {
   wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
@@ -1680,27 +1702,10 @@ mod tests {
   }
   wasm.export_func {name = "direct_pair", func = @caller}
 }"#,
+            "direct_pair",
+            &[],
         );
-        let direct_bytes = crate::emit_module_to_wasm(&mut direct_ctx, direct_module)
-            .expect("direct multi-result module must emit")
-            .bytes;
-        Validator::new()
-            .validate_all(&direct_bytes)
-            .expect("direct multi-result module must validate");
-        let (mut direct_store, direct_instance) = instantiate_in_wasmtime(&direct_bytes);
-        let direct_pair = direct_instance
-            .get_typed_func::<(), (i32, i64)>(&mut direct_store, "direct_pair")
-            .expect("get direct multi-result export");
-        assert_eq!(
-            direct_pair
-                .call(&mut direct_store, ())
-                .expect("execute direct multi-result export"),
-            (7, 9)
-        );
-
-        let mut indirect_ctx = IrContext::new();
-        let indirect_module = parse_test_module(
-            &mut indirect_ctx,
+        invoke(
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
@@ -1718,22 +1723,8 @@ mod tests {
   }
   wasm.export_func {name = "indirect_pair", func = @caller}
 }"#,
-        );
-        let indirect_bytes = crate::emit_module_to_wasm(&mut indirect_ctx, indirect_module)
-            .expect("indirect multi-result module must emit")
-            .bytes;
-        Validator::new()
-            .validate_all(&indirect_bytes)
-            .expect("indirect multi-result module must validate");
-        let (mut indirect_store, indirect_instance) = instantiate_in_wasmtime(&indirect_bytes);
-        let indirect_pair = indirect_instance
-            .get_typed_func::<i32, (i32, i64)>(&mut indirect_store, "indirect_pair")
-            .expect("get indirect multi-result export");
-        assert_eq!(
-            indirect_pair
-                .call(&mut indirect_store, 0)
-                .expect("execute indirect multi-result export"),
-            (7, 9)
+            "indirect_pair",
+            &["0"],
         );
     }
 }

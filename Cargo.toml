@@ -61,7 +61,6 @@ trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
 wasm-encoder = "0.251.0"
 wasmparser = { version = "0.251.0", default-features = false, features = ["std", "validate", "features"] }
-wasmtime = { version = "=45.0.1", default-features = false, features = ["runtime", "cranelift", "gc-null"] }
 winnow = "1.0"
 zmij = "1"
 
