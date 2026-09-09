@@ -1346,6 +1346,48 @@ mod tests {
     }
 
     #[test]
+    fn lower_nested_terminal_scf_switch_with_ordinary_returns_has_no_merge_blocks() {
+        let input = r#"core.module @test {
+  func.func @main(%choice: core.i32, %nested_choice: core.i32, %first: core.i32, %second: core.i32, %third: core.i32) -> core.i32 {
+    scf.switch %choice {
+      scf.case {value = 0} {
+        scf.switch %nested_choice {
+          scf.case {value = 0} {
+            func.return %first
+          }
+          scf.default {
+            func.return %second
+          }
+        }
+      }
+      scf.default {
+        func.return %third
+      }
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
+        let entry = ctx.region(function.body(&ctx)).blocks[0];
+        let args = ctx.block_args(entry).to_vec();
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let returns: Vec<_> = ctx
+            .region(function.body(&ctx))
+            .blocks
+            .iter()
+            .flat_map(|&block| ctx.block(block).ops.iter().copied())
+            .filter(|&op| func::Return::matches(&ctx, op))
+            .map(|op| ctx.op_operands(op).to_vec())
+            .collect();
+        assert_eq!(returns, vec![vec![args[2]], vec![args[3]], vec![args[4]]]);
+        assert_eq!(count_blocks(&ctx, function.body(&ctx)), 5);
+        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+    }
+
+    #[test]
     fn lower_terminal_scf_switch_with_zero_operand_return_has_no_merge_block() {
         let input = r#"core.module @test {
   func.func @main(%choice: core.i32) {

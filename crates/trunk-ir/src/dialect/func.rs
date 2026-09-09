@@ -397,9 +397,13 @@ impl CallableExitModel for TailCallIndirect {
                 "func.tail_call_indirect CallableExit requires a callee operand",
             ));
         }
-        match ctx.op(self.op_ref()).attributes.get_type("signature") {
+        match ctx.op(self.op_ref()).attributes.get("signature") {
             None => Ok(()),
-            Some(signature) if FuncSig::from_type_ref(ctx, signature).is_some() => Ok(()),
+            Some(Attribute::Type(signature))
+                if FuncSig::from_type_ref(ctx, *signature).is_some() =>
+            {
+                Ok(())
+            }
             Some(_) => Err(ControlFlowInterfaceError::new(
                 "func.tail_call_indirect CallableExit has an invalid exact signature",
             )),
@@ -696,7 +700,7 @@ inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::op_interface::IndirectCallLikeOps;
+    use crate::op_interface::{CallableExitOps, IndirectCallLikeOps};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -775,6 +779,26 @@ mod tests {
         assert!(IndirectCallLikeOps::get(&ctx, direct_op).is_none());
         assert_eq!(IndirectCallLikeOps::callee(&ctx, direct_op), None);
         assert_eq!(IndirectCallLikeOps::arguments(&ctx, direct_op), None);
+    }
+
+    #[test]
+    fn callable_exit_rejects_wrong_kind_indirect_tail_signature() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @tail(%callee: func.func_sig<() -> ()>) {
+    func.tail_call_indirect %callee
+  }
+}"#,
+        );
+        let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("tail function");
+        let tail = ctx.block(ctx.region(function.body(&ctx)).blocks[0]).ops[0];
+        ctx.op_mut(tail)
+            .attributes
+            .insert(Symbol::new("signature"), Attribute::Int(0));
+
+        assert!(CallableExitOps::exits_callable(&ctx, tail).is_err());
     }
 }
 

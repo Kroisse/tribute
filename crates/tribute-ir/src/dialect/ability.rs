@@ -293,7 +293,14 @@ impl CallableExitModel for HandleDispatch {
         if data.regions.len() == 1
             && ctx.region(data.regions[0]).blocks.len() == 1
             && ctx.op_operands(self.op_ref()).len() >= 2
-            && data.attributes.contains_key("ability_refs")
+            && matches!(
+                data.attributes.get("ability_refs"),
+                Some(trunk_ir::types::Attribute::List(ability_refs))
+                    if ability_refs.iter().all(|ability_ref| matches!(
+                        ability_ref,
+                        trunk_ir::types::Attribute::Type(_)
+                    ))
+            )
         {
             Ok(())
         } else {
@@ -549,6 +556,8 @@ pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::op_interface::CallableExitOps;
+    use trunk_ir::ops::DialectOp;
 
     #[test]
     fn test_marker_adt_type_ref() {
@@ -698,5 +707,29 @@ mod tests {
         let ev1 = evidence_adt_type_ref(&mut ctx);
         let ev2 = evidence_adt_type_ref(&mut ctx);
         assert_eq!(ev1, ev2, "evidence types should be deduplicated");
+    }
+
+    #[test]
+    fn callable_exit_rejects_malformed_ability_refs_attribute() {
+        for ability_refs in ["@not_a_list", "[1]"] {
+            let mut ctx = IrContext::new();
+            let module = trunk_ir::parser::parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @main(%evidence: core.ptr, %prompt: core.i32) {{
+    ability.handle_dispatch %evidence, %prompt {{ability_refs = {ability_refs}}} {{
+      func.unreachable
+    }}
+  }}
+}}"#
+                ),
+            );
+            let function = trunk_ir::dialect::func::Func::from_op(&ctx, module.ops(&ctx)[0])
+                .expect("function");
+            let handle = ctx.block(ctx.region(function.body(&ctx)).blocks[0]).ops[0];
+
+            assert!(CallableExitOps::exits_callable(&ctx, handle).is_err());
+        }
     }
 }
