@@ -724,19 +724,12 @@ mod test_exit_dialect {
 }
 
 #[cfg(test)]
-impl crate::op_interface::CallableExitModel for Exit {
-    fn exits_callable(
-        self,
-        _ctx: &crate::IrContext,
-    ) -> Result<(), crate::op_interface::ControlFlowInterfaceError> {
-        Ok(())
-    }
-}
+impl crate::op_interface::CallableExitModel for Exit {}
 
 #[cfg(test)]
 impl crate::op_interface::CallableExitModel for MalformedExit {
-    fn exits_callable(
-        self,
+    fn verify_callable_exit(
+        &self,
         _ctx: &crate::IrContext,
     ) -> Result<(), crate::op_interface::ControlFlowInterfaceError> {
         Err(crate::op_interface::ControlFlowInterfaceError::new(

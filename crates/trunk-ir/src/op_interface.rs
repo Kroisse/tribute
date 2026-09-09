@@ -467,10 +467,40 @@ pub trait CallableExit: Sync {
 }
 
 /// Typed callable-exit semantics supplied by a generated dialect operation
-/// wrapper. Implementations must reject malformed operations rather than
-/// treating registration alone as proof of termination.
+/// wrapper. The default contract rejects results, raw block successors, and
+/// nested regions. A model may explicitly permit regions and supplies only
+/// its dialect-specific checks; registration alone is never proof of
+/// termination.
 pub trait CallableExitModel: DialectOp {
-    fn exits_callable(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError>;
+    /// Whether this callable exit may own structured regions.
+    fn allows_nested_regions(&self, _ctx: &IrContext) -> bool {
+        false
+    }
+
+    /// Check the dialect-specific part of the callable-exit contract.
+    fn verify_callable_exit(&self, _ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
+        Ok(())
+    }
+
+    fn exits_callable(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
+        let op = self.op_ref();
+        if !ctx.op_results(op).is_empty() {
+            return Err(ControlFlowInterfaceError::new(
+                "CallableExit must not produce SSA results",
+            ));
+        }
+        if !ctx.op(op).successors.is_empty() {
+            return Err(ControlFlowInterfaceError::new(
+                "CallableExit must not have block successors",
+            ));
+        }
+        if !self.allows_nested_regions(ctx) && !ctx.op(op).regions.is_empty() {
+            return Err(ControlFlowInterfaceError::new(
+                "CallableExit must not contain nested regions",
+            ));
+        }
+        self.verify_callable_exit(ctx)
+    }
 }
 
 fn callable_exit_model<T: CallableExitModel>(

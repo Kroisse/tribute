@@ -48,29 +48,11 @@ mod effect {
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
 
-fn resultless_callable_exit(
-    ctx: &trunk_ir::IrContext,
-    op: trunk_ir::OpRef,
-) -> Result<(), trunk_ir::op_interface::ControlFlowInterfaceError> {
-    if !ctx.op_results(op).is_empty() {
-        Err(trunk_ir::op_interface::ControlFlowInterfaceError::new(
-            "CallableExit must not produce SSA results",
-        ))
-    } else if !ctx.op(op).regions.is_empty() || !ctx.op(op).successors.is_empty() {
-        Err(trunk_ir::op_interface::ControlFlowInterfaceError::new(
-            "CallableExit must not contain nested regions or block successors",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
-    fn exits_callable(
-        self,
+    fn verify_callable_exit(
+        &self,
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), trunk_ir::op_interface::ControlFlowInterfaceError> {
-        resultless_callable_exit(ctx, self.op_ref())?;
         let data = ctx.op(self.op_ref());
         if ctx.op_operands(self.op_ref()).len() == 4
             && data.attributes.get_type("ability_ref").is_some()

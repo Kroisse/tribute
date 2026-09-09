@@ -348,32 +348,13 @@ impl IndirectCallLikeModel for TailCallIndirect {
 
 impl TailCallLike for TailCallIndirect {}
 
-fn resultless_callable_exit(
-    ctx: &crate::IrContext,
-    op: crate::OpRef,
-) -> Result<(), ControlFlowInterfaceError> {
-    if !ctx.op_results(op).is_empty() {
-        Err(ControlFlowInterfaceError::new(
-            "CallableExit must not produce SSA results",
-        ))
-    } else if !ctx.op(op).regions.is_empty() || !ctx.op(op).successors.is_empty() {
-        Err(ControlFlowInterfaceError::new(
-            "CallableExit must not contain nested regions or block successors",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-impl CallableExitModel for Return {
-    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
-        resultless_callable_exit(ctx, self.op_ref())
-    }
-}
+impl CallableExitModel for Return {}
 
 impl CallableExitModel for TailCall {
-    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
-        resultless_callable_exit(ctx, self.op_ref())?;
+    fn verify_callable_exit(
+        &self,
+        ctx: &crate::IrContext,
+    ) -> Result<(), ControlFlowInterfaceError> {
         if ctx
             .op(self.op_ref())
             .attributes
@@ -390,8 +371,10 @@ impl CallableExitModel for TailCall {
 }
 
 impl CallableExitModel for TailCallIndirect {
-    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
-        resultless_callable_exit(ctx, self.op_ref())?;
+    fn verify_callable_exit(
+        &self,
+        ctx: &crate::IrContext,
+    ) -> Result<(), ControlFlowInterfaceError> {
         if ctx.op_operands(self.op_ref()).is_empty() {
             return Err(ControlFlowInterfaceError::new(
                 "func.tail_call_indirect CallableExit requires a callee operand",
@@ -412,8 +395,10 @@ impl CallableExitModel for TailCallIndirect {
 }
 
 impl CallableExitModel for Unreachable {
-    fn exits_callable(self, ctx: &crate::IrContext) -> Result<(), ControlFlowInterfaceError> {
-        resultless_callable_exit(ctx, self.op_ref())?;
+    fn verify_callable_exit(
+        &self,
+        ctx: &crate::IrContext,
+    ) -> Result<(), ControlFlowInterfaceError> {
         if ctx.op_operands(self.op_ref()).is_empty() {
             Ok(())
         } else {
