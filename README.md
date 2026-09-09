@@ -64,9 +64,20 @@ The commands below use these external tools:
 - [cargo-insta](https://insta.rs/docs/cli/) to review snapshot changes
 - [Wasmtime](https://docs.wasmtime.dev/cli-install.html) to run Wasm examples
 
-The repository does not pin their CLI versions. CI installs the latest
-cargo-nextest and Wasmtime releases; use a Wasmtime release that accepts the
-`-Wgc=y,function-references=y` options shown in the example command.
+The repository does not pin cargo-nextest. CI installs Wasmtime as a prebuilt
+binary. For local Wasm runtime tests, install the prebuilt Wasmtime 45.0.1 CLI
+without a source-build fallback:
+
+Install [cargo-binstall](https://github.com/cargo-bins/cargo-binstall#installation)
+first, then run:
+
+```bash
+cargo binstall --strategies crate-meta-data,quick-install wasmtime-cli@45.0.1
+```
+
+Keep that version until a replacement has been verified with the
+`-Wgc=y,function-references=y` and `-Wtail-call=y` options used by the runtime
+tests and CI.
 
 ## Building and Running
 
