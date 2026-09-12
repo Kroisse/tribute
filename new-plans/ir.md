@@ -278,9 +278,9 @@ attribute와 body를 출력하고 entry label을 생략한다. `captures [...]`�
 
 간결한 형식은 non-reserved type attribute가 없는 source signature에만 쓴다.
 그런 attribute가 있으면 `func`/`lambda`는 generic assembly를 써서 complete
-`type` attribute 또는 result type expression을 출력한다. Metadata의 소유자는
-항상 그 `tribute_control.func_sig` type/alias 하나이며, 같은 alias를 참조하는
-여러 operation이 operation-local override를 만들 수 없다. Alias가 없으면
+`type` attribute 또는 result type expression을 출력한다. Metadata의 소유자는 항상
+그 `tribute_control.func_sig` type/alias 하나이며, 같은 alias를 참조하는 여러
+operation이 operation-local override를 만들 수 없다. Alias가 없으면
 generic type-bearing 위치에 attributed `func_sig` 전체를 inline으로 출력한다.
 Operation attribute는 별개의 generic attribute dictionary에 남는다.
 `func_ref`, `call`, `call_indirect`, `return`은 generic assembly가 모든 정보를
@@ -305,15 +305,24 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
   block argument로 들어온다.
 - **위치:** source function 또는 extern declaration 전체 span이다.
 
-Named callable의 origin은 symbol이나 `abi` 문자열과 별개인 typed frontend
-metadata다. Source 정의는 body를 가진 Tribute callable이고, compiler intrinsic은
-canonical registry가 부여한 semantic identity와 완전한 logical signature를 함께
-가진다. 등록된 compiler intrinsic의 logical callable convention은 항상 `Direct`이며,
-이 조건은 identity와 signature 대조와 함께 mutation 전에 검증한다. Private runtime
-helper는 target stage에서만 physical signature로 만들며
-source-logical `adt.typeref`를 받을 수 없다. 아직 별도 user FFI 계약이 없는 bodyless
-declaration은 managed semantic parameter나 result를 사용할 수 없다. Textual attribute,
-symbol spelling, 위치 또는 printed IR만으로 origin을 복구하거나 승격하지 않는다.
+Named callable의 source definition은 body를 가진 Tribute callable이다.
+`extern "intrinsic"`은 compiler-reserved directive이며, canonical qualified
+source name이
+intrinsic identity가 된다. 지원되는 identity와 완전한 logical signature는 mutation 전에
+검증하며, unknown directive나 signature mismatch는 lowering input error다. 등록된 compiler
+intrinsic의 logical callable convention은 항상 `Direct`이다. Generic specialization은 base
+identity를 concrete declaration으로 transport할 수 있지만, mangled name을 parse하여
+identity를 복구하지 않는다. Private runtime helper는 target stage에서만 physical
+signature로 만들며
+source-logical `adt.typeref`를 받을 수 없다. Ordinary bodyless `extern "C"`는 명시적
+trusted/unsafe FFI boundary다. 완전한 signature에 managed semantic parameter나 result가
+있어도 허용하지만, 사용자가 Tribute의 representation과 ownership contract를 지킨다는
+책임을 진다. Native ABI adapter는 managed argument를 borrowed로, managed result를 fresh
+owned transfer로 취급한다. 이것은 compiler intrinsic directive가 아니며, intrinsic
+lowering은 계속 supported identity와 complete signature를 요구한다. `C` 이외의
+bodyless declaration은 이 trusted FFI policy를 얻지 않는다. Textual attribute, symbol
+spelling, 위치 또는 printed IR만으로 generic specialization identity를 복구하거나
+승격하지 않는다.
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 module-local symbol을 유일하게 resolve하고 완전한 signature를

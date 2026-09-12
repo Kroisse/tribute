@@ -344,6 +344,16 @@ impl<'db> ModuleTypeEnv<'db> {
         None
     }
 
+    /// Look up struct fields in declaration order.
+    pub fn lookup_struct_fields(
+        &self,
+        struct_id: TypeDefId<'db>,
+    ) -> Option<&[(Symbol, Type<'db>)]> {
+        self.struct_fields
+            .get(&struct_id)
+            .map(|(_, fields)| fields.as_slice())
+    }
+
     /// Return the number of registered constructors.
     pub fn constructor_count(&self) -> usize {
         self.constructor_types.len()

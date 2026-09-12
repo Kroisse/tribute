@@ -2742,7 +2742,20 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                if !exact_intrinsic && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
+                let trusted_c_ffi = matches!(
+                    data.attributes.get("abi"),
+                    Some(Attribute::String(abi)) if abi == "C"
+                );
+                let intrinsic_directive = matches!(
+                    data.attributes.get("abi"),
+                    Some(Attribute::String(abi)) if abi == "intrinsic"
+                );
+                if intrinsic_directive && !exact_intrinsic && !registered.contains_key(&symbol) {
+                    push_op_error(ctx, op, errors, "unknown compiler intrinsic directive");
+                }
+                if !exact_intrinsic
+                    && !trusted_c_ffi
+                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
                 {
                     push_op_error(
                         ctx,
@@ -2774,6 +2787,42 @@ fn validate_callable_origins(
             );
         }
     }
+}
+
+/// `unrealized_conversion_cast` is representation glue, never a source-callable
+/// adapter. Convention strengthening must be expressed by `func_ref` and
+/// lowered while its declaration provenance is still available. Changing a
+/// callable's source shape does not create a physical adapter, regardless of
+/// whether its value originates at a named function, lambda, or block argument.
+fn validate_callable_conversion_casts(
+    ctx: &IrContext,
+    body: RegionRef,
+    errors: &mut Vec<ValidationError>,
+) {
+    walk_region_ops(ctx, body, &mut |op| {
+        if core::UnrealizedConversionCast::from_op(ctx, op).is_err() {
+            return;
+        }
+        let ([input], [target_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
+            return;
+        };
+        let source_ty = ctx.value_ty(*input);
+        if FuncSig::from_type_ref(ctx, source_ty).is_none()
+            || FuncSig::from_type_ref(ctx, *target_ty).is_none()
+        {
+            return;
+        }
+        let convention_changes =
+            func_sig_convention(ctx, source_ty) != func_sig_convention(ctx, *target_ty);
+        if convention_changes {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "core.unrealized_conversion_cast cannot change a source-logical callable calling convention; use tribute_control.func_ref",
+            );
+        }
+    });
 }
 
 fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
@@ -3240,6 +3289,7 @@ pub fn validate_whole_ir(
         &nominal_layouts,
         &mut errors,
     );
+    validate_callable_conversion_casts(ctx, body, &mut errors);
     validate_callable_origins(
         ctx,
         body,
@@ -5292,7 +5342,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_nested_aggregate_in_bodyless_external_fails_closed() {
+    fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !S = adt.struct() {name = @S, fields = []}
@@ -5304,7 +5354,7 @@ mod tests {
         );
 
         let result = validate(&ctx, module, &[], &[]);
-        assert!(messages(&result).contains("bodyless external"), "{result}");
+        assert!(result.is_ok(), "{result}");
     }
 
     #[test]

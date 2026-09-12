@@ -16,19 +16,14 @@ use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 
-/// Helper to compile code through AST pipeline and return arena IR.
+/// Helper to compile code through the shared production pipeline and return arena IR.
 fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
-    let (mut ctx, m) =
-        tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed");
-    let core_module = trunk_ir::dialect::core::Module::from_op(&ctx, m.op())
-        .expect("frontend output must be a core.module");
-    let mut pm = trunk_ir::pass::PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda);
-    pm.run(&mut ctx, core_module).unwrap();
-    (ctx, m)
+    tribute::pipeline::compile_ast(db, source_file)
+        .expect("shared production pipeline should succeed")
+        .expect("shared production pipeline should produce a module")
 }
 
 /// Helper to check which functions have evidence as first parameter.
@@ -62,16 +57,13 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let has_evidence = params
         .first()
         .is_some_and(|ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, *ty));
-    let hidden_count = usize::from(has_evidence)
-        + usize::from(
-            has_evidence
-                && params.get(1).is_some_and(|ty| {
-                    let ty = ctx.types.get(*ty);
-                    ty.dialect == trunk_ir::Symbol::new("tribute_rt")
-                        && ty.name == trunk_ir::Symbol::new("anyref")
-                }),
-        );
-    let has_done_k = hidden_count == 2;
+    let is_cps = ctx
+        .op(func_op.op_ref())
+        .attributes
+        .get("tribute.calling_convention")
+        .is_some_and(|attr| *attr == trunk_ir::Attribute::Int(2));
+    let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
+    let has_done_k = is_cps;
     let returns_anyref = function.single_result(ctx).is_some_and(|result| {
         let result = ctx.types.get(result);
         result.dialect == trunk_ir::Symbol::new("tribute_rt")
@@ -85,7 +77,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     )
 }
 
-fn function_param_names(ctx: &IrContext, module: &Module, target: &str) -> Vec<String> {
+fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<trunk_ir::TypeRef> {
     let func_op = module
         .ops(ctx)
         .into_iter()
@@ -94,17 +86,27 @@ fn function_param_names(ctx: &IrContext, module: &Module, target: &str) -> Vec<S
             (func_op.sym_name(ctx) == target).then_some(func_op)
         })
         .unwrap_or_else(|| panic!("missing function '{target}'"));
-    let entry = ctx.region(func_op.body(ctx)).blocks[0];
-    ctx.block(entry)
-        .args
-        .iter()
-        .map(|arg| {
-            arg.attrs
-                .get_symbol("bind_name")
-                .map(|name| name.to_string())
-                .unwrap_or_else(|| "_".to_owned())
-        })
-        .collect()
+    func::FuncSig::from_type_ref(ctx, func_op.r#type(ctx))
+        .expect("valid func.func_sig signature")
+        .inputs(ctx)
+        .to_vec()
+}
+
+fn is_anyref(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
+    let ty = ctx.types.get(ty);
+    ty.dialect == trunk_ir::Symbol::new("tribute_rt") && ty.name == trunk_ir::Symbol::new("anyref")
+}
+
+fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
+    let ty = ctx.types.get(ty);
+    ty.dialect == trunk_ir::Symbol::new("core") && ty.name == trunk_ir::Symbol::new("i32")
+}
+
+fn is_continuation_frame(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
+    ctx.types
+        .get(ty)
+        .attrs
+        .contains_key("tribute.cps_continuation_frame_result")
 }
 
 #[test]
@@ -166,10 +168,10 @@ fn main() { }
             function_abi(&ctx, &module, "inferred_evidence_direct"),
             (0, true, false, false)
         );
-        assert_eq!(function_abi(&ctx, &module, "cps"), (0, true, true, true));
+        assert_eq!(function_abi(&ctx, &module, "cps"), (0, true, true, false));
         assert_eq!(
             function_abi(&ctx, &module, "inferred_cps"),
-            (0, true, true, true)
+            (0, true, true, false)
         );
     });
 }
@@ -218,18 +220,28 @@ fn main() { }
     TributeDatabaseImpl::default().attach(|db| {
         let (ctx, module) = compile_to_ir(db, code, "closure_calling_conventions.trb");
 
-        assert_eq!(
-            function_param_names(&ctx, &module, "direct_closure::__clam_0"),
-            ["__env", "x"]
+        let direct = function_param_types(&ctx, &module, "direct_closure::__clam_0");
+        assert_eq!(direct.len(), 2);
+        assert!(is_anyref(&ctx, direct[0]), "{direct:?}");
+        assert!(is_i32(&ctx, direct[1]), "{direct:?}");
+
+        let evidence = function_param_types(&ctx, &module, "evidence_direct_closure::__clam_0");
+        assert_eq!(evidence.len(), 3);
+        assert!(
+            tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, evidence[0]),
+            "{evidence:?}"
         );
-        assert_eq!(
-            function_param_names(&ctx, &module, "evidence_direct_closure::__clam_0"),
-            ["__evidence", "__env", "x"]
+        assert!(is_anyref(&ctx, evidence[1]), "{evidence:?}");
+        assert!(is_i32(&ctx, evidence[2]), "{evidence:?}");
+
+        let cps = function_param_types(&ctx, &module, "cps_closure::__clam_0");
+        assert_eq!(cps.len(), 3);
+        assert!(
+            tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, cps[0]),
+            "{cps:?}"
         );
-        assert_eq!(
-            function_param_names(&ctx, &module, "cps_closure::__clam_0"),
-            ["__evidence", "__env", "__done_k"]
-        );
+        assert!(is_anyref(&ctx, cps[1]), "{cps:?}");
+        assert!(is_continuation_frame(&ctx, cps[2]), "{cps:?}");
     });
 }
 
@@ -258,7 +270,11 @@ fn main() { }
 
         // Pure user-defined top-level functions should not have evidence
         for (name, has_ev) in &functions {
-            if !name.contains("clam") && !name.contains("lambda") && !name.contains("::") {
+            if !name.contains("clam")
+                && !name.contains("lambda")
+                && !name.contains("::")
+                && !name.starts_with("__tribute_")
+            {
                 assert!(
                     !has_ev,
                     "Pure top-level function '{}' should not have evidence parameter",
@@ -403,7 +419,9 @@ fn main() { }
         for op in module.ops(&ctx) {
             if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
-                let body = func_op.body(&ctx);
+                let Some(&body) = ctx.op(op).regions.first() else {
+                    continue;
+                };
                 let blocks = &ctx.region(body).blocks;
                 if let Some(&entry) = blocks.first() {
                     let args = ctx.block_args(entry);

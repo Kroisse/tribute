@@ -5,9 +5,10 @@ use std::num::NonZero;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, EnumDecl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, FuncDefId, HandlerArm,
-    HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl, Type, TypeAnnotation,
-    TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef, VariantDecl,
+    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldDecl, FieldPattern, FuncDecl,
+    FuncDefId, HandlerArm, HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl,
+    Type, TypeAnnotation, TypeAnnotationKind, TypeDefId, TypeKind, TypeScheme, TypedRef,
+    VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
 
@@ -15,8 +16,10 @@ use super::mangle::{mangle_name, mangle_type_name};
 
 pub(super) struct GeneratedSpecializations<'db> {
     pub(super) specialized_declarations: Vec<FuncDecl<TypedRef<'db>>>,
+    pub(super) specialized_extern_declarations: Vec<ExternFuncDecl>,
     pub(super) specialized_function_types: Vec<(Symbol, TypeScheme<'db>)>,
     pub(super) metadata_origins: Vec<(Vec<Type<'db>>, HashSet<NodeId>)>,
+    pub(super) compiler_intrinsic_specializations: Vec<(NodeId, Symbol)>,
 }
 
 struct SpecializationEntry<'db> {
@@ -36,18 +39,22 @@ pub(super) fn generate_specializations<'db>(
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
+    compiler_intrinsics: &HashMap<NodeId, Symbol>,
 ) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
-    let extern_functions = collect_extern_function_names(module);
+    let extern_functions = collect_extern_function_decls(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
     let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
     let mut extern_function_types = Vec::new();
+    let mut specialized_extern_declarations = Vec::new();
+    let mut compiler_intrinsic_specializations = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
         let func = func_decls.get(&qualified).copied();
-        if func.is_none() && !extern_functions.contains(&qualified) {
+        let extern_function = extern_functions.get(&qualified).copied();
+        if func.is_none() && extern_function.is_none() {
             continue;
         }
         let Some(scheme) = scheme_map.get(&qualified) else {
@@ -84,6 +91,12 @@ pub(super) fn generate_specializations<'db>(
                 // call sites still need their concrete scheme during logical
                 // lowering under the mangled identity.
                 extern_function_types.push((mangled, specialized_scheme));
+                let extern_function = extern_function.expect("extern specialization declaration");
+                if let Some(identity) = compiler_intrinsics.get(&extern_function.id).copied() {
+                    let declaration = specialize_extern_decl(extern_function, type_args, mangled);
+                    compiler_intrinsic_specializations.push((declaration.id, identity));
+                    specialized_extern_declarations.push(declaration);
+                }
             }
         }
     }
@@ -101,11 +114,15 @@ pub(super) fn generate_specializations<'db>(
     }
     new_function_types.extend(extern_function_types);
     new_function_types.sort_by_key(|(name, _)| *name);
+    specialized_extern_declarations.sort_by_key(|declaration| declaration.name);
+    compiler_intrinsic_specializations.sort_by_key(|(id, identity)| (*identity, *id));
 
     GeneratedSpecializations {
         specialized_declarations: new_decls,
+        specialized_extern_declarations,
         specialized_function_types: new_function_types,
         metadata_origins,
+        compiler_intrinsic_specializations,
     }
 }
 
@@ -609,32 +626,49 @@ fn collect_func_decls_inner<'a, 'db>(
     }
 }
 
-fn collect_extern_function_names<'db>(module: &Module<TypedRef<'db>>) -> HashSet<Symbol> {
-    let mut names = HashSet::new();
+fn collect_extern_function_decls<'a, 'db>(
+    module: &'a Module<TypedRef<'db>>,
+) -> HashMap<Symbol, &'a ExternFuncDecl> {
+    let mut declarations = HashMap::new();
     let mut prefix = String::new();
-    collect_extern_function_names_inner(&module.decls, &mut prefix, &mut names);
-    names
+    collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
+    declarations
 }
 
-fn collect_extern_function_names_inner<'db>(
-    decls: &[Decl<TypedRef<'db>>],
+fn collect_extern_function_decls_inner<'a, 'db>(
+    decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
-    names: &mut HashSet<Symbol>,
+    declarations: &mut HashMap<Symbol, &'a ExternFuncDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::ExternFunction(func) => {
-                names.insert(crate::qualified_symbol(prefix, func.name));
+                declarations.insert(crate::qualified_symbol(prefix, func.name), func);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
                     let len = crate::push_prefix(prefix, module.name);
-                    collect_extern_function_names_inner(body, prefix, names);
+                    collect_extern_function_decls_inner(body, prefix, declarations);
                     prefix.truncate(len);
                 }
             }
             _ => {}
         }
+    }
+}
+
+fn specialize_extern_decl(
+    declaration: &ExternFuncDecl,
+    type_args: &[Type<'_>],
+    mangled_name: Symbol,
+) -> ExternFuncDecl {
+    ExternFuncDecl {
+        id: declaration.id.with_variant(type_args_variant(type_args)),
+        is_pub: false,
+        name: mangled_name,
+        abi: declaration.abi,
+        params: declaration.params.clone(),
+        return_ty: declaration.return_ty.clone(),
     }
 }
 
@@ -1254,8 +1288,13 @@ mod tests {
         let mut instantiations = HashMap::new();
         instantiations.insert(func_id, type_arg_sets);
 
-        let specializations =
-            generate_specializations(&db, &module, &instantiations, &function_types);
+        let specializations = generate_specializations(
+            &db,
+            &module,
+            &instantiations,
+            &function_types,
+            &HashMap::new(),
+        );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);
         assert_eq!(specializations.specialized_function_types.len(), 2);

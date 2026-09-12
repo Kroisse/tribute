@@ -4,27 +4,69 @@ use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
+use tribute_ir::dialect::tribute_control;
 use tribute_passes::diagnostic::Diagnostic;
-use trunk_ir::Symbol;
+use trunk_ir::dialect::arith;
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::{Attribute, ValueDef};
 use trunk_ir::{IrContext, Module};
 
-/// Helper to check whether a `func.func` with the given `sym_name` exists
-/// among the top-level operations of an arena module.
-fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
-    let func_dialect = Symbol::new("func");
-    let func_name = Symbol::new("func");
-    let sym_name_key = Symbol::new("sym_name");
-    module.ops(ctx).iter().any(|&op_ref| {
-        let op_data = ctx.op(op_ref);
-        if op_data.dialect == func_dialect && op_data.name == func_name {
-            op_data
-                .attributes
-                .get_symbol(sym_name_key)
-                .is_some_and(|symbol| symbol == name)
-        } else {
-            false
-        }
-    })
+/// The frontend owns source-logical definitions, before physical CPS parameters.
+fn source_function(ctx: &IrContext, module: &Module, name: &str) -> tribute_control::Func {
+    let matches: Vec<_> = module
+        .ops(ctx)
+        .iter()
+        .filter_map(|&op| {
+            tribute_control::Func::from_op(ctx, op)
+                .ok()
+                .filter(|function| function.sym_name(ctx) == name)
+        })
+        .collect();
+    assert_eq!(matches.len(), 1, "expected one source function {name}");
+    matches[0]
+}
+
+fn assert_source_signature(
+    ctx: &IrContext,
+    module: &Module,
+    name: &str,
+    arity: usize,
+    result: &str,
+) {
+    let function = source_function(ctx, module, name);
+    let signature = tribute_control::FuncSig::from_type_ref(ctx, function.r#type(ctx))
+        .expect("complete logical signature");
+    assert_eq!(signature.inputs(ctx).len(), arity);
+    assert!(
+        signature
+            .inputs(ctx)
+            .iter()
+            .all(|&ty| ctx.types.get(ty).dialect == "core" && ctx.types.get(ty).name == "i32")
+    );
+    assert_eq!(ctx.types.get(signature.result(ctx)).name, result);
+    let entry = ctx.region(function.body(ctx)).blocks[0];
+    assert_eq!(
+        ctx.block_args(entry)
+            .iter()
+            .map(|&arg| ctx.value_ty(arg))
+            .collect::<Vec<_>>(),
+        signature.inputs(ctx)
+    );
+}
+
+fn returned_constant(ctx: &IrContext, module: &Module, name: &str) -> i128 {
+    let function = source_function(ctx, module, name);
+    let entry = ctx.region(function.body(ctx)).blocks[0];
+    let terminator = *ctx.block(entry).ops.last().expect("function terminator");
+    let returned = tribute_control::Return::from_op(ctx, terminator).expect("logical return");
+    let ValueDef::OpResult(op, _) = ctx.value_def(returned.value(ctx)) else {
+        panic!("expected returned constant");
+    };
+    let constant = arith::Const::from_op(ctx, op).expect("returned value must be constant");
+    let Attribute::Int(value) = constant.value(ctx) else {
+        panic!("expected integer");
+    };
+    value
 }
 
 fn compile_frontend_with_diagnostics(
@@ -82,14 +124,13 @@ fn main() {
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
         let (ctx, module) = expect_compilation_success(db, source_file);
 
-        // Verify that expected user functions exist
         for func_name in expected_funcs {
-            assert!(
-                find_func_by_name(&ctx, &module, func_name),
-                "Expected function '{}' not found in {}",
-                func_name,
-                filename
-            );
+            let (arity, result) = if func_name == "factorial" {
+                (1, "i32")
+            } else {
+                (0, "nil")
+            };
+            assert_source_signature(&ctx, &module, func_name, arity, result);
         }
     }
 }
@@ -113,42 +154,27 @@ fn test_salsa_incremental_computation_detailed() {
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
-    let text = "fn main() { let _ = 1 + 2 }";
+    let text = "fn value() -> Nat { 3 } fn main() {}";
     let tree = parser.parse(text, None).expect("tree");
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
-
-    // Initial lowering
     let (ctx1, module1) = expect_compilation_success(&db, source_file);
-    assert!(
-        find_func_by_name(&ctx1, &module1, "main"),
-        "Should have main function"
-    );
+    assert_source_signature(&ctx1, &module1, "value", 0, "i32");
+    assert_eq!(returned_constant(&ctx1, &module1, "value"), 3);
 
-    // Modify the source file
-    let updated_text = "fn main() { let _ = 1 + 2 + 3 + 4 }";
+    let updated_text = "fn value() -> Nat { 10 } fn main() {}";
     let updated_tree = parser.parse(updated_text, None).expect("tree");
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));
-
-    // Lower again - should recompute with updated source
     let (ctx2, module2) = expect_compilation_success(&db, source_file);
-    assert!(
-        find_func_by_name(&ctx2, &module2, "main"),
-        "Should have main function after update"
-    );
+    assert_source_signature(&ctx2, &module2, "value", 0, "i32");
+    assert_eq!(returned_constant(&ctx2, &module2, "value"), 10);
 
-    // Lower again without changes - pipeline still works
     let (ctx3, module3) = expect_compilation_success(&db, source_file);
-    assert!(
-        find_func_by_name(&ctx3, &module3, "main"),
-        "Should have main function on cached run"
-    );
-
-    // Verify modules have the same structure (same number of top-level ops)
+    assert_source_signature(&ctx3, &module3, "value", 0, "i32");
+    assert_eq!(returned_constant(&ctx3, &module3, "value"), 10);
     assert_eq!(
-        module2.ops(&ctx2).len(),
-        module3.ops(&ctx3).len(),
-        "Modules should have the same number of top-level ops"
+        returned_constant(&ctx2, &module2, "value"),
+        returned_constant(&ctx3, &module3, "value")
     );
 }
 
@@ -167,19 +193,9 @@ fn main() { print_line("test") }
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
     let (ctx, module) = expect_compilation_success(db, source);
 
-    // Verify all user functions exist
-    assert!(
-        find_func_by_name(&ctx, &module, "add"),
-        "Should have add function"
-    );
-    assert!(
-        find_func_by_name(&ctx, &module, "multiply"),
-        "Should have multiply function"
-    );
-    assert!(
-        find_func_by_name(&ctx, &module, "main"),
-        "Should have main function"
-    );
+    assert_source_signature(&ctx, &module, "add", 2, "i32");
+    assert_source_signature(&ctx, &module, "multiply", 2, "i32");
+    assert_source_signature(&ctx, &module, "main", 0, "nil");
 }
 
 #[test]
@@ -225,9 +241,5 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
     let (ctx, module) = expect_compilation_success(db, source_file);
 
-    // Verify the main function exists
-    assert!(
-        find_func_by_name(&ctx, &module, "main"),
-        "Should have main function"
-    );
+    assert_source_signature(&ctx, &module, "main", 0, "nil");
 }

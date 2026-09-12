@@ -9,7 +9,7 @@
 //! UniVar IDs include the function name, making them globally unique across all
 //! functions without needing a global counter.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
@@ -71,6 +71,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
+
+    /// Record expressions that already emitted a missing-field diagnostic.
+    reported_missing_record_fields: HashSet<NodeId>,
 
     /// Function-local quantifiers introduced by pure `let` generalization.
     /// These are distinct from the enclosing function scheme's binders when
@@ -172,6 +175,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
+            reported_missing_record_fields: HashSet::new(),
             local_generalizations: HashMap::new(),
             call_callee_types: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
@@ -337,6 +341,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get the type of an AST node.
     pub fn get_node_type(&self, node: NodeId) -> Option<Type<'db>> {
         self.node_types.get(&node).copied()
+    }
+
+    /// Returns whether this record expression has not reported a missing field yet.
+    pub fn mark_missing_record_field_reported(&mut self, node: NodeId) -> bool {
+        self.reported_missing_record_fields.insert(node)
     }
 
     /// Record a resolved UFCS method for later conversion to Call.

@@ -5,11 +5,14 @@ mod common;
 use common::{assert_native_output, compile_native_or_panic};
 use ropey::Rope;
 use salsa::Database;
+use std::ops::ControlFlow;
 use tribute::TributeDatabaseImpl;
 use tribute_front::SourceCst;
-use tribute_ir::ModulePathExt as _;
-use trunk_ir::Symbol;
-use trunk_ir::{IrContext, Module, RegionRef};
+use tribute_ir::dialect::closure;
+use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::walk::{WalkAction, walk_region};
+use trunk_ir::{Attribute, IrContext, Module, OpRef, ValueDef, ValueRef};
 
 #[test]
 fn test_add_compiles_and_runs() {
@@ -176,44 +179,31 @@ fn main() {
 /// should be properly instantiated at the call site.
 #[test]
 fn test_generic_indirect_call() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
-
-    let source_code = Rope::from_str(
-        r#"
-fn compute() ->{} Int {
-    let f = fn(x) { x }
-    f(+42)
-}
+    let code = r#"
+fn apply_generic(f: fn(a) -> a, x: a) ->{} a { f(x) }
+fn compute_int() ->{} Int { apply_generic(fn(x) { x }, +42) }
+fn compute_float() ->{} Float { apply_generic(fn(x) { x }, 3.5) }
 fn main() { }
-"#,
-    );
-
+"#;
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
-
-        // Collect diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-
-        // Run through evidence params to get arena IR
-        let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed")
-            .expect("frontend should produce a module");
-
-        // Check for func.call_indirect in the module
-        let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
-
-        assert!(
-            has_call_indirect,
-            "Expected func.call_indirect for indirect function call"
-        );
+        let source = SourceCst::from_source_str(db, "generic_indirect.trb", code);
+        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+            .expect("CPS and lambda lifting").expect("frontend module");
+        let mut specializations = Vec::new();
+        for (name, scalar) in [("compute_int", "i32"), ("compute_float", "f64")] {
+            let caller = named_function(&ctx, module, name);
+            let calls = function_ops::<func::TailCall>(&ctx, caller);
+            let call = calls.into_iter().find(|call| call.args(&ctx).iter().any(|&arg| {
+                matches!(ctx.value_def(arg), ValueDef::OpResult(op, _) if closure::New::matches(&ctx, op))
+            })).expect("source call must pass a closure to its specialization");
+            let target = named_function(&ctx, module, &call.callee(&ctx).to_string());
+            let indirect = only_indirect_call(&ctx, target);
+            assert_indirect_signature(&ctx, target, indirect);
+            let args = &ctx.op_operands(indirect)[1..];
+            assert_eq!(ctx.types.get(ctx.value_ty(*args.last().unwrap())).name, scalar);
+            specializations.push(target.op_ref());
+        }
+        assert_ne!(specializations[0], specializations[1], "Int and Float must instantiate distinct callable contracts");
     });
 }
 
@@ -388,443 +378,298 @@ fn main() {
 // Lambda Lifting Tests (Issue #93)
 // ============================================================================
 
-/// Test simple identity lambda (no captures).
+/// Locate the exact source definition or a definition reached by its symbol reference.
+fn named_function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
+    let functions: Vec<_> = module
+        .ops(ctx)
+        .iter()
+        .filter_map(|&op| {
+            func::Func::from_op(ctx, op)
+                .ok()
+                .filter(|f| f.sym_name(ctx) == name)
+        })
+        .collect();
+    assert_eq!(functions.len(), 1, "expected one physical function {name}");
+    functions[0]
+}
+
+fn function_ops<T: DialectOp>(ctx: &IrContext, function: func::Func) -> Vec<T> {
+    let mut found = Vec::new();
+    let _ = walk_region::<()>(ctx, function.body(ctx), &mut |op| {
+        if let Ok(typed) = T::from_op(ctx, op) {
+            found.push(typed);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    found
+}
+
+fn defining_op(ctx: &IrContext, value: ValueRef) -> OpRef {
+    let ValueDef::OpResult(op, _) = ctx.value_def(value) else {
+        panic!("expected operation result");
+    };
+    op
+}
+
+fn only_indirect_call(ctx: &IrContext, function: func::Func) -> OpRef {
+    let mut calls: Vec<_> = function_ops::<func::CallIndirect>(ctx, function)
+        .into_iter()
+        .map(|op| op.op_ref())
+        .collect();
+    calls.extend(
+        function_ops::<func::TailCallIndirect>(ctx, function)
+            .into_iter()
+            .map(|op| op.op_ref()),
+    );
+    assert_eq!(calls.len(), 1, "expected source-linked indirect transfer");
+    calls[0]
+}
+
+/// Check the complete physical transfer contract, including resultless CPS tails.
+fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
+    let signature = ctx
+        .op(call)
+        .attributes
+        .get_type("signature")
+        .expect("exact indirect signature");
+    let signature = func::FuncSig::from_type_ref(ctx, signature).expect("complete signature");
+    let operands = ctx.op_operands(call);
+    assert_eq!(
+        operands[1..]
+            .iter()
+            .map(|&arg| ctx.value_ty(arg))
+            .collect::<Vec<_>>(),
+        signature.inputs(ctx)
+    );
+    if func::TailCallIndirect::matches(ctx, call) {
+        assert!(ctx.op_results(call).is_empty());
+        let owner_signature = func::FuncSig::from_type_ref(ctx, owner.r#type(ctx)).unwrap();
+        assert_eq!(signature.results(ctx), owner_signature.results(ctx));
+        assert_eq!(
+            tribute_core::get_calling_convention(ctx, call),
+            Some(tribute_core::CallingConvention::Cps)
+        );
+    } else {
+        assert_eq!(ctx.op_result_types(call), signature.results(ctx));
+    }
+}
+
+fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New, func::Func) {
+    let owner = named_function(ctx, module, name);
+    let call = only_indirect_call(ctx, owner);
+    assert_indirect_signature(ctx, owner, call);
+    let closure = closure::New::from_op(ctx, defining_op(ctx, ctx.op_operands(call)[0]))
+        .expect("indirect callee must be the source lambda");
+    let lifted = named_function(ctx, module, &closure.func_ref(ctx).to_string());
+    let closure_ty = ctx.value_ty(closure.result(ctx));
+    let callable = closure::Closure::from_type_ref(ctx, closure_ty).expect("typed closure");
+    let signature = func::FuncSig::from_type_ref(ctx, callable.func_type(ctx)).unwrap();
+    assert_eq!(
+        signature.as_type_ref(),
+        ctx.op(call).attributes.get_type("signature").unwrap()
+    );
+    let environment_index =
+        tribute_core::calling_convention::get_physical_closure_environment_index(ctx, closure_ty)
+            .expect("environment placement");
+    let lifted_signature = func::FuncSig::from_type_ref(ctx, lifted.r#type(ctx)).unwrap();
+    let entry = ctx.region(lifted.body(ctx)).blocks[0];
+    let entry_types: Vec<_> = ctx
+        .block_args(entry)
+        .iter()
+        .map(|&arg| ctx.value_ty(arg))
+        .collect();
+    assert_eq!(entry_types, lifted_signature.inputs(ctx));
+    assert_eq!(
+        ctx.types
+            .get(lifted_signature.inputs(ctx)[environment_index])
+            .dialect,
+        "tribute_rt"
+    );
+    assert_eq!(
+        ctx.types
+            .get(lifted_signature.inputs(ctx)[environment_index])
+            .name,
+        "anyref"
+    );
+    let mut expected = signature.inputs(ctx).to_vec();
+    expected.insert(
+        environment_index,
+        lifted_signature.inputs(ctx)[environment_index],
+    );
+    assert_eq!(expected, lifted_signature.inputs(ctx));
+    assert_eq!(signature.results(ctx), lifted_signature.results(ctx));
+    assert_eq!(
+        tribute_core::get_calling_convention(ctx, lifted.op_ref()),
+        tribute_core::get_physical_closure_convention(ctx, closure_ty)
+    );
+    (closure, lifted)
+}
+
+/// Lambda lifting must preserve the identity result and empty environment.
 #[test]
 fn test_lambda_identity() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
-
-    let source_code = Rope::from_str(
-        r#"
-fn compute() ->{} Int {
-    let f = fn(x) { x }
-    f(+42)
-}
-fn main() { }
-"#,
-    );
-
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file =
-            SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
-
-        // Collect diagnostics via compile_with_diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
+        let source = SourceCst::from_source_str(
+            db,
+            "lambda_identity.trb",
+            "fn compute() ->{} Int { let f = fn(x) { x } f(+42) } fn main() {}",
         );
-
-        // Run through evidence params to get arena IR for structural checks
-        let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed")
-            .expect("frontend should produce a module");
-
-        // Verify the module has a lifted function (name starts with __lambda_)
-        let func_dialect = Symbol::new("func");
-        let func_name = Symbol::new("func");
-
-        let has_lifted = m.ops(&ctx).iter().any(|&op_ref| {
-            let op_data = ctx.op(op_ref);
-            op_data.dialect == func_dialect
-                && op_data.name == func_name
-                && op_data
-                    .attributes
-                    .get_symbol("sym_name")
-                    .is_some_and(|name| {
-                        name.last_segment()
-                            .with_str(|s: &str| s.starts_with("__clam_"))
-                    })
-        });
-
-        assert!(
-            has_lifted,
-            "Expected a lifted lambda function in the module"
+        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+            .unwrap()
+            .unwrap();
+        let (closure, lifted) = source_closure(&ctx, module, "compute");
+        assert!(adt::RefNull::matches(
+            &ctx,
+            defining_op(&ctx, closure.env(&ctx))
+        ));
+        let call = only_indirect_call(&ctx, named_function(&ctx, module, "compute"));
+        let boxed = *ctx.op_operands(call).last().unwrap();
+        assert_eq!(ctx.types.get(ctx.value_ty(boxed)).name, "anyref");
+        let cast = defining_op(&ctx, boxed);
+        assert!(core::UnrealizedConversionCast::matches(&ctx, cast));
+        let input = ctx.op_operands(cast);
+        assert_eq!(input.len(), 1);
+        assert_eq!(ctx.types.get(ctx.value_ty(input[0])).name, "i32");
+        let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input[0])).unwrap();
+        assert_eq!(argument.value(&ctx), Attribute::Int(42));
+        let entry = ctx.region(lifted.body(&ctx)).blocks[0];
+        let value = *ctx.block_args(entry).last().unwrap();
+        let transfer = only_indirect_call(&ctx, lifted);
+        assert_indirect_signature(&ctx, lifted, transfer);
+        assert_eq!(
+            ctx.op_operands(transfer).last(),
+            Some(&value),
+            "identity lambda must forward its parameter"
         );
+        assert!(function_ops::<closure::Lambda>(&ctx, lifted).is_empty());
     });
 }
 
-/// Test lambda with capture - verifies closure.new is created.
+/// The capture value must be stored, recovered, added, and delivered to done.
 #[test]
 fn test_lambda_with_capture() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
-
-    let source_code = Rope::from_str(
-        r#"
-fn test_capture() ->{} Int {
-    let a = +10
-    let f = fn(x) { x + a }
-    f(+32)
-}
-
-fn main() { }
-"#,
-    );
-
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
-
-        // Collect diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-
-        // Run through evidence params to get arena IR
-        let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed")
-            .expect("frontend should produce a module");
-
-        // Check for closure.new in the output
-        let has_closure_new = check_for_closure_new_in_module(&ctx, m);
-
-        assert!(
-            has_closure_new,
-            "Expected closure.new operation for captured lambda"
-        );
+        let source = SourceCst::from_source_str(db, "lambda_capture.trb", "fn test_capture() ->{} Int { let a = +10 let f = fn(x) { x + a } f(+32) } fn main() {}");
+        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source).unwrap().unwrap();
+        let (closure, lifted) = source_closure(&ctx, module, "test_capture");
+        let call = only_indirect_call(&ctx, named_function(&ctx, module, "test_capture"));
+        let argument = arith::Const::from_op(&ctx, defining_op(&ctx, *ctx.op_operands(call).last().unwrap())).unwrap();
+        assert_eq!(argument.value(&ctx), Attribute::Int(32));
+        let environment = adt::StructNew::from_op(&ctx, defining_op(&ctx, closure.env(&ctx))).expect("capture environment");
+        assert_eq!(environment.fields(&ctx).len(), 1);
+        let capture = arith::Const::from_op(&ctx, defining_op(&ctx, environment.fields(&ctx)[0])).unwrap();
+        assert_eq!(capture.value(&ctx), Attribute::Int(10));
+        let additions = function_ops::<arith::Addi>(&ctx, lifted);
+        assert_eq!(additions.len(), 1);
+        let addition = additions[0];
+        let recovered = adt::StructGet::from_op(&ctx, defining_op(&ctx, addition.rhs(&ctx))).expect("captured addend");
+        assert_eq!(recovered.field(&ctx), 0);
+        assert_eq!(recovered.r#type(&ctx), environment.r#type(&ctx));
+        let recovery = adt::RefCast::from_op(&ctx, defining_op(&ctx, recovered.r#ref(&ctx))).unwrap();
+        let closure_ty = ctx.value_ty(closure.result(&ctx));
+        let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        let entry = ctx.region(lifted.body(&ctx)).blocks[0];
+        assert_eq!(recovery.r#ref(&ctx), ctx.block_args(entry)[env_index]);
+        assert_eq!(addition.lhs(&ctx), *ctx.block_args(entry).last().unwrap());
+        let transfer = only_indirect_call(&ctx, lifted);
+        assert_indirect_signature(&ctx, lifted, transfer);
+        assert_eq!(ctx.op_operands(transfer).last(), Some(&addition.result(&ctx)));
     });
 }
 
-/// Helper to check for closure.new in a module (arena version)
-fn check_for_closure_new_in_module(ctx: &IrContext, m: Module) -> bool {
-    for &op_ref in &m.ops(ctx) {
-        let op_data = ctx.op(op_ref);
-        for &region_ref in &op_data.regions {
-            if check_for_closure_new_in_region(ctx, region_ref) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Helper to recursively check for closure.new in a region (arena version)
-fn check_for_closure_new_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
-    let closure_dialect = Symbol::new("closure");
-    let closure_new_name = Symbol::new("new");
-
-    let region = ctx.region(region_ref);
-    for &block_ref in &region.blocks {
-        let block = ctx.block(block_ref);
-        for &op_ref in &block.ops {
-            let op_data = ctx.op(op_ref);
-            if op_data.dialect == closure_dialect && op_data.name == closure_new_name {
-                return true;
-            }
-            // Recurse into nested regions
-            for &nested_region in &op_data.regions {
-                if check_for_closure_new_in_region(ctx, nested_region) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-// ============================================================================
-// Indirect Function Call Tests (Issue #94)
-// ============================================================================
-
-/// Test that func.call_indirect is generated for function-typed variables.
+/// An ordinary monomorphic callback must lower to a typed indirect transfer.
 #[test]
 fn test_indirect_call_ir_generation() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
-
-    let source_code = Rope::from_str(
-        r#"
-fn compute() ->{} Int {
-    let f = fn(x) { x }
-    f(+42)
-}
-fn main() { }
-"#,
-    );
-
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
-
-        // Collect diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
+        let source = SourceCst::from_source_str(
+            db,
+            "indirect_call.trb",
+            "fn invoke(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn main() {}",
         );
-
-        // Run through evidence params to get arena IR
-        let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed")
-            .expect("frontend should produce a module");
-
-        // Check for func.call_indirect in the module
-        let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
-
+        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+            .unwrap()
+            .unwrap();
+        let owner = named_function(&ctx, module, "invoke");
+        let call = only_indirect_call(&ctx, owner);
+        assert_indirect_signature(&ctx, owner, call);
+        let entry = ctx.region(owner.body(&ctx)).blocks[0];
         assert!(
-            has_call_indirect,
-            "Expected func.call_indirect for indirect function call"
+            ctx.block_args(entry).contains(&ctx.op_operands(call)[0]),
+            "callee must be invoke's callback parameter"
         );
+        assert_eq!(ctx.op_operands(call).last(), ctx.block_args(entry).last());
     });
 }
 
-/// Test higher-order function with function parameter.
+/// Follow the source call's closure argument into the lifted implementation.
 #[test]
 fn test_higher_order_function_ir() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
-
-    let source_code = Rope::from_str(
-        r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
-    f(x)
-}
-
-fn compute() ->{} Int {
-    apply(fn(n) { n + +1 }, +41)
-}
-fn main() { }
-"#,
-    );
-
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
-
-        // Collect diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-
-        // Run through evidence params to get arena IR
-        let (ctx, m) = run_through_evidence_params(db, source_file)
-            .expect("run_through_evidence_params should succeed")
-            .expect("frontend should produce a module");
-
-        // Check that apply function has func.call_indirect
-        let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
-
-        assert!(
-            has_call_indirect,
-            "Expected func.call_indirect in apply function"
-        );
+        let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { apply(fn(n) { n + +1 }, +41) } fn main() {}");
+        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source).unwrap().unwrap();
+        let apply = named_function(&ctx, module, "apply");
+        assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
+        let compute = named_function(&ctx, module, "compute");
+        let call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == "apply").expect("source apply call");
+        let argument = call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) { ValueDef::OpResult(op, _) => closure::New::from_op(&ctx, op).ok(), _ => None }).expect("source lambda argument");
+        let lifted = named_function(&ctx, module, &argument.func_ref(&ctx).to_string());
+        let additions = function_ops::<arith::Addi>(&ctx, lifted);
+        assert_eq!(additions.len(), 1);
+        let constant = arith::Const::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
+        assert_eq!(constant.value(&ctx), Attribute::Int(1));
     });
 }
 
-/// Helper to check for func.call_indirect in a module (arena version)
-fn check_for_call_indirect_in_module(ctx: &IrContext, m: Module) -> bool {
-    for &op_ref in &m.ops(ctx) {
-        let op_data = ctx.op(op_ref);
-        for &region_ref in &op_data.regions {
-            if check_for_call_indirect_in_region(ctx, region_ref) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Helper to recursively check for func.call_indirect in a region (arena version)
-fn check_for_call_indirect_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
-    let func_dialect = Symbol::new("func");
-    let call_indirect_name = Symbol::new("call_indirect");
-
-    let region = ctx.region(region_ref);
-    for &block_ref in &region.blocks {
-        let block = ctx.block(block_ref);
-        for &op_ref in &block.ops {
-            let op_data = ctx.op(op_ref);
-            if op_data.dialect == func_dialect && op_data.name == call_indirect_name {
-                return true;
-            }
-            // Recurse into nested regions
-            for &nested_region in &op_data.regions {
-                if check_for_call_indirect_in_region(ctx, nested_region) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Test that closure operations are properly lowered after closure lowering.
-///
-/// After lowering:
-/// - `closure.new` → `func.constant` + `adt.struct_new`
-/// - `closure.func` → `adt.struct_get` (field 0)
-/// - `closure.env` → `adt.struct_get` (field 1)
+/// Closure lowering must project both code and environment from the same callback
+/// and insert that environment according to its retained callable metadata.
 #[test]
 fn test_closure_lowering() {
-    use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::{compile_with_diagnostics, run_through_closure_lower};
-
-    let source_code = Rope::from_str(
-        r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
-    f(x)
-}
-
-fn compute() ->{} Int {
-    apply(fn(n) { n + +1 }, +41)
-}
-fn main() { }
-"#,
-    );
-
     TributeDatabaseImpl::default().attach(|db| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
-
-        // Collect diagnostics
-        let result = compile_with_diagnostics(db, source_file);
-
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-
-        // Run through closure lower to get arena IR
-        let (ctx, m) = run_through_closure_lower(db, source_file)
-            .expect("run_through_closure_lower should succeed")
-            .expect("frontend should produce a module");
-
-        // Check that closure operations are lowered
-        let lowered_ops = check_for_lowered_closure_ops_in_module(&ctx, m);
-
-        // Verify closure.func/closure.env are lowered to adt.struct_get
-        assert!(
-            lowered_ops.has_struct_get,
-            "Expected adt.struct_get after closure lowering (from closure.func/closure.env)"
-        );
-        assert!(
-            lowered_ops.has_call_indirect_evidence_arg,
-            "Expected lowered func.call_indirect to pass evidence before closure env"
-        );
+        let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() {}");
+        let (ctx, module) = tribute::pipeline::run_through_closure_lower(db, source).unwrap().unwrap();
+        let apply = named_function(&ctx, module, "apply");
+        let call = only_indirect_call(&ctx, apply);
+        assert_indirect_signature(&ctx, apply, call);
+        let code = adt::StructGet::from_op(&ctx, defining_op(&ctx, ctx.op_operands(call)[0])).expect("projected callback code");
+        assert_eq!(code.field(&ctx), 0);
+        let callback = code.r#ref(&ctx);
+        let closure_ty = ctx.value_ty(callback);
+        let callable = closure::Closure::from_type_ref(&ctx, closure_ty).expect("retained callback contract");
+        let env_index = tribute_core::calling_convention::get_physical_closure_environment_index(&ctx, closure_ty).unwrap();
+        let operands = &ctx.op_operands(call)[1..];
+        let env = adt::StructGet::from_op(&ctx, defining_op(&ctx, operands[env_index])).expect("projected callback environment");
+        assert_eq!(env.field(&ctx), 1);
+        assert_eq!(env.r#ref(&ctx), callback);
+        let signature = func::FuncSig::from_type_ref(&ctx, callable.func_type(&ctx)).unwrap();
+        let mut expected = signature.inputs(&ctx).to_vec();
+        expected.insert(env_index, ctx.value_ty(env.result(&ctx)));
+        assert_eq!(expected, operands.iter().map(|&value| ctx.value_ty(value)).collect::<Vec<_>>());
+        let entry = ctx.region(apply.body(&ctx)).blocks[0];
+        assert!(ctx.block_args(entry).contains(&callback));
+        assert_eq!(operands.last(), ctx.block_args(entry).last());
+        assert!(function_ops::<closure::New>(&ctx, apply).is_empty());
+        assert!(function_ops::<closure::Func>(&ctx, apply).is_empty());
+        assert!(function_ops::<closure::Env>(&ctx, apply).is_empty());
+        let compute = named_function(&ctx, module, "compute");
+        let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == "apply").unwrap();
+        let pack = source_call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) {
+            ValueDef::OpResult(op, _) if tribute_core::get_closure_callable_type(&ctx, op) == Some(closure_ty) => adt::StructNew::from_op(&ctx, op).ok(), _ => None,
+        }).expect("source callback storage with exact callable contract");
+        let fields = pack.fields(&ctx);
+        let function = func::Constant::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
+        let lifted = named_function(&ctx, module, &function.func_ref(&ctx).to_string());
+        let environment = adt::StructNew::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap();
+        assert_eq!(environment.fields(&ctx).len(), 1);
+        assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, environment.fields(&ctx)[0])).unwrap().value(&ctx), Attribute::Int(1));
+        let additions = function_ops::<arith::Addi>(&ctx, lifted);
+        assert_eq!(additions.len(), 1);
+        let capture = adt::StructGet::from_op(&ctx, defining_op(&ctx, additions[0].rhs(&ctx))).unwrap();
+        assert_eq!(capture.r#type(&ctx), environment.r#type(&ctx));
+        assert_eq!(capture.field(&ctx), 0);
+        let transfer = only_indirect_call(&ctx, lifted);
+        assert_indirect_signature(&ctx, lifted, transfer);
+        assert_eq!(ctx.op_operands(transfer).last(), Some(&additions[0].result(&ctx)));
     });
-}
-
-/// Tracks what lowered closure operations are present
-struct LoweredClosureOps {
-    has_func_constant: bool,
-    has_struct_new: bool,
-    has_struct_get: bool,
-    has_call_indirect_evidence_arg: bool,
-}
-
-impl LoweredClosureOps {
-    fn empty() -> Self {
-        Self {
-            has_func_constant: false,
-            has_struct_new: false,
-            has_struct_get: false,
-            has_call_indirect_evidence_arg: false,
-        }
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.has_func_constant |= other.has_func_constant;
-        self.has_struct_new |= other.has_struct_new;
-        self.has_struct_get |= other.has_struct_get;
-        self.has_call_indirect_evidence_arg |= other.has_call_indirect_evidence_arg;
-    }
-}
-
-/// Helper to check for lowered closure operations in a module (arena version)
-fn check_for_lowered_closure_ops_in_module(ctx: &IrContext, m: Module) -> LoweredClosureOps {
-    let mut result = LoweredClosureOps::empty();
-
-    for &op_ref in &m.ops(ctx) {
-        let op_data = ctx.op(op_ref);
-        for &region_ref in &op_data.regions {
-            result.merge(check_for_lowered_closure_ops_in_region(ctx, region_ref));
-        }
-    }
-
-    result
-}
-
-/// Helper to check for lowered closure operations in a region (arena version)
-fn check_for_lowered_closure_ops_in_region(
-    ctx: &IrContext,
-    region_ref: RegionRef,
-) -> LoweredClosureOps {
-    let func_dialect = Symbol::new("func");
-    let func_constant_name = Symbol::new("constant");
-    let func_call_indirect_name = Symbol::new("call_indirect");
-    let adt_dialect = Symbol::new("adt");
-    let adt_struct_new_name = Symbol::new("struct_new");
-    let adt_struct_get_name = Symbol::new("struct_get");
-
-    let mut result = LoweredClosureOps::empty();
-
-    let region = ctx.region(region_ref);
-    for &block_ref in &region.blocks {
-        let block = ctx.block(block_ref);
-        for &op_ref in &block.ops {
-            let op_data = ctx.op(op_ref);
-            let dialect = op_data.dialect;
-            let op_name = op_data.name;
-
-            // Check for func.constant (from closure.new lowering)
-            if dialect == func_dialect && op_name == func_constant_name {
-                result.has_func_constant = true;
-            }
-            if dialect == func_dialect && op_name == func_call_indirect_name {
-                let operands = ctx.op_operands(op_ref);
-                if operands.len() > 1
-                    && tribute_ir::dialect::ability::is_evidence_type_ref(
-                        ctx,
-                        ctx.value_ty(operands[1]),
-                    )
-                {
-                    result.has_call_indirect_evidence_arg = true;
-                }
-            }
-            // Check for adt.struct_new (from closure.new lowering)
-            if dialect == adt_dialect && op_name == adt_struct_new_name {
-                result.has_struct_new = true;
-            }
-            // Check for adt.struct_get (from closure.func/closure.env lowering)
-            if dialect == adt_dialect && op_name == adt_struct_get_name {
-                result.has_struct_get = true;
-            }
-
-            // Recurse into nested regions
-            for &nested_region in &op_data.regions {
-                result.merge(check_for_lowered_closure_ops_in_region(ctx, nested_region));
-            }
-        }
-    }
-
-    result
 }
 
 // ============================================================================

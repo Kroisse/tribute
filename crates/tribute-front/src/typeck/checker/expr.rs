@@ -192,7 +192,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -698,7 +698,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
@@ -836,6 +836,7 @@ impl<'db> TypeChecker<'db> {
     fn infer_record_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
         type_name: &ResolvedRef<'db>,
         fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
         spread: Option<&Expr<ResolvedRef<'db>>>,
@@ -846,6 +847,26 @@ impl<'db> TypeChecker<'db> {
         } else {
             ctor_ty
         };
+
+        if spread.is_none()
+            && let (Some(struct_id), _) = self.extract_struct_info(struct_ty)
+            && let Some(declared_fields) = self.env.lookup_struct_fields(struct_id)
+        {
+            let supplied_fields: HashSet<_> = fields.iter().map(|(name, _)| *name).collect();
+            if let Some((missing, _)) = declared_fields
+                .iter()
+                .find(|(name, _)| !supplied_fields.contains(name))
+                && ctx.mark_missing_record_field_reported(record_id)
+            {
+                Diagnostic::new(
+                    format!("missing field: {missing}"),
+                    self.get_span(record_id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+        }
 
         for (field_name, field_expr) in fields {
             let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);

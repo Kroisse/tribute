@@ -713,12 +713,8 @@ fn main() {
 /// Test `fn` handler arm (tail-resumptive) compiles and runs.
 ///
 /// `Ask::ask()` is declared as `fn`, so the handler arm uses `fn` keyword.
-/// Currently `fn` arms are lowered identically to `op` arms (no automatic
-/// resume from body return value yet). This test verifies the `fn` handler
-/// arm path through parsing, resolution, and lowering.
-///
-/// Note: When tail-resumptive optimization is implemented, the body's return
-/// value will automatically become the resume value without explicit `resume`.
+/// A tail-resumptive arm automatically resumes the value returned by its body.
+/// This test verifies that path through parsing, resolution, and lowering.
 #[test]
 fn test_fn_handler_arm() {
     let code = r#"ability Ask {
@@ -737,9 +733,43 @@ fn main() {
     __tribute_print_nat(result)
 }
 "#;
-    // fn arm body returns 42; since tail-resumptive auto-resume is not yet
-    // implemented, this acts like an early return with value 42.
     assert_native_output("fn_handler_arm.trb", code, "42");
+}
+
+/// The source-logical route resumes a `fn` arm through the completion arm:
+/// the body reaches the handler, the handler supplies the resumed value, the
+/// `do` arm observes that value, and the handle returns it to the caller.
+#[test]
+fn test_source_logical_fn_handler_observes_terminal_order_and_result() {
+    let code = r#"
+ability Ask {
+    fn ask() -> Int
+}
+
+fn use_ask() ->{Ask} Int {
+    __tribute_print_int(+10)
+    Ask::ask()
+}
+
+fn main() {
+    let result = handle use_ask() {
+        do result {
+            __tribute_print_int(+30)
+            result
+        }
+        fn Ask::ask() {
+            __tribute_print_int(+20)
+            +41
+        }
+    }
+    __tribute_print_int(result)
+}
+"#;
+    assert_native_output(
+        "source_logical_fn_handler_terminal_order.trb",
+        code,
+        "10\n20\n30\n41",
+    );
 }
 
 // =============================================================================

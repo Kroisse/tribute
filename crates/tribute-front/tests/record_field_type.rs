@@ -29,6 +29,24 @@ fn make_point() -> Point {
     run_ast_pipeline(db, source);
 }
 
+/// Record fields may be supplied in source order independent of declaration order.
+#[salsa_test]
+fn test_record_fields_can_be_reordered(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "reordered_record_fields.trb",
+        r#"
+struct Point { x: Int, y: Int }
+
+fn make_point() -> Point {
+    Point { y: 20, x: 10 }
+}
+"#,
+    );
+
+    run_ast_pipeline(db, source);
+}
+
 /// Test record construction with multiple field types.
 #[salsa_test]
 fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
