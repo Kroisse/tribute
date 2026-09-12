@@ -1244,6 +1244,25 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
 }
 
 #[test]
+fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
+    let (_ctx, _module, plan) = build(
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@value, core.i32]]}
+  func.func @foreign(%value: !R) -> !R attributes {abi = "C"}
+  func.func @caller(%value: !R) -> !R {
+    %result = func.call %value {callee = @foreign} : !R
+    func.return %result
+  }
+}"#,
+    );
+    let caller = plan.function(Symbol::new("caller")).unwrap();
+    assert_eq!(count(caller, ActionKind::CallBorrow), 1);
+    assert_eq!(count(caller, ActionKind::CallRetain), 0);
+    assert_eq!(count(caller, ActionKind::ReturnTransfer), 1);
+}
+
+#[test]
 fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
     for ir in [
         r#"core.module @test {

@@ -22,6 +22,10 @@ pub struct MonomorphizeMetadata<'db> {
     pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
     pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
     pub exhaustive_cases: HashSet<NodeId>,
+    /// Exact base identities transported to generated generic extern declarations.
+    ///
+    /// This is specialization metadata, not source-provenance or ownership data.
+    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
 }
 
 /// Result of monomorphization: updated module + function types.
@@ -86,16 +90,26 @@ pub fn monomorphize_functions<'db>(
             &module,
             &new_instantiations,
             &source_function_types,
+            &metadata.compiler_intrinsics,
         );
-        for (type_args, origins) in specializations.metadata_origins {
+        let specialize::GeneratedSpecializations {
+            specialized_declarations,
+            specialized_extern_declarations,
+            specialized_function_types,
+            metadata_origins,
+            compiler_intrinsic_specializations,
+        } = specializations;
+        for (type_args, origins) in metadata_origins {
             specialize_metadata(db, &mut metadata, &type_args, &origins);
         }
+        metadata
+            .compiler_intrinsics
+            .extend(compiler_intrinsic_specializations);
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
         let rewritten_module =
             rewrite::rewrite_module(db, module, &source_function_types, &rewrite_map);
-        let specialized_decls: Vec<Decl<TypedRef<'db>>> = specializations
-            .specialized_declarations
+        let specialized_decls: Vec<Decl<TypedRef<'db>>> = specialized_declarations
             .into_iter()
             .map(Decl::Function)
             .collect();
@@ -104,8 +118,13 @@ pub fn monomorphize_functions<'db>(
 
         let mut decls = rewritten_module.decls;
         decls.extend(rewritten_specialized);
+        decls.extend(
+            specialized_extern_declarations
+                .into_iter()
+                .map(Decl::ExternFunction),
+        );
         module = Module::new(rewritten_module.id, rewritten_module.name, decls);
-        all_function_types.extend(specializations.specialized_function_types);
+        all_function_types.extend(specialized_function_types);
     }
     assert!(
         reached_fixpoint,
@@ -505,6 +524,7 @@ mod tests {
                 },
             )]),
             exhaustive_cases: HashSet::from([origin]),
+            compiler_intrinsics: HashMap::new(),
         };
         let type_args = vec![int];
         let origins = HashSet::from([origin]);

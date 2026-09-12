@@ -2742,7 +2742,20 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                if !exact_intrinsic && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
+                let trusted_c_ffi = matches!(
+                    data.attributes.get("abi"),
+                    Some(Attribute::String(abi)) if abi == "C"
+                );
+                let intrinsic_directive = matches!(
+                    data.attributes.get("abi"),
+                    Some(Attribute::String(abi)) if abi == "intrinsic"
+                );
+                if intrinsic_directive && !exact_intrinsic && !registered.contains_key(&symbol) {
+                    push_op_error(ctx, op, errors, "unknown compiler intrinsic directive");
+                }
+                if !exact_intrinsic
+                    && !trusted_c_ffi
+                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
                 {
                     push_op_error(
                         ctx,
@@ -5292,7 +5305,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_nested_aggregate_in_bodyless_external_fails_closed() {
+    fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !S = adt.struct() {name = @S, fields = []}
@@ -5304,7 +5317,7 @@ mod tests {
         );
 
         let result = validate(&ctx, module, &[], &[]);
-        assert!(messages(&result).contains("bodyless external"), "{result}");
+        assert!(result.is_ok(), "{result}");
     }
 
     #[test]

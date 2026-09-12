@@ -93,6 +93,8 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "Float::<=",
         "Float::>",
         "Float::>=",
+        "__bytes_get_or_panic",
+        "std::io::__tribute_io_write",
         "std::io::__tribute_io_read_line",
     ]
     .into_iter()
@@ -104,10 +106,11 @@ fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
     SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
 }
 
-/// Register compiler intrinsics from the canonical prelude AST.
+/// Register supported compiler intrinsic directives by canonical source name.
 ///
-/// Callers must invoke this only for the compiler-owned prelude module.  A
-/// user module with the same declarations must never be passed here.
+/// `extern "intrinsic"` is compiler-reserved: any source declaration using it
+/// requests lowering under its qualified name. The fixed supported set remains
+/// the validation boundary; unknown directives are rejected before lowering.
 pub fn registered_compiler_intrinsics<V>(module: &AstModule<V>) -> HashMap<NodeId, Symbol>
 where
     V: salsa::Update,
@@ -200,7 +203,7 @@ pub struct TypedModule<'db> {
     /// Case expressions whose source coverage is known to be exhaustive.
     pub exhaustive_cases: std::collections::HashSet<NodeId>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
-    /// Exact declaration IDs registered from the compiler-owned prelude.
+    /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
 }
 
