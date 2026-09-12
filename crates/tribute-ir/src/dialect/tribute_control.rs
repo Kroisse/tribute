@@ -2789,6 +2789,42 @@ fn validate_callable_origins(
     }
 }
 
+/// `unrealized_conversion_cast` is representation glue, never a source-callable
+/// adapter. Convention strengthening must be expressed by `func_ref` and
+/// lowered while its declaration provenance is still available. Changing a
+/// callable's source shape does not create a physical adapter, regardless of
+/// whether its value originates at a named function, lambda, or block argument.
+fn validate_callable_conversion_casts(
+    ctx: &IrContext,
+    body: RegionRef,
+    errors: &mut Vec<ValidationError>,
+) {
+    walk_region_ops(ctx, body, &mut |op| {
+        if core::UnrealizedConversionCast::from_op(ctx, op).is_err() {
+            return;
+        }
+        let ([input], [target_ty]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
+            return;
+        };
+        let source_ty = ctx.value_ty(*input);
+        if FuncSig::from_type_ref(ctx, source_ty).is_none()
+            || FuncSig::from_type_ref(ctx, *target_ty).is_none()
+        {
+            return;
+        }
+        let convention_changes =
+            func_sig_convention(ctx, source_ty) != func_sig_convention(ctx, *target_ty);
+        if convention_changes {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                "core.unrealized_conversion_cast cannot change a source-logical callable calling convention; use tribute_control.func_ref",
+            );
+        }
+    });
+}
+
 fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<ValidationError>) {
     walk_region_ops(ctx, body, &mut |op| {
         if !is_control_op(ctx, op, "return") {
@@ -3253,6 +3289,7 @@ pub fn validate_whole_ir(
         &nominal_layouts,
         &mut errors,
     );
+    validate_callable_conversion_casts(ctx, body, &mut errors);
     validate_callable_origins(
         ctx,
         body,

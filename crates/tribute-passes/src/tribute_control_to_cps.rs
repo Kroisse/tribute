@@ -5630,6 +5630,97 @@ mod tests {
     }
 
     #[test]
+    fn raw_callable_convention_cast_is_rejected_before_mutation() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @run(%value: core.i32) -> core.i32 convention(cps) {
+    %direct = tribute_control.func_ref {func_ref = @id} : !direct
+    %callee = core.unrealized_conversion_cast %direct : !cps
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("cannot change a source-logical callable calling convention"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn func_ref_cast_cannot_hide_a_convention_change_behind_source_erasure() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32> {tribute.calling_convention = 2}
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @apply(%callback: !cps_erased, %value: tribute_rt.anyref) -> core.i32 convention(cps) {
+    %result = tribute_control.call_indirect %callback, %value : core.i32
+    tribute_control.return %result
+  }
+  tribute_control.func @broken(%value: core.i32, %erased: tribute_rt.anyref) -> core.i32 convention(cps) {
+    %direct = tribute_control.func_ref {func_ref = @id} : !direct
+    %forged = core.unrealized_conversion_cast %direct : !cps_erased
+    %result = tribute_control.call %forged, %erased {callee = @apply} : core.i32
+    tribute_control.return %result
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("cannot change a source-logical callable calling convention"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn direct_lambda_cast_cannot_hide_a_convention_change_behind_source_erasure() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32> {tribute.calling_convention = 2}
+  tribute_control.func @apply(%callback: !cps_erased, %value: tribute_rt.anyref) -> core.i32 convention(cps) {
+    %result = tribute_control.call_indirect %callback, %value : core.i32
+    tribute_control.return %result
+  }
+  tribute_control.func @broken(%erased: tribute_rt.anyref) -> core.i32 convention(cps) {
+    %direct = tribute_control.lambda(%value: core.i32) -> core.i32 convention(direct) captures [] {
+      tribute_control.return %value
+    }
+    %forged = core.unrealized_conversion_cast %direct : !cps_erased
+    %result = tribute_control.call %forged, %erased {callee = @apply} : core.i32
+    tribute_control.return %result
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let before = print_module(&ctx, module.op());
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
+        assert!(
+            error
+                .to_string()
+                .contains("cannot change a source-logical callable calling convention"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
     fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
         let input = r#"core.module @test {
   !S = adt.struct() {name = @S, fields = []}

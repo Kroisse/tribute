@@ -685,21 +685,33 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 // These functions take SourceCst and run the pipeline up to a specific stage.
 // Useful for testing individual stages or for tools that need intermediate results.
 
-/// Run pipeline through evidence params (for testing).
+/// Run frontend, source-logical CPS conversion, and lambda lifting (for testing).
 ///
-/// Evidence params are now inserted during ast_to_ir lowering.
+/// Evidence params are introduced by the physical CPS conversion. Keep frontend
+/// metadata in the same arena so the conversion can authenticate declarations.
 pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    let Some(FrontendCompilation {
+        context,
+        module: m,
+        operation_declarations,
+        compiler_intrinsics,
+    }) = compile_frontend_for_shared_route(db, source)
+    else {
         return Ok(None);
     };
+    let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+            .with_compiler_intrinsics(compiler_intrinsics),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
