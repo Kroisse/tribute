@@ -73,6 +73,14 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
+    /// Record layouts already checked during this function's infer/check visits.
+    /// Child expression checking still runs on every visit.
+    checked_record_shapes: HashSet<NodeId>,
+
+    /// One full constructor instance per record occurrence, shared by inference
+    /// and conversion so phantom arguments and callable field rows stay linked.
+    record_constructor_instances: HashMap<NodeId, Type<'db>>,
+
     /// Function-local quantifiers introduced by pure `let` generalization.
     /// These are distinct from the enclosing function scheme's binders when
     /// the solved typed body and callable metadata are materialized.
@@ -174,6 +182,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
+            checked_record_shapes: HashSet::new(),
+            record_constructor_instances: HashMap::new(),
             local_generalizations: HashMap::new(),
             call_callee_types: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
@@ -203,6 +213,20 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn mark_handler_error(&mut self, arm: NodeId, reason: &'static str) -> bool {
         self.reported_handler_errors.insert((arm, reason))
+    }
+
+    pub(crate) fn mark_record_shape_checked(&mut self, record: NodeId) -> bool {
+        self.checked_record_shapes.insert(record)
+    }
+
+    pub(crate) fn get_record_constructor_instance(&self, record: NodeId) -> Option<Type<'db>> {
+        self.record_constructor_instances.get(&record).copied()
+    }
+
+    pub(crate) fn record_constructor_instance(&mut self, record: NodeId, ty: Type<'db>) {
+        self.record_constructor_instances
+            .entry(record)
+            .or_insert(ty);
     }
 
     /// Get the module type environment.

@@ -1517,6 +1517,11 @@ fn run() ->{Trace} Pair {
 }
 "#,
     );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "record spread fixture must type-check: {errors:?}"
+    );
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(&ir, "run");
     assert_in_order(

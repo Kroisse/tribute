@@ -196,7 +196,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -722,7 +722,7 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 spread,
-            } => self.infer_record_type_with_ctx(ctx, type_name, fields, spread.as_ref()),
+            } => self.infer_record_type_with_ctx(ctx, expr.id, type_name, fields, spread.as_ref()),
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 for stmt in stmts {
@@ -912,20 +912,46 @@ impl<'db> TypeChecker<'db> {
             .collect()
     }
 
+    /// Keep the full constructor instance, including field types and effect rows,
+    /// stable across inference and conversion of this source occurrence.
+    fn instantiate_record_constructor_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+    ) -> Type<'db> {
+        if let Some(ty) = ctx.get_record_constructor_instance(record_id) {
+            return ty;
+        }
+        let ty = self.infer_var_with_ctx(ctx, type_name);
+        ctx.record_constructor_instance(record_id, ty);
+        ty
+    }
+
     /// Infer a record literal's nominal type and constrain its fields and spread.
     fn infer_record_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
         type_name: &ResolvedRef<'db>,
         fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
         spread: Option<&Expr<ResolvedRef<'db>>>,
     ) -> Type<'db> {
-        let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+        let ctor_ty = self.instantiate_record_constructor_with_ctx(ctx, record_id, type_name);
         let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
             *result
         } else {
             ctor_ty
         };
+
+        self.validate_record_shape_with_ctx(
+            ctx,
+            record_id,
+            type_name,
+            struct_ty,
+            fields,
+            spread.is_some(),
+        );
 
         for (field_name, field_expr) in fields {
             if let Some(expected_field_ty) =
@@ -943,6 +969,58 @@ impl<'db> TypeChecker<'db> {
         }
 
         struct_ty
+    }
+
+    /// Validate declaration-owned field names once, independently of child typing.
+    fn validate_record_shape_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+        struct_ty: Type<'db>,
+        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        has_spread: bool,
+    ) {
+        let (struct_id, _) = self.extract_struct_info(struct_ty);
+        let (Some(struct_id), ResolvedRef::Constructor { id, .. }) = (struct_id, type_name) else {
+            return;
+        };
+        let Some(declared_fields) = self.env.lookup_struct_fields(struct_id) else {
+            return;
+        };
+        if !ctx.mark_record_shape_checked(record_id) {
+            return;
+        }
+
+        let span = self.get_span(record_id);
+        let report = |message: String| {
+            Diagnostic::new(
+                message,
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        };
+        let mut seen = HashSet::new();
+        for (name, _) in fields {
+            if !declared_fields.iter().any(|(declared, _)| declared == name) {
+                report(format!(
+                    "unknown field `{}` for struct `{}`",
+                    name,
+                    id.qualified(self.db())
+                ));
+            } else if !seen.insert(*name) {
+                report(format!("duplicate field `{}`", name));
+            }
+        }
+        if !has_spread
+            && let Some((missing, _)) = declared_fields
+                .iter()
+                .find(|(name, _)| !seen.contains(name))
+        {
+            report(format!("missing field: {}", missing));
+        }
     }
 
     /// Infer the type of a variable reference.
@@ -1384,7 +1462,10 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => ExprKind::Record {
-                type_name: self.convert_ref_with_ctx(ctx, None, type_name),
+                type_name: TypedRef {
+                    ty: self.instantiate_record_constructor_with_ctx(ctx, expr_id, &type_name),
+                    resolved: type_name,
+                },
                 fields: fields
                     .into_iter()
                     .map(|(name, expr)| (name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))

@@ -1,11 +1,10 @@
 ---
 source: tests/diagnostic_snapshots.rs
-assertion_line: 181
 expression: diagnostics
 ---
-- message: "missing field: y"
+- message: "duplicate field `x`"
   span:
     start: 59
-    end: 74
+    end: 88
   severity: Error
   phase: TypeChecking
