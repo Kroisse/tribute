@@ -912,6 +912,22 @@ impl<'db> TypeChecker<'db> {
             .collect()
     }
 
+    /// Keep the full constructor instance, including field types and effect rows,
+    /// stable across inference and conversion of this source occurrence.
+    fn instantiate_record_constructor_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+    ) -> Type<'db> {
+        if let Some(ty) = ctx.get_record_constructor_instance(record_id) {
+            return ty;
+        }
+        let ty = self.infer_var_with_ctx(ctx, type_name);
+        ctx.record_constructor_instance(record_id, ty);
+        ty
+    }
+
     /// Infer a record literal's nominal type and constrain its fields and spread.
     fn infer_record_type_with_ctx(
         &self,
@@ -921,7 +937,7 @@ impl<'db> TypeChecker<'db> {
         fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
         spread: Option<&Expr<ResolvedRef<'db>>>,
     ) -> Type<'db> {
-        let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+        let ctor_ty = self.instantiate_record_constructor_with_ctx(ctx, record_id, type_name);
         let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
             *result
         } else {
@@ -1446,7 +1462,10 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 spread,
             } => ExprKind::Record {
-                type_name: self.convert_ref_with_ctx(ctx, None, type_name),
+                type_name: TypedRef {
+                    ty: self.instantiate_record_constructor_with_ctx(ctx, expr_id, &type_name),
+                    resolved: type_name,
+                },
                 fields: fields
                     .into_iter()
                     .map(|(name, expr)| (name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))

@@ -87,6 +87,13 @@ fn node_type<'db>(
         .unwrap_or_else(|| panic!("missing type metadata for node {:?}", expression.id))
 }
 
+fn record_type_name<'a, 'db>(record: &'a Expr<TypedRef<'db>>) -> &'a TypedRef<'db> {
+    let ExprKind::Record { type_name, .. } = &*record.kind else {
+        panic!("expected a record expression");
+    };
+    type_name
+}
+
 fn assert_named_args(
     db: &dyn salsa::Database,
     ty: Type<'_>,
@@ -561,6 +568,117 @@ fn mapper() -> Mapper(Int, Bool) { Mapper { map: fn(value) { True } } }
             if matches!(params.as_slice(), [param] if matches!(param.kind(db), TypeKind::Int))
                 && matches!(result.kind(db), TypeKind::Bool)
     ));
+    let TypeKind::Func { params, result, .. } = record_type_name(mapper).ty.kind(db) else {
+        panic!("mapper constructor must have a function type");
+    };
+    assert_eq!(*result, node_type(checked.expression_types(db), mapper));
+    assert_eq!(params.as_slice(), &[signature.function_type]);
+}
+
+#[salsa_test]
+fn generic_phantom_record_keeps_expected_type_argument(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_phantom_record.trb",
+        r#"
+struct Tag(a) {}
+fn tag() -> Tag(Int) { Tag {} }
+"#,
+    );
+    assert_eq!(ast_pipeline_diagnostics(db, source), vec![]);
+    let checked = tribute_front::query::type_check_output(db, source).unwrap();
+    let module = checked.module(db);
+    let tag_id = declared_struct_id(db, module, "Tag");
+    let metadata = checked.expression_types(db);
+    let expected = [TypeKind::Int];
+
+    assert_named_args(
+        db,
+        node_type(metadata, typed_function_body(module, "tag")),
+        tag_id,
+        "Tag",
+        &expected,
+    );
+    let record = typed_function_tail(module, "tag");
+    assert_named_args(db, node_type(metadata, record), tag_id, "Tag", &expected);
+    assert_named_args(db, record_type_name(record).ty, tag_id, "Tag", &expected);
+}
+
+#[salsa_test]
+fn generic_nonempty_phantom_record_keeps_expected_type_argument(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_nonempty_phantom_record.trb",
+        r#"
+struct Tagged(a) { value: Nat }
+fn tagged() -> Tagged(Int) { Tagged { value: 1 } }
+"#,
+    );
+    assert_eq!(ast_pipeline_diagnostics(db, source), vec![]);
+    let checked = tribute_front::query::type_check_output(db, source).unwrap();
+    let module = checked.module(db);
+    let tagged_id = declared_struct_id(db, module, "Tagged");
+    let metadata = checked.expression_types(db);
+    let expected = [TypeKind::Int];
+
+    assert_named_args(
+        db,
+        node_type(metadata, typed_function_body(module, "tagged")),
+        tagged_id,
+        "Tagged",
+        &expected,
+    );
+    let record = typed_function_tail(module, "tagged");
+    assert_named_args(
+        db,
+        node_type(metadata, record),
+        tagged_id,
+        "Tagged",
+        &expected,
+    );
+    let TypeKind::Func { params, result, .. } = record_type_name(record).ty.kind(db) else {
+        panic!("nonempty struct constructor must have a function type");
+    };
+    assert!(matches!(params.as_slice(), [param] if matches!(param.kind(db), TypeKind::Nat)));
+    assert_named_args(db, *result, tagged_id, "Tagged", &expected);
+}
+
+#[salsa_test]
+fn pure_let_phantom_record_remains_polymorphic(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "pure_let_phantom_record.trb",
+        r#"
+struct Tag(a) {}
+fn tags() -> #(Tag(Int), Tag(Bool)) {
+    let tag = Tag {}
+    #(tag, tag)
+}
+"#,
+    );
+    assert_eq!(ast_pipeline_diagnostics(db, source), vec![]);
+    let checked = tribute_front::query::type_check_output(db, source).unwrap();
+    let module = checked.module(db);
+    let tag_id = declared_struct_id(db, module, "Tag");
+    let tail = typed_function_tail(module, "tags");
+    let ExprKind::Tuple(uses) = &*tail.kind else {
+        panic!("tags must end in a tuple");
+    };
+    assert_eq!(uses.len(), 2);
+    assert_named_args(
+        db,
+        node_type(checked.expression_types(db), &uses[0]),
+        tag_id,
+        "Tag",
+        &[TypeKind::Int],
+    );
+    assert_named_args(
+        db,
+        node_type(checked.expression_types(db), &uses[1]),
+        tag_id,
+        "Tag",
+        &[TypeKind::Bool],
+    );
 }
 
 #[salsa_test]
