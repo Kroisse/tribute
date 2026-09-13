@@ -22,6 +22,26 @@ their type arguments unify pairwise. The source spelling is diagnostic
 presentation, not semantic identity. Substitution and generalization preserve
 the declaration identity of every named type.
 
+### 레코드 생성 검사
+
+레코드 필드 검증은 generic 타입 인자 추론과 독립적으로, 이름 해석으로 확정한 struct
+선언 identity와 선언 순서의 필드 목록을 사용한다. 알 수 없는 필드, 중복 필드,
+누락 필드는 `TypeChecking` 진단을 생성한다. 오류가 있으면 공개 컴파일 경로는
+IR을 생성하지 않는다.
+
+추론과 검사 과정에서 같은 레코드 노드를 다시 방문하더라도 필드 구성은 함수 검사
+컨텍스트마다 한 번만 검증한다. 검증 여부는 해당 컨텍스트에만 저장하며, 선언 필드
+목록을 조회한 뒤에만 기록한다. 소스에 실제로 반복해서 나타난 필드는 메시지와 span이
+같아도 각각 진단한다. 소스나 선언을 편집한 뒤 새로 검사하면 필드 구성도 다시 검증한다.
+
+재방문 시 생략하는 것은 필드 구성 검증뿐이다. 모든 자식 표현식은 계속 검사한다.
+선언에 있는 필드에는 instantiate한 기대 타입을 전달하고
+`TypeCoerce(actual, expected)`를 적용한다. 알 수 없는 필드도 RHS를 추론하며,
+spread는 생성할 struct 타입을 기대 타입으로 삼아 방향성 있게 검사한다.
+필드 구성 오류가 독립적인 자식 표현식 오류, spread 오류, 누락 필드 오류를 억제하지
+않는다. 문맥에 따른 람다 검사와 최상위 `Never` 제거에도 다른 표현식 검사 위치와
+동일한 규칙을 적용한다.
+
 ### Equality, 표현식 검사, 공통 결과 타입
 
 제약 solver는 다음 세 관계를 구별한다.

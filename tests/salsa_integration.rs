@@ -2,11 +2,13 @@
 
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
-use tree_sitter::Parser;
+use tree_sitter::{InputEdit, Parser, Point};
+use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use tribute_passes::diagnostic::Diagnostic;
-use trunk_ir::Symbol;
+use tribute_front::ast::{Decl, ExprKind, NodeId};
+use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{IrContext, Module};
+use trunk_ir::{Span, Symbol};
 
 /// Helper to check whether a `func.func` with the given `sym_name` exists
 /// among the top-level operations of an arena module.
@@ -150,6 +152,114 @@ fn test_salsa_incremental_computation_detailed() {
         module3.ops(&ctx3).len(),
         "Modules should have the same number of top-level ops"
     );
+}
+
+#[test]
+fn record_shape_diagnostics_follow_incremental_declaration_edits() {
+    const ORIGINAL: &str =
+        "struct Point { x: Int, y: Int }\nfn test() -> Point { Point { x: +1, y: +2 } }\n";
+    const RECORD: &str = "Point { x: +1, y: +2 }";
+
+    fn record_node_id(db: &dyn salsa::Database, source: SourceCst) -> NodeId {
+        let parsed = tribute_front::query::parsed_ast(db, source).expect("parsed module");
+        let module = parsed.module(db);
+        let function = module
+            .decls
+            .iter()
+            .find_map(|decl| match decl {
+                Decl::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("test function");
+        let ExprKind::Block { value, .. } = &*function.body.kind else {
+            panic!("function body must be a block");
+        };
+        assert!(matches!(&*value.kind, ExprKind::Record { .. }));
+        value.id
+    }
+
+    let mut db = TributeDatabaseImpl::default();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("tree-sitter language");
+    let mut tree = parser.parse(ORIGINAL, None).expect("initial tree");
+    let source = SourceCst::from_path(
+        &db,
+        "record_incremental.trb",
+        ORIGINAL.into(),
+        Some(tree.clone()),
+    );
+    let original_node = record_node_id(&db, source);
+    let changed = ORIGINAL.replacen("y: Int", "z: Int", 1);
+    let edit_start = ORIGINAL.find("y: Int").expect("declaration field");
+    let record_start = ORIGINAL.find(RECORD).expect("record expression");
+    let record_span = Span::new(record_start, record_start + RECORD.len());
+    let changed_diagnostics: Vec<_> = ["missing field: z", "unknown field `y` for struct `Point`"]
+        .into_iter()
+        .map(|message| {
+            Diagnostic::new(
+                message,
+                record_span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+        })
+        .collect();
+
+    for (revision, text) in [ORIGINAL, changed.as_str(), ORIGINAL]
+        .into_iter()
+        .enumerate()
+    {
+        if revision > 0 {
+            tree.edit(&InputEdit {
+                start_byte: edit_start,
+                old_end_byte: edit_start + 1,
+                new_end_byte: edit_start + 1,
+                start_position: Point::new(0, edit_start),
+                old_end_position: Point::new(0, edit_start + 1),
+                new_end_position: Point::new(0, edit_start + 1),
+            });
+            tree = parser.parse(text, Some(&tree)).expect("incremental tree");
+            source.set_text(&mut db).to(text.into());
+            source.set_tree(&mut db).to(Some(tree.clone()));
+        }
+        assert_eq!(
+            record_node_id(&db, source),
+            original_node,
+            "revision {revision}"
+        );
+        let expected = if revision == 1 {
+            changed_diagnostics.as_slice()
+        } else {
+            &[]
+        };
+        let first = compile_with_diagnostics(&db, source);
+        let cached = compile_with_diagnostics(&db, source);
+        assert_eq!(first.diagnostics, expected, "revision {revision}");
+        assert_eq!(cached.diagnostics, first.diagnostics, "revision {revision}");
+        assert_eq!(
+            first.module.is_some(),
+            expected.is_empty(),
+            "revision {revision}"
+        );
+        assert_eq!(
+            cached.module.is_some(),
+            first.module.is_some(),
+            "revision {revision}"
+        );
+
+        TributeDatabaseImpl::default().attach(|fresh_db| {
+            let fresh_source = SourceCst::from_source_str(fresh_db, "record_incremental.trb", text);
+            let fresh = compile_with_diagnostics(fresh_db, fresh_source);
+            assert_eq!(fresh.diagnostics, first.diagnostics, "revision {revision}");
+            assert_eq!(
+                fresh.module.is_some(),
+                first.module.is_some(),
+                "revision {revision}"
+            );
+        });
+    }
 }
 
 #[salsa_test]
