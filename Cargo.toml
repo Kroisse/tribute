@@ -10,7 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 ariadne = "0.6"
 clap = { version = "4.6.1", features = ["derive"] }
-cranelift-codegen = "0.132.1"
+cranelift-codegen = "0.134.4"
 cranelift-entity = "0.132.1"
 cranelift-frontend = "0.132.1"
 cranelift-module = "0.132.1"
