@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{
-    Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
+    Effect, EffectRow, EffectVar, NodeId, Type, TypeKind, TypeParam, UniVarId, UniVarSource,
     collect_effect_vars,
 };
 
@@ -723,6 +723,16 @@ pub struct TypeSolver<'db> {
     row_subst: RowSubst<'db>,
     /// Counter for fresh row variables.
     next_row_var: u64,
+    /// Expression relations survive each equality/row and deferred-method round.
+    pending_relations: Vec<Constraint<'db>>,
+    /// Results whose producer signature has not yet been resolved.
+    pending_producers: Vec<PendingProducer<'db>>,
+}
+
+struct PendingProducer<'db> {
+    node_id: NodeId,
+    result: Type<'db>,
+    inputs: Vec<Type<'db>>,
 }
 
 impl<'db> TypeSolver<'db> {
@@ -733,6 +743,8 @@ impl<'db> TypeSolver<'db> {
             type_subst: TypeSubst::new(),
             row_subst: RowSubst::new(),
             next_row_var: 0,
+            pending_relations: Vec::new(),
+            pending_producers: Vec::new(),
         }
     }
 
@@ -744,6 +756,366 @@ impl<'db> TypeSolver<'db> {
     /// Get the row substitution.
     pub fn row_subst(&self) -> &RowSubst<'db> {
         &self.row_subst
+    }
+
+    pub(crate) fn next_row_var(&self) -> u64 {
+        self.next_row_var
+    }
+
+    pub(crate) fn reserve_row_vars(&mut self, next: u64) {
+        self.next_row_var = self.next_row_var.max(next);
+    }
+
+    pub fn defer_producer(&mut self, node_id: NodeId, result: Type<'db>, inputs: Vec<Type<'db>>) {
+        if !self
+            .pending_producers
+            .iter()
+            .any(|pending| pending.node_id == node_id)
+        {
+            self.pending_producers.push(PendingProducer {
+                node_id,
+                result,
+                inputs,
+            });
+        }
+    }
+
+    pub fn resolve_producer(&mut self, node_id: NodeId) {
+        self.pending_producers
+            .retain(|pending| pending.node_id != node_id);
+    }
+
+    /// Variables in an unresolved relation cannot be quantified independently.
+    pub fn pending_variables(&self) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+        let mut types = Vec::new();
+        for producer in &self.pending_producers {
+            types.push(producer.result);
+            types.extend(producer.inputs.iter().copied());
+        }
+        for relation in &self.pending_relations {
+            match relation {
+                Constraint::TypeCoerce(actual, expected, _) => types.extend([*actual, *expected]),
+                Constraint::TypeJoin {
+                    sources, result, ..
+                } => {
+                    types.push(*result);
+                    types.extend(sources.iter().map(|(ty, _)| *ty));
+                }
+                _ => unreachable!("only expression relations are deferred"),
+            }
+        }
+        let mut vars = Vec::new();
+        let mut effects = Vec::new();
+        for ty in types {
+            let ty = self
+                .type_subst
+                .apply_with_rows(self.db, ty, &self.row_subst);
+            self.type_subst
+                .collect_univars_from_type(self.db, ty, &self.row_subst, &mut vars);
+            for effect in collect_effect_vars(self.db, ty) {
+                if !effects.contains(&effect) {
+                    effects.push(effect);
+                }
+            }
+        }
+        (vars, effects)
+    }
+
+    /// At an inference boundary, equate remaining ordinary variables only when
+    /// no unresolved producer or common-result relation can still supply Never.
+    pub fn finalize_relations(&mut self) -> Result<(), LocatedSolveError<'db>> {
+        self.settle_relations(true)
+    }
+
+    fn settle_relations(&mut self, finalize: bool) -> Result<(), LocatedSolveError<'db>> {
+        let mut first_error = None;
+        loop {
+            let before = (
+                self.type_subst.map.len(),
+                self.row_subst.map.len(),
+                self.pending_relations.len(),
+            );
+            let mut protected: Vec<_> = self
+                .pending_producers
+                .iter()
+                .map(|producer| producer.result)
+                .collect();
+            protected.extend(
+                self.pending_relations
+                    .iter()
+                    .filter_map(|relation| match relation {
+                        Constraint::TypeJoin { result, .. } => Some(*result),
+                        _ => None,
+                    }),
+            );
+            let protected: Vec<_> = protected
+                .into_iter()
+                .map(|ty| self.type_subst.apply(self.db, ty))
+                .collect();
+            for relation in std::mem::take(&mut self.pending_relations) {
+                let outcome = match &relation {
+                    Constraint::TypeCoerce(actual, expected, origin) => {
+                        let actual = self.type_subst.apply(self.db, *actual);
+                        let expected = self.type_subst.apply(self.db, *expected);
+                        if actual == expected || matches!(actual.kind(self.db), TypeKind::Never) {
+                            Ok(true)
+                        } else if matches!(actual.kind(self.db), TypeKind::UniVar { .. })
+                            && (!finalize || protected.contains(&actual))
+                        {
+                            Ok(false)
+                        } else {
+                            self.unify_types(expected, actual)
+                                .map(|()| true)
+                                .map_err(|error| LocatedSolveError {
+                                    error,
+                                    origin: Some(*origin),
+                                })
+                        }
+                    }
+                    Constraint::TypeJoin {
+                        sources,
+                        result,
+                        origin,
+                        complete,
+                    } => {
+                        self.solve_join(sources, *result, *origin, *complete, finalize, &protected)
+                    }
+                    _ => unreachable!("only expression relations are deferred"),
+                };
+                match outcome {
+                    Ok(true) => {}
+                    Ok(false) => self.pending_relations.push(relation),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            let after = (
+                self.type_subst.map.len(),
+                self.row_subst.map.len(),
+                self.pending_relations.len(),
+            );
+            if before == after {
+                if finalize {
+                    match self.resolve_join_cycle() {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Nested cases in a resumptive arm can refer back to the handle answer.
+    /// Resolve a closed strongly connected group from its independent sources.
+    fn resolve_join_cycle(&mut self) -> Result<bool, LocatedSolveError<'db>> {
+        let joins: Vec<_> = self
+            .pending_relations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, relation)| {
+                let Constraint::TypeJoin {
+                    result,
+                    sources,
+                    complete: true,
+                    origin,
+                } = relation
+                else {
+                    return None;
+                };
+                let result = self.type_subst.apply(self.db, *result);
+                matches!(result.kind(self.db), TypeKind::UniVar { .. }).then(|| {
+                    (
+                        index,
+                        result,
+                        sources
+                            .iter()
+                            .map(|(source, origin)| {
+                                (self.type_subst.apply(self.db, *source), *origin)
+                            })
+                            .collect::<Vec<_>>(),
+                        *origin,
+                    )
+                })
+            })
+            .collect();
+        let reachable = |start: usize| {
+            let mut seen = vec![false; joins.len()];
+            let mut work = vec![start];
+            while let Some(index) = work.pop() {
+                if std::mem::replace(&mut seen[index], true) {
+                    continue;
+                }
+                for (source, _) in &joins[index].2 {
+                    for (next, (_, result, _, _)) in joins.iter().enumerate() {
+                        if source == result && !seen[next] {
+                            work.push(next);
+                        }
+                    }
+                }
+            }
+            seen
+        };
+        let reachability: Vec<_> = (0..joins.len()).map(reachable).collect();
+        let protected: Vec<_> = self
+            .pending_producers
+            .iter()
+            .map(|producer| self.type_subst.apply(self.db, producer.result))
+            .chain(
+                self.pending_relations
+                    .iter()
+                    .filter_map(|relation| match relation {
+                        Constraint::TypeJoin { result, .. } => {
+                            Some(self.type_subst.apply(self.db, *result))
+                        }
+                        _ => None,
+                    }),
+            )
+            .collect();
+        for (start, reachable_from_start) in reachability.iter().enumerate() {
+            let component: Vec<_> = (0..joins.len())
+                .filter(|next| reachable_from_start[*next] && reachability[*next][start])
+                .collect();
+            if component.len() < 2 {
+                continue;
+            }
+            let members: Vec<_> = component.iter().map(|index| joins[*index].1).collect();
+            if self
+                .pending_producers
+                .iter()
+                .any(|producer| members.contains(&self.type_subst.apply(self.db, producer.result)))
+            {
+                continue;
+            }
+            let sources: Vec<_> = component
+                .iter()
+                .flat_map(|index| joins[*index].2.iter().copied())
+                .filter(|(source, _)| {
+                    !members.contains(source) && !matches!(source.kind(self.db), TypeKind::Never)
+                })
+                .collect();
+            if sources.iter().any(|(source, _)| protected.contains(source)) {
+                continue;
+            }
+            // Consume the component once, including on failure, so a later
+            // producer round cannot emit the same diagnostic again.
+            let indices: Vec<_> = component.iter().map(|index| joins[*index].0).collect();
+            let mut index = 0;
+            self.pending_relations.retain(|_| {
+                let keep = !indices.contains(&index);
+                index += 1;
+                keep
+            });
+            let common = sources.first().map_or_else(
+                || Type::new(self.db, TypeKind::Never),
+                |(source, _)| *source,
+            );
+            for (source, origin) in sources {
+                self.unify_types(common, source)
+                    .map_err(|error| LocatedSolveError {
+                        error,
+                        origin: Some(origin),
+                    })?;
+            }
+            for member in component {
+                self.unify_types(joins[member].1, common)
+                    .map_err(|error| LocatedSolveError {
+                        error,
+                        origin: Some(joins[member].3),
+                    })?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn solve_join(
+        &mut self,
+        sources: &[(Type<'db>, ConstraintOrigin)],
+        result: Type<'db>,
+        origin: ConstraintOrigin,
+        complete: bool,
+        finalize: bool,
+        protected: &[Type<'db>],
+    ) -> Result<bool, LocatedSolveError<'db>> {
+        if !complete {
+            return Ok(false);
+        }
+        let result = self.type_subst.apply(self.db, result);
+        if matches!(result.kind(self.db), TypeKind::UniVar { .. })
+            && self
+                .pending_producers
+                .iter()
+                .any(|producer| self.type_subst.apply(self.db, producer.result) == result)
+        {
+            return Ok(false);
+        }
+        let mut common = None;
+        let mut unknown = Vec::new();
+        for (source, source_origin) in sources {
+            let source = self.type_subst.apply(self.db, *source);
+            // A resumption returns this very answer; it supplies no independent
+            // evidence of an inhabited result (including through nested joins).
+            if source == result || matches!(source.kind(self.db), TypeKind::Never) {
+                continue;
+            }
+            if matches!(source.kind(self.db), TypeKind::UniVar { .. }) {
+                unknown.push((source, *source_origin));
+            } else if let Some(common) = common {
+                self.unify_types(common, source)
+                    .map_err(|error| LocatedSolveError {
+                        error,
+                        origin: Some(*source_origin),
+                    })?;
+            } else {
+                common = Some(source);
+            }
+        }
+        if let Some(common) = common {
+            self.unify_types(result, common)
+                .map_err(|error| LocatedSolveError {
+                    error,
+                    origin: Some(origin),
+                })?;
+        }
+        if !unknown.is_empty() {
+            if !finalize || unknown.iter().any(|(ty, _)| protected.contains(ty)) {
+                return Ok(false);
+            }
+            let common = common.unwrap_or(unknown[0].0);
+            for (source, origin) in unknown {
+                self.unify_types(common, source)
+                    .map_err(|error| LocatedSolveError {
+                        error,
+                        origin: Some(origin),
+                    })?;
+            }
+            self.unify_types(result, common)
+                .map_err(|error| LocatedSolveError {
+                    error,
+                    origin: Some(origin),
+                })?;
+        } else if common.is_none() {
+            // If a previous round selected a concrete result, a source may now
+            // equal it. That source remains independent evidence; only an
+            // unresolved answer variable is a circular resumption reference.
+            let has_result_source = sources
+                .iter()
+                .any(|(source, _)| self.type_subst.apply(self.db, *source) == result);
+            if !has_result_source || matches!(result.kind(self.db), TypeKind::UniVar { .. }) {
+                self.unify_types(result, Type::new(self.db, TypeKind::Never))
+                    .map_err(|error| LocatedSolveError {
+                        error,
+                        origin: Some(origin),
+                    })?;
+            }
+        }
+        Ok(true)
     }
 
     /// Generate a fresh type variable for post-solve instantiation.
@@ -790,9 +1162,19 @@ impl<'db> TypeSolver<'db> {
 
     fn reserve_effect_vars_in_constraint(&mut self, constraint: &Constraint<'db>) {
         match constraint {
-            Constraint::TypeEq(left, right) | Constraint::TypeEqAt(left, right, _) => {
+            Constraint::TypeEq(left, right)
+            | Constraint::TypeEqAt(left, right, _)
+            | Constraint::TypeCoerce(left, right, _) => {
                 self.reserve_effect_vars_in_type(*left);
                 self.reserve_effect_vars_in_type(*right);
+            }
+            Constraint::TypeJoin {
+                sources, result, ..
+            } => {
+                self.reserve_effect_vars_in_type(*result);
+                for (source, _) in sources {
+                    self.reserve_effect_vars_in_type(*source);
+                }
             }
             Constraint::RowEq(left, right) | Constraint::RowEqAt(left, right, _) => {
                 self.reserve_effect_vars_in_row(*left);
@@ -840,8 +1222,24 @@ impl<'db> TypeSolver<'db> {
                 first_error.get_or_insert(e);
             }
         }
+        if let Err(error) = self.settle_relations(false) {
+            first_error.get_or_insert(error);
+        }
         match first_error {
-            Some(e) => Err(e),
+            Some(mut error) => {
+                // Relations may resolve type arguments after equality has already
+                // reported a mismatch. Diagnose the final types, including nominal
+                // identities whose arguments were initially inference variables.
+                if let SolveError::TypeMismatch { expected, actual } = &mut error.error {
+                    *expected =
+                        self.type_subst
+                            .apply_with_rows(self.db, *expected, &self.row_subst);
+                    *actual = self
+                        .type_subst
+                        .apply_with_rows(self.db, *actual, &self.row_subst);
+                }
+                Err(error)
+            }
             None => Ok(()),
         }
     }
@@ -852,6 +1250,10 @@ impl<'db> TypeSolver<'db> {
         constraint: Constraint<'db>,
     ) -> Result<(), LocatedSolveError<'db>> {
         match constraint {
+            relation @ (Constraint::TypeCoerce(..) | Constraint::TypeJoin { .. }) => {
+                self.pending_relations.push(relation);
+                Ok(())
+            }
             Constraint::TypeEq(t1, t2) => {
                 self.unify_types(t1, t2).map_err(|error| LocatedSolveError {
                     error,
@@ -930,9 +1332,6 @@ impl<'db> TypeSolver<'db> {
 
             // Error types unify with anything
             (&TypeKind::Error, _) | (_, &TypeKind::Error) => Ok(()),
-
-            // Never (bottom type) unifies with anything
-            (&TypeKind::Never, _) | (_, &TypeKind::Never) => Ok(()),
 
             // Structural unification for compound types
             (
@@ -1401,8 +1800,6 @@ impl<'db> TypeSolver<'db> {
             (TypeKind::UniVar { .. }, _) | (_, TypeKind::UniVar { .. }) => true,
             // Error type unifies with anything
             (TypeKind::Error, _) | (_, TypeKind::Error) => true,
-            // Never (bottom type) unifies with anything
-            (TypeKind::Never, _) | (_, TypeKind::Never) => true,
             // Same kind, check recursively
             (TypeKind::Int, TypeKind::Int)
             | (TypeKind::Nat, TypeKind::Nat)
@@ -2148,7 +2545,7 @@ mod tests {
     }
 
     #[test]
-    fn test_never_type_unifies_with_anything() {
+    fn test_never_equality_is_strict() {
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
@@ -2157,20 +2554,20 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let nat_ty = Type::new(&db, TypeKind::Nat);
 
-        // Never (bottom type) should unify with any type
-        assert!(solver.unify_types(never_ty, int_ty).is_ok());
-        assert!(solver.unify_types(bool_ty, never_ty).is_ok());
-        assert!(solver.unify_types(never_ty, nat_ty).is_ok());
+        assert!(solver.unify_types(never_ty, never_ty).is_ok());
+        assert!(solver.unify_types(never_ty, int_ty).is_err());
+        assert!(solver.unify_types(bool_ty, never_ty).is_err());
+        assert!(solver.unify_types(never_ty, nat_ty).is_err());
 
         // UniVar should unify with Never, then resolve to Never
         let var = fresh_var(&db, 0);
         assert!(solver.unify_types(var, never_ty).is_ok());
         assert_eq!(solver.type_subst.apply(&db, var), never_ty);
 
-        // UniVar bound to Never should then unify with any concrete type
+        // A variable resolved to Never retains that exact identity.
         let var2 = fresh_var(&db, 1);
         assert!(solver.unify_types(var2, never_ty).is_ok());
-        assert!(solver.unify_types(var2, int_ty).is_ok());
+        assert!(solver.unify_types(var2, int_ty).is_err());
     }
 
     #[test]
@@ -2181,8 +2578,7 @@ mod tests {
         let never_ty = Type::new(&db, TypeKind::Never);
         let int_ty = Type::new(&db, TypeKind::Int);
 
-        // Named("List", [Never]) should unify with Named("List", [Int])
-        // because Never is a bottom type
+        // Expression elimination does not recurse into nominal arguments.
         let list_never = Type::new(
             &db,
             TypeKind::Named {
@@ -2199,7 +2595,80 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        assert!(solver.unify_types(list_never, list_int).is_ok());
+        assert!(solver.unify_types(list_never, list_int).is_err());
+    }
+
+    #[test]
+    fn test_never_coercion_preserves_expected_variable() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+        let never = Type::new(&db, TypeKind::Never);
+        let expected = fresh_var(&db, 0);
+        let origin = ConstraintOrigin {
+            node_id: crate::ast::NodeId::from_raw(0),
+            kind: super::super::constraint::ConstraintOriginKind::Expression,
+        };
+        let mut constraints = ConstraintSet::new();
+        constraints.add_type_coerce(never, expected, origin);
+        solver.solve(constraints).unwrap();
+        solver.finalize_relations().unwrap();
+        assert_eq!(solver.type_subst.apply(&db, expected), expected);
+        solver
+            .unify_types(expected, Type::new(&db, TypeKind::Nat))
+            .unwrap();
+    }
+
+    #[test]
+    fn deferred_producers_with_equal_results_retain_distinct_dependencies() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+        let first = fresh_var(&db, 0);
+        let second = fresh_var(&db, 1);
+        let result = Type::new(&db, TypeKind::Bool);
+        let first_node = NodeId::from_raw(1);
+        let second_node = NodeId::from_raw(2);
+        solver.defer_producer(first_node, result, vec![first]);
+        solver.defer_producer(second_node, result, vec![second]);
+        assert_eq!(solver.pending_variables().0.len(), 2);
+        solver.resolve_producer(first_node);
+        let TypeKind::UniVar { id } = second.kind(&db) else {
+            unreachable!();
+        };
+        assert_eq!(solver.pending_variables().0, vec![*id]);
+    }
+
+    #[test]
+    fn deferred_join_keeps_actual_producer_and_reports_a_late_mismatch_once() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+        let actual = fresh_var(&db, 0);
+        let result = fresh_var(&db, 1);
+        let nat = Type::new(&db, TypeKind::Nat);
+        let origin = ConstraintOrigin {
+            node_id: NodeId::from_raw(1),
+            kind: super::super::constraint::ConstraintOriginKind::Expression,
+        };
+        solver.defer_producer(origin.node_id, actual, vec![]);
+        let mut constraints = ConstraintSet::new();
+        constraints.add(Constraint::TypeJoin {
+            sources: vec![(actual, origin), (nat, origin)],
+            result,
+            origin,
+            complete: true,
+        });
+        constraints.add_type_coerce(result, nat, origin);
+        solver.solve(constraints).unwrap();
+        solver.finalize_relations().unwrap();
+        assert_eq!(solver.type_subst.apply(&db, actual), actual);
+        assert_eq!(solver.type_subst.apply(&db, result), nat);
+        solver.resolve_producer(origin.node_id);
+        let mut late = ConstraintSet::new();
+        late.add_type_eq(actual, Type::new(&db, TypeKind::Bool));
+        let failure = solver.solve_with_origin(late).unwrap_err();
+        assert_eq!(failure.origin, Some(origin));
+        assert!(matches!(failure.error, SolveError::TypeMismatch { .. }));
+        solver.finalize_relations().unwrap();
+        solver.solve(ConstraintSet::new()).unwrap();
     }
 
     #[test]
@@ -2933,10 +3402,10 @@ mod tests {
         let var_ty2 = fresh_var(&db, 1);
         assert!(solver.types_unifiable(var_ty, var_ty2));
 
-        // Never (bottom type) is unifiable with any type
+        // Compatibility uses equality, including for effect arguments.
         let never_ty = Type::new(&db, TypeKind::Never);
-        assert!(solver.types_unifiable(never_ty, int_ty));
-        assert!(solver.types_unifiable(bool_ty, never_ty));
+        assert!(!solver.types_unifiable(never_ty, int_ty));
+        assert!(!solver.types_unifiable(bool_ty, never_ty));
         assert!(solver.types_unifiable(never_ty, var_ty));
     }
 

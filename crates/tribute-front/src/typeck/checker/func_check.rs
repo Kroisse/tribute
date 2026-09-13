@@ -137,13 +137,26 @@ impl<'db> TypeChecker<'db> {
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
         self.local_generalizations = local_generalizations;
 
         let mut solver = TypeSolver::new(self.db());
+        solver.reserve_row_vars(next_row_var);
+        for method in &deferred_methods {
+            solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
+        }
 
         if let Err(error) = solver.solve_with_origin(constraints) {
+            self.report_solve_error(
+                diagnostic_func_id,
+                diagnostic_func_name,
+                diagnostic_effects.as_deref(),
+                error,
+            );
+        }
+        if let Err(error) = solver.finalize_relations() {
             self.report_solve_error(
                 diagnostic_func_id,
                 diagnostic_func_name,
@@ -157,6 +170,14 @@ impl<'db> TypeChecker<'db> {
         // Look up methods and add type constraints for return types.
         let deferred_resolutions =
             self.resolve_deferred_methods(&mut solver, deferred_methods, func.id);
+        if let Err(error) = solver.finalize_relations() {
+            self.report_solve_error(
+                diagnostic_func_id,
+                diagnostic_func_name,
+                diagnostic_effects.as_deref(),
+                error,
+            );
+        }
 
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
@@ -576,11 +597,18 @@ impl<'db> TypeChecker<'db> {
 
                         // Constrain result type
                         new_constraints.add_type_eq(mc.result_ty, *result);
+                        solver.resolve_producer(mc.node_id);
 
                         // Constrain arg types against function params (min of both lengths)
                         for (arg, param) in mc.arg_types.iter().zip(params.iter()) {
-                            new_constraints
-                                .add_type_eq(solver.type_subst().apply(self.db(), *arg), *param);
+                            new_constraints.add_type_coerce(
+                                *arg,
+                                *param,
+                                super::super::constraint::ConstraintOrigin {
+                                    node_id: mc.node_id,
+                                    kind: super::super::constraint::ConstraintOriginKind::Call,
+                                },
+                            );
                         }
 
                         // Propagate effect row
@@ -603,6 +631,15 @@ impl<'db> TypeChecker<'db> {
                 Diagnostic::new(
                     format!("type error during UFCS method resolution: {}", error),
                     self.get_span(func_node_id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+            if let Err(error) = solver.finalize_relations() {
+                Diagnostic::new(
+                    format!("type error during UFCS method resolution: {}", error.error),
+                    self.get_span(error.origin.map_or(func_node_id, |origin| origin.node_id)),
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )

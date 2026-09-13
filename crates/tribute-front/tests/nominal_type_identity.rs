@@ -161,7 +161,7 @@ pub mod A {
     let errors = ast_pipeline_error_messages(db, source);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
-        errors[0].contains("expected `String`, found `Nat`"),
+        errors[0].contains("expected `Nat`, found `String`"),
         "{errors:?}"
     );
 }

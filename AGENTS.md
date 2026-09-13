@@ -21,6 +21,8 @@ Key design docs:
 
 ## Working Rules
 
+- Prefer Korean prose in `new-plans/`; retain code identifiers and technical
+  terms where useful.
 - When changing language, type, ability, module, IR, or backend rules, update
   the relevant `new-plans/*.md` file first.
 - Design documents under `new-plans/` must stand independently of work progress:

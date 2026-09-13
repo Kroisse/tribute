@@ -196,7 +196,7 @@ fn result() {
     assert!(
         errors
             .iter()
-            .any(|error| error.contains("expected `Nat`, found `Nil`")),
+            .any(|error| error.contains("expected `Nil`, found `Nat`")),
         "an aborting op arm must be checked against the handler answer"
     );
 }

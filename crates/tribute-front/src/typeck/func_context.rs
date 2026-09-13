@@ -9,7 +9,7 @@
 //! UniVar IDs include the function name, making them globally unique across all
 //! functions without needing a global counter.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
@@ -20,7 +20,7 @@ use crate::ast::{
     UniVarId, UniVarSource,
 };
 
-use super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
+use super::constraint::{Constraint, ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::context::ModuleTypeEnv;
 use super::subst;
 
@@ -29,6 +29,7 @@ use super::subst;
 /// Captures the body type and body effect row so that handler arms
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
+    pub node_id: NodeId,
     /// The source result of the complete handle expression after its `do` arm.
     pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
@@ -88,6 +89,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
 
+    /// Handler validation is revisited during conversion; report each error once.
+    reported_handler_errors: HashSet<(NodeId, &'static str)>,
+
     /// Exact instantiated metadata for ability-operation call expressions.
     perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
 
@@ -97,16 +101,14 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// concrete node-type table consumed by legacy lowering.
     ability_op_callee_types: HashMap<NodeId, Type<'db>>,
 
-    /// Inference-time lambda expression types. Call conversion revisits lambda
-    /// children, so this keeps their call-constrained instance separate from
-    /// the concrete node-type table used by legacy lowering.
-    inferred_lambda_types: HashMap<NodeId, Type<'db>>,
-
     /// Source-logical callable signatures for lambda nodes.
     lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
 
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
+
+    /// One common-result relation per source expression, shared by infer/check visits.
+    result_joins: HashMap<NodeId, Constraint<'db>>,
 
     /// Counter for fresh type variables (local to this function).
     next_type_var: u64,
@@ -176,11 +178,12 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             call_callee_types: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
             handler_operations: HashMap::new(),
+            reported_handler_errors: HashSet::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
-            inferred_lambda_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
             constraints: ConstraintSet::new(),
+            result_joins: HashMap::new(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
@@ -196,6 +199,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get the database.
     pub fn db(&self) -> &'db dyn salsa::Database {
         self.db
+    }
+
+    pub(crate) fn mark_handler_error(&mut self, arm: NodeId, reason: &'static str) -> bool {
+        self.reported_handler_errors.insert((arm, reason))
     }
 
     /// Get the module type environment.
@@ -356,7 +363,30 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Record a deferred UFCS method call for post-solve resolution.
     pub fn record_deferred_method(&mut self, deferred: DeferredMethodCall<'db>) {
-        self.deferred_methods.push(deferred);
+        if let Some(existing) = self
+            .deferred_methods
+            .iter()
+            .find(|method| method.node_id == deferred.node_id)
+        {
+            let result = existing.result_ty;
+            let args = existing.arg_types.clone();
+            self.constrain_eq_at(
+                deferred.result_ty,
+                result,
+                deferred.node_id,
+                ConstraintOriginKind::Call,
+            );
+            for (actual, existing) in deferred.arg_types.into_iter().zip(args) {
+                self.constrain_eq_at(
+                    actual,
+                    existing,
+                    deferred.node_id,
+                    ConstraintOriginKind::Call,
+                );
+            }
+        } else {
+            self.deferred_methods.push(deferred);
+        }
     }
 
     /// Take ownership of deferred method calls.
@@ -466,14 +496,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.ability_op_callee_types.get(&callee).copied()
     }
 
-    pub fn record_inferred_lambda_type(&mut self, lambda: NodeId, ty: Type<'db>) {
-        self.inferred_lambda_types.entry(lambda).or_insert(ty);
-    }
-
-    pub fn get_inferred_lambda_type(&self, lambda: NodeId) -> Option<Type<'db>> {
-        self.inferred_lambda_types.get(&lambda).copied()
-    }
-
     pub fn record_lambda_signature(&mut self, lambda: NodeId, signature: LambdaSignature<'db>) {
         self.lambda_signatures.entry(lambda).or_insert(signature);
     }
@@ -568,6 +590,84 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.constraints.add_type_eq(t1, t2);
     }
 
+    pub fn constrain_coerce(&mut self, actual: Type<'db>, expected: Type<'db>, node_id: NodeId) {
+        self.constrain_coerce_at(actual, expected, node_id, ConstraintOriginKind::Expression);
+    }
+
+    pub fn constrain_coerce_at(
+        &mut self,
+        actual: Type<'db>,
+        expected: Type<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_type_coerce(actual, expected, ConstraintOrigin { node_id, kind });
+    }
+
+    /// Reuse the result identity while collecting this source node's candidates.
+    pub fn begin_result_join(&mut self, node_id: NodeId) -> Type<'db> {
+        if let Some(Constraint::TypeJoin {
+            result, complete, ..
+        }) = self.result_joins.get_mut(&node_id)
+        {
+            *complete = false;
+            return *result;
+        }
+        let result = self.fresh_type_var();
+        self.result_joins.insert(
+            node_id,
+            Constraint::TypeJoin {
+                sources: Vec::new(),
+                result,
+                origin: ConstraintOrigin {
+                    node_id,
+                    kind: ConstraintOriginKind::Expression,
+                },
+                complete: false,
+            },
+        );
+        result
+    }
+
+    pub fn add_result_source(&mut self, owner: NodeId, source: NodeId, actual: Type<'db>) {
+        let Some(Constraint::TypeJoin { sources, .. }) = self.result_joins.get_mut(&owner) else {
+            unreachable!("result group must be opened before adding a candidate");
+        };
+        if let Some((existing, _)) = sources.iter().find(|(_, origin)| origin.node_id == source) {
+            let existing = *existing;
+            self.constrain_eq_at(actual, existing, source, ConstraintOriginKind::Expression);
+        } else {
+            sources.push((
+                actual,
+                ConstraintOrigin {
+                    node_id: source,
+                    kind: ConstraintOriginKind::Expression,
+                },
+            ));
+        }
+    }
+
+    pub fn finish_result_join(&mut self, node_id: NodeId) {
+        let Some(Constraint::TypeJoin { complete, .. }) = self.result_joins.get_mut(&node_id)
+        else {
+            unreachable!("result group must be opened before completion");
+        };
+        *complete = true;
+    }
+
+    pub fn deferred_methods(&self) -> &[DeferredMethodCall<'db>] {
+        &self.deferred_methods
+    }
+
+    pub(crate) fn next_row_var(&self) -> u64 {
+        self.next_row_var
+    }
+
+    pub(crate) fn reserve_row_vars(&mut self, next: u64) {
+        self.next_row_var = self.next_row_var.max(next);
+    }
+
     /// Add a type equality constraint tied to a source AST node.
     pub fn constrain_eq_at(
         &mut self,
@@ -615,12 +715,20 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
-        std::mem::take(&mut self.constraints)
+        let mut constraints = std::mem::take(&mut self.constraints);
+        for (_, join) in self.result_joins.drain() {
+            constraints.add(join);
+        }
+        constraints
     }
 
     /// Clone constraints generated so far for prefix solving at a let binding.
     pub fn constraints_snapshot(&self) -> ConstraintSet<'db> {
-        self.constraints.clone()
+        let mut constraints = self.constraints.clone();
+        for join in self.result_joins.values() {
+            constraints.add(join.clone());
+        }
+        constraints
     }
 
     /// Return all schemes visible in the local environment.

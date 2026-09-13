@@ -37,6 +37,27 @@ Float 비교는 C/Rust 스타일 NaN 의미를 따른다:
 전체 ordered/unordered predicate 집합은 아직 surface language에 노출하지
 않는다.
 
+## Never와 표현식의 제거 규칙
+
+`Never`는 값이 없는 타입이며, 현재 continuation으로 돌아오지 않는 계산을
+나타낸다. `Nil`을 비롯한 다른 모든 구체적인 타입과 구별된다. 정상적인 값은
+기대 타입이 `Never`인 위치에 사용할 수 없다.
+
+실제 타입이 `Never`인 표현식은 암묵적 제거를 통해 어떤 기대 타입으로도 검사할
+수 있다. 이는 방향성 있는 표현식 규칙이며 타입 equality나 일반 subtyping이
+아니다. 기존 `List(Never)`, tuple, 명목 타입, 함수 값의 내부에 재귀적으로 적용하지
+않는다. 람다 리터럴은 본문을 문맥의 기대 반환 타입으로 검사하며, 이 규칙이 기존
+함수 값의 variance를 허용하지는 않는다.
+
+Case 결과와 리스트 리터럴 원소는 공통 타입 관계를 사용한다. `Never`가 아닌
+결과들은 같은 타입이어야 하며, 모두 `Never`이면 공통 타입도 `Never`다. 빈 리스트의
+원소 타입은 fresh 변수로 남는다. Handle의 공통 answer에는 정상 완료 경로(`do`,
+또는 `do`가 없으면 처리 대상 본문)와 `op` handler의 반환 경로가 포함된다.
+`fn` handler는 operation의 결과 타입을 반환한다. `resume`이 바깥 answer를 참조하는
+것은 그 answer 타입을 결정하는 독립적인 근거가 아니다.
+
+이 규칙은 명시적 제거 표현식이나 빈 case 문법을 추가하지 않는다.
+
 ## Function Results
 
 Source-level functions have exactly one logical result. `Unit` and `Never` are

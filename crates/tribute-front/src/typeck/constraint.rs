@@ -1,9 +1,12 @@
 //! Type inference constraints.
 //!
-//! Constraints are generated during type checking and solved by unification.
+//! Constraints distinguish structural equality from expression elimination and
+//! common-result inference. Expression relations survive unresolved producers.
 //!
 //! ```text
 //! C ::= τ₁ = τ₂           -- type equality
+//!     | τ₁ ⇒ τ₂           -- expression coercion (actual to expected)
+//!     | join(τs) = τ      -- common non-Never result
 //!     | ρ₁ = ρ₂           -- effect row equality
 //!     | C₁ ∧ C₂           -- conjunction
 //! ```
@@ -42,6 +45,17 @@ pub enum Constraint<'db> {
 
     /// Type equality with a source origin.
     TypeEqAt(Type<'db>, Type<'db>, ConstraintOrigin),
+
+    /// Directional checking of an evaluated expression.
+    TypeCoerce(Type<'db>, Type<'db>, ConstraintOrigin),
+
+    /// A source construct's common result. Open groups cannot be finalized.
+    TypeJoin {
+        sources: Vec<(Type<'db>, ConstraintOrigin)>,
+        result: Type<'db>,
+        origin: ConstraintOrigin,
+        complete: bool,
+    },
 
     /// Effect row equality with a source origin.
     RowEqAt(EffectRow<'db>, EffectRow<'db>, ConstraintOrigin),
@@ -117,6 +131,16 @@ impl<'db> ConstraintSet<'db> {
     /// Add a source-originated type equality constraint.
     pub fn add_type_eq_at(&mut self, t1: Type<'db>, t2: Type<'db>, origin: ConstraintOrigin) {
         self.add(Constraint::type_eq_at(t1, t2, origin));
+    }
+
+    /// Check an actual expression type against its expected type.
+    pub fn add_type_coerce(
+        &mut self,
+        actual: Type<'db>,
+        expected: Type<'db>,
+        origin: ConstraintOrigin,
+    ) {
+        self.add(Constraint::TypeCoerce(actual, expected, origin));
     }
 
     /// Add a source-originated effect row equality constraint.
