@@ -25,6 +25,12 @@ Direct < EvidenceDirect < Cps
 
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
+Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
+결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
+cast해서는 안 된다. 실제 source `Never` operation의 결과 타입과 재개할 수 없다는
+의미는 그대로 보존한다. 이 표현식 규칙은 logical CPS의 `core.never` 결과나
+target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
+
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
 

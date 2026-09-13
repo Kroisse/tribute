@@ -674,7 +674,20 @@ fn main() {
     __tribute_print_nat(b)
 }
 "#;
-    assert_native_output("abort_conditional.trb", code, "0\n42");
+    let reversed = code.replace(
+        "True -> Abort::abort()\n        False -> 42",
+        "False -> 42\n        True -> Abort::abort()",
+    );
+    assert_ne!(reversed, code, "the second witness must reverse the arms");
+    for (name, source) in [
+        ("abort_conditional.trb", code),
+        ("abort_conditional_reversed.trb", reversed.as_str()),
+    ] {
+        let source = format!("{}\n{source}", common::PRINT_EXTERNS);
+        let output = compile_and_run_native(name, &source);
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert_eq!(output.stdout, b"0\n42\n", "{name}");
+    }
 }
 
 /// Test handling an ability declared inside a module.

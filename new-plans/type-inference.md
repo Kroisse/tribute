@@ -22,6 +22,55 @@ their type arguments unify pairwise. The source spelling is diagnostic
 presentation, not semantic identity. Substitution and generalization preserve
 the declaration identity of every named type.
 
+### Equality, 표현식 검사, 공통 결과 타입
+
+제약 solver는 다음 세 관계를 구별한다.
+
+```text
+TypeEq(A, B)                  -- 정확한 타입 equality
+TypeCoerce(actual, expected)   -- 방향성 있는 표현식 검사
+TypeJoin(sources, result)      -- 값을 반환하는 경로들의 공통 결과
+```
+
+`TypeEq`는 `Never`에 별도의 호환 규칙을 적용하지 않는다. 복합 타입과 ability
+인자에도 재귀적으로 정확한 equality를 요구한다. `TypeCoerce`는 최상위 actual이
+`Never`이면 미해결 expected 변수를 묶지 않고 허용하며, 그 외에는 equality를
+요구한다. 복합 타입 내부에 재귀적인 variance를 도입하지 않는다.
+
+`TypeJoin`은 `Never`를 제외하고 공통 타입을 선택하며, 서로 다른 정상 결과 타입은
+거부한다. 모든 source가 `Never`이면 결과도 `Never`다. 결과 변수는 각 producer의
+실제 타입과 분리하므로, 바깥 기대 타입으로 검사하더라도 producer의 `Never` 타입을
+덮어쓸 수 없다. Case arm, 리스트 리터럴 원소, handle의 answer 경로에 이 관계를
+사용한다.
+
+관계는 substitution과 지연된 메서드 해석을 거치는 동안 source origin과 미해결
+의존성을 보존한다. 지연된 호출의 실제 결과는 선택된 선언의 결과와 정확히 같아야
+하며, 그 결과를 표현식으로 사용하는 위치는 별도로 검사한다. 같은 source node를
+다시 추론하거나 검사할 때는 하나의 결과 관계를 공유한다. Handler의 arm을 수집하는
+동안에는 answer 관계를 확정하지 않는다.
+
+지연된 메서드에 전달하는 람다 리터럴은 반환 슬롯을 fresh 변수로 두고 실제 본문을
+그 슬롯으로 검사한다. 메서드의 매개변수 타입이 정해지면 callable signature를
+equality로 연결한다. 따라서 실제 본문이 `Never`여도 문맥의 반환 타입을 선택할 수
+있다. 이 문맥 전달은 리터럴 정의에만 적용하며 기존 함수 값의 내부 타입은 바꾸지
+않는다.
+
+Solver는 equality, 공통 결과 관계, 표현식 검사와 지연된 producer 해석을 더 이상
+진전이 없을 때까지 반복한다. 그 뒤에만 남은 순수 추론 변수의 공통 타입을 일반화하거나
+equality로 확정할 수 있다. 미해결 producer를 `Never`의 근거로 삼지 않는다.
+Answer의 재귀 참조는 의존성이며, 독립적인 정상 반환 경로가 아니다. 닫힌 answer
+참조 순환의 결과는 순환 밖의 독립적인 source로 결정한다. 독립적인 source가 없거나
+모두 `Never`이면 최소 결과는 `Never`다. 그 외에는 정상 source들이 공통 타입을
+결정한다. 순환 밖에 미해결 producer가 있으면 이 결정을 미룬다.
+
+지역 `let`의 임시 solver에도 같은 규칙을 적용한다. Effect 인자와 row를 통한
+의존성을 포함하여 미해결 관계에 연결된 변수는 일반화에서 제외한다. 순수 binding의
+관련 없는 변수는 계속 일반화할 수 있으며, 미해결 관계 하나 때문에 binding 전체를
+monomorphic하게 바꾸지 않는다. 추론 변수를 지역 quantifier로 변환하면서 미해결
+제약을 지워서는 안 된다.
+임시 solver에서 생성한 row 변수의 identity도 이후 함수 추론과 지연된 메서드
+해석의 fresh 변수 할당과 충돌하지 않아야 한다.
+
 ---
 
 ## Effect Row Syntax

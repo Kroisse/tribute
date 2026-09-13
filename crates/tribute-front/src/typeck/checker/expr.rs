@@ -110,6 +110,16 @@ impl<'db> TypeChecker<'db> {
         expr: Expr<ResolvedRef<'db>>,
         mode: Mode<'db>,
     ) -> Expr<TypedRef<'db>> {
+        // Revisited literal lambdas keep the callable signature selected by
+        // their context, even when their actual body has type Never.
+        let mode = if matches!(mode, Mode::Infer)
+            && matches!(*expr.kind, ExprKind::Lambda { .. })
+            && let Some(existing) = ctx.get_node_type(expr.id)
+        {
+            Mode::Check(existing)
+        } else {
+            mode
+        };
         let ty = match &*expr.kind {
             ExprKind::NatLit(_) => ctx.nat_type(),
             ExprKind::IntLit(_) => ctx.int_type(),
@@ -135,10 +145,7 @@ impl<'db> TypeChecker<'db> {
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
-                let arg_types: Vec<Type<'db>> = args
-                    .iter()
-                    .map(|a| self.infer_expr_type_with_ctx(ctx, a))
-                    .collect();
+                let arg_types = self.infer_call_args_with_ctx(ctx, callee_ty, args);
                 let result = self.infer_call_with_ctx(ctx, callee_ty, &arg_types, expr.id);
                 if let (
                     ExprKind::Var(ResolvedRef::AbilityOp {
@@ -181,10 +188,7 @@ impl<'db> TypeChecker<'db> {
                     ctor_ty
                 } else {
                     // Constructor with arguments (e.g., Some(x)) - treat as function call
-                    let arg_types: Vec<Type<'db>> = args
-                        .iter()
-                        .map(|a| self.infer_expr_type_with_ctx(ctx, a))
-                        .collect();
+                    let arg_types = self.infer_call_args_with_ctx(ctx, ctor_ty, args);
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
@@ -215,12 +219,12 @@ impl<'db> TypeChecker<'db> {
                         TypeKind::Func { params, result, .. } => {
                             // Constrain receiver against the method's first param
                             if let Some(first_param) = params.first() {
-                                ctx.constrain_eq(receiver_ty, *first_param);
+                                ctx.constrain_coerce(receiver_ty, *first_param, receiver.id);
                             }
                             // Infer arg types and constrain against method's parameter types
                             for (arg, param_ty) in args.iter().zip(params.iter().skip(1)) {
-                                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
-                                ctx.constrain_eq(arg_ty, *param_ty);
+                                let arg_ty = self.infer_expr_with_expected(ctx, arg, *param_ty);
+                                ctx.constrain_coerce(arg_ty, *param_ty, arg.id);
                             }
                             *result
                         }
@@ -229,7 +233,7 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     // Receiver not yet resolved — defer to post-solve
                     let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
-                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
                         .collect();
 
                     // For known operator methods, add type constraints eagerly
@@ -268,8 +272,8 @@ impl<'db> TypeChecker<'db> {
                 match op {
                     BinOpKind::And | BinOpKind::Or => {
                         let bool_ty = ctx.bool_type();
-                        ctx.constrain_eq(lhs_ty, bool_ty);
-                        ctx.constrain_eq(rhs_ty, bool_ty);
+                        ctx.constrain_coerce(lhs_ty, bool_ty, lhs.id);
+                        ctx.constrain_coerce(rhs_ty, bool_ty, rhs.id);
                         bool_ty
                     }
                 }
@@ -279,7 +283,10 @@ impl<'db> TypeChecker<'db> {
                 for stmt in stmts {
                     self.infer_stmt_and_bind_with_ctx(ctx, stmt);
                 }
-                let ty = self.infer_expr_type_with_ctx(ctx, value);
+                let ty = match &mode {
+                    Mode::Check(expected) => self.infer_expr_with_expected(ctx, value, *expected),
+                    Mode::Infer => self.infer_expr_type_with_ctx(ctx, value),
+                };
                 ctx.pop_scope();
                 ty
             }
@@ -287,18 +294,17 @@ impl<'db> TypeChecker<'db> {
                 // Infer scrutinee type
                 let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
 
-                // Create result type and constrain all arms to it
-                let result_ty = ctx.fresh_type_var();
+                let result_ty = ctx.begin_result_join(expr.id);
                 for arm in arms {
                     ctx.push_scope();
                     let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
                     ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
-                    ctx.constrain_eq(arm_ty, result_ty);
+                    ctx.add_result_source(expr.id, arm.body.id, arm_ty);
                     ctx.pop_scope();
                 }
-
+                ctx.finish_result_join(expr.id);
                 result_ty
             }
             ExprKind::Lambda { params, body } => {
@@ -352,7 +358,15 @@ impl<'db> TypeChecker<'db> {
                     ctx.bind_local_by_name(param.name, *ty);
                 }
 
-                let body_ty = self.infer_expr_type_with_ctx(ctx, body);
+                let body_ty = match &mode {
+                    Mode::Check(expected) => match expected.kind(self.db()) {
+                        TypeKind::Func { result, .. } => {
+                            self.infer_expr_with_expected(ctx, body, *result)
+                        }
+                        _ => self.infer_expr_type_with_ctx(ctx, body),
+                    },
+                    Mode::Infer => self.infer_expr_type_with_ctx(ctx, body),
+                };
 
                 // The lambda's effect is what accumulated during body inference
                 let inferred_effect = ctx.current_effect();
@@ -380,15 +394,23 @@ impl<'db> TypeChecker<'db> {
                 if let Some(expected) = expected_effect {
                     // This resolves generic ability arguments selected by the body.
                     ctx.constrain_row_eq_at(
-                        lambda_effect,
                         expected,
+                        lambda_effect,
                         expr.id,
                         ConstraintOriginKind::Lambda,
                     );
                 }
 
-                let result_ty = ctx.fresh_type_var();
-                ctx.constrain_eq(result_ty, body_ty);
+                let result_ty = match mode {
+                    Mode::Check(expected) => match expected.kind(self.db()) {
+                        TypeKind::Func { result, .. } => {
+                            ctx.constrain_coerce(body_ty, *result, body.id);
+                            *result
+                        }
+                        _ => body_ty,
+                    },
+                    Mode::Infer => body_ty,
+                };
                 let lambda_type = ctx.func_type_with_convention(
                     param_types,
                     result_ty,
@@ -405,6 +427,7 @@ impl<'db> TypeChecker<'db> {
                 lambda_type
             }
             ExprKind::Handle { body, handlers } => {
+                let answer_ty = ctx.begin_result_join(expr.id);
                 // Handle expression:
                 // 1. Infer the body's type (body may have effects)
                 // 2. Extract handled effects from handler arms
@@ -482,8 +505,13 @@ impl<'db> TypeChecker<'db> {
                 // which can still perform the handled effects. When `k(x)` is called
                 // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
                 // row `{e, State(s)}` so it matches the expected `comp` parameter type.
-                let answer_ty = completion_ty.unwrap_or(body_ty);
+                let completion_node = handlers
+                    .iter()
+                    .find(|handler| matches!(handler.kind, HandlerKind::Do { .. }))
+                    .map_or(body.id, |handler| handler.body.id);
+                ctx.add_result_source(expr.id, completion_node, completion_ty.unwrap_or(body_ty));
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
+                    node_id: expr.id,
                     answer_ty,
                     body_ty,
                     body_effect: body_effect_after,
@@ -511,10 +539,17 @@ impl<'db> TypeChecker<'db> {
                 ctx.tuple_type(elem_tys)
             }
             ExprKind::List(elems) => {
-                let elem_ty = ctx.fresh_type_var();
+                let elem_ty = if elems.is_empty() {
+                    ctx.fresh_type_var()
+                } else {
+                    ctx.begin_result_join(expr.id)
+                };
                 for elem in elems.iter() {
                     let ty = self.infer_expr_type_with_ctx(ctx, elem);
-                    ctx.constrain_eq(ty, elem_ty);
+                    ctx.add_result_source(expr.id, elem.id, ty);
+                }
+                if !elems.is_empty() {
+                    ctx.finish_result_join(expr.id);
                 }
                 ctx.canonical_list_type(elem_ty)
             }
@@ -528,7 +563,7 @@ impl<'db> TypeChecker<'db> {
                         effect,
                     } = cont_ty.kind(self.db())
                 {
-                    ctx.constrain_eq(arg_ty, *cont_arg);
+                    ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
                     ctx.record_lambda_resume_effect(*effect);
                     *cont_result
                 } else {
@@ -561,21 +596,16 @@ impl<'db> TypeChecker<'db> {
                     for (inf_p, exp_p) in inf_params.iter().zip(exp_params.iter()) {
                         ctx.constrain_eq(*inf_p, *exp_p);
                     }
-                    ctx.constrain_eq(*inf_result, *exp_result);
+                    ctx.constrain_coerce(*inf_result, *exp_result, expr.id);
                 }
             } else {
-                ctx.constrain_eq(ty, expected);
+                ctx.constrain_coerce(ty, expected, expr.id);
             }
         }
 
         // If a type was already recorded for this node (e.g., by infer_expr_type_with_ctx),
         // add a constraint to ensure consistency. This handles cases like Lambda where
         // type inference may occur twice (once in infer_* and once in check_*).
-        if let ExprKind::Lambda { .. } = &*expr.kind
-            && let Some(inferred_lambda_type) = ctx.get_inferred_lambda_type(expr.id)
-        {
-            ctx.constrain_eq(ty, inferred_lambda_type);
-        }
         if let Some(existing_ty) = ctx.get_node_type(expr.id) {
             ctx.constrain_eq(ty, existing_ty);
         }
@@ -641,10 +671,7 @@ impl<'db> TypeChecker<'db> {
                 if matches!(&*callee.kind, ExprKind::Var(ResolvedRef::AbilityOp { .. })) {
                     ctx.record_ability_op_callee_type(callee.id, callee_ty);
                 }
-                let arg_types: Vec<Type<'db>> = args
-                    .iter()
-                    .map(|a| self.infer_expr_type_with_ctx(ctx, a))
-                    .collect();
+                let arg_types = self.infer_call_args_with_ctx(ctx, callee_ty, args);
                 let result = self.infer_call_with_ctx(ctx, callee_ty, &arg_types, expr.id);
                 if let (
                     ExprKind::Var(ResolvedRef::AbilityOp {
@@ -687,10 +714,7 @@ impl<'db> TypeChecker<'db> {
                     ctor_ty
                 } else {
                     // Constructor with arguments (e.g., Some(x)) - treat as function call
-                    let arg_types: Vec<Type<'db>> = args
-                        .iter()
-                        .map(|a| self.infer_expr_type_with_ctx(ctx, a))
-                        .collect();
+                    let arg_types = self.infer_call_args_with_ctx(ctx, ctor_ty, args);
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types, expr.id)
                 }
             }
@@ -710,16 +734,17 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Case { scrutinee, arms } => {
                 let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
-                let result_ty = ctx.fresh_type_var();
+                let result_ty = ctx.begin_result_join(expr.id);
                 for arm in arms {
                     ctx.push_scope();
                     let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
                     ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
-                    ctx.constrain_eq(arm_ty, result_ty);
+                    ctx.add_result_source(expr.id, arm.body.id, arm_ty);
                     ctx.pop_scope();
                 }
+                ctx.finish_result_join(expr.id);
                 result_ty
             }
             ExprKind::MethodCall {
@@ -734,15 +759,25 @@ impl<'db> TypeChecker<'db> {
                     let callee_ty = ctx
                         .instantiate_function(entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
+                    ctx.record_resolved_method(expr.id, entry.func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
-                        TypeKind::Func { result, .. } => *result,
+                        TypeKind::Func { params, result, .. } => {
+                            if let Some(param) = params.first() {
+                                ctx.constrain_coerce(receiver_ty, *param, receiver.id);
+                            }
+                            for (arg, param) in args.iter().zip(params.iter().skip(1)) {
+                                let actual = self.infer_expr_with_expected(ctx, arg, *param);
+                                ctx.constrain_coerce(actual, *param, arg.id);
+                            }
+                            *result
+                        }
                         _ => ctx.fresh_type_var(),
                     }
                 } else {
                     // Defer to post-solve
                     let result_ty = ctx.fresh_type_var();
                     let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
-                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .chain(args.iter().map(|a| self.infer_deferred_argument(ctx, a)))
                         .collect();
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
@@ -754,47 +789,12 @@ impl<'db> TypeChecker<'db> {
                     result_ty
                 }
             }
-            ExprKind::Lambda { params, body } => {
-                // Infer parameter types from annotations (or fresh vars)
-                let param_types: Vec<Type<'db>> = params
-                    .iter()
-                    .map(|p| match &p.ty {
-                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
-                        None => ctx.fresh_type_var(),
-                    })
-                    .collect();
-
-                let outer_effect = ctx.current_effect();
-                let fresh_effect = ctx.fresh_effect_row();
-                ctx.set_current_effect(fresh_effect);
-
-                ctx.push_scope();
-                ctx.enter_lambda();
-                for (param, ty) in params.iter().zip(param_types.iter()) {
-                    if let Some(local_id) = param.local_id {
-                        ctx.bind_local(local_id, *ty);
-                    }
-                    ctx.bind_local_by_name(param.name, *ty);
-                }
-
-                let body_ty = self.infer_expr_type_with_ctx(ctx, body);
-                let inferred_effect = ctx.current_effect();
-
-                ctx.pop_scope();
-                let resume_effect = ctx.exit_lambda();
-                ctx.set_current_effect(outer_effect);
-
-                if let Some(resume_effect) = resume_effect {
-                    ctx.constrain_row_eq_at(
-                        inferred_effect,
-                        resume_effect,
-                        expr.id,
-                        ConstraintOriginKind::Lambda,
-                    );
-                }
-                let lambda_type = ctx.func_type(param_types, body_ty, inferred_effect);
-                ctx.record_inferred_lambda_type(expr.id, lambda_type);
-                lambda_type
+            ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
+                // These constructs need their scoped bodies checked before a
+                // surrounding let can solve/generalize the result relation.
+                self.check_expr_with_ctx(ctx, expr.clone(), Mode::Infer);
+                ctx.get_node_type(expr.id)
+                    .expect("checked expression has a type")
             }
             ExprKind::Resume { arg, local_id } => {
                 let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
@@ -806,7 +806,7 @@ impl<'db> TypeChecker<'db> {
                         effect,
                     } = cont_ty.kind(self.db())
                 {
-                    ctx.constrain_eq(arg_ty, *cont_arg);
+                    ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
                     ctx.record_lambda_resume_effect(*effect);
                     *cont_result
                 } else {
@@ -821,15 +821,95 @@ impl<'db> TypeChecker<'db> {
                 ctx.tuple_type(elem_tys)
             }
             ExprKind::List(elems) => {
-                let elem_ty = ctx.fresh_type_var();
+                let elem_ty = if elems.is_empty() {
+                    ctx.fresh_type_var()
+                } else {
+                    ctx.begin_result_join(expr.id)
+                };
                 for elem in elems {
                     let ty = self.infer_expr_type_with_ctx(ctx, elem);
-                    ctx.constrain_eq(ty, elem_ty);
+                    ctx.add_result_source(expr.id, elem.id, ty);
+                }
+                if !elems.is_empty() {
+                    ctx.finish_result_join(expr.id);
                 }
                 ctx.canonical_list_type(elem_ty)
             }
             _ => ctx.fresh_type_var(),
         }
+    }
+
+    /// Literal callables are checked at their definition site; existing values
+    /// keep exact equality for every nested argument and result slot.
+    fn infer_expr_with_expected(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        expr: &Expr<ResolvedRef<'db>>,
+        expected: Type<'db>,
+    ) -> Type<'db> {
+        if matches!(expected.kind(self.db()), TypeKind::Func { .. })
+            && matches!(*expr.kind, ExprKind::Lambda { .. } | ExprKind::Block { .. })
+        {
+            self.check_expr_with_ctx(ctx, expr.clone(), Mode::Check(expected));
+            ctx.get_node_type(expr.id)
+                .expect("checked expression has a type")
+        } else {
+            self.infer_expr_type_with_ctx(ctx, expr)
+        }
+    }
+
+    /// Keep a literal's contextual return slot open until UFCS selects its
+    /// parameter type. The actual body is checked directionally against this
+    /// slot; the deferred callable itself still uses ordinary equality.
+    fn infer_deferred_argument(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        expr: &Expr<ResolvedRef<'db>>,
+    ) -> Type<'db> {
+        if let Some(expected) = Self::literal_callable_shape(ctx, expr) {
+            self.infer_expr_with_expected(ctx, expr, expected)
+        } else {
+            self.infer_expr_type_with_ctx(ctx, expr)
+        }
+    }
+
+    fn literal_callable_shape(
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        expr: &Expr<ResolvedRef<'db>>,
+    ) -> Option<Type<'db>> {
+        match &*expr.kind {
+            ExprKind::Lambda { params, body } => {
+                let params = params.iter().map(|_| ctx.fresh_type_var()).collect();
+                let result =
+                    Self::literal_callable_shape(ctx, body).unwrap_or_else(|| ctx.fresh_type_var());
+                let effect = ctx.fresh_effect_row();
+                Some(ctx.func_type(params, result, effect))
+            }
+            ExprKind::Block { value, .. } => Self::literal_callable_shape(ctx, value),
+            _ => None,
+        }
+    }
+
+    fn infer_call_args_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        callee: Type<'db>,
+        args: &[Expr<ResolvedRef<'db>>],
+    ) -> Vec<Type<'db>> {
+        let params = match callee.kind(self.db()) {
+            TypeKind::Func { params, .. } => params.as_slice(),
+            _ => &[],
+        };
+        args.iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if let Some(expected) = params.get(index) {
+                    self.infer_expr_with_expected(ctx, arg, *expected)
+                } else {
+                    self.infer_expr_type_with_ctx(ctx, arg)
+                }
+            })
+            .collect()
     }
 
     /// Infer a record literal's nominal type and constrain its fields and spread.
@@ -848,16 +928,18 @@ impl<'db> TypeChecker<'db> {
         };
 
         for (field_name, field_expr) in fields {
-            let field_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
             if let Some(expected_field_ty) =
                 self.lookup_struct_field_type(ctx, struct_ty, *field_name)
             {
-                ctx.constrain_eq(field_ty, expected_field_ty);
+                let field_ty = self.infer_expr_with_expected(ctx, field_expr, expected_field_ty);
+                ctx.constrain_coerce(field_ty, expected_field_ty, field_expr.id);
+            } else {
+                self.infer_expr_type_with_ctx(ctx, field_expr);
             }
         }
         if let Some(spread_expr) = spread {
             let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
-            ctx.constrain_eq(spread_ty, struct_ty);
+            ctx.constrain_coerce(spread_ty, struct_ty, spread_expr.id);
         }
 
         struct_ty
@@ -1030,9 +1112,9 @@ impl<'db> TypeChecker<'db> {
                     origin,
                     ConstraintOriginKind::Call,
                 );
-                ctx.constrain_eq_at(
-                    cont_arg_ty,
+                ctx.constrain_coerce_at(
                     arg_types[0],
+                    cont_arg_ty,
                     origin,
                     ConstraintOriginKind::Call,
                 );
@@ -1047,7 +1129,7 @@ impl<'db> TypeChecker<'db> {
                     ConstraintOriginKind::Call,
                 );
                 for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
-                    ctx.constrain_eq_at(*param_ty, *arg_ty, origin, ConstraintOriginKind::Call);
+                    ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
                 }
 
                 ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
@@ -1068,7 +1150,7 @@ impl<'db> TypeChecker<'db> {
 
         // Constrain argument types
         for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
-            ctx.constrain_eq_at(*param_ty, *arg_ty, origin, ConstraintOriginKind::Call);
+            ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
         }
 
         ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
@@ -1434,7 +1516,14 @@ impl<'db> TypeChecker<'db> {
                     ctx.bind_local_by_name(param.name, *ty);
                 }
 
-                let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                let body_mode = ctx
+                    .get_node_type(expr_id)
+                    .and_then(|ty| match ty.kind(self.db()) {
+                        TypeKind::Func { result, .. } => Some(Mode::Check(*result)),
+                        _ => None,
+                    })
+                    .unwrap_or(Mode::Infer);
+                let converted_body = self.check_expr_with_ctx(ctx, body, body_mode);
 
                 ctx.pop_scope();
                 ctx.set_current_effect(outer_effect);
@@ -1456,12 +1545,14 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(fresh_effect);
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
                 ctx.set_current_effect(outer_effect);
+                let handlers = handlers
+                    .into_iter()
+                    .map(|h| self.convert_handler_arm_with_ctx(ctx, h, &handle_ctx))
+                    .collect();
+                ctx.finish_result_join(expr_id);
                 ExprKind::Handle {
                     body: converted_body,
-                    handlers: handlers
-                        .into_iter()
-                        .map(|h| self.convert_handler_arm_with_ctx(ctx, h, &handle_ctx))
-                        .collect(),
+                    handlers,
                 }
             }
             ExprKind::Resume { arg, local_id } => ExprKind::Resume {
@@ -1520,8 +1611,8 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(EffectRow::pure(self.db()));
                 let value_ty = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
-                    let inferred = self.infer_expr_type_with_ctx(ctx, value);
-                    ctx.constrain_eq(inferred, expected);
+                    let inferred = self.infer_expr_with_expected(ctx, value, expected);
+                    ctx.constrain_coerce(inferred, expected, value.id);
                     expected
                 } else {
                     self.infer_expr_type_with_ctx(ctx, value)
@@ -1567,9 +1658,12 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     self.check_expr_with_ctx(ctx, value, Mode::Infer)
                 };
-                let value_ty = ctx
-                    .get_node_type(value.id)
-                    .unwrap_or_else(|| ctx.fresh_type_var());
+                let value_ty = if let Some(ann) = &ty {
+                    self.annotation_to_type_with_ctx(ctx, ann)
+                } else {
+                    ctx.get_node_type(value.id)
+                        .unwrap_or_else(|| ctx.fresh_type_var())
+                };
                 let evaluation_effect = ctx.current_effect();
                 ctx.set_current_effect(outer_effect);
                 ctx.merge_effect(evaluation_effect);
@@ -1612,7 +1706,15 @@ impl<'db> TypeChecker<'db> {
         evaluation_effect: EffectRow<'db>,
     ) {
         let mut solver = TypeSolver::new(self.db());
-        if solver.solve(ctx.constraints_snapshot()).is_err() {
+        solver.reserve_row_vars(ctx.next_row_var());
+        for method in ctx.deferred_methods() {
+            solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
+        }
+        let solved = solver
+            .solve(ctx.constraints_snapshot())
+            .and_then(|()| solver.finalize_relations().map_err(|failure| failure.error));
+        ctx.reserve_row_vars(solver.next_row_var());
+        if solved.is_err() {
             self.bind_pattern_vars_with_ctx(ctx, pattern, value_ty);
             return;
         }
@@ -1623,8 +1725,7 @@ impl<'db> TypeChecker<'db> {
             .apply(self.db(), evaluation_effect)
             .is_pure(self.db());
 
-        let mut environment_type_vars = Vec::new();
-        let mut environment_effect_vars = Vec::new();
+        let (mut environment_type_vars, mut environment_effect_vars) = solver.pending_variables();
         if should_generalize {
             for scheme in ctx.visible_local_schemes() {
                 let body =
@@ -2310,14 +2411,22 @@ impl<'db> TypeChecker<'db> {
                     },
                     // An explicit operation arm either resumes (whose result
                     // is the handler answer) or aborts with that same answer.
-                    Mode::Check(handle_ctx.answer_ty),
+                    Mode::Infer,
                 )
             }
         };
+        let contributes_answer = matches!(kind, HandlerKind::Op { .. } | HandlerKind::Do { .. });
+        let body = self.check_expr_with_ctx(ctx, arm.body, body_mode);
+        if contributes_answer {
+            let actual = ctx
+                .get_node_type(body.id)
+                .expect("checked handler body has a type");
+            ctx.add_result_source(handle_ctx.node_id, body.id, actual);
+        }
         HandlerArm {
             id: arm.id,
             kind,
-            body: self.check_expr_with_ctx(ctx, arm.body, body_mode),
+            body,
         }
     }
 
@@ -2341,26 +2450,30 @@ impl<'db> TypeChecker<'db> {
             handle_ctx,
         } = request;
         let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
-            Diagnostic::new(
-                format!("handler operation '{}' has no resolved ability", op),
-                self.get_span(arm_id),
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            if ctx.mark_handler_error(arm_id, "unresolved ability") {
+                Diagnostic::new(
+                    format!("handler operation '{}' has no resolved ability", op),
+                    self.get_span(arm_id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
         let Some(op_info) = self.env.lookup_ability_op(ability_id, op) else {
-            Diagnostic::new(
-                format!("unknown handler operation '{}'", op),
-                self.get_span(arm_id),
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            if ctx.mark_handler_error(arm_id, "unknown operation") {
+                Diagnostic::new(
+                    format!("unknown handler operation '{}'", op),
+                    self.get_span(arm_id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
-        if syntax_kind != op_info.kind {
+        if syntax_kind != op_info.kind && ctx.mark_handler_error(arm_id, "operation kind") {
             Diagnostic::new(
                 format!(
                     "handler arm uses @{:?} for '{}', but the declared operation is @{:?}",
@@ -2392,29 +2505,33 @@ impl<'db> TypeChecker<'db> {
                 Vec::new()
             }
             [] => {
-                Diagnostic::new(
-                    format!(
-                        "cannot determine the instantiated ability for handler operation '{}'",
-                        op
-                    ),
-                    self.get_span(arm_id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                if ctx.mark_handler_error(arm_id, "missing ability instance") {
+                    Diagnostic::new(
+                        format!(
+                            "cannot determine the instantiated ability for handler operation '{}'",
+                            op
+                        ),
+                        self.get_span(arm_id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
+                }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
             _ => {
-                Diagnostic::new(
-                    format!(
-                        "handler operation '{}' ambiguously matches multiple instantiated abilities",
-                        op
-                    ),
-                    self.get_span(arm_id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+                if ctx.mark_handler_error(arm_id, "ambiguous ability instance") {
+                    Diagnostic::new(
+                        format!(
+                            "handler operation '{}' ambiguously matches multiple instantiated abilities",
+                            op
+                        ),
+                        self.get_span(arm_id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
+                }
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
         };
@@ -2441,18 +2558,20 @@ impl<'db> TypeChecker<'db> {
                 .first()
                 .map(|p| self.get_span(p.id))
                 .unwrap_or_else(|| self.get_span(arm_id));
-            Diagnostic::new(
-                format!(
-                    "handler arm has {} parameter(s), but operation '{}' expects {}",
-                    params.len(),
-                    op,
-                    op_param_types.len()
-                ),
-                span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
+            if ctx.mark_handler_error(arm_id, "parameter arity") {
+                Diagnostic::new(
+                    format!(
+                        "handler arm has {} parameter(s), but operation '{}' expects {}",
+                        params.len(),
+                        op,
+                        op_param_types.len()
+                    ),
+                    span,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         }
 
@@ -2949,6 +3068,81 @@ mod tests {
         )
     }
 
+    // The current CST lowering does not preserve let annotations. Exercise
+    // both checker visits directly until that separate syntax gap is closed.
+    #[salsa_test]
+    fn annotated_let_eliminates_never_without_retyping_its_producer(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let never = Type::new(db, TypeKind::Never);
+        let nat = Type::new(db, TypeKind::Nat);
+        let source = LocalId::new(0);
+        let binding = LocalId::new(1);
+        let source_name = Symbol::new("impossible");
+        let statement = crate::ast::Stmt::Let {
+            id: NodeId::from_raw(1),
+            pattern: bind_pattern(2, Symbol::new("value"), binding),
+            value: local_expr(3, source_name, source),
+            ty: Some(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Nat",
+            )))),
+        };
+        for convert in [false, true] {
+            let mut ctx = make_test_ctx(db, &checker.env);
+            ctx.bind_local(source, never);
+            if convert {
+                checker.convert_stmt_with_ctx(&mut ctx, statement.clone());
+                assert_eq!(ctx.get_node_type(NodeId::from_raw(3)), Some(never));
+            } else {
+                checker.infer_stmt_and_bind_with_ctx(&mut ctx, &statement);
+            }
+            let mut solver = super::TypeSolver::new(db);
+            solver.solve(ctx.take_constraints()).unwrap();
+            solver.finalize_relations().unwrap();
+            assert_eq!(ctx.lookup_local(binding), Some(nat));
+            assert_eq!(ctx.lookup_local(source), Some(never));
+        }
+    }
+
+    #[salsa_test]
+    fn annotated_lambda_uses_context_on_its_first_visit(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let mut ctx = make_test_ctx(db, &checker.env);
+        let source = LocalId::new(0);
+        let binding = LocalId::new(1);
+        let name = Symbol::new("impossible");
+        let never = Type::new(db, TypeKind::Never);
+        ctx.bind_local(source, never);
+        let statement = crate::ast::Stmt::Let {
+            id: NodeId::from_raw(1),
+            pattern: bind_pattern(2, Symbol::new("thunk"), binding),
+            value: Expr::new(
+                NodeId::from_raw(3),
+                ExprKind::Lambda {
+                    params: vec![],
+                    body: local_expr(4, name, source),
+                },
+            ),
+            ty: Some(make_annotation(TypeAnnotationKind::Func {
+                params: vec![],
+                result: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                    "Nat",
+                )))),
+                abilities: vec![],
+            })),
+        };
+        checker.infer_stmt_and_bind_with_ctx(&mut ctx, &statement);
+        checker.convert_stmt_with_ctx(&mut ctx, statement);
+        let mut solver = super::TypeSolver::new(db);
+        solver.solve(ctx.take_constraints()).unwrap();
+        solver.finalize_relations().unwrap();
+        let callable = ctx.lookup_local(binding).unwrap();
+        let TypeKind::Func { result, .. } = callable.kind(db) else {
+            panic!("expected callable");
+        };
+        assert!(matches!(result.kind(db), TypeKind::Nat));
+        assert_eq!(ctx.get_node_type(NodeId::from_raw(4)), Some(never));
+    }
+
     #[salsa_test]
     fn test_handler_do_binding_does_not_leak(db: &dyn salsa::Database) {
         let mut checker = make_test_checker(db);
@@ -2973,7 +3167,10 @@ mod tests {
             },
         );
         let mut ctx = make_test_ctx(db, &checker.env);
+        let handle_node_id = NodeId::from_raw(0);
+        let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
+            node_id: handle_node_id,
             answer_ty: body_ty,
             body_ty,
             body_effect: EffectRow::pure(db),
@@ -3065,7 +3262,10 @@ mod tests {
         );
 
         let mut ctx = make_test_ctx(db, &checker.env);
+        let handle_node_id = NodeId::from_raw(0);
+        let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
+            node_id: handle_node_id,
             answer_ty: Type::new(db, TypeKind::Nil),
             body_ty: Type::new(db, TypeKind::Nil),
             body_effect: EffectRow::pure(db),
