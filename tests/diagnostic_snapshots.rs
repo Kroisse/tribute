@@ -300,6 +300,31 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
     }
 }
 
+#[salsa_test]
+fn generic_record_spread_mismatch_blocks_ir(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_spread.trb",
+        r#"
+struct Pair(a, b) { first: a, second: b }
+fn invalid(base: Pair(Int, Bool)) -> Pair(Int, Int) {
+    Pair { first: +1, second: +2, ..base }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    let diagnostic = &result.diagnostics[0];
+    assert_eq!(diagnostic.phase, CompilationPhase::TypeChecking);
+    assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
+    assert!(diagnostic.inner.message.contains("type error"));
+    assert!(diagnostic.inner.message.contains("Int"));
+    assert!(diagnostic.inner.message.contains("Bool"));
+    assert!(result.module.is_none());
+    assert!(tribute::compile_frontend(db, source).is_none());
+    assert!(matches!(compile_ast(db, source), Ok(None)));
+}
+
 // =============================================================================
 // Ability / effect errors
 // =============================================================================

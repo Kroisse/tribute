@@ -928,48 +928,14 @@ impl<'db> TypeChecker<'db> {
             ctor_ty
         };
 
-        let (struct_id, _) = self.extract_struct_info(struct_ty);
-        if let (Some(struct_id), ResolvedRef::Constructor { id, .. }) = (struct_id, type_name)
-            && let Some(declared_fields) = self.env.lookup_struct_fields(struct_id)
-            && ctx.mark_record_shape_checked(record_id)
-        {
-            let mut seen = HashSet::new();
-            for (name, _) in fields {
-                let message = if !declared_fields.iter().any(|(declared, _)| declared == name) {
-                    Some(format!(
-                        "unknown field `{}` for struct `{}`",
-                        name,
-                        id.qualified(self.db())
-                    ))
-                } else if !seen.insert(*name) {
-                    Some(format!("duplicate field `{}`", name))
-                } else {
-                    None
-                };
-                if let Some(message) = message {
-                    Diagnostic::new(
-                        message,
-                        self.get_span(record_id),
-                        DiagnosticSeverity::Error,
-                        CompilationPhase::TypeChecking,
-                    )
-                    .accumulate(self.db());
-                }
-            }
-            if spread.is_none()
-                && let Some((missing, _)) = declared_fields
-                    .iter()
-                    .find(|(name, _)| !seen.contains(name))
-            {
-                Diagnostic::new(
-                    format!("missing field: {}", missing),
-                    self.get_span(record_id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
-            }
-        }
+        self.validate_record_shape_with_ctx(
+            ctx,
+            record_id,
+            type_name,
+            struct_ty,
+            fields,
+            spread.is_some(),
+        );
 
         for (field_name, field_expr) in fields {
             if let Some(expected_field_ty) =
@@ -987,6 +953,58 @@ impl<'db> TypeChecker<'db> {
         }
 
         struct_ty
+    }
+
+    /// Validate declaration-owned field names once, independently of child typing.
+    fn validate_record_shape_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+        struct_ty: Type<'db>,
+        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        has_spread: bool,
+    ) {
+        let (struct_id, _) = self.extract_struct_info(struct_ty);
+        let (Some(struct_id), ResolvedRef::Constructor { id, .. }) = (struct_id, type_name) else {
+            return;
+        };
+        let Some(declared_fields) = self.env.lookup_struct_fields(struct_id) else {
+            return;
+        };
+        if !ctx.mark_record_shape_checked(record_id) {
+            return;
+        }
+
+        let span = self.get_span(record_id);
+        let report = |message: String| {
+            Diagnostic::new(
+                message,
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        };
+        let mut seen = HashSet::new();
+        for (name, _) in fields {
+            if !declared_fields.iter().any(|(declared, _)| declared == name) {
+                report(format!(
+                    "unknown field `{}` for struct `{}`",
+                    name,
+                    id.qualified(self.db())
+                ));
+            } else if !seen.insert(*name) {
+                report(format!("duplicate field `{}`", name));
+            }
+        }
+        if !has_spread
+            && let Some((missing, _)) = declared_fields
+                .iter()
+                .find(|(name, _)| !seen.contains(name))
+        {
+            report(format!("missing field: {}", missing));
+        }
     }
 
     /// Infer the type of a variable reference.

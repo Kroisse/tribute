@@ -9,7 +9,11 @@ use self::common::{ast_pipeline_diagnostics, run_ast_pipeline, run_ast_pipeline_
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_front::SourceCst;
+use tribute_front::{
+    SourceCst,
+    ast::{Decl, Expr, ExprKind, Module, Type, TypeDefId, TypeKind, TypedRef},
+    typeck::ExpressionTypeMetadata,
+};
 use trunk_ir::Span;
 
 fn diagnostics(db: &dyn salsa::Database, text: &str) -> Vec<Diagnostic> {
@@ -25,6 +29,85 @@ fn shape_error(text: &str, record: &str, occurrence: usize, message: &str) -> Di
         DiagnosticSeverity::Error,
         CompilationPhase::TypeChecking,
     )
+}
+
+fn typed_function_body<'a, 'db>(
+    module: &'a Module<TypedRef<'db>>,
+    name: &str,
+) -> &'a Expr<TypedRef<'db>> {
+    module
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Function(function) if function.name.with_str(|candidate| candidate == name) => {
+                Some(&function.body)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing typed function {name}"))
+}
+
+fn typed_function_tail<'a, 'db>(
+    module: &'a Module<TypedRef<'db>>,
+    name: &str,
+) -> &'a Expr<TypedRef<'db>> {
+    let body = typed_function_body(module, name);
+    let ExprKind::Block { value, .. } = &*body.kind else {
+        panic!("{name} must have a block body");
+    };
+    value
+}
+
+fn declared_struct_id<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    name: &str,
+) -> TypeDefId<'db> {
+    let structure = module
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Struct(structure) if structure.name.with_str(|candidate| candidate == name) => {
+                Some(structure)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing struct {name}"));
+    TypeDefId::source(db, structure.name, structure.id)
+}
+
+fn node_type<'db>(
+    metadata: &ExpressionTypeMetadata<'db>,
+    expression: &Expr<TypedRef<'db>>,
+) -> Type<'db> {
+    metadata
+        .node_types
+        .iter()
+        .find_map(|(id, ty)| (*id == expression.id).then_some(*ty))
+        .unwrap_or_else(|| panic!("missing type metadata for node {:?}", expression.id))
+}
+
+fn assert_named_args(
+    db: &dyn salsa::Database,
+    ty: Type<'_>,
+    expected_id: TypeDefId<'_>,
+    name: &str,
+    args: &[TypeKind<'_>],
+) {
+    let TypeKind::Named {
+        id,
+        name: actual,
+        args: actual_args,
+    } = ty.kind(db)
+    else {
+        panic!("expected {name} named type, found {ty:?}");
+    };
+    assert_eq!(*id, expected_id, "{name} declaration identity");
+    actual.with_str(|actual| assert_eq!(actual, name));
+    assert_eq!(actual_args.len(), args.len(), "{name} argument count");
+    for (actual, expected) in actual_args.iter().zip(args) {
+        assert_eq!(actual.kind(db), expected, "{name} type argument");
+    }
 }
 
 #[salsa_test]
@@ -292,6 +375,250 @@ fn make_a() -> A::Point { A::Point { x: +1 } }
 fn make_b() -> B::Point { B::Point { y: +2 } }
 "#;
     assert_eq!(diagnostics(db, text), vec![]);
+}
+
+#[salsa_test]
+fn generic_record_fields_infer_and_receive_contextual_arguments(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_record_inference.trb",
+        r#"
+struct Pair(a, b) { first: a, second: b }
+
+fn inferred() { Pair { first: +1, second: True } }
+fn expected_return() -> Pair(Int, Bool) { Pair { first: +1, second: True } }
+fn take(value: Pair(Int, Bool)) -> Pair(Int, Bool) { value }
+fn expected_argument() -> Pair(Int, Bool) { take(Pair { first: +1, second: True }) }
+"#,
+    );
+    assert_eq!(
+        ast_pipeline_diagnostics(db, source),
+        vec![],
+        "generic record construction must type check"
+    );
+
+    let checked = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output");
+    let metadata = checked.expression_types(db);
+    let module = checked.module(db);
+    let pair = declared_struct_id(db, module, "Pair");
+    let expected = [TypeKind::Int, TypeKind::Bool];
+    for name in ["inferred", "expected_return"] {
+        let record = typed_function_tail(module, name);
+        assert_named_args(db, node_type(metadata, record), pair, "Pair", &expected);
+        let ExprKind::Record { fields, .. } = &*record.kind else {
+            panic!("{name} must end in a record");
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(
+            node_type(metadata, &fields[0].1).kind(db),
+            TypeKind::Int
+        ));
+        assert!(matches!(
+            node_type(metadata, &fields[1].1).kind(db),
+            TypeKind::Bool
+        ));
+    }
+    let call = typed_function_tail(module, "expected_argument");
+    let ExprKind::Call { args, .. } = &*call.kind else {
+        panic!("expected_argument must end in a call");
+    };
+    let ExprKind::Record { fields, .. } = &*args[0].kind else {
+        panic!("the call argument must be a record");
+    };
+    assert_named_args(db, node_type(metadata, &args[0]), pair, "Pair", &expected);
+    assert!(matches!(
+        node_type(metadata, &fields[0].1).kind(db),
+        TypeKind::Int
+    ));
+    assert!(matches!(
+        node_type(metadata, &fields[1].1).kind(db),
+        TypeKind::Bool
+    ));
+}
+
+#[salsa_test]
+fn generic_record_instances_keep_independent_substitutions(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "independent_generic_records.trb",
+        r#"
+struct Pair(a, b) { first: a, second: b }
+
+fn independent() -> #(Pair(Int, Bool), Pair(Bool, Int)) {
+    #(Pair { first: +1, second: True }, Pair { first: False, second: +2 })
+}
+"#,
+    );
+    assert_eq!(ast_pipeline_diagnostics(db, source), vec![]);
+
+    let checked = tribute_front::query::type_check_output(db, source).unwrap();
+    let module = checked.module(db);
+    let pair = declared_struct_id(db, module, "Pair");
+    let tail = typed_function_tail(module, "independent");
+    let ExprKind::Tuple(records) = &*tail.kind else {
+        panic!("independent must end in a tuple");
+    };
+    assert_named_args(
+        db,
+        node_type(checked.expression_types(db), &records[0]),
+        pair,
+        "Pair",
+        &[TypeKind::Int, TypeKind::Bool],
+    );
+    assert_named_args(
+        db,
+        node_type(checked.expression_types(db), &records[1]),
+        pair,
+        "Pair",
+        &[TypeKind::Bool, TypeKind::Int],
+    );
+}
+
+#[salsa_test]
+fn generic_record_repeated_field_parameter_rejects_mismatched_rhs(db: &salsa::DatabaseImpl) {
+    let text = r#"
+struct Same(a) { first: a, second: a }
+fn bad() -> Same(Int) { Same { first: +1, second: True } }
+"#;
+    let errors = diagnostics(db, text);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert_eq!(errors[0].phase, CompilationPhase::TypeChecking);
+    assert!(
+        errors[0]
+            .inner
+            .message
+            .contains("expected `Int`, found `Bool`"),
+        "{errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn generic_record_spread_preserves_all_type_arguments(db: &salsa::DatabaseImpl) {
+    let valid = r#"
+struct Pair(a, b) { first: a, second: b }
+fn spread_only(base: Pair(Int, Bool)) -> Pair(Int, Bool) { Pair { ..base } }
+fn partial(base: Pair(Int, Bool)) -> Pair(Int, Bool) { Pair { first: +1, ..base } }
+fn full(base: Pair(Int, Bool)) -> Pair(Int, Bool) {
+    Pair { first: +1, second: True, ..base }
+}
+"#;
+    assert_eq!(diagnostics(db, valid), vec![]);
+
+    let invalid = r#"
+struct Pair(a, b) { first: a, second: b }
+fn spread_only(base: Pair(Bool, Int)) -> Pair(Int, Bool) { Pair { ..base } }
+fn partial(base: Pair(Bool, Int)) -> Pair(Int, Bool) { Pair { first: +1, ..base } }
+fn full(base: Pair(Bool, Int)) -> Pair(Int, Bool) {
+    Pair { first: +1, second: True, ..base }
+}
+"#;
+    let errors = diagnostics(db, invalid);
+    assert_eq!(errors.len(), 3, "{errors:#?}");
+    for error in errors {
+        assert_eq!(error.phase, CompilationPhase::TypeChecking);
+        assert!(
+            error.inner.message.contains("expected `Int`, found `Bool`"),
+            "{error:#?}"
+        );
+    }
+}
+
+#[salsa_test]
+fn generic_callable_record_field_keeps_context(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "generic_callable_record.trb",
+        r#"
+struct Mapper(a, b) { map: fn(a) ->{} b }
+fn mapper() -> Mapper(Int, Bool) { Mapper { map: fn(value) { True } } }
+"#,
+    );
+    assert_eq!(ast_pipeline_diagnostics(db, source), vec![]);
+    let checked = tribute_front::query::type_check_output(db, source).unwrap();
+    let module = checked.module(db);
+    let mapper_id = declared_struct_id(db, module, "Mapper");
+    let mapper = typed_function_tail(checked.module(db), "mapper");
+    assert_named_args(
+        db,
+        node_type(checked.expression_types(db), mapper),
+        mapper_id,
+        "Mapper",
+        &[TypeKind::Int, TypeKind::Bool],
+    );
+    let ExprKind::Record { fields, .. } = &*mapper.kind else {
+        panic!("mapper must end in a record");
+    };
+    let lambda = &fields[0].1;
+    let signature = checked
+        .lambda_signatures(db)
+        .iter()
+        .find_map(|(id, signature)| (*id == lambda.id).then_some(signature))
+        .expect("missing lambda signature");
+    assert!(matches!(
+        signature.function_type.kind(db),
+        TypeKind::Func { params, result, .. }
+            if matches!(params.as_slice(), [param] if matches!(param.kind(db), TypeKind::Int))
+                && matches!(result.kind(db), TypeKind::Bool)
+    ));
+}
+
+#[salsa_test]
+fn generic_phantom_record_spread_rejects_incompatible_argument(db: &salsa::DatabaseImpl) {
+    let invalid = r#"
+struct Tag(a) {}
+fn tag_bad(base: Tag(Bool)) -> Tag(Int) { Tag { ..base } }
+"#;
+    let errors = diagnostics(db, invalid);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0]
+            .inner
+            .message
+            .contains("expected `Int`, found `Bool`"),
+        "{errors:#?}"
+    );
+}
+
+#[salsa_test]
+fn generic_callable_record_rejects_wrong_result(db: &salsa::DatabaseImpl) {
+    let invalid = r#"
+struct Mapper(a, b) { map: fn(a) ->{} b }
+fn mapper_bad() -> Mapper(Int, Bool) { Mapper { map: fn(value) { +1 } } }
+"#;
+    let errors = diagnostics(db, invalid);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0]
+            .inner
+            .message
+            .contains("expected `Bool`, found `Int`")
+    );
+}
+
+#[salsa_test]
+fn generic_record_never_field_coercion_is_directional(db: &salsa::DatabaseImpl) {
+    let valid = r#"
+ability Stop { op stop() -> Never }
+struct Box(a) { value: a }
+fn abort() ->{Stop} Never { Stop::stop() }
+fn box_nat() ->{Stop} Box(Nat) { Box { value: abort() } }
+"#;
+    assert_eq!(diagnostics(db, valid), vec![]);
+
+    let invalid = r#"
+struct Box(a) { value: a }
+fn bad() -> Box(Never) { Box { value: 1 } }
+"#;
+    let errors = diagnostics(db, invalid);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0]
+            .inner
+            .message
+            .contains("expected `Never`, found `Nat`"),
+        "{errors:#?}"
+    );
 }
 
 /// Test basic record construction with correct field types.
