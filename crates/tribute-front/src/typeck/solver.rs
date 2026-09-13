@@ -733,6 +733,10 @@ pub struct TypeSolver<'db> {
     /// Expression relations survive each equality/row and deferred-method round.
     pending_relations: Vec<Constraint<'db>>,
     pending_row_unions: Vec<(crate::ast::RowUnion<'db>, Option<ConstraintOrigin>)>,
+    pending_row_removals: Vec<(
+        crate::ast::RowRemoval<'db>,
+        Option<super::constraint::ConstraintOrigin>,
+    )>,
     /// Results whose producer signature has not yet been resolved.
     pending_producers: Vec<PendingProducer<'db>>,
 }
@@ -753,6 +757,7 @@ impl<'db> TypeSolver<'db> {
             next_row_var: 0,
             pending_relations: Vec::new(),
             pending_row_unions: Vec::new(),
+            pending_row_removals: Vec::new(),
             pending_producers: Vec::new(),
         }
     }
@@ -844,7 +849,7 @@ impl<'db> TypeSolver<'db> {
                 self.type_subst.map.len(),
                 self.row_subst.map.len(),
                 self.pending_relations.len(),
-                self.pending_row_unions.len(),
+                self.pending_row_unions.len() + self.pending_row_removals.len(),
             );
             let mut protected: Vec<_> = self
                 .pending_producers
@@ -908,7 +913,7 @@ impl<'db> TypeSolver<'db> {
                 self.type_subst.map.len(),
                 self.row_subst.map.len(),
                 self.pending_relations.len(),
-                self.pending_row_unions.len(),
+                self.pending_row_unions.len() + self.pending_row_removals.len(),
             );
             if before == after {
                 if finalize {
@@ -965,8 +970,8 @@ impl<'db> TypeSolver<'db> {
     ) {
         loop {
             let before = (types.len(), rows.len());
-            for (union, _) in &self.pending_row_unions {
-                let (ut, ur) = self.union_variables(union);
+            for union in self.row_dependency_views() {
+                let (ut, ur) = self.union_variables(&union);
                 if ut.iter().any(|v| types.contains(v)) || ur.iter().any(|v| rows.contains(v)) {
                     for var in ut {
                         if !types.contains(&var) {
@@ -991,7 +996,13 @@ impl<'db> TypeSolver<'db> {
     /// variable imposes no restriction: assigning that row to every variable
     /// satisfies every equation. Keeping it would export implementation-local
     /// existential variables and multiply them at every call.
-    pub fn row_unions_for_type(&self, ty: Type<'db>) -> Vec<crate::ast::RowUnion<'db>> {
+    fn row_relations_for_type(
+        &self,
+        ty: Type<'db>,
+    ) -> (
+        Vec<crate::ast::RowUnion<'db>>,
+        Vec<crate::ast::RowRemoval<'db>>,
+    ) {
         let ty = self
             .type_subst
             .apply_with_rows(self.db, ty, &self.row_subst);
@@ -999,7 +1010,9 @@ impl<'db> TypeSolver<'db> {
         let mut visible_types = Vec::new();
         self.type_subst
             .collect_univars_from_type(self.db, ty, &self.row_subst, &mut visible_types);
-        let unions = self.retained_row_unions();
+        let union_count = self.pending_row_unions.len();
+        let removals = self.retained_row_removals();
+        let unions = self.row_dependency_views();
         let variables: Vec<_> = unions
             .iter()
             .map(|union| self.union_variables(union))
@@ -1049,7 +1062,8 @@ impl<'db> TypeSolver<'db> {
             }
             let unrestricted = component.iter().all(|i| {
                 let union = &unions[*i];
-                union.result.rest(self.db).is_some()
+                *i < union_count
+                    && union.result.rest(self.db).is_some()
                     && union.sources.iter().any(|row| row.rest(self.db).is_some())
                     && union
                         .sources
@@ -1060,9 +1074,58 @@ impl<'db> TypeSolver<'db> {
             if unrestricted && vars.iter().filter(|var| visible.contains(var)).count() <= 1 {
                 continue;
             }
-            retained.extend(component.into_iter().map(|i| unions[i].clone()));
+            retained.extend(component);
         }
-        retained
+        (
+            retained
+                .iter()
+                .filter(|i| **i < union_count)
+                .map(|i| unions[*i].clone())
+                .collect(),
+            retained
+                .iter()
+                .filter(|i| **i >= union_count)
+                .map(|i| removals[*i - union_count].clone())
+                .collect(),
+        )
+    }
+
+    pub fn row_unions_for_type(&self, ty: Type<'db>) -> Vec<crate::ast::RowUnion<'db>> {
+        self.row_relations_for_type(ty).0
+    }
+    pub fn row_removals_for_type(&self, ty: Type<'db>) -> Vec<crate::ast::RowRemoval<'db>> {
+        self.row_relations_for_type(ty).1
+    }
+
+    // Uniform row lists for dependency analysis only. Subtractions are never
+    // sent to the union solver through these graph views.
+    fn row_dependency_views(&self) -> Vec<crate::ast::RowUnion<'db>> {
+        self.retained_row_unions()
+            .into_iter()
+            .chain(
+                self.retained_row_removals()
+                    .into_iter()
+                    .map(|r| crate::ast::RowUnion {
+                        sources: vec![r.source, r.removed],
+                        result: r.result,
+                    }),
+            )
+            .collect()
+    }
+
+    pub fn row_removal_variables(
+        &self,
+        removals: &[crate::ast::RowRemoval<'db>],
+    ) -> (Vec<UniVarId<'db>>, Vec<EffectVar>) {
+        self.row_union_variables(
+            &removals
+                .iter()
+                .map(|r| crate::ast::RowUnion {
+                    sources: vec![r.source, r.removed],
+                    result: r.result,
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 
     pub fn row_union_variables(
@@ -1139,7 +1202,153 @@ impl<'db> TypeSolver<'db> {
                 }
             }
         }
+        for (removal, origin) in std::mem::take(&mut self.pending_row_removals) {
+            match self.solve_row_removal(&removal) {
+                Ok(true) => {}
+                Ok(false) => self.pending_row_removals.push((removal, origin)),
+                Err(error) => {
+                    first_error.get_or_insert(LocatedSolveError { error, origin });
+                }
+            }
+        }
         first_error.map_or(Ok(()), Err)
+    }
+
+    pub fn add_row_removals(&mut self, removals: Vec<crate::ast::RowRemoval<'db>>) {
+        for removal in removals {
+            for row in removal.rows() {
+                self.reserve_effect_vars_in_row(row);
+            }
+            if !self
+                .pending_row_removals
+                .iter()
+                .any(|(old, _)| *old == removal)
+            {
+                self.pending_row_removals.push((removal, None));
+            }
+        }
+    }
+
+    pub fn retained_row_removals(&self) -> Vec<crate::ast::RowRemoval<'db>> {
+        self.pending_row_removals
+            .iter()
+            .map(|(r, _)| r.map_rows(|row| self.normalize_row(row)))
+            .collect()
+    }
+
+    pub fn generalize_row_removal(
+        &self,
+        removal: &crate::ast::RowRemoval<'db>,
+        mapping: &HashMap<UniVarId<'db>, u32>,
+    ) -> crate::ast::RowRemoval<'db> {
+        removal.map_rows(|row| {
+            map_effect_row_type_args(self.db, self.normalize_row(row), |ty| {
+                self.type_subst
+                    .apply_generalization(self.db, ty, &self.row_subst, mapping)
+            })
+        })
+    }
+
+    fn solve_row_removal(
+        &mut self,
+        removal: &crate::ast::RowRemoval<'db>,
+    ) -> Result<bool, SolveError<'db>> {
+        let removal = removal.map_rows(|row| self.normalize_row(row));
+        assert!(
+            removal.removed.rest(self.db).is_none(),
+            "handler removal set must be closed"
+        );
+        if removal
+            .result
+            .effects(self.db)
+            .iter()
+            .any(|effect| removal.removed.effects(self.db).contains(effect))
+        {
+            let allowed: Vec<_> = removal
+                .result
+                .effects(self.db)
+                .iter()
+                .filter(|effect| !removal.removed.effects(self.db).contains(effect))
+                .cloned()
+                .collect();
+            return Err(SolveError::RowMismatch {
+                expected: EffectRow::new(self.db, allowed, removal.result.rest(self.db)),
+                actual: removal.result,
+            });
+        }
+        let mut remaining = Vec::new();
+        let mut ambiguous = false;
+        for effect in removal.source.effects(self.db) {
+            if removal.removed.effects(self.db).contains(effect) {
+                continue;
+            }
+            if removal.removed.effects(self.db).iter().any(|candidate| {
+                candidate.ability_id == effect.ability_id
+                    && candidate.args.len() == effect.args.len()
+                    && candidate
+                        .args
+                        .iter()
+                        .zip(&effect.args)
+                        .all(|(a, b)| self.types_unifiable(*a, *b))
+            }) {
+                ambiguous = true;
+            } else {
+                remaining.push(effect.clone());
+            }
+        }
+        let known = EffectRow::new(self.db, remaining, None);
+        if removal.source.rest(self.db).is_none() && !ambiguous {
+            self.unify_rows(removal.result, known)?;
+            return Ok(true);
+        }
+        // Propagate only effects proven not to be removed. Do not decide the
+        // membership of an unresolved type argument by unification.
+        if let Some(tail) = removal.result.rest(self.db) {
+            let missing: Vec<_> = known
+                .effects(self.db)
+                .iter()
+                .filter(|effect| !removal.result.effects(self.db).contains(effect))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                let fresh = self.fresh_row_var();
+                self.row_subst
+                    .insert(tail.id, EffectRow::new(self.db, missing, Some(fresh)));
+            }
+        } else {
+            for effect in known.effects(self.db) {
+                let candidates: Vec<_> = removal
+                    .result
+                    .effects(self.db)
+                    .iter()
+                    .filter(|other| {
+                        other.ability_id == effect.ability_id
+                            && other.args.len() == effect.args.len()
+                            && other
+                                .args
+                                .iter()
+                                .zip(&effect.args)
+                                .all(|(a, b)| self.types_unifiable(*a, *b))
+                    })
+                    .cloned()
+                    .collect();
+                match candidates.as_slice() {
+                    [] => {
+                        return Err(SolveError::RowMismatch {
+                            expected: removal.result,
+                            actual: known,
+                        });
+                    }
+                    [other] => {
+                        for (a, b) in other.args.iter().zip(&effect.args) {
+                            self.unify_types(*a, *b)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn solve_row_union(
@@ -1166,12 +1375,12 @@ impl<'db> TypeSolver<'db> {
             if actual == union.result {
                 return Ok(true);
             }
-            self.unify_rows(actual, union.result)?;
+            self.unify_rows(union.result, actual)?;
             return Ok(true);
         }
         if union.result.is_pure(self.db) {
             for source in union.sources {
-                self.unify_rows(source, union.result)?;
+                self.unify_rows(union.result, source)?;
             }
             return Ok(true);
         }
@@ -1495,6 +1704,11 @@ impl<'db> TypeSolver<'db> {
                 self.reserve_effect_vars_in_row(*left);
                 self.reserve_effect_vars_in_row(*right);
             }
+            Constraint::RowRemoval(removal, _) => {
+                for row in removal.rows() {
+                    self.reserve_effect_vars_in_row(row);
+                }
+            }
             Constraint::RowUnion(union, _) => {
                 for row in union.sources.iter().chain(std::iter::once(&union.result)) {
                     self.reserve_effect_vars_in_row(*row);
@@ -1570,6 +1784,16 @@ impl<'db> TypeSolver<'db> {
         constraint: Constraint<'db>,
     ) -> Result<(), LocatedSolveError<'db>> {
         match constraint {
+            Constraint::RowRemoval(removal, origin) => {
+                if !self
+                    .pending_row_removals
+                    .iter()
+                    .any(|(old, _)| *old == removal)
+                {
+                    self.pending_row_removals.push((removal, origin));
+                }
+                Ok(())
+            }
             Constraint::RowUnion(union, origin) => {
                 if !self
                     .pending_row_unions
@@ -2072,6 +2296,7 @@ impl<'db> TypeSolver<'db> {
         // Equality is bidirectional set membership, including idempotence
         // after type substitution. Never choose the first of several possible
         // instances of the same ability.
+        let mut pairs = Vec::new();
         for (source, target) in [(effects1, effects2), (effects2, effects1)] {
             for effect in source {
                 let normalized = |candidate: &crate::ast::Effect<'db>| crate::ast::Effect {
@@ -2116,7 +2341,7 @@ impl<'db> TypeSolver<'db> {
                 match candidates.as_slice() {
                     [other] => {
                         for (a, b) in effect.args.iter().zip(&other.args) {
-                            self.unify_types(*a, *b)?;
+                            pairs.push((*a, *b));
                         }
                     }
                     [] => {
@@ -2135,6 +2360,10 @@ impl<'db> TypeSolver<'db> {
             }
         }
 
+        // Do not let early matches erase ambiguity in the reverse direction.
+        for (a, b) in pairs {
+            self.unify_types(a, b)?;
+        }
         Ok(())
     }
 
@@ -4035,6 +4264,112 @@ mod row_union_tests {
     use super::*;
     use salsa_test_macros::salsa_test;
 
+    #[salsa_test]
+    fn row_removal_defers_ambiguous_types(db: &salsa::DatabaseImpl) {
+        let ability = crate::ast::AbilityId::source(db, trunk_ir::Symbol::new("Writer"));
+        let nat = Type::new(db, TypeKind::Nat);
+        let int = Type::new(db, TypeKind::Int);
+        let row = |ty| {
+            EffectRow::single(
+                db,
+                Effect {
+                    ability_id: ability,
+                    args: vec![ty],
+                },
+            )
+        };
+        for reverse in [false, true] {
+            let mut solver = TypeSolver::new(db);
+            let result = EffectRow::open(db, solver.fresh_row_var());
+            let mut labels = vec![
+                row(nat).effects(db)[0].clone(),
+                row(int).effects(db)[0].clone(),
+            ];
+            if reverse {
+                labels.reverse();
+            }
+            solver.add_row_removals(vec![crate::ast::RowRemoval {
+                source: EffectRow::new(db, labels, None),
+                removed: row(nat),
+                result,
+            }]);
+            solver.finalize_relations().unwrap();
+            assert_eq!(solver.row_subst().apply(db, result), row(int));
+        }
+        let mut solver = TypeSolver::new(db);
+        let unknown = solver.fresh_type_var(db);
+        let result = EffectRow::open(db, solver.fresh_row_var());
+        solver.add_row_removals(vec![crate::ast::RowRemoval {
+            source: row(unknown),
+            removed: row(nat),
+            result,
+        }]);
+        solver.finalize_relations().unwrap();
+        assert_eq!(solver.type_subst().apply(db, unknown), unknown);
+        assert_eq!(solver.retained_row_removals().len(), 1);
+        let mut constraints = ConstraintSet::new();
+        constraints.add_type_eq(unknown, int);
+        solver.solve(constraints).unwrap();
+        assert_eq!(solver.row_subst().apply(db, result), row(int));
+        assert!(solver.retained_row_removals().is_empty());
+    }
+
+    #[salsa_test]
+    fn row_removal_empty_result_does_not_close_its_source(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
+        let source = EffectRow::open(db, solver.fresh_row_var());
+        solver.add_row_removals(vec![crate::ast::RowRemoval {
+            source,
+            removed: label(db, "Ping"),
+            result: EffectRow::pure(db),
+        }]);
+        solver.finalize_relations().unwrap();
+        assert_eq!(solver.row_subst().apply(db, source), source);
+        let mut constraints = ConstraintSet::new();
+        constraints.add_row_eq(source, label(db, "Ping"));
+        solver.solve(constraints).unwrap();
+        assert!(solver.retained_row_removals().is_empty());
+    }
+
+    #[salsa_test]
+    fn row_removal_rejects_reintroduced_labels(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
+        let source = EffectRow::open(db, solver.fresh_row_var());
+        solver.add_row_removals(vec![crate::ast::RowRemoval {
+            source,
+            removed: label(db, "Ping"),
+            result: label(db, "Ping"),
+        }]);
+        assert!(solver.finalize_relations().is_err());
+    }
+
+    #[salsa_test]
+    fn row_removal_uses_exact_ability_identity(db: &salsa::DatabaseImpl) {
+        let mut solver = TypeSolver::new(db);
+        let name = trunk_ir::Symbol::new("Io");
+        let builtin = crate::ast::AbilityId::new(
+            db,
+            crate::ast::AbilityOrigin::Builtin(crate::ast::BuiltinAbility::Io),
+            name,
+        );
+        let source = crate::ast::AbilityId::source(db, name);
+        let effect = |ability_id| Effect {
+            ability_id,
+            args: vec![],
+        };
+        let result = EffectRow::open(db, solver.fresh_row_var());
+        solver.add_row_removals(vec![crate::ast::RowRemoval {
+            source: EffectRow::new(db, vec![effect(builtin), effect(source)], None),
+            removed: EffectRow::single(db, effect(builtin)),
+            result,
+        }]);
+        solver.finalize_relations().unwrap();
+        assert_eq!(
+            solver.row_subst().apply(db, result),
+            EffectRow::single(db, effect(source))
+        );
+    }
+
     fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> EffectRow<'db> {
         EffectRow::single(
             db,
@@ -4183,7 +4518,7 @@ mod row_union_tests {
             ability_id: ability,
             args: vec![arg],
         };
-        for reverse in [false, true] {
+        for (reverse, swap) in [(false, false), (true, false), (false, true), (true, true)] {
             let source = EffectRow::new(db, vec![effect(variable), effect(nat)], None);
             let result = EffectRow::new(
                 db,
@@ -4196,7 +4531,11 @@ mod row_union_tests {
             );
             let mut solver = TypeSolver::new(db);
             let mut constraints = ConstraintSet::new();
-            constraints.add_row_eq(source, result);
+            if swap {
+                constraints.add_row_eq(result, source);
+            } else {
+                constraints.add_row_eq(source, result);
+            }
             solver.solve(constraints).unwrap();
             assert_eq!(solver.type_subst().apply(db, variable), variable);
             assert!(!solver.retained_row_unions().is_empty());

@@ -46,6 +46,147 @@ fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
 }
 
 #[salsa_test]
+fn local_annotation_rows_share_signature_names_and_keep_unions(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "local_rows.trb",
+        r#"
+fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    left()
+    right()
+}
+fn local(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    let action = fn(first: fn() ->{e1} Nil, second: fn() ->{e2} Nil) {
+        combine(first, second)
+    }
+    action(left, right)
+}
+"#,
+    );
+    let output = checked(db, source);
+    let errors = checked::accumulated::<Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+    let scheme = output
+        .function_types(db)
+        .iter()
+        .find(|(name, _)| *name == trunk_ir::Symbol::new("local"))
+        .unwrap()
+        .1;
+    let TypeKind::Func { params, .. } = scheme.body(db).kind(db) else {
+        panic!("function")
+    };
+    let tail = |ty: tribute_front::ast::Type<'_>| match ty.kind(db) {
+        TypeKind::Func { effect, .. } => effect.rest(db).unwrap(),
+        _ => panic!("callback"),
+    };
+    assert_ne!(tail(params[0]), tail(params[1]));
+    assert!(!scheme.row_unions(db).is_empty());
+    let TypeKind::Func {
+        params: local_params,
+        ..
+    } = output.lambda_signatures(db)[0].1.function_type.kind(db)
+    else {
+        panic!("lambda")
+    };
+    assert_eq!(tail(local_params[0]), tail(params[0]));
+    assert_eq!(tail(local_params[1]), tail(params[1]));
+}
+
+#[salsa_test]
+fn local_row_name_refers_to_its_enclosing_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "shared_row.trb",
+        r#"
+fn pure(comp: fn() ->{} Nil) ->{} Nil { comp() }
+fn shared(comp: fn() ->{e} Nil) ->{e} Nil {
+    let unused = fn(other: fn() ->{e} Nil) { pure(other) }
+    comp()
+}
+"#,
+    );
+    let output = checked(db, source);
+    let errors = checked::accumulated::<Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+    let scheme = output
+        .function_types(db)
+        .iter()
+        .find(|(name, _)| *name == trunk_ir::Symbol::new("shared"))
+        .unwrap()
+        .1;
+    let TypeKind::Func { params, effect, .. } = scheme.body(db).kind(db) else {
+        panic!("function")
+    };
+    assert!(effect.is_pure(db));
+    let TypeKind::Func { effect, .. } = params[0].kind(db) else {
+        panic!("callback")
+    };
+    assert!(effect.is_pure(db));
+}
+
+#[salsa_test]
+fn handler_removes_effect_discovered_through_union_tails(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "handled_union.trb",
+        r#"
+ability Ping { op ping() -> Nil }
+fn ping() ->{Ping} Nil { Ping::ping() }
+fn combine(left: fn() ->{e1} Nil, right: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    left()
+    right()
+}
+fn main() ->{} Nil {
+    handle combine(ping, ping) {
+        do value { value }
+        op Ping::ping() { resume Nil }
+    }
+}
+"#,
+    );
+    let _ = checked(db, source);
+    let errors = checked::accumulated::<Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[salsa_test]
+fn handler_removal_survives_a_scheme_and_independent_calls(db: &salsa::DatabaseImpl) {
+    for (callback, valid) in [("ping", true), ("pure", true), ("other", false)] {
+        let source = SourceCst::from_source_str(
+            db,
+            "removal_scheme.trb",
+            &format!(
+                r#"
+ability Ping {{ op ping() -> Nil }}
+ability Other {{ op other() -> Nil }}
+fn ping() ->{{Ping}} Nil {{ Ping::ping() }}
+fn pure() ->{{}} Nil {{ Nil }}
+fn other() ->{{Other}} Nil {{ Other::other() }}
+fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
+    handle comp() {{
+        do value {{ value }}
+        op Ping::ping() {{ resume Nil }}
+    }}
+}}
+fn main() ->{{}} Nil {{ handled(ping)
+handled({callback}) }}
+"#
+            ),
+        );
+        let output = checked(db, source);
+        let errors = checked::accumulated::<Diagnostic>(db, source);
+        assert_eq!(errors.is_empty(), valid, "{callback}: {errors:?}");
+        let scheme = output
+            .function_types(db)
+            .iter()
+            .find(|(name, _)| *name == trunk_ir::Symbol::new("handled"))
+            .unwrap()
+            .1;
+        assert!(!scheme.row_removals(db).is_empty());
+    }
+}
+
+#[salsa_test]
 fn relay_preserves_writer_argument_through_nested_lambda(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

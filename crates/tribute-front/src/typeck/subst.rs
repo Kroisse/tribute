@@ -210,6 +210,7 @@ pub struct SchemeInstance<'db> {
     pub type_args: Vec<Type<'db>>,
     pub row_args: Vec<EffectRow<'db>>,
     pub row_unions: Vec<crate::ast::RowUnion<'db>>,
+    pub row_removals: Vec<crate::ast::RowRemoval<'db>>,
 }
 
 pub fn instantiate_with_arguments<'db>(
@@ -228,34 +229,40 @@ pub fn instantiate_with_arguments<'db>(
         .collect();
     let mut fresh = || unreachable!("all quantified rows have allocated identities");
     let mut map_type = |ty| {
-        let ty = substitute_bound_vars(db, ty, &type_args)
-            .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"));
-        freshen_effect_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping)
+        // Freshen only scheme-owned rows before inserting caller-owned types.
+        let ty =
+            freshen_effect_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping);
+        substitute_bound_vars(db, ty, &type_args)
+            .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"))
     };
     let ty = map_type(scheme.body(db));
+    let mut map_row = |row: EffectRow<'db>| {
+        let effects: Vec<_> = row
+            .effects(db)
+            .iter()
+            .map(|effect| Effect {
+                ability_id: effect.ability_id,
+                args: effect.args.iter().copied().map(&mut map_type).collect(),
+            })
+            .collect();
+        let rest = row.rest(db).map(|var| {
+            scheme
+                .effect_params(db)
+                .iter()
+                .position(|p| *p == var)
+                .map_or(var, |i| row_vars[i])
+        });
+        EffectRow::new(db, effects, rest)
+    };
     let row_unions = scheme
         .row_unions(db)
         .iter()
-        .map(|union| {
-            union.map_rows(|row| {
-                let effects: Vec<_> = row
-                    .effects(db)
-                    .iter()
-                    .map(|effect| Effect {
-                        ability_id: effect.ability_id,
-                        args: effect.args.iter().copied().map(&mut map_type).collect(),
-                    })
-                    .collect();
-                let rest = row.rest(db).map(|var| {
-                    scheme
-                        .effect_params(db)
-                        .iter()
-                        .position(|p| *p == var)
-                        .map_or(var, |i| row_vars[i])
-                });
-                EffectRow::new(db, effects, rest)
-            })
-        })
+        .map(|union| union.map_rows(&mut map_row))
+        .collect();
+    let row_removals = scheme
+        .row_removals(db)
+        .iter()
+        .map(|removal| removal.map_rows(&mut map_row))
         .collect();
     SchemeInstance {
         ty,
@@ -265,6 +272,7 @@ pub fn instantiate_with_arguments<'db>(
             .map(|var| EffectRow::open(db, var))
             .collect(),
         row_unions,
+        row_removals,
     }
 }
 
@@ -292,6 +300,11 @@ pub fn instantiate_scheme_details_for_solver<'db>(
             solver.reserve_effect_vars_in_row(*row);
         }
     }
+    for removal in scheme.row_removals(db) {
+        for row in removal.rows() {
+            solver.reserve_effect_vars_in_row(row);
+        }
+    }
     let types = scheme
         .type_params(db)
         .iter()
@@ -304,6 +317,7 @@ pub fn instantiate_scheme_details_for_solver<'db>(
         .collect();
     let instance = instantiate_with_arguments(db, scheme, types, rows);
     solver.add_row_unions(instance.row_unions.clone());
+    solver.add_row_removals(instance.row_removals.clone());
     instance
 }
 
@@ -496,6 +510,75 @@ mod tests {
 
         let result = substitute_bound_vars(db, bound_var, &subst);
         assert_eq!(result, SubstResult::Ok(int_ty));
+    }
+
+    #[salsa_test]
+    fn instantiation_does_not_capture_rows_in_caller_type_arguments(db: &dyn salsa::Database) {
+        let shared_id = EffectVar { id: 7 };
+        let nil = Type::new(db, TypeKind::Nil);
+        let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let callback = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![],
+                result: nil,
+                effect: EffectRow::open(db, shared_id),
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let row = EffectRow::new(
+            db,
+            vec![Effect {
+                ability_id: test_ability_id(db, "Writer"),
+                args: vec![bound],
+            }],
+            Some(shared_id),
+        );
+        let body = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound],
+                result: bound,
+                effect: row,
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let scheme = TypeScheme::new(
+            db,
+            vec![crate::ast::TypeParam::anonymous()],
+            vec![shared_id],
+            body,
+        )
+        .with_row_unions(
+            db,
+            vec![crate::ast::RowUnion {
+                sources: vec![row],
+                result: row,
+            }],
+        );
+        for id in [8, 9] {
+            let fresh = EffectVar { id };
+            let instance = instantiate_with_arguments(db, scheme, vec![callback], vec![fresh]);
+            let TypeKind::Func {
+                params,
+                result,
+                effect,
+                ..
+            } = instance.ty.kind(db)
+            else {
+                panic!("function")
+            };
+            assert_eq!(params, &vec![callback]);
+            assert_eq!(*result, callback);
+            assert_eq!(instance.type_args, vec![callback]);
+            for row in std::iter::once(effect)
+                .chain(instance.row_unions[0].sources.iter())
+                .chain(std::iter::once(&instance.row_unions[0].result))
+            {
+                assert_eq!(row.rest(db), Some(fresh));
+                assert_eq!(row.effects(db)[0].args, vec![callback]);
+            }
+        }
     }
 
     #[salsa_test]

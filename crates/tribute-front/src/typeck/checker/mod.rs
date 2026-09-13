@@ -113,6 +113,7 @@ pub struct TypeChecker<'db> {
     exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
+    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -152,6 +153,7 @@ impl<'db> TypeChecker<'db> {
             local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
             effect_annotation_origins: HashMap::new(),
+            signature_row_names: HashMap::new(),
         }
     }
 

@@ -204,6 +204,7 @@ impl<'db> TypeChecker<'db> {
         if let Some(origins) = effect_origins {
             self.effect_annotation_origins.insert(func_id, origins);
         }
+        self.signature_row_names.insert(func_id, vars.rows);
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters

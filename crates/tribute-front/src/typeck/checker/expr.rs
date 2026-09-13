@@ -503,6 +503,24 @@ impl<'db> TypeChecker<'db> {
                     }))
                 });
 
+                let mut selected_effects = Vec::new();
+                for ability_id in &handled_ability_ids {
+                    if selected_effects
+                        .iter()
+                        .any(|effect: &Effect<'db>| effect.ability_id == *ability_id)
+                    {
+                        continue;
+                    }
+                    let count = self
+                        .env
+                        .lookup_ability(*ability_id)
+                        .map_or(0, |ability| ability.type_params.len());
+                    selected_effects.push(Effect {
+                        ability_id: *ability_id,
+                        args: (0..count).map(|_| ctx.fresh_type_var()).collect(),
+                    });
+                }
+                let handled_effects = EffectRow::new(self.db(), selected_effects, None);
                 // Create a result effect row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
                 let result_effect = if handled_ability_ids.is_empty() {
@@ -510,7 +528,7 @@ impl<'db> TypeChecker<'db> {
                     body_effect_after
                 } else {
                     // Remove handled effects from the body's effect row
-                    self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
+                    self.remove_handled_effects(ctx, body_effect_after, handled_effects)
                 };
 
                 // Push handle context with the ORIGINAL body effect (including handled effects).
@@ -528,12 +546,13 @@ impl<'db> TypeChecker<'db> {
                     answer_ty,
                     body_ty,
                     body_effect: body_effect_after,
+                    handled_effects,
                 });
 
                 // The handler contributes its residual requirements to the
                 // surrounding computation; this is union, not row equality.
                 ctx.set_current_effect(effect_before_body);
-                ctx.merge_effect_at(result_effect, expr.id);
+                ctx.merge_handler_effect_at(result_effect, expr.id);
 
                 answer_ty
             }
@@ -1961,7 +1980,11 @@ impl<'db> TypeChecker<'db> {
                         &environment_type_vars,
                     );
                 let retained = solver.row_unions_for_type(ty);
-                let (union_types, union_rows) = solver.row_union_variables(&retained);
+                let removals = solver.row_removals_for_type(ty);
+                let (mut union_types, mut union_rows) = solver.row_union_variables(&retained);
+                let (removed_types, removed_rows) = solver.row_removal_variables(&removals);
+                union_types.extend(removed_types);
+                union_rows.extend(removed_rows);
                 for var in union_types {
                     if !environment_type_vars.contains(&var) && !mapping.contains_key(&var) {
                         mapping.insert(var, type_params.len() as u32);
@@ -1974,7 +1997,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|union| solver.generalize_row_union(union, &mapping))
                     .collect();
-                ctx.record_local_generalization(scope, mapping);
+                ctx.record_local_generalization(scope, mapping.clone());
                 let mut effect_params = Vec::new();
                 for var in collect_effect_vars(self.db(), generalized)
                     .into_iter()
@@ -1986,6 +2009,13 @@ impl<'db> TypeChecker<'db> {
                 }
                 TypeScheme::new(self.db(), type_params, effect_params, generalized)
                     .with_row_unions(self.db(), unions)
+                    .with_row_removals(
+                        self.db(),
+                        removals
+                            .iter()
+                            .map(|r| solver.generalize_row_removal(r, &mapping))
+                            .collect(),
+                    )
             } else {
                 TypeScheme::mono(self.db(), ty)
             };
@@ -2741,6 +2771,14 @@ impl<'db> TypeChecker<'db> {
             {
                 Vec::new()
             }
+            [] if body_row.rest(self.db()).is_some() => handle_ctx
+                .handled_effects
+                .effects(self.db())
+                .iter()
+                .find(|effect| effect.ability_id == ability_id)
+                .expect("handler selection was recorded during inference")
+                .args
+                .clone(),
             [] => {
                 if ctx.mark_handler_error(arm_id, "missing ability instance") {
                     Diagnostic::new(
@@ -2772,6 +2810,17 @@ impl<'db> TypeChecker<'db> {
                 return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
             }
         };
+
+        if let Some(selected) = handle_ctx
+            .handled_effects
+            .effects(self.db())
+            .iter()
+            .find(|effect| effect.ability_id == ability_id)
+        {
+            for (variable, selected_arg) in selected.args.iter().zip(&ability_args) {
+                ctx.constrain_eq(*variable, *selected_arg);
+            }
+        }
 
         // Substitute ability type params into the operation's parameter types
         let op_param_types: Vec<Type<'db>> = op_info
@@ -2866,7 +2915,10 @@ impl<'db> TypeChecker<'db> {
     ) -> Type<'db> {
         use crate::ast::TypeAnnotationKind;
 
-        match &ann.kind {
+        if let Some(ty) = ctx.annotation_type(ann.id) {
+            return ty;
+        }
+        let ty = match &ann.kind {
             TypeAnnotationKind::Named(name) => {
                 if *name == "Int" {
                     ctx.int_type()
@@ -2917,14 +2969,42 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_with_ctx(ctx, p))
                     .collect();
                 let result_ty = self.annotation_to_type_with_ctx(ctx, result);
-                let row_var = ctx.fresh_row_var();
-                let effect = crate::ast::abilities_to_effect_row(
+                let mut rows = Vec::new();
+                for ability in abilities {
+                    let row = match &ability.kind {
+                        TypeAnnotationKind::Named(name) if crate::ast::is_type_variable(name) => {
+                            ctx.annotation_row(*name)
+                        }
+                        TypeAnnotationKind::Infer => ctx.fresh_row_var(),
+                        _ => continue,
+                    };
+                    if !rows.contains(&row) {
+                        rows.push(row);
+                    }
+                }
+                let rest = match rows.as_slice() {
+                    [] => None,
+                    [row] => Some(*row),
+                    _ => {
+                        let result = ctx.fresh_row_var();
+                        ctx.constrain_row_union(crate::ast::RowUnion {
+                            sources: rows
+                                .into_iter()
+                                .map(|row| EffectRow::open(self.db(), row))
+                                .collect(),
+                            result: EffectRow::open(self.db(), result),
+                        });
+                        Some(result)
+                    }
+                };
+                let converted = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
                     self.current_prefix(),
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
-                    || row_var,
+                    || rest.expect("row annotations allocate a tail"),
                 );
+                let effect = EffectRow::new(self.db(), converted.effects(self.db()).clone(), rest);
                 ctx.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
@@ -2936,7 +3016,9 @@ impl<'db> TypeChecker<'db> {
             }
             TypeAnnotationKind::Infer => ctx.fresh_type_var(),
             TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => ctx.error_type(),
-        }
+        };
+        ctx.record_annotation_type(ann.id, ty);
+        ty
     }
 
     // =========================================================================
@@ -3225,26 +3307,17 @@ impl<'db> TypeChecker<'db> {
     /// `State(Int)` and `State(Bool)` are now correctly distinguished.
     fn remove_handled_effects(
         &self,
-        _ctx: &mut FunctionInferenceContext<'_, 'db>,
-        row: EffectRow<'db>,
-        handled_ability_ids: &[AbilityId<'db>],
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        source: EffectRow<'db>,
+        removed: EffectRow<'db>,
     ) -> EffectRow<'db> {
-        let db = self.db();
-        let effects = row.effects(db);
-
-        // Filter out effects whose ability_id is in the handled list
-        let remaining_effects: Vec<_> = effects
-            .iter()
-            .filter(|effect| !handled_ability_ids.contains(&effect.ability_id))
-            .cloned()
-            .collect();
-
-        // Keep the same tail variable. The handled effects were explicitly
-        // listed in the effect row's effect list, so they are NOT in the tail.
-        // The tail represents the row-polymorphic remainder (e.g., `e` in
-        // `fn() ->{e, State(s)} a`), which by definition does not contain
-        // the handled effects.
-        EffectRow::new(db, remaining_effects, row.rest(db))
+        let result = ctx.fresh_effect_row();
+        ctx.constrain_row_removal(crate::ast::RowRemoval {
+            source,
+            removed,
+            result,
+        });
+        result
     }
 }
 
@@ -3282,8 +3355,12 @@ mod tests {
 
     /// Helper to create a TypeAnnotation with a given kind.
     fn make_annotation(kind: TypeAnnotationKind) -> TypeAnnotation {
+        static NEXT_ANNOTATION: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(1);
         TypeAnnotation {
-            id: NodeId::from_raw(0),
+            id: NodeId::from_raw(
+                NEXT_ANNOTATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ),
             kind,
         }
     }
@@ -3430,6 +3507,7 @@ mod tests {
         let handle_node_id = NodeId::from_raw(0);
         let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
+            handled_effects: EffectRow::pure(db),
             node_id: handle_node_id,
             answer_ty: body_ty,
             body_ty,
@@ -3525,6 +3603,7 @@ mod tests {
         let handle_node_id = NodeId::from_raw(0);
         let _ = ctx.begin_result_join(handle_node_id);
         let handle_ctx = HandleContext {
+            handled_effects: EffectRow::pure(db),
             node_id: handle_node_id,
             answer_ty: Type::new(db, TypeKind::Nil),
             body_ty: Type::new(db, TypeKind::Nil),
@@ -4050,5 +4129,53 @@ mod tests {
 
         let elem_ty = checker.extract_list_element_type(outer_list, &mut ctx);
         assert_eq!(elem_ty, inner_list);
+    }
+
+    #[salsa_test]
+    fn local_annotation_unions_preserve_names_and_revisit_identity(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let callback = |names: &[&str]| {
+            make_annotation(TypeAnnotationKind::Func {
+                params: vec![],
+                result: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                    "Nil",
+                )))),
+                abilities: names
+                    .iter()
+                    .map(|name| {
+                        make_annotation(TypeAnnotationKind::Named(Symbol::from_dynamic(name)))
+                    })
+                    .collect(),
+            })
+        };
+        let ann = make_annotation(TypeAnnotationKind::Func {
+            params: vec![callback(&["e1"]), callback(&["e2"]), callback(&["e1"])],
+            result: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Nil",
+            )))),
+            abilities: vec![
+                make_annotation(TypeAnnotationKind::Named(Symbol::new("e1"))),
+                make_annotation(TypeAnnotationKind::Named(Symbol::new("e2"))),
+            ],
+        });
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+        let allocated = ctx.next_row_var();
+        assert_eq!(checker.annotation_to_type_with_ctx(&mut ctx, &ann), ty);
+        assert_eq!(ctx.next_row_var(), allocated);
+        let TypeKind::Func { params, effect, .. } = ty.kind(db) else {
+            panic!("function")
+        };
+        let row = |index: usize| match params[index].kind(db) {
+            TypeKind::Func { effect, .. } => *effect,
+            _ => panic!("callback"),
+        };
+        assert_eq!(row(0), row(2));
+        assert_ne!(row(0), row(1));
+        assert!(
+            matches!(ctx.take_constraints().constraints(), [super::super::super::constraint::Constraint::RowUnion(union, None)]
+            if union.sources == vec![row(0), row(1)] && union.result == *effect)
+        );
     }
 }

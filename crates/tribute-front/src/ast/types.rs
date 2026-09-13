@@ -271,6 +271,8 @@ pub struct TypeScheme<'db> {
     /// Retained exact effect unions, quantified together with the body.
     #[returns(ref)]
     pub row_unions: Vec<RowUnion<'db>>,
+    #[returns(ref)]
+    pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
     pub body: Type<'db>,
 }
@@ -280,6 +282,28 @@ pub struct TypeScheme<'db> {
 pub struct RowUnion<'db> {
     pub sources: Vec<EffectRow<'db>>,
     pub result: EffectRow<'db>,
+}
+
+/// Exact handler subtraction, retained while source tails or type arguments are open.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct RowRemoval<'db> {
+    pub source: EffectRow<'db>,
+    pub removed: EffectRow<'db>,
+    pub result: EffectRow<'db>,
+}
+
+impl<'db> RowRemoval<'db> {
+    pub fn rows(&self) -> [EffectRow<'db>; 3] {
+        [self.source, self.removed, self.result]
+    }
+
+    pub fn map_rows(&self, mut f: impl FnMut(EffectRow<'db>) -> EffectRow<'db>) -> Self {
+        Self {
+            source: f(self.source),
+            removed: f(self.removed),
+            result: f(self.result),
+        }
+    }
 }
 
 impl<'db> RowUnion<'db> {
@@ -298,7 +322,7 @@ impl<'db> TypeScheme<'db> {
         effect_params: Vec<EffectVar>,
         body: Type<'db>,
     ) -> Self {
-        Self::intern(db, type_params, effect_params, Vec::new(), body)
+        Self::intern(db, type_params, effect_params, Vec::new(), Vec::new(), body)
     }
 
     pub fn with_row_unions(self, db: &'db dyn salsa::Database, unions: Vec<RowUnion<'db>>) -> Self {
@@ -307,6 +331,22 @@ impl<'db> TypeScheme<'db> {
             self.type_params(db).clone(),
             self.effect_params(db).clone(),
             unions,
+            self.row_removals(db).clone(),
+            self.body(db),
+        )
+    }
+
+    pub fn with_row_removals(
+        self,
+        db: &'db dyn salsa::Database,
+        removals: Vec<RowRemoval<'db>>,
+    ) -> Self {
+        Self::intern(
+            db,
+            self.type_params(db).clone(),
+            self.effect_params(db).clone(),
+            self.row_unions(db).clone(),
+            removals,
             self.body(db),
         )
     }

@@ -37,6 +37,7 @@ pub(crate) struct HandleContext<'db> {
     pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
+    pub handled_effects: EffectRow<'db>,
 }
 
 /// Function-level type inference context.
@@ -130,6 +131,11 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Counter for fresh effect row variables (local to this function).
     next_row_var: u64,
 
+    /// Named rows share the function declaration's annotation scope.
+    annotation_rows: HashMap<Symbol, EffectVar>,
+    /// Annotation revisits must not allocate unrelated inference variables.
+    annotation_types: HashMap<NodeId, Type<'db>>,
+
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
     pub(crate) effect_contract: Option<EffectRow<'db>>,
@@ -206,6 +212,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
+            annotation_rows: HashMap::new(),
+            annotation_types: HashMap::new(),
             current_effect: EffectRow::pure(db),
             effect_contract: None,
             lambda_resume_effects: Vec::new(),
@@ -660,6 +668,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.constraints
                 .add(super::constraint::Constraint::RowUnion(union.clone(), None));
         }
+        for removal in &instance.row_removals {
+            self.constraints
+                .add(Constraint::RowRemoval(removal.clone(), None));
+        }
         instance
     }
 
@@ -748,6 +760,35 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn reserve_row_vars(&mut self, next: u64) {
         self.next_row_var = self.next_row_var.max(next);
+    }
+
+    pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: EffectVar) {
+        self.annotation_rows.insert(name, row);
+    }
+
+    pub(crate) fn annotation_row(&mut self, name: Symbol) -> EffectVar {
+        if let Some(row) = self.annotation_rows.get(&name) {
+            return *row;
+        }
+        let row = self.fresh_row_var();
+        self.annotation_rows.insert(name, row);
+        row
+    }
+
+    pub(crate) fn annotation_type(&self, node: NodeId) -> Option<Type<'db>> {
+        self.annotation_types.get(&node).copied()
+    }
+
+    pub(crate) fn record_annotation_type(&mut self, node: NodeId, ty: Type<'db>) {
+        self.annotation_types.insert(node, ty);
+    }
+
+    pub(crate) fn constrain_row_union(&mut self, union: crate::ast::RowUnion<'db>) {
+        self.constraints.add(Constraint::RowUnion(union, None));
+    }
+
+    pub(crate) fn constrain_row_removal(&mut self, removal: crate::ast::RowRemoval<'db>) {
+        self.constraints.add(Constraint::RowRemoval(removal, None));
     }
 
     /// Add a type equality constraint tied to a source AST node.
@@ -875,10 +916,30 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Merge an effect and tie any resulting type/arity constraint to a call.
     pub fn merge_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
-        self.merge_effect_with_origin(effect, Some(node_id));
+        self.merge_effect_with_origin(
+            effect,
+            Some(ConstraintOrigin {
+                node_id,
+                kind: ConstraintOriginKind::Call,
+            }),
+        );
     }
 
-    fn merge_effect_with_origin(&mut self, effect: EffectRow<'db>, origin: Option<NodeId>) {
+    pub(crate) fn merge_handler_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+        self.merge_effect_with_origin(
+            effect,
+            Some(ConstraintOrigin {
+                node_id,
+                kind: ConstraintOriginKind::HandlerBoundary,
+            }),
+        );
+    }
+
+    fn merge_effect_with_origin(
+        &mut self,
+        effect: EffectRow<'db>,
+        origin: Option<ConstraintOrigin>,
+    ) {
         let db = self.db;
         let current = self.current_effect;
 
@@ -919,8 +980,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     },
                 );
                 let right = EffectRow::single(db, invalid.clone());
-                if let Some(node_id) = origin {
-                    self.constrain_row_eq_at(left, right, node_id, ConstraintOriginKind::Call);
+                if let Some(origin) = origin {
+                    self.constrain_row_eq_at(left, right, origin.node_id, origin.kind);
                 } else {
                     self.constrain_row_eq(left, right);
                 }
@@ -930,13 +991,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             super::effect_row::union(db, current, effect, || self.fresh_row_var());
         self.current_effect = result;
         if let Some(relation) = relation {
-            self.constraints.add(Constraint::RowUnion(
-                relation,
-                origin.map(|node_id| ConstraintOrigin {
-                    node_id,
-                    kind: ConstraintOriginKind::Call,
-                }),
-            ));
+            self.constraints.add(Constraint::RowUnion(relation, origin));
         }
     }
 

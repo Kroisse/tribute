@@ -88,6 +88,21 @@ impl<'db> TypeChecker<'db> {
         // Get the instantiated function type (with UniVars) for later generalization
         let (param_types, expected_return, instantiated_func_ty, signature_instance) =
             self.get_func_signature_with_type(&mut ctx, func_id, &func);
+        if let Some((scheme, instance)) = &signature_instance
+            && let Some(names) = self.signature_row_names.get(&func_id)
+        {
+            for (name, original) in names {
+                let index = scheme
+                    .effect_params(self.db())
+                    .iter()
+                    .position(|row| row == original)
+                    .expect("named signature row must be quantified");
+                let row = instance.row_args[index]
+                    .rest(self.db())
+                    .expect("fresh signature row must be open");
+                ctx.bind_annotation_row(*name, row);
+            }
+        }
         let diagnostic_func_id = func.id;
         let diagnostic_func_name = func.name;
         let diagnostic_effects = func.effects.clone();
@@ -295,8 +310,23 @@ impl<'db> TypeChecker<'db> {
             row_subst,
             &mut body_univars,
         );
-        for union in solver.row_unions_for_type(inferred_func_ty) {
-            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+        for rows in solver
+            .row_unions_for_type(inferred_func_ty)
+            .into_iter()
+            .map(|u| {
+                u.sources
+                    .into_iter()
+                    .chain(std::iter::once(u.result))
+                    .collect::<Vec<_>>()
+            })
+            .chain(
+                solver
+                    .row_removals_for_type(inferred_func_ty)
+                    .into_iter()
+                    .map(|r| r.rows().to_vec()),
+            )
+        {
+            for row in rows {
                 for effect in row.effects(self.db()) {
                     for arg in &effect.args {
                         type_subst.collect_univars_from_type(
@@ -438,6 +468,12 @@ impl<'db> TypeChecker<'db> {
         for var in solver
             .row_union_variables(&solver.row_unions_for_type(inferred_func_ty))
             .1
+            .into_iter()
+            .chain(
+                solver
+                    .row_removal_variables(&solver.row_removals_for_type(inferred_func_ty))
+                    .1,
+            )
         {
             if !effect_params.contains(&var) {
                 effect_params.push(var);
@@ -449,7 +485,15 @@ impl<'db> TypeChecker<'db> {
             .map(|union| solver.generalize_row_union(union, &var_to_index))
             .collect();
         let new_scheme = TypeScheme::new(self.db(), type_params, effect_params, generalized)
-            .with_row_unions(self.db(), unions);
+            .with_row_unions(self.db(), unions)
+            .with_row_removals(
+                self.db(),
+                solver
+                    .row_removals_for_type(inferred_func_ty)
+                    .iter()
+                    .map(|r| solver.generalize_row_removal(r, &var_to_index))
+                    .collect(),
+            );
         if let Some((source_scheme, instance)) = signature_instance {
             let mut types = vec![None; new_scheme.type_params(self.db()).len()];
             for (source_index, ty) in instance.type_args.iter().enumerate() {

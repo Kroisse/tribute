@@ -189,6 +189,16 @@ pub fn monomorphize_functions<'db>(
                     })
                     .collect(),
             )
+            .with_row_removals(
+                db,
+                scheme
+                    .row_removals(db)
+                    .iter()
+                    .map(|removal| {
+                        removal.map_rows(|row| rewrite::rewrite_row(db, row, &type_rewrite_map))
+                    })
+                    .collect(),
+            )
         };
         for (_, scheme) in &mut fn_types_vec {
             *scheme = rewrite_scheme(*scheme);

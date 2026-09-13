@@ -232,8 +232,30 @@ with one shared mapping. Variables connected to the surrounding environment or
 an unresolved producer are not independently generalized. Handler subtraction
 must not reintroduce its consumed instance into the outward row.
 
+Handler의 차집합도 지연 가능한 semantic 제약이다. `RowRemoval(source, removed,
+result)`는 `result = source − removed`를 뜻한다. 제거 대상은 닫힌 exact ability
+instance 집합이며, source의 열린 tail에서 나중에 드러나는 label에도 적용한다.
+타입 인자가 아직 미정이라 제거 여부가 모호하면 관계를 남긴다. 일반화와
+인스턴스화는 이 관계를 합집합 관계와 함께 보존한다. 결과가 비어 있다는 이유로
+source 자체를 빈 row로 닫아서는 안 된다.
+
+Effect 집합 equality는 양방향 후보 검사를 끝낸 뒤에 확정된 타입 치환을 적용한다.
+한쪽 순회에서 먼저 찾은 대응의 치환으로 다른 쪽의 모호성을 없애서는 안 되며,
+입력 row나 label의 순서를 바꾸어도 같은 제약을 보존해야 한다.
+
 Named row variables have declaration-scoped identity: repeated names share an
 identity and distinct names do not. Multiple row names denote their union.
+
+지역 타입 주석도 선언의 row 이름 환경을 사용한다. 같은 함수 선언의 서명과 본문에서
+같은 이름은 같은 row를 가리키고, 다른 이름은 독립적으로 유지한다. `{e1, e2}`는
+두 row를 하나로 대체하지 않고 합집합 관계로 보존한다. 같은 annotation 노드를
+재방문할 때는 처음 변환한 타입을 재사용하며, 생략된 row나 `_`는 해당 주석 위치의
+새 변수로 유지한다.
+
+스킴 인스턴스화는 스킴 소유 row를 먼저 freshening한 뒤 호출자의 타입 인자를
+대입한다. 대입된 함수 타입 내부의 row는 호출자가 소유하므로, 숫자 식별자가 스킴의
+quantifier와 같더라도 다시 freshening하지 않는다. 스킴 본문과 보존한 제약에는
+동일한 대응표와 변환 순서를 적용한다.
 
 ## Row Unification
 
