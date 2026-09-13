@@ -10,8 +10,9 @@ mod common;
 use salsa::Database;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
-use tribute::pipeline::{compile_ast, compile_with_diagnostics};
+use tribute::pipeline::{compile_ast, compile_frontend, compile_with_diagnostics};
 use tribute_front::SourceCst;
+use tribute_passes::diagnostic::CompilationPhase;
 
 // =============================================================================
 // Name resolution errors
@@ -194,7 +195,7 @@ fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
 }
 
 // =============================================================================
-// Lowering errors
+// Record construction diagnostics
 // =============================================================================
 
 #[salsa::tracked]
@@ -241,9 +242,83 @@ fn test() -> Point {
 }
 "#,
     );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.module.is_none());
+    assert_eq!(result.diagnostics.len(), 1, "{:#?}", result.diagnostics);
+    assert_eq!(result.diagnostics[0].inner.message, "missing field: y");
+    assert!(compile_frontend(db, source).is_none());
+
     let diagnostics = lowering_diagnostics(db, source);
     assert!(!diagnostics.is_empty());
     insta::assert_yaml_snapshot!(diagnostics);
+}
+
+#[salsa_test]
+fn record_errors_do_not_gain_missing_field_diagnostics(db: &salsa::DatabaseImpl) {
+    let cases = [
+        (
+            "unknown",
+            r#"
+struct Point { x: Int, y: Int }
+
+fn test() -> Point {
+    Point { x: +1, y: +2, z: +3 }
+}
+"#,
+            "unknown field `z` for struct `Point`",
+        ),
+        (
+            "duplicate",
+            r#"
+struct Point { x: Int, y: Int }
+
+fn test() -> Point {
+    Point { x: +1, x: +2, y: +3 }
+}
+"#,
+            "duplicate field `x`",
+        ),
+        (
+            "field_type",
+            r#"
+struct Point { x: Int, y: Int }
+
+fn test() -> Point {
+    Point { x: True, y: +2 }
+}
+"#,
+            "type error in function 'test': expected `Bool`, found `Int`",
+        ),
+    ];
+
+    for (name, text, message) in cases {
+        let file_name = format!("{name}.trb");
+        let source = SourceCst::from_source_str(db, &file_name, text);
+        let diagnostics = lowering_diagnostics(db, source);
+        assert_eq!(diagnostics.len(), 1, "{name}: {:#?}", diagnostics);
+        assert_eq!(diagnostics[0].inner.message, message, "{name}");
+    }
+}
+
+#[salsa_test]
+fn nested_missing_struct_field_is_reported_once(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "nested_missing_struct_field.trb",
+        r#"
+struct Point { x: Int, y: Int }
+struct Wrapper { point: Point }
+
+fn test() -> Wrapper {
+    Wrapper { point: Point { x: +1 } }
+}
+"#,
+    );
+
+    let diagnostics = lowering_diagnostics(db, source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].inner.message, "missing field: y");
+    assert_eq!(diagnostics[0].phase, CompilationPhase::TypeChecking);
 }
 
 // =============================================================================

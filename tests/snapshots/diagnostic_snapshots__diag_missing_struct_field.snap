@@ -8,4 +8,4 @@ expression: diagnostics
     start: 59
     end: 74
   severity: Error
-  phase: Lowering
+  phase: TypeChecking

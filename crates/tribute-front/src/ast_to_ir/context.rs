@@ -139,7 +139,7 @@ pub struct IrLoweringCtx<'db> {
     /// are built. This lets recursive and forward fields retain `adt.typeref`
     /// while their layout is still incomplete.
     logical_nominal_declarations: HashSet<Symbol>,
-    /// Exact compiler-owned prelude declaration ID to intrinsic identity.
+    /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// Counter for generating unique prompt tags (per-module deterministic).
     prompt_tag_counter: u32,

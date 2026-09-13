@@ -60,19 +60,21 @@ impl Pass for LowerListIntrinsics {
                 && {
                     func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(
                         |signature| {
-                            let [element, tail] = signature.inputs(ctx) else {
+                            let [_, _] = signature.inputs(ctx) else {
                                 return false;
                             };
-                            let Some(result) = signature.single_result(ctx) else {
-                                return false;
-                            };
-                            [result, *element, *tail].into_iter().all(|ty| {
-                                let data = ctx.types.get(ty);
-                                data.dialect == Symbol::new("tribute_rt")
-                                    && data.name == Symbol::new("anyref")
-                            })
+                            signature.single_result(ctx).is_some()
                         },
                     )
+                        // Pre-CPS validation authenticates the exact semantic
+                        // identity and complete concrete signature. Keep that
+                        // signature intact for a specialized generic intrinsic;
+                        // this target-neutral lowering only needs its callable
+                        // arity and must not recreate trust from the symbol.
+                        && matches!(
+                            ctx.op(op).attributes.get("abi"),
+                            Some(trunk_ir::Attribute::String(abi)) if abi == "intrinsic"
+                        )
                 }
             {
                 intrinsic_declarations.eligible.insert(name);

@@ -200,9 +200,15 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 });
             }
 
-            // any → adt.struct/adt.typeref: no-op (already a reference type)
-            if is_adt_struct_type(ctx, to_ty) || is_adt_typeref(ctx, to_ty) {
+            // any → adt.struct: no-op (already a reference type)
+            if is_adt_struct_type(ctx, to_ty) {
                 return Some(MaterializeResult { value, ops: vec![] });
+            }
+
+            // Keep dynamic nominal recovery for the target converter. Native
+            // lowering can erase it to a pointer, while Wasm needs a ref.cast.
+            if is_adt_typeref(ctx, to_ty) {
+                return None;
             }
 
             // Note: any → trampoline.resume_wrapper and any → core.array conversions
@@ -214,4 +220,94 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     });
 
     tc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::OperationDataBuilder;
+    use trunk_ir::location::Span;
+    use trunk_ir::refs::ValueRef;
+    use trunk_ir::types::{Attribute, Location};
+
+    fn test_location(ctx: &mut IrContext) -> Location {
+        let path = ctx.paths.intern("test.trb".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    fn anyref_type(ctx: &mut IrContext) -> TypeRef {
+        intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"))
+    }
+
+    fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
+        ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .build(),
+        )
+    }
+
+    fn struct_type(ctx: &mut IrContext) -> TypeRef {
+        ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+                .attr("name", Attribute::Symbol(Symbol::new("Payload")))
+                .build(),
+        )
+    }
+
+    fn dynamic_value(ctx: &mut IrContext, location: Location) -> ValueRef {
+        let anyref_ty = anyref_type(ctx);
+        let source_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
+                .result(anyref_ty)
+                .build(ctx);
+        let source = ctx.create_op(source_data);
+        ctx.op_result(source, 0)
+    }
+
+    #[test]
+    fn generic_cleanup_preserves_dynamic_nominal_recovery_for_target_materialization() {
+        let mut ctx = IrContext::new();
+        let location = test_location(&mut ctx);
+        let anyref_ty = anyref_type(&mut ctx);
+        let nominal_ty = nominal_reference_type(&mut ctx);
+        let struct_ty = struct_type(&mut ctx);
+        let value = dynamic_value(&mut ctx, location);
+        let generic_converter = generic_type_converter(&mut ctx);
+        assert!(
+            generic_converter
+                .materialize(&mut ctx, location, value, anyref_ty, nominal_ty)
+                .is_none()
+        );
+        let struct_result = generic_converter
+            .materialize(&mut ctx, location, value, anyref_ty, struct_ty)
+            .expect("dynamic struct recovery stays a no-op");
+        assert!(struct_result.ops.is_empty());
+
+        let (native_converter, native_refs) =
+            crate::native::type_converter::native_type_converter(&mut ctx);
+        let native_target = native_converter
+            .convert_type(&ctx, nominal_ty)
+            .expect("native nominal representation");
+        assert_eq!(native_target, native_refs.core_ptr);
+        let native_result = native_converter
+            .materialize(&mut ctx, location, value, anyref_ty, native_target)
+            .expect("native target consumes nominal recovery");
+        assert!(native_result.ops.is_empty());
+
+        let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
+        let wasm_target = wasm_converter
+            .convert_type(&ctx, nominal_ty)
+            .expect("Wasm nominal representation");
+        let wasm_result = wasm_converter
+            .materialize(&mut ctx, location, value, anyref_ty, wasm_target)
+            .expect("Wasm target consumes nominal recovery");
+        assert_eq!(
+            (
+                ctx.op(wasm_result.ops[0]).dialect,
+                ctx.op(wasm_result.ops[0]).name
+            ),
+            (Symbol::new("wasm_gc"), Symbol::new("ref_cast"))
+        );
+    }
 }

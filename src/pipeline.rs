@@ -116,6 +116,8 @@ pub struct CompilationConfig {
 /// Independently selectable optimization stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OptimizationOptions {
+    /// Compatibility-only legacy frontend settings. The source-logical
+    /// production route does not consult these; #826 owns their removal.
     pub ast_to_ir: ast_to_ir::AstToIrOptions,
     pub native: NativeOptimizationOptions,
 }
@@ -355,16 +357,23 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
 /// This performs AST-level prelude merge (prepending prelude decls to user decls),
 /// then runs `ast_to_ir` on the merged module.
 ///
-/// Returns `(IrContext, Module)` — arena IR ready for in-place passes.
+/// Returns the logical frontend result, including the metadata required by the
+/// shared CPS boundary.
 fn merge_and_lower_to_ir<'db>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-    options: OptimizationOptions,
-) -> (IrContext, Module) {
-    merge_and_lower_to_ir_with(db, typed, source, |typed, db, ir, source_uri| {
-        typed.lower_to_legacy_ir_with_options(db, ir, source_uri, options.ast_to_ir)
-    })
+) -> FrontendCompilation {
+    let (context, frontend) =
+        merge_and_lower_to_ir_with(db, typed, source, |typed, db, ir, source_uri| {
+            typed.lower_to_ir(db, ir, source_uri)
+        });
+    FrontendCompilation {
+        context,
+        module: frontend.module,
+        operation_declarations: frontend.operation_declarations,
+        compiler_intrinsics: frontend.compiler_intrinsics,
+    }
 }
 
 fn merge_and_lower_to_ir_with<'db, M>(
@@ -379,6 +388,11 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let user_fn_types = typed.function_types(db);
     let user_node_types = &typed.expression_types(db).node_types;
     let user_call_callee_types = &typed.expression_types(db).call_callee_types;
+    let user_ability_definitions = typed.ability_definitions(db);
+    let user_handler_operations = typed.handler_operations(db);
+    let user_perform_operations = typed.perform_operations(db);
+    let user_lambda_signatures = typed.lambda_signatures(db);
+    let user_exhaustive_cases = typed.exhaustive_cases(db);
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
@@ -389,15 +403,24 @@ fn merge_and_lower_to_ir_with<'db, M>(
         merged_node_types,
         merged_call_callee_types,
         merged_ability_conventions,
+        merged_ability_definitions,
+        merged_handler_operations,
+        merged_perform_operations,
+        merged_lambda_signatures,
+        merged_exhaustive_cases,
         merged_span_map,
         compiler_intrinsics,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
-        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(prelude_module_ast);
         let prelude_fn_types = prelude.function_types(db);
         let prelude_node_types = &prelude.expression_types(db).node_types;
         let prelude_call_callee_types = &prelude.expression_types(db).call_callee_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
+        let prelude_ability_definitions = prelude.ability_definitions(db);
+        let prelude_handler_operations = prelude.handler_operations(db);
+        let prelude_perform_operations = prelude.perform_operations(db);
+        let prelude_lambda_signatures = prelude.lambda_signatures(db);
+        let prelude_exhaustive_cases = prelude.exhaustive_cases(db);
         let prelude_span_map = prelude.span_map(db);
 
         // Prepend prelude decls before user decls
@@ -409,6 +432,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             user_module.name,
             merged_decls,
         );
+        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(&merged_ast);
 
         // Merge function_types: prelude first, user overrides
         let mut fn_types: std::collections::HashMap<_, _> =
@@ -428,6 +452,28 @@ fn merge_and_lower_to_ir_with<'db, M>(
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
 
+        let mut ability_definitions = prelude_ability_definitions.clone();
+        for definition in user_ability_definitions {
+            ability_definitions.retain(|existing| existing.0 != definition.0);
+            ability_definitions.push(definition.clone());
+        }
+
+        let mut handler_operations: std::collections::HashMap<_, _> =
+            prelude_handler_operations.iter().cloned().collect();
+        handler_operations.extend(user_handler_operations.iter().cloned());
+
+        let mut perform_operations: std::collections::HashMap<_, _> =
+            prelude_perform_operations.iter().cloned().collect();
+        perform_operations.extend(user_perform_operations.iter().cloned());
+
+        let mut lambda_signatures: std::collections::HashMap<_, _> =
+            prelude_lambda_signatures.iter().cloned().collect();
+        lambda_signatures.extend(user_lambda_signatures.iter().cloned());
+
+        let mut exhaustive_cases: std::collections::HashSet<_> =
+            prelude_exhaustive_cases.iter().copied().collect();
+        exhaustive_cases.extend(user_exhaustive_cases.iter().copied());
+
         // Merge span maps (user overrides prelude on conflict)
         let merged_span_map = user_span_map.merge(&prelude_span_map);
 
@@ -437,6 +483,11 @@ fn merge_and_lower_to_ir_with<'db, M>(
             node_types,
             call_callee_types,
             ability_conventions,
+            ability_definitions,
+            handler_operations,
+            perform_operations,
+            lambda_signatures,
+            exhaustive_cases,
             merged_span_map,
             compiler_intrinsics,
         )
@@ -447,14 +498,28 @@ fn merge_and_lower_to_ir_with<'db, M>(
             user_call_callee_types.iter().cloned().collect();
         let ability_conventions: std::collections::HashMap<_, _> =
             user_ability_conventions.iter().cloned().collect();
+        let ability_definitions = user_ability_definitions.clone();
+        let handler_operations: std::collections::HashMap<_, _> =
+            user_handler_operations.iter().cloned().collect();
+        let perform_operations: std::collections::HashMap<_, _> =
+            user_perform_operations.iter().cloned().collect();
+        let lambda_signatures: std::collections::HashMap<_, _> =
+            user_lambda_signatures.iter().cloned().collect();
+        let exhaustive_cases: std::collections::HashSet<_> =
+            user_exhaustive_cases.iter().copied().collect();
         (
             user_module.clone(),
             fn_types,
             node_types,
             call_callee_types,
             ability_conventions,
+            ability_definitions,
+            handler_operations,
+            perform_operations,
+            lambda_signatures,
+            exhaustive_cases,
             user_span_map.clone(),
-            std::collections::HashMap::new(),
+            ast_to_ir::registered_compiler_intrinsics(user_module),
         )
     };
 
@@ -467,10 +532,11 @@ fn merge_and_lower_to_ir_with<'db, M>(
             constructor_types: typed.constructor_types(db).iter().cloned().collect(),
             node_types: merged_node_types,
             call_callee_types: merged_call_callee_types,
-            handler_operations: typed.handler_operations(db).iter().cloned().collect(),
-            perform_operations: typed.perform_operations(db).iter().cloned().collect(),
-            lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
-            exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+            handler_operations: merged_handler_operations,
+            perform_operations: merged_perform_operations,
+            lambda_signatures: merged_lambda_signatures,
+            exhaustive_cases: merged_exhaustive_cases,
+            compiler_intrinsics,
         },
     );
     let merged_module = mono_result.module;
@@ -489,14 +555,14 @@ fn merge_and_lower_to_ir_with<'db, M>(
             node_types: mono_result.metadata.node_types,
             ability_conventions: merged_ability_conventions,
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
-                typed.ability_definitions(db),
+                &merged_ability_definitions,
             ),
             handler_operations: mono_result.metadata.handler_operations,
             perform_operations: mono_result.metadata.perform_operations,
             lambda_signatures: mono_result.metadata.lambda_signatures,
             exhaustive_cases: mono_result.metadata.exhaustive_cases,
             well_known_types: typed.well_known_types(db),
-            compiler_intrinsics,
+            compiler_intrinsics: mono_result.metadata.compiler_intrinsics,
         },
         db,
         &mut ir,
@@ -504,6 +570,15 @@ fn merge_and_lower_to_ir_with<'db, M>(
     );
 
     (ir, module)
+}
+
+/// Arena IR together with the exact semantic metadata required by the shared
+/// CPS conversion. Public frontend callers intentionally receive only IR.
+struct FrontendCompilation {
+    context: IrContext,
+    module: Module,
+    operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
+    compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
 }
 
 /// Run frontend (parse → typecheck → TDNR) and lower to arena IR.
@@ -514,14 +589,14 @@ pub fn compile_frontend(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
-    compile_frontend_with_options(db, source, OptimizationOptions::production())
+    let compilation = compile_frontend_for_shared_route(db, source)?;
+    Some((compilation.context, compilation.module))
 }
 
-fn compile_frontend_with_options(
+fn compile_frontend_for_shared_route(
     db: &dyn salsa::Database,
     source: SourceCst,
-    options: OptimizationOptions,
-) -> Option<(IrContext, Module)> {
+) -> Option<FrontendCompilation> {
     let typed = parse_and_lower_ast(db, source)?;
     let has_frontend_errors = parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
         .iter()
@@ -529,7 +604,7 @@ fn compile_frontend_with_options(
     if has_frontend_errors {
         return None;
     }
-    Some(merge_and_lower_to_ir(db, &typed, source, options))
+    Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
 /// Result of the full compilation pipeline.
@@ -610,42 +685,65 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 // These functions take SourceCst and run the pipeline up to a specific stage.
 // Useful for testing individual stages or for tools that need intermediate results.
 
-/// Run pipeline through evidence params (for testing).
+/// Run frontend, source-logical CPS conversion, and lambda lifting (for testing).
 ///
-/// Evidence params are now inserted during ast_to_ir lowering.
+/// Evidence params are introduced by the physical CPS conversion. Keep frontend
+/// metadata in the same arena so the conversion can authenticate declarations.
 pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    let Some(FrontendCompilation {
+        context,
+        module: m,
+        operation_declarations,
+        compiler_intrinsics,
+    }) = compile_frontend_for_shared_route(db, source)
+    else {
         return Ok(None);
     };
+    let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+            .with_compiler_intrinsics(compiler_intrinsics),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs frontend + `lower_closure_lambda` + `lower_closures`
+/// Runs frontend + source-logical CPS + `lower_closure_lambda` + `lower_closures`
 /// in a single arena session.
 pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend(db, source) else {
+    let Some(FrontendCompilation {
+        context,
+        module: m,
+        operation_declarations,
+        compiler_intrinsics,
+    }) = compile_frontend_for_shared_route(db, source)
+    else {
         return Ok(None);
     };
+    let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+            .with_compiler_intrinsics(compiler_intrinsics),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+    .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
     pm.nest::<func_dialect::Func>()
         .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     pm.run(&mut ctx, core_module)?;
@@ -673,12 +771,19 @@ fn run_shared_pipeline(
 fn run_shared_pipeline_with_options(
     db: &dyn salsa::Database,
     source: SourceCst,
-    options: OptimizationOptions,
+    _options: OptimizationOptions,
     stop_after: Option<SharedPipelineStage>,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = compile_frontend_with_options(db, source, options) else {
+    let Some(FrontendCompilation {
+        context,
+        module: m,
+        operation_declarations,
+        compiler_intrinsics,
+    }) = compile_frontend_for_shared_route(db, source)
+    else {
         return Ok(None);
     };
+    let mut ctx = context;
 
     if stop_after == Some(SharedPipelineStage::AfterFrontend) {
         return Ok(Some((ctx, m)));
@@ -690,6 +795,12 @@ fn run_shared_pipeline_with_options(
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut structural_pm = PassManager::new();
     structural_pm
+        .add_pass(
+            tribute_passes::tribute_control_to_cps::TributeControlToCps::new(
+                operation_declarations,
+            )
+            .with_compiler_intrinsics(compiler_intrinsics),
+        )
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
         .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
@@ -706,8 +817,7 @@ fn run_shared_pipeline_with_options(
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform)
-        .add_pass(tribute_passes::tail_resumptive::ConvertTailResumptive);
+        .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
     install_debug_use_chain_verifier(&mut ability_pm);
     ability_pm.run(&mut ctx, core_module)?;
 
@@ -2001,26 +2111,30 @@ mod tests {
             .expect("attached db")
     }
 
-    fn has_boxed_closure_call_pointer_witness(
+    fn has_exact_cps_closure_tail_witness(
         ctx: &IrContext,
         module: Module,
         pointer_type: trunk_ir::TypeRef,
+        i32_type: trunk_ir::TypeRef,
     ) -> bool {
         let body = module.body(ctx).expect("module must have a body");
         let mut found = false;
         let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if clif::CallIndirect::matches(ctx, op) {
+            if clif::ReturnCallIndirect::matches(ctx, op) {
                 let signature = ctx
                     .op(op)
                     .attributes
                     .get_type("sig")
                     .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
                 let operands = ctx.op_operands(op);
-                if let (Some(signature), Some(&argument)) = (signature, operands.get(3))
-                    && operands.len() == 4
-                    && signature.inputs(ctx).len() == 3
-                    && signature.inputs(ctx)[2] == pointer_type
-                    && ctx.value_ty(argument) == pointer_type
+                if let (Some(signature), Some(&argument)) = (signature, operands.get(2))
+                    && operands.len() == 3
+                    && signature.inputs(ctx) == [pointer_type, i32_type]
+                    && signature.results(ctx).is_empty()
+                    && ctx.value_ty(operands[1]) == pointer_type
+                    && ctx.value_ty(argument) == i32_type
+                    && ctx.op(op).attributes.get("tribute.calling_convention")
+                        == Some(&trunk_ir::Attribute::Int(2))
                     && matches!(
                         ctx.value_def(argument),
                         trunk_ir::refs::ValueDef::OpResult(producer, _)
@@ -2065,9 +2179,18 @@ fn main() {
         trunk_ir_cranelift_backend::validate_clif_ir(&ctx, module)
             .expect("prepared native IR must satisfy exact callable slot contracts");
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == trunk_ir::Symbol::new("core")
+                    && data.name == trunk_ir::Symbol::new("i32"))
+                .then_some(ty)
+            })
+            .expect("fixture must contain core.i32");
         assert!(
-            has_boxed_closure_call_pointer_witness(&ctx, module, pointer_type),
-            "closure execution fixture must pass a core.ptr boxed value to its indirect call"
+            has_exact_cps_closure_tail_witness(&ctx, module, pointer_type, i32_type),
+            "closure execution fixture must tail-call its closure with the exact CPS ABI"
         );
     }
 
@@ -2191,59 +2314,62 @@ fn main() {
     }
 
     #[salsa_test]
-    fn pre_825_legacy_route_has_no_logical_control_leak(db: &salsa::DatabaseImpl) {
-        // Temporary pre-#825 compatibility routing: this must continue to
-        // specialize a representative generic source program into physical IR
-        // until the shared logical-control pipeline owns composition. Remove
-        // this fixture with the legacy route.
+    fn production_route_legalizes_source_control_with_exact_declarations(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
-            "legacy-route.trb",
+            "production-route.trb",
             r#"
-struct Packet(a) { value: a }
+ability Counter {
+    op next() -> Int
+}
 
-fn select(packet: Packet(a), values: List(a)) -> a {
-    let singleton = [packet.value]
-    let pair = #(packet.value, values)
-    case pair {
-        #(value, [head, ..tail]) -> {
-            let identity = fn(item) { item }
-            identity(value)
-        }
-        _ -> packet.value
-    }
+fn count() ->{Counter} Int {
+    Counter::next()
 }
 
 fn main() {
-    let packet = Packet { value: +1 }
-    let _ = select(packet, [+2])
+    let _ = handle count() {
+        do result { result }
+        op Counter::next() { resume +1 }
+    }
 }
 "#,
         );
-        let result = compile_frontend(db, source);
+        let frontend = compile_frontend_for_shared_route(db, source)
+            .expect("production frontend route should lower");
+        let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
         assert!(
-            result.is_some(),
-            "legacy frontend route should lower before shared passes: {:#?}",
-            parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+            logical.contains("tribute_control.perform"),
+            "frontend must retain source logical perform:\n{logical}"
         );
-        let (ctx, module) = result.unwrap();
+        let throw = frontend
+            .operation_declarations
+            .iter()
+            .position(|declaration| declaration.op_name == trunk_ir::Symbol::new("throw"))
+            .expect("prelude Throw declaration");
+        let next = frontend
+            .operation_declarations
+            .iter()
+            .position(|declaration| declaration.op_name == trunk_ir::Symbol::new("next"))
+            .expect("source Counter declaration");
+        assert!(
+            throw < next,
+            "operation declarations must preserve prelude-before-source order"
+        );
+        let (ctx, module) = compile_ast(db, source)
+            .expect("shared lowering should succeed")
+            .expect("shared lowering should produce a module");
         let output = trunk_ir::printer::print_module(&ctx, module.op());
         for forbidden in [
             "tribute_control.",
             "tribute_control.func_sig",
             "resume_token",
+            "ability.legacy_",
         ] {
             assert!(
                 !output.contains(forbidden),
-                "legacy route leaked logical control representation `{forbidden}`:\n{output}"
+                "shared route leaked `{forbidden}`:\n{output}"
             );
         }
-        assert!(output.contains("func.func"), "{output}");
-        assert!(
-            output.contains("Packet$Int")
-                && output.contains("func.func @select(")
-                && output.contains("closure.lambda"),
-            "root pipeline must retain the specialized physical generic layout, callable, and lambda:\n{output}"
-        );
     }
 
     #[salsa_test]
@@ -2539,13 +2665,13 @@ fn main() ->{std::io::Io} Nil {
     }
 
     #[test]
-    fn root_prelude_generic_callee_metadata_reaches_concrete_specialization() {
+    fn generic_intrinsic_specialization_reaches_concrete_lowering() {
         salsa::Database::attach(&salsa::DatabaseImpl::default(), |db| {
             let source = source_from_str(
                 "prelude_list_prepend.trb",
                 r#"
 fn main() {
-    let _ = List::prepend(+1, [])
+    let _ = List::prepend("token", [])
 }
 "#,
             );
@@ -2553,13 +2679,13 @@ fn main() {
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
             let ast = format!("{:#?}", monomorphized.ast);
-            let concrete = "List::__tribute_list_prepend_intrinsic$Int";
+            let concrete = "List::__tribute_list_prepend_intrinsic$String";
 
             assert!(
                 monomorphized
                     .function_types
                     .contains_key(&trunk_ir::Symbol::new(concrete)),
-                "monomorphization must retain the concrete prelude intrinsic scheme"
+                "monomorphization must retain the concrete intrinsic scheme"
             );
             assert!(
                 ast.contains(concrete),
@@ -2568,6 +2694,35 @@ fn main() {
             assert!(
                 !ast.contains("List::__tribute_list_prepend_intrinsic$T"),
                 "specialized List body must not retain generic intrinsic binders:\n{ast}"
+            );
+
+            let frontend = compile_frontend_for_shared_route(db, source)
+                .expect("source-logical lowering must retain the specialization");
+            let concrete_symbol = trunk_ir::Symbol::new(concrete);
+            assert!(
+                frontend.compiler_intrinsics.iter().any(|declaration| {
+                    declaration.symbol == concrete_symbol
+                        && declaration.identity
+                            == trunk_ir::Symbol::new("List::__tribute_list_prepend_intrinsic")
+                }),
+                "the concrete specialization must retain its base intrinsic identity"
+            );
+            let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
+            assert!(
+                logical.contains(
+                    r#"tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic""#
+                ),
+                "the concrete declaration must carry its exact intrinsic identity:\n{logical}"
+            );
+
+            let (ctx, module) = compile_ast(db, source)
+                .expect("shared pipeline must lower the concrete intrinsic specialization")
+                .expect("shared pipeline must produce a module");
+            let lowered = trunk_ir::printer::print_module(&ctx, module.op());
+            assert!(lowered.contains("list.prepend"), "{lowered}");
+            assert!(
+                !lowered.contains("List::__tribute_list_prepend_intrinsic"),
+                "list intrinsic lowering must consume the concrete declaration:\n{lowered}"
             );
         });
     }
@@ -2637,92 +2792,28 @@ fn main() {
     }
 
     #[salsa_test]
-    fn frontend_registers_only_compiler_owned_intrinsic_origins(db: &salsa::DatabaseImpl) {
+    fn unknown_intrinsic_directive_fails_before_cps(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
-            "intrinsic_origin.trb",
-            r#"
-extern "intrinsic" fn user_intrinsic(value: Int) -> Int
-
-fn comparison(left: Float, right: Float) -> Bool { left == right }
-"#,
+            "unknown_intrinsic.trb",
+            r#"extern "intrinsic" fn user_intrinsic(value: Int) -> Int"#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let (_, registered) = merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| {
-            typed.compiler_intrinsics
-        });
-
-        assert!(
-            registered
-                .values()
-                .any(|identity| *identity == trunk_ir::Symbol::new("Float::==")),
-            "canonical prelude intrinsic must retain exact identity"
-        );
-        assert!(
-            registered
-                .values()
-                .all(|identity| *identity != trunk_ir::Symbol::new("user_intrinsic")),
-            "user abi spelling must not register an intrinsic"
-        );
-
-        let (mut logical_ctx, logical) =
-            merge_and_lower_to_ir_with(db, &typed, source, |mut typed, db, ir, uri| {
-                typed.ast.decls.retain(|declaration| match declaration {
-                    tribute_front::ast::Decl::Module(module) => {
-                        module.name == trunk_ir::Symbol::new("Float")
-                    }
-                    tribute_front::ast::Decl::ExternFunction(declaration) => {
-                        declaration.name == trunk_ir::Symbol::new("user_intrinsic")
-                    }
-                    tribute_front::ast::Decl::Function(declaration) => {
-                        declaration.name == trunk_ir::Symbol::new("comparison")
-                    }
-                    _ => false,
-                });
-                typed.lower_to_ir(db, ir, uri)
-            });
-        let source_logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
-        assert!(
-            source_logical_ir.contains("tribute_control.call"),
-            "logical lowering must preserve the call for exact declaration-based lowering:\n{source_logical_ir}"
-        );
-        assert!(
-            !source_logical_ir.contains("arith.cmpf"),
-            "logical lowering must not trust an intrinsic name alone:\n{source_logical_ir}"
-        );
+        let frontend = merge_and_lower_to_ir(db, &typed, source);
         let validation = tribute_ir::dialect::tribute_control::validate(
-            &logical_ctx,
-            logical.module,
-            &logical.operation_declarations,
-            &logical.compiler_intrinsics,
-        );
-        assert!(validation.is_ok(), "{validation}");
-        tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
-            &mut logical_ctx,
-            logical.module,
-            &logical.operation_declarations,
-            &logical.compiler_intrinsics,
-        )
-        .unwrap();
-        let logical_ir = trunk_ir::printer::print_module(&logical_ctx, logical.module.op());
-        assert!(
-            logical_ir.contains("tribute.compiler_intrinsic = @\"Float::==\""),
-            "verified identity must cross the logical boundary:\n{logical_ir}"
+            &frontend.context,
+            frontend.module,
+            &frontend.operation_declarations,
+            &frontend.compiler_intrinsics,
         );
         assert!(
-            !logical_ir.contains("tribute.compiler_intrinsic = @user_intrinsic"),
-            "source ABI spelling must remain untrusted logically:\n{logical_ir}"
-        );
-
-        let (ctx, module) =
-            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
-        let converted = trunk_ir::printer::print_module(&ctx, module.op());
-        assert!(
-            converted.contains("tribute.compiler_intrinsic = @\"Float::==\""),
-            "verified identity must cross the current frontend boundary:\n{converted}"
+            !validation.is_ok(),
+            "unknown intrinsic directives must fail before CPS"
         );
         assert!(
-            !converted.contains("tribute.compiler_intrinsic = @user_intrinsic"),
-            "unregistered source declaration must remain ordinary:\n{converted}"
+            validation
+                .to_string()
+                .contains("unknown compiler intrinsic directive"),
+            "{validation}"
         );
     }
 
@@ -2744,8 +2835,11 @@ fn main() -> String { "hello" }
             .well_known_types(db)
             .string
             .expect("prelude String identity");
-        let (ctx, module) =
-            merge_and_lower_to_ir(db, &typed, source, OptimizationOptions::production());
+        let FrontendCompilation {
+            context: ctx,
+            module,
+            ..
+        } = merge_and_lower_to_ir(db, &typed, source);
         let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
             .string
             .expect("String IR metadata");

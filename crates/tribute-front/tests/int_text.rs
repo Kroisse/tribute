@@ -232,6 +232,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            compiler_intrinsics: std::collections::HashMap::new(),
         },
     );
     let mut ir = IrContext::new();
@@ -302,6 +303,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            compiler_intrinsics: std::collections::HashMap::new(),
         },
     );
     let mut ir = IrContext::new();

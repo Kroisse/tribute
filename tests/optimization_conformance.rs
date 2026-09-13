@@ -400,6 +400,119 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
         "physical CPS functions are conservatively consumed; typed-plan policy coverage lives with the pre-erasure action planner"
     );
 }
+/// Follow typed source allocations to the RTTI index stored in their header,
+/// then verify the deep-release loads. Generated numbering is not a contract.
+fn assert_source_allocation_field_releases(ir: &str) {
+    use std::collections::BTreeSet;
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::tribute_rt;
+    use trunk_ir::dialect::{clif, core};
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::walk::{WalkAction, walk_op};
+    use trunk_ir::{IrContext, ValueDef};
+
+    let mut ctx = IrContext::new();
+    let module = trunk_ir::parser::parse_module(&mut ctx, ir).expect("native stage IR round trip");
+    let mut ops = Vec::new();
+    let _ = walk_op::<()>(&ctx, module, &mut |op| {
+        ops.push(op);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    let mut checked = BTreeSet::new();
+    for &op in &ops {
+        let Ok(retain) = tribute_rt::Retain::from_op(&ctx, op) else {
+            continue;
+        };
+        let ty = ctx.types.get(ctx.value_ty(retain.result(&ctx)));
+        let kind = if ty
+            .attrs
+            .get_symbol("name")
+            .is_some_and(|name| name == "_closure")
+        {
+            "closure"
+        } else if ty
+            .attrs
+            .get_type(tribute_core::calling_convention::CPS_CONTINUATION_FRAME_RESULT_ATTR)
+            .is_some_and(|result| ctx.types.get(result).name == "i32")
+        {
+            "frame"
+        } else {
+            continue;
+        };
+        let mut value = retain.ptr(&ctx);
+        // Native materialization casts and payload offsets retain the allocation
+        // base as operand zero. Stop at block args rather than guessing ownership.
+        let allocation = loop {
+            let ValueDef::OpResult(def, _) = ctx.value_def(value) else {
+                break None;
+            };
+            if let Ok(call) = clif::Call::from_op(&ctx, def) {
+                break (call.callee(&ctx) == "__tribute_alloc").then_some(value);
+            }
+            if core::UnrealizedConversionCast::matches(&ctx, def) || clif::Iadd::matches(&ctx, def)
+            {
+                value = ctx.op_operands(def)[0];
+            } else {
+                break None;
+            }
+        };
+        let Some(allocation) = allocation else {
+            continue;
+        };
+        let header = ops
+            .iter()
+            .filter_map(|&op| clif::Store::from_op(&ctx, op).ok())
+            .find(|store| store.addr(&ctx) == allocation && store.offset(&ctx) == 4)
+            .expect("allocation RTTI header");
+        let ValueDef::OpResult(index, _) = ctx.value_def(header.value(&ctx)) else {
+            panic!("constant RTTI index");
+        };
+        let index = clif::Iconst::from_op(&ctx, index).unwrap().value(&ctx);
+        let symbol = format!("{}{index}", tribute_passes::native::rtti::RELEASE_FN_PREFIX);
+        if !checked.insert((kind, symbol.clone())) {
+            continue;
+        }
+        let release = ops
+            .iter()
+            .filter_map(|&op| clif::Func::from_op(&ctx, op).ok())
+            .find(|function| function.sym_name(&ctx) == symbol.as_str())
+            .expect("allocation release function");
+        let entry = ctx.region(release.body(&ctx)).blocks[0];
+        let payload = ctx.block_args(entry)[0];
+        let mut offsets = Vec::new();
+        let _ = walk_op::<()>(&ctx, release.op_ref(), &mut |op| {
+            if let Ok(release) = tribute_rt::Release::from_op(&ctx, op) {
+                let ValueDef::OpResult(load, _) = ctx.value_def(release.ptr(&ctx)) else {
+                    panic!("release of loaded field");
+                };
+                let load =
+                    clif::Load::from_op(&ctx, load).expect("release must load a managed field");
+                assert_eq!(load.addr(&ctx), payload);
+                offsets.push(load.offset(&ctx));
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        offsets.sort();
+        assert_eq!(
+            offsets,
+            if kind == "closure" {
+                vec![8]
+            } else {
+                vec![0, 8]
+            },
+            "{kind} must release exactly its managed fields"
+        );
+    }
+    assert!(
+        checked.iter().any(|(kind, _)| *kind == "closure"),
+        "fixture must allocate closure storage"
+    );
+    assert!(
+        checked.iter().any(|(kind, _)| *kind == "frame"),
+        "fixture must allocate Int continuation frames"
+    );
+}
+
 #[salsa_test]
 fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
@@ -435,14 +548,9 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     )
     .expect("disabled RC optimization IR should be available");
 
-    let expected_rtti = "@__tribute_release_32=2,@__tribute_release_33=1,\
-        @__tribute_release_34=1,@__tribute_release_35=1";
-    assert_eq!(generated_rtti_field_releases(&before), expected_rtti);
-    assert_eq!(generated_rtti_field_releases(&after), expected_rtti);
-    assert_eq!(
-        generated_rtti_field_releases(&disabled_after),
-        expected_rtti
-    );
+    for ir in [&before, &after, &disabled_after] {
+        assert_source_allocation_field_releases(ir);
+    }
 
     let before = focused_rc_ops(&before);
     let after = focused_rc_ops(&after);
