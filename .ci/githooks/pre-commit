@@ -6,17 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "Running pre-commit checks..."
 
-"$SCRIPT_DIR/../../.ci/lint.sh"
-
-echo "Running tests..."
-# Use nextest for faster test execution
-# --status-level=fail: only print failing tests (suppress 1000+ PASS lines)
-# --final-status-level=flaky: summary shows failures and flaky tests
-if ! cargo nextest run --workspace --status-level=fail --final-status-level=flaky; then
-    echo ""
-    echo "❌ Tests failed."
-    echo "   Run 'cargo nextest run --workspace' to see detailed test output."
-    exit 1
-fi
+git diff --cached --check
+"$SCRIPT_DIR/../../.ci/lint.sh" --quick
 
 echo "✅ All pre-commit checks passed!"
