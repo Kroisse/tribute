@@ -70,6 +70,18 @@ pub(super) fn generate_specializations<'db>(
                     },
                 ),
             );
+            let specialized_scheme = specialized_scheme.with_row_unions(
+                db,
+                scheme
+                    .row_unions(db)
+                    .iter()
+                    .map(|union| {
+                        union.map_rows(|row| {
+                            crate::typeck::subst::substitute_effect_row(db, row, type_args)
+                        })
+                    })
+                    .collect(),
+            );
             if let Some(func) = func {
                 let specialized = specialize_func_decl(db, func, type_args, mangled);
                 entries.push(SpecializationEntry {

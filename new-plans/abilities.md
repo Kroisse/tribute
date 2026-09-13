@@ -496,3 +496,13 @@ fn main() ->{Io} Nil {
 | `do value { expr }` | completion arm (handle 내) |
 | `fn Op(args) { body }` | `fn` operation handler (handle 내) |
 | `op Op(args) { body }` | `op` operation handler (handle 내) |
+
+## Checked effect instances across compilation
+
+Effect labels use the exact resolved ability declaration and ordered type
+arguments; row label order does not select an instance. Accumulation preserves
+open-tail union relationships through let/function generalization. Handler
+subtraction consumes the selected instance without constraining every incoming
+tail to contain it. Reached handler and perform identities must have resolved
+semantic type arguments before IR type erasure. A physical anyref representation
+is not evidence that an unresolved semantic argument is valid.

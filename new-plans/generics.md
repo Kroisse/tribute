@@ -377,8 +377,8 @@ struct InstantiationKey<'db> {
 | ------ | ---- |
 | Polymorphic recursion → 무한 인스턴스화 | depth limit으로 방어, #54에서 본격 처리 |
 | Higher-order functions의 type arg 추적 | closure 타입에서도 BoundVar 매칭 |
-| Effect-only polymorphism | skip — evidence passing이 이미 처리 |
-| 미해결 타입 변수 (BoundVar 잔존) | anyref 폴백 유지 (기존 uniform rep) |
+| Row-only polymorphism | evidence passing을 유지; effect 내부 type parameter는 특수화 |
+| 미해결 타입 변수 (BoundVar 잔존) | 도달하는 특수화 및 ability identity에서는 erasure 전에 진단 |
 
 ---
 
@@ -399,3 +399,31 @@ struct InstantiationKey<'db> {
 - [GHC Representation Polymorphism](https://ghc.gitlab.haskell.org/ghc/doc/users_guide/exts/representation_polymorphism.html)
 - [OCaml Polymorphism](https://ocaml.org/manual/5.1/polymorphism.html)
 - [WasmGC Proposal](https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md)
+
+## Explicit checked function instances
+
+Type checking records each function reference's declaration, source scheme,
+ordered type arguments, quantified-row arguments, and instantiated callable
+type. The record is keyed by the reference NodeId, shared across revisits of
+that node, and independently instantiated at other nodes. Solving and binder
+finalization apply the same mapping to the callable and all its arguments.
+
+Collection and rewriting consume this record rather than reconstructing type
+arguments by reverse matching the callable type. IDE type rendering accepts
+function-local quantified variables as well as declaration binders; rendering
+does not change their semantic scope or instantiate them.
+Prelude name resolution, type
+exports, and typed bodies share the same parsed declarations, including their
+nominal definition identities. Independently reparsing the same text does not
+establish declaration identity. Prelude merging, deferred
+method desugaring, and specialized AST cloning preserve the record. Clones
+substitute their enclosing type arguments into nested instance records.
+Effect-only type arguments participate in ordinary type specialization; open
+residual rows continue to use evidence passing. Unused generic templates are
+permitted, but incomplete reached instances fail before logical lowering.
+
+Function quantifiers cover the callable interface and retained semantic row
+relations. Inference variables occurring only in the checked body remain
+body-owned local existentials; they do not add phantom arguments to callers.
+The pre-erasure ability-instance check still rejects unresolved local
+existentials in reachable handler or perform ability arguments.

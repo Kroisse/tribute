@@ -258,7 +258,7 @@ impl fmt::Display for TypeKind<'_> {
 ///
 /// TypeSchemes represent types that can be instantiated with different type arguments.
 /// For example, `fn identity(x: a) -> a` has the scheme `forall a. a -> a`.
-#[salsa::interned(debug)]
+#[salsa::interned(debug, constructor = intern)]
 pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
@@ -268,11 +268,49 @@ pub struct TypeScheme<'db> {
     /// Effect-row variables quantified by this scheme.
     #[returns(ref)]
     pub effect_params: Vec<EffectVar>,
+    /// Retained exact effect unions, quantified together with the body.
+    #[returns(ref)]
+    pub row_unions: Vec<RowUnion<'db>>,
     /// The body type with BoundVar references to type_params.
     pub body: Type<'db>,
 }
 
+/// An exact set union retained through inference and generalization.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct RowUnion<'db> {
+    pub sources: Vec<EffectRow<'db>>,
+    pub result: EffectRow<'db>,
+}
+
+impl<'db> RowUnion<'db> {
+    pub fn map_rows(&self, mut f: impl FnMut(EffectRow<'db>) -> EffectRow<'db>) -> Self {
+        Self {
+            sources: self.sources.iter().copied().map(&mut f).collect(),
+            result: f(self.result),
+        }
+    }
+}
+
 impl<'db> TypeScheme<'db> {
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        type_params: Vec<TypeParam>,
+        effect_params: Vec<EffectVar>,
+        body: Type<'db>,
+    ) -> Self {
+        Self::intern(db, type_params, effect_params, Vec::new(), body)
+    }
+
+    pub fn with_row_unions(self, db: &'db dyn salsa::Database, unions: Vec<RowUnion<'db>>) -> Self {
+        Self::intern(
+            db,
+            self.type_params(db).clone(),
+            self.effect_params(db).clone(),
+            unions,
+            self.body(db),
+        )
+    }
+
     /// Create a monomorphic scheme (no quantified variables).
     pub fn mono(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
         Self::new(db, Vec::new(), Vec::new(), ty)

@@ -5,19 +5,21 @@ expression: ir_text
 core.module @direct_fn {
   !_closure = adt.struct() {fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], name = @_closure}
   !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
-  !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}
   !t3 = func.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref>
   !t2 = closure.closure(!t3)
   !__tribute_cps_control = adt.enum() {name = @__tribute_cps_control, variants = [[@Normal, [tribute_rt.anyref]], [@Escape, [core.i32, tribute_rt.anyref]]]}
+  !"Result$Int$Int::ParseError" = adt.enum() {name = @"Result$Int$Int::ParseError", variants = [[@Ok, [core.i32]], [@Error, [tribute_rt.anyref]]]}
   !"Result::map_err::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map_err::__clam_0::env"}
   !"Option::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Option::map::__clam_0::env"}
   !"Result::map::__clam_0::env" = adt.struct() {fields = [[@_0, tribute_rt.anyref]], name = @"Result::map::__clam_0::env"}
   !"Int::ParseError" = adt.enum() {name = @"Int::ParseError", variants = [[@InvalidSyntax, []], [@OutOfRange, []]]}
   !"std::io::Error" = adt.enum() {name = @"std::io::Error", variants = [[@EndOfFile, []], [@InvalidEncoding, []], [@System, [tribute_rt.anyref]]]}
   !t6 = core.ability_ref() {name = @"abilities::Throw"}
+  !"Option$Nat" = adt.enum() {name = @"Option$Nat", variants = [[@None, []], [@Some, [core.i32]]]}
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
   !t0 = core.array(!_Marker)
   !t1 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>

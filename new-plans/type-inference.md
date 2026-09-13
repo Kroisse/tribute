@@ -61,6 +61,16 @@ phantom 인자도 nominal 타입의 일부이므로 기대 타입이나 spread�
 인스턴스를 공유하는 것은 일반화한 binding의 각 사용 위치를 하나의 인스턴스로
 합치는 것이 아니다. 일반화한 값의 사용 위치는 기존대로 독립적으로 instantiate한다.
 
+Enum variant 생성자도 값 참조의 `NodeId`별로 하나의 전체 constructor 인스턴스를
+유지한다. `Box(+42)`의 인자 검사에서 선택한 `fn(Int) -> Boxed(Int)`를 typed AST의
+생성자 참조까지 전달한다. 생성 결과 타입만 보존하고 변환 단계에서 생성자 자체를
+새로 instantiate하면, 생성과 패턴 추출이 서로 다른 generic/specialized 레이아웃을
+선택할 수 있다. 서로 다른 생성 위치와 일반화한 생성자 값의 사용 위치는 독립적이다.
+
+Variant patterns preserve the constructor type constrained against the matched
+value. This applies to let destructuring as well as case arms: conversion must
+not instantiate a fresh constructor after the pattern has been solved.
+
 ### Equality, 표현식 검사, 공통 결과 타입
 
 제약 solver는 다음 세 관계를 구별한다.
@@ -202,6 +212,29 @@ fn nested() ->{State(Int) as counter, State(Int) as total} Nil {
 
 ---
 
+## Effect accumulation and retained relations
+
+Effect accumulation is set union, not row equality. `RowUnion(sources, result)`
+means that `result` contains exactly the union of its sources. Distinct open
+sources remain independent; neither source is replaced by the other or equated
+to the complete result. Closed-empty rows are identities and repeated union is
+idempotent. Source annotation duplicate diagnostics remain distinct from
+idempotent accumulation of effects performed more than once.
+
+Closed function effect contracts are the expected side of boundary diagnostics;
+the accumulated body requirements are the actual side. Ability argument counts
+come from the exact ability declaration, regardless of row merge order.
+
+Unsolved union relations survive substitution and deferred method resolution.
+Generalization retains the relations in the type scheme and quantifies their
+variables together with the body. Instantiation freshens the body and relations
+with one shared mapping. Variables connected to the surrounding environment or
+an unresolved producer are not independently generalized. Handler subtraction
+must not reintroduce its consumed instance into the outward row.
+
+Named row variables have declaration-scoped identity: repeated names share an
+identity and distinct names do not. Multiple row names denote their union.
+
 ## Row Unification
 
 ### 기본 규칙
@@ -217,14 +250,18 @@ unify({A, B | e₁}, {A, C | e₂})
 4. 결과: {A, B, C | e₃}
 ```
 
-**중복 검사**: Unification 결과에 동일한 ability가 두 번 나타나면 에러:
+**중복 처리**: 추론 중 동일한 ability instance의 반복은 집합에서 하나로 합친다.
+소스 annotation에 같은 instance를 중복 표기한 경우는 별도로 진단한다:
 
 ```text
 unify({State(Int) | e₁}, {State(Int) | e₂})
 // e₁ = e₂ 로 unify됨, 결과: {State(Int) | e₁}  -- OK (중복 아님)
 
 unify({State(Int)}, {State(Int), State(Int)})
-// Error: 동일한 ability State(Int) 중복
+// 추론 내부 row는 같은 집합: {State(Int)}
+
+source annotation: {State(Int), State(Int)}
+// Error: 동일한 ability State(Int) 중복 표기
 ```
 
 ### 예시
@@ -242,7 +279,8 @@ Unification 과정:
 ```text
 {State(Int) | e₁} ∪ {Logger | e₂}
 = {State(Int), Logger | e₃}
-  where e₁ = {Logger | e₃}, e₂ = {State(Int) | e₃}
+  where RowUnion([e₁, e₂], e₃)
+// 입력 tail 사이에는 equality를 추가하지 않는다.
 ```
 
 ### Occurs Check
@@ -603,6 +641,24 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 - `-> Int`: 암묵적 effect 변수, 컨텍스트의 effect 수행 가능
 
 ---
+
+## 일반화할 제약과 람다 검사 재사용
+
+일반화할 스킴에는 본문 타입의 타입 변수 또는 row 변수와 연결되는 합집합 관계만
+옮긴다. 연결은 effect 인자 내부의 타입 변수도 포함하여 전이적으로 계산한다.
+무관한 관계는 원래 함수의 solver에서 계속 검사하지만 다른 `let` 스킴에 복사하지
+않는다. 예를 들어 앞선 Io 호출의 관계를 뒤에서 바인딩한 `String` 값에 붙이면
+그 값을 참조할 때마다 무관한 제약까지 재인스턴스화하게 된다.
+
+함수 본문을 한 번 검사하는 동안, 동일한 람다 `NodeId`를 같은 기대 타입으로
+재방문하면 완료된 본문 검사와 typed AST를 재사용한다. 이미 검사한 람다 타입을
+그대로 요구하는 변환 방문도 이에 포함된다. 본문을 다시 검사하여 지역 `let`의
+일반화나 fresh row 제약을 중첩 깊이에 따라 반복 생성하지 않는다.
+
+기대 타입이 달라진 방문은 새 기대 타입을 검사해야 한다. 이 재사용은 함수 검사
+컨텍스트에 한정되며, 서로 다른 람다 노드나 일반화한 함수 값의 서로 다른 사용
+위치를 합치지 않는다. 람다 생성 자체는 본문의 latent effect를 수행하지 않으므로
+재사용 때 본문 effect를 바깥 누적 row에 추가하지 않는다.
 
 ## Open Questions
 

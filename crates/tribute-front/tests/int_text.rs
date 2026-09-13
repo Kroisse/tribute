@@ -216,15 +216,15 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
-            node_types: checked
+            function_instances: checked
                 .expression_types(db)
-                .node_types
+                .function_instances
                 .iter()
                 .cloned()
                 .collect(),
-            call_callee_types: checked
+            node_types: checked
                 .expression_types(db)
-                .call_callee_types
+                .node_types
                 .iter()
                 .cloned()
                 .collect(),
@@ -233,7 +233,8 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
         },
-    );
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
@@ -286,15 +287,15 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
-            node_types: checked
+            function_instances: checked
                 .expression_types(db)
-                .node_types
+                .function_instances
                 .iter()
                 .cloned()
                 .collect(),
-            call_callee_types: checked
+            node_types: checked
                 .expression_types(db)
-                .call_callee_types
+                .node_types
                 .iter()
                 .cloned()
                 .collect(),
@@ -303,7 +304,8 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
         },
-    );
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,

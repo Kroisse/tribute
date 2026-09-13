@@ -204,6 +204,70 @@ pub fn substitute_effect_row<'db>(
     }
 }
 
+/// One instantiation mapping is shared by the signature and its retained rows.
+pub struct SchemeInstance<'db> {
+    pub ty: Type<'db>,
+    pub type_args: Vec<Type<'db>>,
+    pub row_args: Vec<EffectRow<'db>>,
+    pub row_unions: Vec<crate::ast::RowUnion<'db>>,
+}
+
+pub fn instantiate_with_arguments<'db>(
+    db: &'db dyn salsa::Database,
+    scheme: TypeScheme<'db>,
+    type_args: Vec<Type<'db>>,
+    row_vars: Vec<EffectVar>,
+) -> SchemeInstance<'db> {
+    assert_eq!(scheme.type_params(db).len(), type_args.len());
+    assert_eq!(scheme.effect_params(db).len(), row_vars.len());
+    let mut mapping: HashMap<_, _> = scheme
+        .effect_params(db)
+        .iter()
+        .zip(&row_vars)
+        .map(|(old, new)| (old.id, *new))
+        .collect();
+    let mut fresh = || unreachable!("all quantified rows have allocated identities");
+    let mut map_type = |ty| {
+        let ty = substitute_bound_vars(db, ty, &type_args)
+            .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"));
+        freshen_effect_vars_inner(db, ty, scheme.effect_params(db), &mut fresh, &mut mapping)
+    };
+    let ty = map_type(scheme.body(db));
+    let row_unions = scheme
+        .row_unions(db)
+        .iter()
+        .map(|union| {
+            union.map_rows(|row| {
+                let effects: Vec<_> = row
+                    .effects(db)
+                    .iter()
+                    .map(|effect| Effect {
+                        ability_id: effect.ability_id,
+                        args: effect.args.iter().copied().map(&mut map_type).collect(),
+                    })
+                    .collect();
+                let rest = row.rest(db).map(|var| {
+                    scheme
+                        .effect_params(db)
+                        .iter()
+                        .position(|p| *p == var)
+                        .map_or(var, |i| row_vars[i])
+                });
+                EffectRow::new(db, effects, rest)
+            })
+        })
+        .collect();
+    SchemeInstance {
+        ty,
+        type_args,
+        row_args: row_vars
+            .into_iter()
+            .map(|var| EffectRow::open(db, var))
+            .collect(),
+        row_unions,
+    }
+}
+
 /// Instantiate a TypeScheme for use in the post-solve deferred resolution loop.
 ///
 /// Replaces BoundVars with fresh UniVars from the solver. This is similar to
@@ -214,38 +278,33 @@ pub fn instantiate_scheme_for_solver<'db>(
     scheme: TypeScheme<'db>,
     solver: &mut super::solver::TypeSolver<'db>,
 ) -> Type<'db> {
+    instantiate_scheme_details_for_solver(db, scheme, solver).ty
+}
+
+pub fn instantiate_scheme_details_for_solver<'db>(
+    db: &'db dyn salsa::Database,
+    scheme: TypeScheme<'db>,
+    solver: &mut super::solver::TypeSolver<'db>,
+) -> SchemeInstance<'db> {
     solver.reserve_effect_vars_in_type(scheme.body(db));
-    let subst: Vec<Type<'db>> = scheme
+    for union in scheme.row_unions(db) {
+        for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+            solver.reserve_effect_vars_in_row(*row);
+        }
+    }
+    let types = scheme
         .type_params(db)
         .iter()
         .map(|_| solver.fresh_type_var(db))
         .collect();
-    let instantiated =
-        substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|index, max| {
-            panic!(
-                "BoundVar index out of range in post-solve instantiation: index={}, subst.len()={}",
-                index, max
-            )
-        });
-    freshen_effect_vars(db, instantiated, scheme.effect_params(db), || {
-        solver.fresh_row_var()
-    })
-}
-
-/// Freshen quantified effect-row variables throughout a type.
-pub(super) fn freshen_effect_vars<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    quantified_rows: &[EffectVar],
-    mut fresh_row_var: impl FnMut() -> EffectVar,
-) -> Type<'db> {
-    freshen_effect_vars_inner(
-        db,
-        ty,
-        quantified_rows,
-        &mut fresh_row_var,
-        &mut HashMap::new(),
-    )
+    let rows = scheme
+        .effect_params(db)
+        .iter()
+        .map(|_| solver.fresh_row_var())
+        .collect();
+    let instance = instantiate_with_arguments(db, scheme, types, rows);
+    solver.add_row_unions(instance.row_unions.clone());
+    instance
 }
 
 fn freshen_effect_vars_inner<'db>(
