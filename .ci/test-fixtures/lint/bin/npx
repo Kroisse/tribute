@@ -1,4 +1,7 @@
 #!/bin/sh
 
 : "${LINT_TEST_NPX_MARKER:?must be set by test-lint.sh}"
+: "${LINT_TEST_COMMAND_LOG:?must be set by test-lint.sh}"
+echo "npx $*" >>"$LINT_TEST_COMMAND_LOG"
 touch "$LINT_TEST_NPX_MARKER"
+exit "${LINT_TEST_NPX_STATUS:-0}"
