@@ -20,8 +20,6 @@ pub use error::{LocatedSolveError, SolveError};
 
 use std::collections::HashMap;
 
-use itertools::Itertools;
-
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{
@@ -30,20 +28,6 @@ use crate::ast::{
 };
 
 use super::constraint::{Constraint, ConstraintOrigin, ConstraintSet};
-
-/// Format an effect row using stable, source-oriented syntax.
-///
-/// Internal row-variable IDs are intentionally hidden.  Open rows use the
-/// generic source-level tail name `e`, and concrete effects are sorted so the
-/// message does not depend on insertion or hash-map iteration order.
-pub fn format_effect_row(db: &dyn salsa::Database, row: EffectRow<'_>) -> String {
-    let mut items: Vec<String> = row.effects(db).iter().map(ToString::to_string).collect();
-    items.sort();
-    if row.rest(db).is_some() {
-        items.push("e".to_string());
-    }
-    format!("{{{}}}", items.iter().format(", "))
-}
 
 /// Apply a type-transforming function to all effect type arguments in an effect row.
 ///

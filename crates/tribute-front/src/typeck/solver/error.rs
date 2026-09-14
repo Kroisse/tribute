@@ -1,6 +1,5 @@
-//! Structured solver failures and stable effect-row formatting.
+//! Structured solver failures and their diagnostic messages.
 
-use super::format_effect_row;
 use crate::ast::{EffectRow, Type, UniVarId};
 use crate::typeck::constraint::ConstraintOrigin;
 
@@ -54,15 +53,10 @@ impl std::fmt::Display for SolveError<'_> {
                 )
             }
             Self::RowMismatch { expected, actual } | Self::AmbiguousEffect { expected, actual } => {
-                salsa::with_attached_database(|db| {
-                    write!(
-                        f,
-                        "effect mismatch: expected `{}`, found `{}`",
-                        format_effect_row(db, *expected),
-                        format_effect_row(db, *actual)
-                    )
-                })
-                .unwrap_or(Err(std::fmt::Error))
+                write!(
+                    f,
+                    "effect mismatch: expected `{expected}`, found `{actual}`"
+                )
             }
             Self::EffectArgArityMismatch {
                 effect_name,

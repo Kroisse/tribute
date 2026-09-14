@@ -10,6 +10,7 @@ description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 fluent-uri.workspace = true
 im.workspace = true
 itertools.workspace = true
+itoa.workspace = true
 salsa.workspace = true
 ropey.workspace = true
 smallvec.workspace = true

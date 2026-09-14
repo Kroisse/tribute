@@ -1511,6 +1511,7 @@ dependencies = [
  "im",
  "insta",
  "itertools",
+ "itoa",
  "proptest",
  "ropey",
  "salsa",
