@@ -1166,20 +1166,25 @@ impl<'db> TypeSolver<'db> {
         union: &crate::ast::RowUnion<'db>,
         mapping: &HashMap<UniVarId<'db>, u32>,
     ) -> crate::ast::RowUnion<'db> {
-        union.map_rows(|row| {
-            let row = self.normalize_row(row);
-            map_effect_row_type_args(self.db, row, |ty| {
+        let mut union = union.clone();
+        union.for_each_row_mut(|row| {
+            *row = map_effect_row_type_args(self.db, self.normalize_row(*row), |ty| {
                 self.type_subst
                     .apply_generalization(self.db, ty, &self.row_subst, mapping)
-            })
-        })
+            });
+        });
+        union
     }
 
     /// Relations which must be quantified together with the enclosing scheme.
     pub fn retained_row_unions(&self) -> Vec<crate::ast::RowUnion<'db>> {
         self.pending_row_unions
             .iter()
-            .map(|(union, _)| union.map_rows(|row| self.normalize_row(row)))
+            .map(|(union, _)| {
+                let mut union = union.clone();
+                union.for_each_row_mut(|row| *row = self.normalize_row(*row));
+                union
+            })
             .collect()
     }
 
@@ -1232,7 +1237,11 @@ impl<'db> TypeSolver<'db> {
     pub fn retained_row_removals(&self) -> Vec<crate::ast::RowRemoval<'db>> {
         self.pending_row_removals
             .iter()
-            .map(|(r, _)| r.map_rows(|row| self.normalize_row(row)))
+            .map(|(removal, _)| {
+                let mut removal = removal.clone();
+                removal.for_each_row_mut(|row| *row = self.normalize_row(*row));
+                removal
+            })
             .collect()
     }
 
@@ -1241,19 +1250,22 @@ impl<'db> TypeSolver<'db> {
         removal: &crate::ast::RowRemoval<'db>,
         mapping: &HashMap<UniVarId<'db>, u32>,
     ) -> crate::ast::RowRemoval<'db> {
-        removal.map_rows(|row| {
-            map_effect_row_type_args(self.db, self.normalize_row(row), |ty| {
+        let mut removal = removal.clone();
+        removal.for_each_row_mut(|row| {
+            *row = map_effect_row_type_args(self.db, self.normalize_row(*row), |ty| {
                 self.type_subst
                     .apply_generalization(self.db, ty, &self.row_subst, mapping)
-            })
-        })
+            });
+        });
+        removal
     }
 
     fn solve_row_removal(
         &mut self,
         removal: &crate::ast::RowRemoval<'db>,
     ) -> Result<bool, SolveError<'db>> {
-        let removal = removal.map_rows(|row| self.normalize_row(row));
+        let mut removal = removal.clone();
+        removal.for_each_row_mut(|row| *row = self.normalize_row(*row));
         assert!(
             removal.removed.rest(self.db).is_none(),
             "handler removal set must be closed"
@@ -1355,7 +1367,8 @@ impl<'db> TypeSolver<'db> {
         &mut self,
         union: &crate::ast::RowUnion<'db>,
     ) -> Result<bool, SolveError<'db>> {
-        let union = union.map_rows(|row| self.normalize_row(row));
+        let mut union = union.clone();
+        union.for_each_row_mut(|row| *row = self.normalize_row(*row));
         let mut known = Vec::new();
         let mut tails = Vec::new();
         for source in &union.sources {

@@ -236,7 +236,7 @@ pub fn instantiate_with_arguments<'db>(
             .unwrap_or_else(|index, max| panic!("scheme binder {index} out of {max}"))
     };
     let ty = map_type(scheme.body(db));
-    let mut map_row = |row: EffectRow<'db>| {
+    let mut map_row = |row: &mut EffectRow<'db>| {
         let effects: Vec<_> = row
             .effects(db)
             .iter()
@@ -252,18 +252,16 @@ pub fn instantiate_with_arguments<'db>(
                 .position(|p| *p == var)
                 .map_or(var, |i| row_vars[i])
         });
-        EffectRow::new(db, effects, rest)
+        *row = EffectRow::new(db, effects, rest);
     };
-    let row_unions = scheme
-        .row_unions(db)
-        .iter()
-        .map(|union| union.map_rows(&mut map_row))
-        .collect();
-    let row_removals = scheme
-        .row_removals(db)
-        .iter()
-        .map(|removal| removal.map_rows(&mut map_row))
-        .collect();
+    let mut row_unions = scheme.row_unions(db).clone();
+    for union in &mut row_unions {
+        union.for_each_row_mut(&mut map_row);
+    }
+    let mut row_removals = scheme.row_removals(db).clone();
+    for removal in &mut row_removals {
+        removal.for_each_row_mut(&mut map_row);
+    }
     SchemeInstance {
         ty,
         type_args,

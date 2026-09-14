@@ -297,21 +297,21 @@ impl<'db> RowRemoval<'db> {
         [self.source, self.removed, self.result]
     }
 
-    pub fn map_rows(&self, mut f: impl FnMut(EffectRow<'db>) -> EffectRow<'db>) -> Self {
-        Self {
-            source: f(self.source),
-            removed: f(self.removed),
-            result: f(self.result),
-        }
+    /// Visit source, removed, then result, updating their row handles in place.
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+        f(&mut self.source);
+        f(&mut self.removed);
+        f(&mut self.result);
     }
 }
 
 impl<'db> RowUnion<'db> {
-    pub fn map_rows(&self, mut f: impl FnMut(EffectRow<'db>) -> EffectRow<'db>) -> Self {
-        Self {
-            sources: self.sources.iter().copied().map(&mut f).collect(),
-            result: f(self.result),
+    /// Visit sources in order, then result, reusing the source vector.
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+        for source in &mut self.sources {
+            f(source);
         }
+        f(&mut self.result);
     }
 }
 
@@ -402,8 +402,8 @@ impl<'db> TypeSchemeBuilder<'db> {
         mut map: impl FnMut(Type<'db>) -> Type<'db>,
     ) -> Self {
         self.body = map(self.body);
-        let mut map_row = |row: EffectRow<'db>| {
-            EffectRow::new(
+        let mut map_row = |row: &mut EffectRow<'db>| {
+            *row = EffectRow::new(
                 db,
                 row.effects(db)
                     .iter()
@@ -413,18 +413,13 @@ impl<'db> TypeSchemeBuilder<'db> {
                     })
                     .collect::<Vec<_>>(),
                 row.rest(db),
-            )
+            );
         };
         for union in &mut self.row_unions {
-            for source in &mut union.sources {
-                *source = map_row(*source);
-            }
-            union.result = map_row(union.result);
+            union.for_each_row_mut(&mut map_row);
         }
         for removal in &mut self.row_removals {
-            removal.source = map_row(removal.source);
-            removal.removed = map_row(removal.removed);
-            removal.result = map_row(removal.result);
+            removal.for_each_row_mut(&mut map_row);
         }
         self
     }
