@@ -36,19 +36,32 @@ pub enum CompileError {
 
 ## Formatting Utilities
 
-Prefer `tribute_core::fmt::{joined, joined_by}` for formatting sequences in
-diagnostic messages:
+Prefer `Itertools::format` and `Itertools::format_with` when embedding sequences
+in diagnostic messages. They write elements directly into the surrounding
+formatter without allocating an intermediate joined string or per-item strings.
 
 ```rust
-use tribute_core::fmt::{joined, joined_by};
+use itertools::Itertools;
 
-// joined(separator, iterable) -> impl Display
-format!("unhandled effects: {}", joined(", ", &effects))
+let effects = ["State(Int)", "Console"];
+let message = format!("unhandled effects: {}", effects.iter().format(", "));
+assert_eq!(message, "unhandled effects: State(Int), Console");
 
-// joined_by(separator, iterable, formatter) -> impl Display
-// Custom formatting per item, zero allocation
-format!("{}", joined_by(", ", &items, |item, f| write!(f, "#{item}")))
+let items = [1, 2, 3];
+let custom = format!(
+    "items: {}",
+    items.iter().format_with(", ", |item, f| f(&format_args!("#{item}")))
+);
+assert_eq!(custom, "items: #1, #2, #3");
 ```
+
+These are extension methods provided by `itertools::Itertools`. Formatting
+adapters are single-use; create a fresh adapter for each formatting operation.
+Use them directly instead of adding custom joining wrappers.
+
+When an owned joined `String` is itself the required result, use
+`itertools::join` or `Itertools::join`. Avoid collecting a `Vec<String>` only
+for joining; keep collections needed for sorting or reuse.
 
 ## Type System
 
