@@ -253,143 +253,57 @@ any (anyref) ← 다형적 값의 공통 타입
 
 ## Implementation
 
-Monomorphization은 AST 레벨에서 동작하며, `tribute-front` 크레이트 안에서 처리한다.
-제네릭 함수를 먼저 구현하고, 제네릭 타입(struct/enum)은 후속 작업으로 분리한다.
+Monomorphization은 `tribute-front`의 typed AST와 명시적인 함수 인스턴스 기록을
+소비한다. 함수 특수화와 nominal 타입 특수화는 같은 frontend 준비 단계에 속한다.
 
-### 구현 순서
+### 파이프라인의 책임
 
-1. **Phase A: 제네릭 함수** — 함수 특수화 + call site 재작성
-2. **Phase B: 제네릭 타입** — struct/enum 특수화 + 생성자 재작성
-
-### 파이프라인 삽입 위치
-
-TDNR 이후, ast_to_ir 이전에 삽입한다. TDNR까지 마치면 모든 타입이 구체적으로
-확정되어 있으므로, `node_types`에서 call site의 concrete type을 추출할 수 있다.
+`parse_and_lower_ast()`는 이름 해석과 타입 추론·TDNR을 수행하고, 선택된 함수
+인스턴스와 semantic 메타데이터를 반환한다. `prepare_frontend_for_lowering()`은
+Prelude 병합, 도달하는 인스턴스 검증, 특수화 및 메타데이터 재작성을 담당한다.
+IR lowering은 이 준비 단계가 성공한 결과만 소비한다.
 
 ```text
-TDNR (Module<TypedRef>)
+parse_and_lower_ast: 해석·타입 추론·TDNR·인스턴스 기록
     ↓
-★ monomorphize — AST 레벨, tribute-front 크레이트
+prepare_frontend_for_lowering: 병합·검증·특수화·메타데이터 재작성
     ↓
-ast_to_ir (IR lowering)
+ast_to_ir: IR lowering
 ```
 
-수정 대상: `src/pipeline.rs`의 `parse_and_lower_ast()` 함수.
+### 함수 인스턴스 수집과 특수화
 
-### 기존 인프라 재사용
+수집과 호출 재작성은 함수 참조 NodeId에 연결된 checked instance의
+`(FuncDefId, type_arguments)`를 사용한다. `node_types`나 callable 타입에서 타입
+인자를 역추론하지 않는다. 함수 값으로 전달되는 참조도 같은 계약을 따른다.
 
-| 용도 | 기존 코드 | 위치 |
-| ---- | --------- | ---- |
-| BoundVar 치환 | `substitute_bound_vars()` | `typeck/subst.rs` |
-| 함수 시그니처 조회 | `function_types: HashMap<Symbol, TypeScheme>` | `TypeCheckOutput` |
-| 표현식 concrete type | `node_types: HashMap<NodeId, Type>` | `TypeCheckOutput` |
-| 제네릭 여부 판별 | `TypeScheme.type_params` 비어있지 않으면 제네릭 | `ast/types.rs` |
+선택된 선언 스킴, 인자 개수, callable 및 row 인자의 일관성을 먼저 검사한다.
+원본 함수의 binder 순서에 맞춰 타입을 치환하고, 특수화된 정의의 모든 typed
+메타데이터에도 같은 치환을 적용한다. 스킴 본문과 합집합·차집합 제약은 함께
+변환한다. 생성된 clone 내부의 참조가 새 인스턴스를 드러내면 같은 인스턴스 키를
+재사용하며 고정점까지 수집한다. 확장 한도를 넘으면 구조적 진단을 반환한다.
 
-### 모듈 구조
+타입 인자를 갖는 함수만 이 과정으로 특수화한다. Row만 다형적인 함수는 기존
+인스턴스 전달을 유지한다. 도달하지 않는 generic template은 허용하되, 도달하는
+함수 인스턴스나 ability 인자가 미해결이면 타입 erasure 전에 거부한다.
 
-```text
-crates/tribute-front/src/monomorphize/
-├── mod.rs        — 공개 API
-├── collect.rs    — 인스턴스화 수집
-├── mangle.rs     — 이름 맹글링
-└── specialize.rs — 특수화된 정의 생성 + call site 재작성
-```
+### Nominal 타입 수집과 재작성
 
-### Phase A: 제네릭 함수 Monomorphization
+Nominal 타입의 수집 시작점은 AST 안의 typed reference와 재작성 대상 메타데이터다.
+함수·생성자 스킴의 본문과 보존된 합집합·차집합 제약, 함수 인스턴스의 callable과
+타입·row 인자, node 타입, lambda 시그니처, handler·perform의 인자·결과를 포함한다.
+메타데이터에만 등장하는 concrete 타입도 특수화 선언을 생성해야 한다.
 
-#### Step 1: 이름 맹글링 (`mangle.rs`)
+각 시작점 내부의 함수·continuation effect와 중첩 nominal 타입 인자를 재귀적으로
+수집한다. 정확한 `TypeDefId`와 concrete 인자 조합으로 struct/enum 선언 및 생성자
+스킴을 만들고, 같은 rewrite map을 AST와 메타데이터에 적용한다. 선언의 기준
+스킴을 보관하는 provenance 기록은 인스턴스의 치환 결과와 구분한다.
 
-Type → mangled name 변환. `$0`/`$1`로 중첩 타입 인자를 감싼다:
+### 이름과 identity
 
-```text
-identity + [Int]           → identity$Int
-first + [Int, Text]        → first$Int$Text
-map + [Int, Option(Int)]   → map$Int$Option$0$Int$1
-```
-
-#### Step 2: 인스턴스화 수집 (`collect.rs`)
-
-`Module<TypedRef>` 전체를 순회하며 제네릭 함수 호출을 찾는다.
-
-**Type arg 추론 방법:**
-
-TypeScheme의 param types와 call site의 concrete argument types를 매칭하여
-BoundVar → concrete type 매핑을 역추론한다.
-
-```text
-TypeScheme: fn identity(a)(x: a) -> a
-  body = Func { params: [BoundVar(0)], result: BoundVar(0) }
-
-Call site: identity(42)
-  arg types = [Int]  (node_types에서 조회)
-
-매칭: BoundVar(0) = Int
-  → type_args = [Int]
-```
-
-여러 파라미터가 같은 BoundVar를 참조하면 일관성 검증한다.
-수집 결과는 `HashMap<Symbol, HashSet<Vec<Type>>>` (함수명 → type arg 조합 집합).
-
-#### Step 3: 특수화된 함수 생성 (`specialize.rs`)
-
-각 (function_name, type_args)에 대해:
-
-1. 원본 `FuncDecl<TypedRef>` 복제
-2. `type_params` 비움
-3. `substitute_bound_vars()`로 body의 모든 `TypedRef.ty`에서 BoundVar 치환
-4. mangled name 적용
-5. `function_types`에 specialized TypeScheme 등록
-
-#### Step 4: Call site 재작성
-
-Module 순회하며 제네릭 함수 호출의 `ResolvedRef::Function { id }` →
-specialized function의 id로 교체. 원본 제네릭 선언은 유지한다
-(향후 DCE에서 제거 가능).
-
-#### Step 5: Pipeline 통합
-
-`parse_and_lower_ast()`에서 TDNR 후 monomorphize 호출.
-`TypeCheckOutput`의 `function_types`, `node_types`를 monomorphize에 전달하고,
-결과로 updated module + function_types를 받아 ast_to_ir에 넘긴다.
-
-### Phase B: 제네릭 타입 (후속 작업)
-
-Phase A 완료 후 별도 이슈로 추적:
-
-- `StructDecl`, `EnumDecl`의 타입 파라미터 특수화
-- 생성자 호출(`Variant`, `StructNew`) 재작성
-- IR lowering에서 specialized struct/enum 타입 생성
-
-### 데이터 구조
-
-```rust
-/// 인스턴스화 키 — 함수/타입 이름 + concrete type args
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct InstantiationKey<'db> {
-    name: Symbol,
-    type_args: Vec<Type<'db>>,
-}
-```
-
-### 리스크와 대응
-
-| 리스크 | 대응 |
-| ------ | ---- |
-| Polymorphic recursion → 무한 인스턴스화 | depth limit으로 방어, #54에서 본격 처리 |
-| Higher-order functions의 type arg 추적 | closure 타입에서도 BoundVar 매칭 |
-| Row-only polymorphism | evidence passing을 유지; effect 내부 type parameter는 특수화 |
-| 미해결 타입 변수 (BoundVar 잔존) | 도달하는 특수화 및 ability identity에서는 erasure 전에 진단 |
-
----
-
-## Edge Cases
-
-| 케이스           | 해결책                             |
-| ---------------- | ---------------------------------- |
-| 다형적 재귀      | 자동 감지 → uniform representation |
-| 미해결 타입 변수 | 명시적 타입 주석 요구              |
-| 분리 컴파일      | 향후 링크 타임 중복 제거           |
-| 재귀 타입        | Placeholder로 사이클 처리          |
+맹글링은 생성된 선언의 이름을 부여한다. 이름으로 선언 identity나 인스턴스 인자를
+복원하지 않는다. 예를 들어 `identity`와 `[Int]`는 `identity$Int`로 표현하고, 중첩
+타입 인자는 `$0`/`$1`로 감싸지만 특수화 키는 정확한 선언 ID와 타입 인자로 유지한다.
 
 ---
 

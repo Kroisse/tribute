@@ -133,10 +133,24 @@ pub fn monomorphize_functions<'db>(
 
     // === Type monomorphization (struct/enum) ===
 
-    let mut extra_types: Vec<_> = fn_types_vec
+    // Every rewritten metadata type is a root, even if absent from the AST.
+    let mut extra_types = Vec::new();
+    for scheme in fn_types_vec
         .iter()
-        .map(|(_, scheme)| scheme.body(db))
-        .collect();
+        .map(|(_, scheme)| *scheme)
+        .chain(metadata.constructor_types.values().copied())
+    {
+        scheme.for_each_type(db, |ty| extra_types.push(ty));
+    }
+    for instance in metadata.function_instances.values() {
+        extra_types.push(instance.callable);
+        extra_types.extend(instance.type_arguments.iter().copied());
+        for row in &instance.row_arguments {
+            for effect in row.effects(db) {
+                extra_types.extend(effect.args.iter().copied());
+            }
+        }
+    }
     extra_types.extend(metadata.node_types.values().copied());
     extra_types.extend(
         metadata

@@ -350,6 +350,29 @@ impl<'db> TypeScheme<'db> {
         }
     }
 
+    /// Visit the body and each type argument in retained row constraints.
+    /// The caller owns recursive traversal within each type.
+    pub fn for_each_type(self, db: &'db dyn salsa::Database, mut f: impl FnMut(Type<'db>)) {
+        f(self.body(db));
+        let mut visit_row = |row: EffectRow<'db>| {
+            for effect in row.effects(db) {
+                for argument in &effect.args {
+                    f(*argument);
+                }
+            }
+        };
+        for union in self.row_unions(db) {
+            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+                visit_row(*row);
+            }
+        }
+        for removal in self.row_removals(db) {
+            for row in removal.rows() {
+                visit_row(row);
+            }
+        }
+    }
+
     /// Create a monomorphic scheme (no quantified variables).
     pub fn mono(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
         Self::new(db, Vec::new(), Vec::new(), ty)
