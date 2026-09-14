@@ -4,6 +4,7 @@ use super::*;
 use crate::ast::{
     AbilityId, CallingConvention, EffectVar, NodeId, TypeDefId, UniVarId, UniVarSource,
 };
+use trunk_ir::Symbol;
 
 fn effect<'db>(
     db: &'db dyn salsa::Database,
@@ -16,7 +17,7 @@ fn effect<'db>(
     }
 }
 
-/// Explicit spellings guard the shared renderer independently of the comparator.
+/// Preserve diagnostic spellings across the different type forms.
 fn examples(db: &dyn salsa::Database) -> Vec<(Type<'_>, &'static str)> {
     let int = Type::new(db, TypeKind::Int);
     let bool_ty = Type::new(db, TypeKind::Bool);
@@ -118,44 +119,8 @@ fn type_and_effect_display_preserve_spelling(db: &salsa::DatabaseImpl) {
     }
 }
 
-#[test]
-fn cmp_for_display_matches_string_order_without_attached_database() {
-    let db = salsa::DatabaseImpl::default();
-    let mut effects = Vec::new();
-    for name in ["State", "Stateful", "é", "효과"] {
-        effects.push(effect(&db, name, vec![]));
-        for (ty, _) in examples(&db) {
-            effects.push(effect(&db, name, vec![ty]));
-            effects.push(effect(&db, name, vec![ty, Type::new(&db, TypeKind::Int)]));
-        }
-    }
-    // Equal output with different fragment boundaries must compare equally.
-    effects.push(effect(
-        &db,
-        "State",
-        vec![Type::new(
-            &db,
-            TypeKind::Named {
-                id: TypeDefId::synthetic(&db, Symbol::new("Int(Bool)")),
-                name: Symbol::new("Int(Bool)"),
-                args: vec![],
-            },
-        )],
-    ));
-    let rendered: Vec<_> = salsa::attach(&db, || effects.iter().map(ToString::to_string).collect());
-    for (a, a_text) in effects.iter().zip(&rendered) {
-        for (b, b_text) in effects.iter().zip(&rendered) {
-            assert_eq!(
-                a.cmp_for_display(&db, b),
-                a_text.cmp(b_text),
-                "{a_text:?} vs {b_text:?}"
-            );
-        }
-    }
-}
-
 #[salsa_test]
-fn display_order_does_not_compare_hidden_identity(db: &salsa::DatabaseImpl) {
+fn effect_row_display_preserves_distinct_identities(db: &salsa::DatabaseImpl) {
     let int = Type::new(db, TypeKind::Int);
     let pure = EffectRow::pure(db);
     let open = EffectRow::open(db, EffectVar { id: 987 });
@@ -215,8 +180,10 @@ fn display_order_does_not_compare_hidden_identity(db: &salsa::DatabaseImpl) {
         let a = effect(db, "State", vec![Type::new(db, a)]);
         let b = effect(db, "State", vec![Type::new(db, b)]);
         assert_ne!(a, b);
-        assert_eq!(a.cmp_for_display(db, &b), Ordering::Equal);
         assert_eq!(a.to_string(), b.to_string());
+        let expected = format!("{{{a}, {b}}}");
+        let row = EffectRow::new(db, vec![a, b], None);
+        assert_eq!(row.to_string(), expected);
     }
     let source = effect(db, "std::io::Io", vec![]);
     let builtin = Effect {
@@ -224,7 +191,8 @@ fn display_order_does_not_compare_hidden_identity(db: &salsa::DatabaseImpl) {
         args: vec![],
     };
     assert_ne!(source, builtin);
-    assert_eq!(source.cmp_for_display(db, &builtin), Ordering::Equal);
+    let row = EffectRow::new(db, vec![source, builtin], None);
+    assert_eq!(row.to_string(), "{Io, Io}");
 }
 
 #[salsa_test]
@@ -274,7 +242,7 @@ fn effect_row_display_is_canonical(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn display_comparison_handles_deep_types(db: &salsa::DatabaseImpl) {
+fn effect_row_displays_deep_types(db: &salsa::DatabaseImpl) {
     let mut ty = Type::new(db, TypeKind::Int);
     for _ in 0..32 {
         ty = Type::new(db, TypeKind::Tuple(vec![ty]));
@@ -285,5 +253,7 @@ fn display_comparison_handles_deep_types(db: &salsa::DatabaseImpl) {
         a.to_string(),
         format!("State({}Int{})", "#(".repeat(32), ")".repeat(32))
     );
-    assert_eq!(a.cmp_for_display(db, &b), a.to_string().cmp(&b.to_string()));
+    let expected = format!("{{{a}, {b}}}");
+    let row = EffectRow::new(db, vec![a, b], None);
+    assert_eq!(row.to_string(), expected);
 }

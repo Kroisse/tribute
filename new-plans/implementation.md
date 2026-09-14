@@ -1079,9 +1079,9 @@ cascading diagnostics containing internal IR operation identities.
 
 타입과 effect의 진단 표기는 AST 타입 계층이 소유한다. Effect row의 구체적인
 effect들은 표시 문자열의 사전순으로 출력하고, 열린 tail은 마지막에 `e`로
-표시한다. 출력과 표시 순서 비교는 같은 표현을 사용한다. 표시 순서의 동률은
-선언이나 타입의 identity가 같다는 뜻이 아니며, 추론·제약 해결의 동등성 판정에
-사용하지 않는다.
+표시한다. 각 effect의 표시 문자열을 정렬 키와 출력에 함께 사용한다. 표시
+문자열이 같더라도 선언이나 타입의 identity가 같다는 뜻은 아니며, 이 문자열을
+추론·제약 해결의 동등성 판정에 사용하지 않는다.
 
 Effect-annotation conversion also preserves the source origin of each concrete
 effect separately from the semantic `EffectRow`. Duplicate annotations are
