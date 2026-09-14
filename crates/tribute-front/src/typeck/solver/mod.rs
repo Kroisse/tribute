@@ -20,6 +20,8 @@ pub use error::{LocatedSolveError, SolveError};
 
 use std::collections::HashMap;
 
+use tribute_core::fmt::joined;
+
 use trunk_ir::smallvec::SmallVec;
 
 use crate::ast::{
@@ -40,7 +42,7 @@ pub fn format_effect_row(db: &dyn salsa::Database, row: EffectRow<'_>) -> String
     if row.rest(db).is_some() {
         items.push("e".to_string());
     }
-    format!("{{{}}}", items.join(", "))
+    format!("{{{}}}", joined(", ", &items))
 }
 
 /// Apply a type-transforming function to all effect type arguments in an effect row.
