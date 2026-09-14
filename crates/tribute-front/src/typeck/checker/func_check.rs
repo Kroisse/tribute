@@ -86,8 +86,23 @@ impl<'db> TypeChecker<'db> {
         // 2. Get the function's registered type scheme and instantiate it
 
         // Get the instantiated function type (with UniVars) for later generalization
-        let (param_types, expected_return, instantiated_func_ty) =
+        let (param_types, expected_return, instantiated_func_ty, signature_instance) =
             self.get_func_signature_with_type(&mut ctx, func_id, &func);
+        if let Some((scheme, instance)) = &signature_instance
+            && let Some(names) = self.signature_row_names.get(&func_id)
+        {
+            for (name, original) in names {
+                let index = scheme
+                    .effect_params(self.db())
+                    .iter()
+                    .position(|row| row == original)
+                    .expect("named signature row must be quantified");
+                let row = instance.row_args[index]
+                    .rest(self.db())
+                    .expect("fresh signature row must be open");
+                ctx.bind_annotation_row(*name, row);
+            }
+        }
         let diagnostic_func_id = func.id;
         let diagnostic_func_name = func.name;
         let diagnostic_effects = func.effects.clone();
@@ -121,14 +136,39 @@ impl<'db> TypeChecker<'db> {
                 None
             };
 
+        ctx.effect_contract = declared_effect;
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, func.body, Mode::Check(expected_return));
 
+        if func.effects.is_none()
+            && ctx.current_effect().rest(self.db()).is_some()
+            && let Some(declared) = declared_effect
+        {
+            ctx.constrain_row_eq(declared, ctx.current_effect());
+        }
+        if let Some(declared) = declared_effect.filter(|row| row.rest(self.db()).is_none()) {
+            // A sole handler expression owns the whole body's residual row.
+            // Retain that boundary's location after delayed union solving.
+            // With preceding statements the row belongs to the whole function.
+            let mut effect_body = &body;
+            while let ExprKind::Block { stmts, value } = &*effect_body.kind {
+                if !stmts.is_empty() {
+                    break;
+                }
+                effect_body = value;
+            }
+            let (node_id, kind) = if matches!(&*effect_body.kind, ExprKind::Handle { .. }) {
+                (effect_body.id, ConstraintOriginKind::HandlerBoundary)
+            } else {
+                (func.id, ConstraintOriginKind::Expression)
+            };
+            ctx.constrain_row_eq_at(declared, ctx.current_effect(), node_id, kind);
+        }
         // 4. Solve constraints for this function only
         let constraints = ctx.take_constraints();
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
-        let func_call_callee_types = ctx.take_call_callee_types();
+        let mut func_instances = ctx.take_function_instances();
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
@@ -148,7 +188,9 @@ impl<'db> TypeChecker<'db> {
             solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
         }
 
+        let mut solve_failed = false;
         if let Err(error) = solver.solve_with_origin(constraints) {
+            solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
                 diagnostic_func_name,
@@ -168,8 +210,12 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        let deferred_resolutions =
-            self.resolve_deferred_methods(&mut solver, deferred_methods, func.id);
+        let deferred_resolutions = self.resolve_deferred_methods(
+            &mut solver,
+            deferred_methods,
+            func.id,
+            &mut func_instances,
+        );
         if let Err(error) = solver.finalize_relations() {
             self.report_solve_error(
                 diagnostic_func_id,
@@ -246,23 +292,62 @@ impl<'db> TypeChecker<'db> {
             }
         }
 
-        // Preserve the established whole-body and deferred-resolution mapping
-        // for non-local inference artifacts. Locally generalized variables are
-        // excluded below so they cannot become phantom function binders.
+        // Only interface and retained-relation variables are function binders.
+        // Body-local existentials (for example an unused constructor argument)
+        // stay owned by this body and must not become call-site arguments.
         let mut all_univars = Vec::new();
         type_subst.collect_univars_from_type(
             self.db(),
-            instantiated_func_ty,
+            inferred_func_ty,
             row_subst,
             &mut all_univars,
         );
-        self.collect_univars_from_body(&body, type_subst, row_subst, &mut all_univars);
+        let mut body_univars = Vec::new();
+        self.collect_univars_from_body(&body, type_subst, row_subst, &mut body_univars);
         self.collect_univars_from_deferred_resolutions(
             &deferred_resolutions,
             type_subst,
             row_subst,
-            &mut all_univars,
+            &mut body_univars,
         );
+        for rows in solver
+            .row_unions_for_type(inferred_func_ty)
+            .into_iter()
+            .map(|u| {
+                u.sources
+                    .into_iter()
+                    .chain(std::iter::once(u.result))
+                    .collect::<Vec<_>>()
+            })
+            .chain(
+                solver
+                    .row_removals_for_type(inferred_func_ty)
+                    .into_iter()
+                    .map(|r| r.rows().to_vec()),
+            )
+        {
+            for row in rows {
+                for effect in row.effects(self.db()) {
+                    for arg in &effect.args {
+                        type_subst.collect_univars_from_type(
+                            self.db(),
+                            *arg,
+                            row_subst,
+                            &mut all_univars,
+                        );
+                    }
+                }
+            }
+        }
+        for (index, var) in body_univars
+            .into_iter()
+            .filter(|var| !all_univars.contains(var))
+            .enumerate()
+        {
+            self.local_generalizations
+                .entry(var)
+                .or_insert((func.id, index as u32));
+        }
         all_univars.retain(|id| !self.local_generalizations.contains_key(id));
         let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
             .into_iter()
@@ -355,7 +440,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .filter(|e| !declared_ids.contains(&e.ability_id))
                     .peekable();
-                if undeclared.peek().is_some() {
+                if !solve_failed && undeclared.peek().is_some() {
                     Diagnostic::new(
                         format!(
                             "function '{}' uses undeclared effects: {}",
@@ -379,8 +464,64 @@ impl<'db> TypeChecker<'db> {
             .map(|_| crate::ast::TypeParam::anonymous())
             .collect();
 
-        let effect_params = collect_effect_vars(self.db(), generalized);
-        let new_scheme = TypeScheme::new(self.db(), type_params, effect_params, generalized);
+        let mut effect_params = collect_effect_vars(self.db(), generalized);
+        for var in solver
+            .row_union_variables(&solver.row_unions_for_type(inferred_func_ty))
+            .1
+            .into_iter()
+            .chain(
+                solver
+                    .row_removal_variables(&solver.row_removals_for_type(inferred_func_ty))
+                    .1,
+            )
+        {
+            if !effect_params.contains(&var) {
+                effect_params.push(var);
+            }
+        }
+        let unions = solver
+            .row_unions_for_type(inferred_func_ty)
+            .iter()
+            .map(|union| solver.generalize_row_union(union, &var_to_index))
+            .collect();
+        let new_scheme = TypeScheme::builder(type_params, effect_params, generalized)
+            .row_unions(unions)
+            .row_removals(
+                solver
+                    .row_removals_for_type(inferred_func_ty)
+                    .iter()
+                    .map(|r| solver.generalize_row_removal(r, &var_to_index))
+                    .collect(),
+            )
+            .build(self.db());
+        if let Some((source_scheme, instance)) = signature_instance {
+            let mut types = vec![None; new_scheme.type_params(self.db()).len()];
+            for (source_index, ty) in instance.type_args.iter().enumerate() {
+                let ty = type_subst.apply_with_rows(self.db(), *ty, row_subst);
+                if let TypeKind::UniVar { id } = ty.kind(self.db())
+                    && let Some(index) = var_to_index.get(id)
+                {
+                    types[*index as usize] = Some(source_index);
+                }
+            }
+            let rows = new_scheme
+                .effect_params(self.db())
+                .iter()
+                .map(|target| {
+                    instance.row_args.iter().position(|row| {
+                        row_subst.apply(self.db(), *row).rest(self.db()) == Some(*target)
+                    })
+                })
+                .collect();
+            self.function_rebindings.insert(
+                (func_id, source_scheme),
+                super::FunctionRebinding {
+                    scheme: new_scheme,
+                    types,
+                    rows,
+                },
+            );
+        }
         // Update the function's type scheme with the generalized version
         self.env.register_function(func_id, new_scheme);
 
@@ -400,9 +541,25 @@ impl<'db> TypeChecker<'db> {
             &deferred_resolutions,
         );
 
-        for (callee_id, ty) in func_call_callee_types {
-            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
-            self.call_callee_types.insert(callee_id, substituted);
+        for (node, mut instance) in func_instances {
+            instance.callable =
+                self.apply_subst_to_type(instance.callable, type_subst, row_subst, &var_to_index);
+            instance.type_arguments = instance
+                .type_arguments
+                .into_iter()
+                .map(|ty| self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index))
+                .collect();
+            instance.row_arguments = instance
+                .row_arguments
+                .into_iter()
+                .map(|row| {
+                    let row = row_subst.apply(self.db(), row);
+                    crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
+                        self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                    })
+                })
+                .collect();
+            self.function_instances.insert(node, instance);
         }
         for (arm_id, operation) in func_handler_operations {
             self.handler_operations.insert(
@@ -549,6 +706,7 @@ impl<'db> TypeChecker<'db> {
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
         func_node_id: crate::ast::NodeId,
+        instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
         let mut resolved = HashMap::new();
         loop {
@@ -560,11 +718,24 @@ impl<'db> TypeChecker<'db> {
                 if let Some(entry) = self.env.lookup_method(mc.method, resolved_receiver) {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
-                        crate::typeck::subst::instantiate_scheme_for_solver(
+                        let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(
                             self.db(),
                             scheme,
                             solver,
-                        )
+                        );
+                        let callable = instance.ty;
+                        instances.insert(
+                            mc.node_id,
+                            crate::typeck::FunctionInstance {
+                                origin: crate::typeck::FunctionInstanceOrigin::Declaration,
+                                function: entry.func_id,
+                                scheme,
+                                callable,
+                                type_arguments: instance.type_args,
+                                row_arguments: instance.row_args,
+                            },
+                        );
+                        callable
                     } else {
                         entry.func_ty
                     };
@@ -659,11 +830,17 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         func_id: FuncDefId<'db>,
         func: &FuncDecl<ResolvedRef<'db>>,
-    ) -> (Vec<Type<'db>>, Type<'db>, Type<'db>) {
+    ) -> (
+        Vec<Type<'db>>,
+        Type<'db>,
+        Type<'db>,
+        Option<(TypeScheme<'db>, crate::typeck::subst::SchemeInstance<'db>)>,
+    ) {
         if let Some(scheme) = self.env.lookup_function(func_id) {
-            let func_ty = ctx.instantiate_scheme(scheme);
+            let instance = ctx.instantiate_scheme_details(scheme);
+            let func_ty = instance.ty;
             if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
-                return (params.clone(), *result, func_ty);
+                return (params.clone(), *result, func_ty, Some((scheme, instance)));
             }
         }
 
@@ -673,7 +850,7 @@ impl<'db> TypeChecker<'db> {
         let return_ty = ctx.fresh_type_var();
         let effect = ctx.fresh_effect_row();
         let func_ty = ctx.func_type(param_types.clone(), return_ty, effect);
-        (param_types, return_ty, func_ty)
+        (param_types, return_ty, func_ty, None)
     }
 
     // =========================================================================

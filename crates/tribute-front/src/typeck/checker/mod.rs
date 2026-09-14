@@ -38,6 +38,12 @@ use super::{
 };
 use crate::ast::CallingConvention;
 
+struct FunctionRebinding<'db> {
+    scheme: TypeScheme<'db>,
+    types: Vec<Option<usize>>,
+    rows: Vec<Option<usize>>,
+}
+
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
     /// The typed module AST.
@@ -50,7 +56,7 @@ pub struct ModuleCheckResult<'db> {
     /// Node types for IR lowering (NodeId → monomorphic type).
     pub node_types: Vec<(NodeId, Type<'db>)>,
     /// Exact instantiated types selected for direct call callees.
-    pub call_callee_types: Vec<(NodeId, Type<'db>)>,
+    pub function_instances: Vec<(NodeId, super::FunctionInstance<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
@@ -95,7 +101,8 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
-    call_callee_types: HashMap<NodeId, Type<'db>>,
+    function_rebindings: HashMap<(FuncDefId<'db>, TypeScheme<'db>), FunctionRebinding<'db>>,
+    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -106,6 +113,7 @@ pub struct TypeChecker<'db> {
     exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
+    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -137,13 +145,15 @@ impl<'db> TypeChecker<'db> {
             prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
-            call_callee_types: HashMap::new(),
+            function_instances: HashMap::new(),
+            function_rebindings: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
             local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
             effect_annotation_origins: HashMap::new(),
+            signature_row_names: HashMap::new(),
         }
     }
 
@@ -244,8 +254,56 @@ impl<'db> TypeChecker<'db> {
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
-        let mut call_callee_types: Vec<_> = self.call_callee_types.into_iter().collect();
-        call_callee_types.sort_by_key(|(id, _)| *id);
+        let db = self.env.db();
+        let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
+        function_instances.sort_by_key(|(id, _)| *id);
+        let mut next_row = function_instances
+            .iter()
+            .flat_map(|(_, instance)| {
+                crate::ast::collect_effect_vars(db, instance.callable)
+                    .into_iter()
+                    .chain(instance.row_arguments.iter().filter_map(|row| row.rest(db)))
+            })
+            .map(|var| var.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        for (_, instance) in &mut function_instances {
+            if let Some(FunctionRebinding {
+                scheme,
+                types,
+                rows,
+            }) = self
+                .function_rebindings
+                .get(&(instance.function, instance.scheme))
+            {
+                instance.type_arguments = types
+                    .iter()
+                    .map(|source| {
+                        source
+                            .and_then(|index| instance.type_arguments.get(index).copied())
+                            .unwrap_or_else(|| Type::new(db, crate::ast::TypeKind::Error))
+                    })
+                    .collect();
+                let old_rows = &instance.row_arguments;
+                instance.row_arguments = rows
+                    .iter()
+                    .map(|source| {
+                        source
+                            .and_then(|source| old_rows.get(source).copied())
+                            .unwrap_or_else(|| {
+                                let row = crate::ast::EffectRow::open(
+                                    db,
+                                    crate::ast::EffectVar { id: next_row },
+                                );
+                                next_row += 1;
+                                row
+                            })
+                    })
+                    .collect();
+                instance.scheme = *scheme;
+            }
+        }
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
@@ -263,7 +321,7 @@ impl<'db> TypeChecker<'db> {
             function_types,
             constructor_types,
             node_types,
-            call_callee_types,
+            function_instances,
             ability_conventions,
             handler_operations,
             perform_operations,

@@ -268,9 +268,9 @@ fn pass(value: a) -> a {
         .chain(
             output
                 .expression_types(db)
-                .call_callee_types
+                .function_instances
                 .iter()
-                .map(|(_, ty)| *ty),
+                .map(|(_, instance)| instance.callable),
         )
         .chain(
             output

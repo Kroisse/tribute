@@ -57,19 +57,18 @@ pub(super) fn generate_specializations<'db>(
 
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
-            let specialized_scheme = TypeScheme::new(
-                db,
-                vec![],
-                scheme.effect_params(db).clone(),
-                substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or_else(
-                    |index, max| {
+            let specialized_scheme = scheme
+                .to_builder(db)
+                .map_types(db, |ty| {
+                    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
                         panic!(
                             "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
                             qualified, index, max
                         )
-                    },
-                ),
-            );
+                    })
+                })
+                .type_params(Vec::new())
+                .build(db);
             if let Some(func) = func {
                 let specialized = specialize_func_decl(db, func, type_args, mangled);
                 entries.push(SpecializationEntry {
@@ -1245,7 +1244,27 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(&db, vec![TypeParam::anonymous()], vec![], scheme_body);
+        let writer = crate::ast::AbilityId::source(&db, Symbol::new("Writer"));
+        let row = |ty| {
+            crate::ast::EffectRow::single(
+                &db,
+                crate::ast::Effect {
+                    ability_id: writer,
+                    args: vec![ty],
+                },
+            )
+        };
+        let scheme = TypeScheme::builder(vec![TypeParam::anonymous()], vec![], scheme_body)
+            .row_unions(vec![crate::ast::RowUnion {
+                sources: vec![row(bv0)],
+                result: row(bv0),
+            }])
+            .row_removals(vec![crate::ast::RowRemoval {
+                source: row(bv0),
+                removed: row(bv0),
+                result: pure_effect(&db),
+            }])
+            .build(&db);
         let function_types = vec![(func_name, scheme)];
 
         let mut type_arg_sets = HashSet::new();
@@ -1270,10 +1289,30 @@ mod tests {
         assert!(names.contains("identity$Float"));
 
         // All specialized TypeSchemes must be monomorphic
-        for (_, scheme) in &specializations.specialized_function_types {
+        for (name, scheme) in &specializations.specialized_function_types {
             assert!(
                 scheme.is_mono(&db),
                 "specialized scheme should have no type params"
+            );
+            let expected = if *name == Symbol::new("identity$Int") {
+                int
+            } else {
+                float
+            };
+            assert_eq!(
+                scheme.row_unions(&db),
+                &vec![crate::ast::RowUnion {
+                    sources: vec![row(expected)],
+                    result: row(expected),
+                }]
+            );
+            assert_eq!(
+                scheme.row_removals(&db),
+                &vec![crate::ast::RowRemoval {
+                    source: row(expected),
+                    removed: row(expected),
+                    result: pure_effect(&db),
+                }]
             );
         }
     }

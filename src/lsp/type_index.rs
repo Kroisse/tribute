@@ -27,7 +27,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
     }
 
     match kind {
-        TypeKind::BoundVar { index } => {
+        TypeKind::BoundVar { index } | TypeKind::LocalBoundVar { index, .. } => {
             // Convert de Bruijn index to a name (a, b, c, ...)
             let name = if *index < 26 {
                 char::from_u32('a' as u32 + *index).map(|c| c.to_string())
@@ -594,6 +594,17 @@ mod tests {
         // Large index should fallback to t{index}
         let ty = Type::new(&db, TypeKind::BoundVar { index: 26 });
         assert_eq!(print_ast_type(&db, ty), "t26");
+    }
+
+    #[test]
+    fn test_print_ast_type_local_bound_var() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { Nil }");
+        let scope = ast_query::parsed_ast(&db, source).unwrap().module(&db).id;
+        for (index, expected) in [(0, "a"), (1, "b"), (26, "t26")] {
+            let ty = Type::new(&db, TypeKind::LocalBoundVar { scope, index });
+            assert_eq!(print_ast_type(&db, ty), expected);
+        }
     }
 
     #[test]

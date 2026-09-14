@@ -1,0 +1,50 @@
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+ability Reader(r) {
+    op ask() -> r
+}
+
+ability Writer(w) {
+    op tell(value: w) -> Nil
+}
+
+fn use_all() ->{State(Nat), Reader(Nat), Writer(Nat)} Nat {
+    let config = Reader::ask()
+    Writer::tell(config)
+    State::set(config)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Reader::ask() { run_reader(fn() { resume value }, value) }
+    }
+}
+
+fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Writer::tell(v) { run_writer(fn() { resume Nil }) }
+    }
+}
+
+fn main() {
+    let result = run_reader(fn() {
+        run_writer(fn() {
+            run_state(fn() { use_all() }, 0)
+        })
+    }, 5)
+    __tribute_print_nat(result)
+}

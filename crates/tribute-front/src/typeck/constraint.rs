@@ -60,6 +60,10 @@ pub enum Constraint<'db> {
     /// Effect row equality with a source origin.
     RowEqAt(EffectRow<'db>, EffectRow<'db>, ConstraintOrigin),
 
+    /// Exact effect accumulation; neither source tail is equated to the other.
+    RowUnion(crate::ast::RowUnion<'db>, Option<ConstraintOrigin>),
+    RowRemoval(crate::ast::RowRemoval<'db>, Option<ConstraintOrigin>),
+
     /// Conjunction of constraints.
     And(Vec<Constraint<'db>>),
 }

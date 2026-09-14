@@ -16,6 +16,23 @@ use crate::typeck::context::{AbilityInfo, AbilityOpInfo, MethodEntry};
 
 use super::TypeChecker;
 
+#[derive(Default)]
+struct SignatureVariables<'db> {
+    types: HashMap<Symbol, u32>,
+    next_type: u32,
+    rows: HashMap<Symbol, EffectVar>,
+    next_row: u64,
+    unions: Vec<crate::ast::RowUnion<'db>>,
+}
+
+impl SignatureVariables<'_> {
+    fn fresh_row(&mut self) -> EffectVar {
+        // Zero is reserved for the implicit, omitted effect annotation.
+        self.next_row += 1;
+        EffectVar { id: self.next_row }
+    }
+}
+
 impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Declaration collection (Phase 1)
@@ -123,21 +140,18 @@ impl<'db> TypeChecker<'db> {
     /// per-function in check_func_decl.
     fn collect_function_signature(&mut self, func: &FuncDecl<ResolvedRef<'db>>) {
         // Per-function map: same lowercase name → same BoundVar index
-        let mut type_var_map: HashMap<Symbol, u32> = HashMap::new();
-        let mut next_bound_var: u32 = 0;
+        let mut vars = SignatureVariables::default();
 
         // Build parameter types from annotations
         let param_types: Vec<Type<'db>> = func
             .params
             .iter()
             .map(|p| match &p.ty {
-                Some(ann) => {
-                    self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
-                }
+                Some(ann) => self.annotation_to_type_for_sig(ann, &mut vars),
                 // No annotation: use a fresh BoundVar (will be inferred during function body check)
                 None => {
-                    let index = next_bound_var;
-                    next_bound_var += 1;
+                    let index = vars.next_type;
+                    vars.next_type += 1;
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 }
             })
@@ -147,26 +161,17 @@ impl<'db> TypeChecker<'db> {
         let return_ty = func
             .return_ty
             .as_ref()
-            .map(|ann| self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var))
+            .map(|ann| self.annotation_to_type_for_sig(ann, &mut vars))
             .unwrap_or_else(|| {
                 // No annotation: use a fresh BoundVar
-                let index = next_bound_var;
-                next_bound_var += 1;
+                let index = vars.next_type;
+                vars.next_type += 1;
                 Type::new(self.db(), TypeKind::BoundVar { index })
             });
         // Build effect row from annotations (effects don't have BoundVars for now)
         let (effect, effect_origins) = match &func.effects {
             Some(anns) => {
-                // For effects, we use a closed row during collection
-                let conversion = crate::ast::abilities_to_effect_row_with_origins(
-                    self.db(),
-                    anns,
-                    self.current_prefix(),
-                    &mut |ann| {
-                        self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
-                    },
-                    || EffectVar { id: 0 }, // Placeholder, will be replaced during function check
-                );
+                let conversion = self.effects_for_signature(anns, &mut vars);
                 (conversion.row, Some(conversion.origins))
             }
             // Omitting the annotation is effect-polymorphic (`->{e}`), not
@@ -177,18 +182,30 @@ impl<'db> TypeChecker<'db> {
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
         // Build type params from the collected BoundVars
-        let type_params: Vec<TypeParam> = (0..next_bound_var)
+        let type_params: Vec<TypeParam> = (0..vars.next_type)
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let effect_params = collect_effect_vars(self.db(), func_ty);
-        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty);
+        let mut effect_params = collect_effect_vars(self.db(), func_ty);
+        for union in &vars.unions {
+            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+                if let Some(var) = row.rest(self.db())
+                    && !effect_params.contains(&var)
+                {
+                    effect_params.push(var);
+                }
+            }
+        }
+        let scheme = TypeScheme::builder(type_params, effect_params, func_ty)
+            .row_unions(vars.unions)
+            .build(self.db());
 
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(func.name);
         if let Some(origins) = effect_origins {
             self.effect_annotation_origins.insert(func_id, origins);
         }
+        self.signature_row_names.insert(func_id, vars.rows);
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters
@@ -203,39 +220,43 @@ impl<'db> TypeChecker<'db> {
     /// Extern functions have no body, so we only need to register the type.
     /// Uses BoundVars for type parameters.
     fn collect_extern_function_signature(&mut self, func: &crate::ast::ExternFuncDecl) {
-        let mut type_var_map: HashMap<Symbol, u32> = HashMap::new();
-        let mut next_bound_var: u32 = 0;
+        let mut vars = SignatureVariables::default();
 
         let param_types: Vec<Type<'db>> = func
             .params
             .iter()
             .map(|p| match &p.ty {
-                Some(ann) => {
-                    self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
-                }
+                Some(ann) => self.annotation_to_type_for_sig(ann, &mut vars),
                 None => {
-                    let index = next_bound_var;
-                    next_bound_var += 1;
+                    let index = vars.next_type;
+                    vars.next_type += 1;
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 }
             })
             .collect();
 
-        let return_ty = self.annotation_to_type_for_sig(
-            &func.return_ty,
-            &mut type_var_map,
-            &mut next_bound_var,
-        );
+        let return_ty = self.annotation_to_type_for_sig(&func.return_ty, &mut vars);
 
         let effect = EffectRow::pure(self.db());
         let func_ty = self.env.func_type(param_types, return_ty, effect);
 
-        let type_params: Vec<TypeParam> = (0..next_bound_var)
+        let type_params: Vec<TypeParam> = (0..vars.next_type)
             .map(|_| TypeParam::anonymous())
             .collect();
 
-        let effect_params = collect_effect_vars(self.db(), func_ty);
-        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty);
+        let mut effect_params = collect_effect_vars(self.db(), func_ty);
+        for union in &vars.unions {
+            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+                if let Some(var) = row.rest(self.db())
+                    && !effect_params.contains(&var)
+                {
+                    effect_params.push(var);
+                }
+            }
+        }
+        let scheme = TypeScheme::builder(type_params, effect_params, func_ty)
+            .row_unions(vars.unions)
+            .build(self.db());
 
         // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(func.name);
@@ -453,20 +474,19 @@ impl<'db> TypeChecker<'db> {
     fn annotation_to_type_for_sig(
         &self,
         ann: &crate::ast::TypeAnnotation,
-        type_var_map: &mut HashMap<Symbol, u32>,
-        next_bound_var: &mut u32,
+        vars: &mut SignatureVariables<'db>,
     ) -> Type<'db> {
         use crate::ast::TypeAnnotationKind;
 
         match &ann.kind {
             TypeAnnotationKind::Named(name) if is_type_variable(name) => {
                 // Lowercase name → BoundVar
-                if let Some(&index) = type_var_map.get(name) {
+                if let Some(&index) = vars.types.get(name) {
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 } else {
-                    let index = *next_bound_var;
-                    *next_bound_var += 1;
-                    type_var_map.insert(*name, index);
+                    let index = vars.next_type;
+                    vars.next_type += 1;
+                    vars.types.insert(*name, index);
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 }
             }
@@ -480,11 +500,11 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type_for_sig(ctor, type_var_map, next_bound_var);
+                let ctor_ty = self.annotation_to_type_for_sig(ctor, vars);
                 if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
                     let arg_types: Vec<Type<'db>> = args
                         .iter()
-                        .map(|a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var))
+                        .map(|a| self.annotation_to_type_for_sig(a, vars))
                         .collect();
                     self.env.named_type_with_id(*id, *name, arg_types)
                 } else {
@@ -498,33 +518,79 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let param_types: Vec<Type<'db>> = params
                     .iter()
-                    .map(|p| self.annotation_to_type_for_sig(p, type_var_map, next_bound_var))
+                    .map(|p| self.annotation_to_type_for_sig(p, vars))
                     .collect();
-                let result_ty =
-                    self.annotation_to_type_for_sig(result, type_var_map, next_bound_var);
-                let effect = crate::ast::abilities_to_effect_row(
-                    self.db(),
-                    abilities,
-                    self.current_prefix(),
-                    &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
-                    || EffectVar { id: 0 },
-                );
+                let result_ty = self.annotation_to_type_for_sig(result, vars);
+                let effect = self.effects_for_signature(abilities, vars).row;
                 self.env.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> = elems
                     .iter()
-                    .map(|e| self.annotation_to_type_for_sig(e, type_var_map, next_bound_var))
+                    .map(|e| self.annotation_to_type_for_sig(e, vars))
                     .collect();
                 self.env.tuple_type(elem_types)
             }
             TypeAnnotationKind::Infer => {
                 // Infer: use a fresh BoundVar
-                let index = *next_bound_var;
-                *next_bound_var += 1;
+                let index = vars.next_type;
+                vars.next_type += 1;
                 Type::new(self.db(), TypeKind::BoundVar { index })
             }
             TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => self.env.error_type(),
+        }
+    }
+
+    fn effects_for_signature(
+        &self,
+        annotations: &[crate::ast::TypeAnnotation],
+        vars: &mut SignatureVariables<'db>,
+    ) -> crate::ast::EffectRowConversion<'db> {
+        use crate::ast::TypeAnnotationKind;
+        let conversion = crate::ast::abilities_to_effect_row_with_origins(
+            self.db(),
+            annotations,
+            self.current_prefix(),
+            &mut |ann| self.annotation_to_type_for_sig(ann, vars),
+            || EffectVar { id: 0 },
+        );
+        let mut tails = Vec::new();
+        for ann in annotations {
+            let var = match &ann.kind {
+                TypeAnnotationKind::Named(name) if is_type_variable(name) => {
+                    if let Some(var) = vars.rows.get(name) {
+                        *var
+                    } else {
+                        let var = vars.fresh_row();
+                        vars.rows.insert(*name, var);
+                        var
+                    }
+                }
+                TypeAnnotationKind::Infer => vars.fresh_row(),
+                _ => continue,
+            };
+            if !tails.contains(&var) {
+                tails.push(var);
+            }
+        }
+        let rest = match tails.as_slice() {
+            [] => None,
+            [var] => Some(*var),
+            _ => {
+                let result = vars.fresh_row();
+                vars.unions.push(crate::ast::RowUnion {
+                    sources: tails
+                        .into_iter()
+                        .map(|var| EffectRow::open(self.db(), var))
+                        .collect(),
+                    result: EffectRow::open(self.db(), result),
+                });
+                Some(result)
+            }
+        };
+        crate::ast::EffectRowConversion {
+            row: EffectRow::new(self.db(), conversion.row.effects(self.db()).clone(), rest),
+            origins: conversion.origins,
         }
     }
 
