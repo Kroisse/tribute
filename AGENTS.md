@@ -29,8 +29,8 @@ Key design docs:
   state durable contracts and compiler-phase ownership, not issue or PR numbers,
   temporary branches or commits, or task sequencing and status. Track
   implementation and handoff work in GitHub.
-- Use `.claude/rules/` for crate structure, pipeline, IR, and code convention
-  reference material.
+- Use `guides/development/` for crate structure, pipeline, IR, and code
+  convention reference material. `.claude/rules` links to this directory.
 - Use the `tribute-testing` skill for test commands, Salsa test patterns,
   nextest, and snapshot testing.
 - Implementation work is tracked in GitHub Issues. Use `gh issue list` when
