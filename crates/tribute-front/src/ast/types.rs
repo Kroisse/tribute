@@ -394,7 +394,8 @@ impl<'db> TypeSchemeBuilder<'db> {
 
     /// Transform the body and every type argument in retained constraints.
     /// The callback owns recursive traversal within each type; binder identities
-    /// and constraint order remain unchanged.
+    /// and constraint order remain unchanged. Owned constraint vectors are reused;
+    /// interned rows remain immutable.
     pub fn map_types(
         mut self,
         db: &'db dyn salsa::Database,
@@ -414,16 +415,17 @@ impl<'db> TypeSchemeBuilder<'db> {
                 row.rest(db),
             )
         };
-        self.row_unions = self
-            .row_unions
-            .iter()
-            .map(|union| union.map_rows(&mut map_row))
-            .collect();
-        self.row_removals = self
-            .row_removals
-            .iter()
-            .map(|removal| removal.map_rows(&mut map_row))
-            .collect();
+        for union in &mut self.row_unions {
+            for source in &mut union.sources {
+                *source = map_row(*source);
+            }
+            union.result = map_row(union.result);
+        }
+        for removal in &mut self.row_removals {
+            removal.source = map_row(removal.source);
+            removal.removed = map_row(removal.removed);
+            removal.result = map_row(removal.result);
+        }
         self
     }
 
