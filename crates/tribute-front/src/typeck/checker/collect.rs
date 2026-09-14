@@ -196,8 +196,9 @@ impl<'db> TypeChecker<'db> {
                 }
             }
         }
-        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty)
-            .with_row_unions(self.db(), vars.unions);
+        let scheme = TypeScheme::builder(type_params, effect_params, func_ty)
+            .row_unions(vars.unions)
+            .build(self.db());
 
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(func.name);
@@ -253,8 +254,9 @@ impl<'db> TypeChecker<'db> {
                 }
             }
         }
-        let scheme = TypeScheme::new(self.db(), type_params, effect_params, func_ty)
-            .with_row_unions(self.db(), vars.unions);
+        let scheme = TypeScheme::builder(type_params, effect_params, func_ty)
+            .row_unions(vars.unions)
+            .build(self.db());
 
         // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(func.name);

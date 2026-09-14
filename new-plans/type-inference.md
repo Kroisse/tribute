@@ -257,6 +257,11 @@ identity and distinct names do not. Multiple row names denote their union.
 quantifier와 같더라도 다시 freshening하지 않는다. 스킴 본문과 보존한 제약에는
 동일한 대응표와 변환 순서를 적용한다.
 
+스킴은 일반 데이터인 builder에서 본문·binder·semantic 제약을 조립한 뒤 한 번에
+intern하여 게시한다. 조립 중간 상태는 intern하지 않는다. 게시된 스킴의 타입을
+재작성할 때는 본문뿐 아니라 합집합·차집합 제약 안의 타입에도 같은 변환을 적용한다.
+이 생성 경계는 binder 정규화나 의미적 동치 판정을 수행하지 않는다.
+
 ## Row Unification
 
 ### 기본 규칙

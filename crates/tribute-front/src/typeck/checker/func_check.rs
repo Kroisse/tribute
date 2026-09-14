@@ -484,16 +484,16 @@ impl<'db> TypeChecker<'db> {
             .iter()
             .map(|union| solver.generalize_row_union(union, &var_to_index))
             .collect();
-        let new_scheme = TypeScheme::new(self.db(), type_params, effect_params, generalized)
-            .with_row_unions(self.db(), unions)
-            .with_row_removals(
-                self.db(),
+        let new_scheme = TypeScheme::builder(type_params, effect_params, generalized)
+            .row_unions(unions)
+            .row_removals(
                 solver
                     .row_removals_for_type(inferred_func_ty)
                     .iter()
                     .map(|r| solver.generalize_row_removal(r, &var_to_index))
                     .collect(),
-            );
+            )
+            .build(self.db());
         if let Some((source_scheme, instance)) = signature_instance {
             let mut types = vec![None; new_scheme.type_params(self.db()).len()];
             for (source_index, ty) in instance.type_args.iter().enumerate() {

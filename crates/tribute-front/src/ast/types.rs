@@ -322,33 +322,32 @@ impl<'db> TypeScheme<'db> {
         effect_params: Vec<EffectVar>,
         body: Type<'db>,
     ) -> Self {
-        Self::intern(db, type_params, effect_params, Vec::new(), Vec::new(), body)
+        Self::builder(type_params, effect_params, body).build(db)
     }
 
-    pub fn with_row_unions(self, db: &'db dyn salsa::Database, unions: Vec<RowUnion<'db>>) -> Self {
-        Self::intern(
-            db,
-            self.type_params(db).clone(),
-            self.effect_params(db).clone(),
-            unions,
-            self.row_removals(db).clone(),
-            self.body(db),
-        )
+    pub fn builder(
+        type_params: Vec<TypeParam>,
+        effect_params: Vec<EffectVar>,
+        body: Type<'db>,
+    ) -> TypeSchemeBuilder<'db> {
+        TypeSchemeBuilder {
+            type_params,
+            effect_params,
+            row_unions: Vec::new(),
+            row_removals: Vec::new(),
+            body,
+        }
     }
 
-    pub fn with_row_removals(
-        self,
-        db: &'db dyn salsa::Database,
-        removals: Vec<RowRemoval<'db>>,
-    ) -> Self {
-        Self::intern(
-            db,
-            self.type_params(db).clone(),
-            self.effect_params(db).clone(),
-            self.row_unions(db).clone(),
-            removals,
-            self.body(db),
-        )
+    /// Copy the complete scheme into ordinary data for rewriting before publication.
+    pub fn to_builder(self, db: &'db dyn salsa::Database) -> TypeSchemeBuilder<'db> {
+        TypeSchemeBuilder {
+            type_params: self.type_params(db).clone(),
+            effect_params: self.effect_params(db).clone(),
+            row_unions: self.row_unions(db).clone(),
+            row_removals: self.row_removals(db).clone(),
+            body: self.body(db),
+        }
     }
 
     /// Create a monomorphic scheme (no quantified variables).
@@ -364,6 +363,79 @@ impl<'db> TypeScheme<'db> {
     /// Get the number of type parameters.
     pub fn arity(&self, db: &'db dyn salsa::Database) -> usize {
         self.type_params(db).len()
+    }
+}
+
+/// Mutable construction data; only `build` interns a scheme.
+#[must_use]
+pub struct TypeSchemeBuilder<'db> {
+    type_params: Vec<TypeParam>,
+    effect_params: Vec<EffectVar>,
+    row_unions: Vec<RowUnion<'db>>,
+    row_removals: Vec<RowRemoval<'db>>,
+    body: Type<'db>,
+}
+
+impl<'db> TypeSchemeBuilder<'db> {
+    pub fn type_params(mut self, params: Vec<TypeParam>) -> Self {
+        self.type_params = params;
+        self
+    }
+
+    pub fn row_unions(mut self, unions: Vec<RowUnion<'db>>) -> Self {
+        self.row_unions = unions;
+        self
+    }
+
+    pub fn row_removals(mut self, removals: Vec<RowRemoval<'db>>) -> Self {
+        self.row_removals = removals;
+        self
+    }
+
+    /// Transform the body and every type argument in retained constraints.
+    /// The callback owns recursive traversal within each type; binder identities
+    /// and constraint order remain unchanged.
+    pub fn map_types(
+        mut self,
+        db: &'db dyn salsa::Database,
+        mut map: impl FnMut(Type<'db>) -> Type<'db>,
+    ) -> Self {
+        self.body = map(self.body);
+        let mut map_row = |row: EffectRow<'db>| {
+            EffectRow::new(
+                db,
+                row.effects(db)
+                    .iter()
+                    .map(|effect| Effect {
+                        ability_id: effect.ability_id,
+                        args: effect.args.iter().copied().map(&mut map).collect(),
+                    })
+                    .collect::<Vec<_>>(),
+                row.rest(db),
+            )
+        };
+        self.row_unions = self
+            .row_unions
+            .iter()
+            .map(|union| union.map_rows(&mut map_row))
+            .collect();
+        self.row_removals = self
+            .row_removals
+            .iter()
+            .map(|removal| removal.map_rows(&mut map_row))
+            .collect();
+        self
+    }
+
+    pub fn build(self, db: &'db dyn salsa::Database) -> TypeScheme<'db> {
+        TypeScheme::intern(
+            db,
+            self.type_params,
+            self.effect_params,
+            self.row_unions,
+            self.row_removals,
+            self.body,
+        )
     }
 }
 

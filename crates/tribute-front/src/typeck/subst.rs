@@ -543,19 +543,16 @@ mod tests {
                 minimum_convention: CallingConvention::Direct,
             },
         );
-        let scheme = TypeScheme::new(
-            db,
+        let scheme = TypeScheme::builder(
             vec![crate::ast::TypeParam::anonymous()],
             vec![shared_id],
             body,
         )
-        .with_row_unions(
-            db,
-            vec![crate::ast::RowUnion {
-                sources: vec![row],
-                result: row,
-            }],
-        );
+        .row_unions(vec![crate::ast::RowUnion {
+            sources: vec![row],
+            result: row,
+        }])
+        .build(db);
         for id in [8, 9] {
             let fresh = EffectVar { id };
             let instance = instantiate_with_arguments(db, scheme, vec![callback], vec![fresh]);

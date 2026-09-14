@@ -172,34 +172,8 @@ pub fn monomorphize_functions<'db>(
         // Build type rewrite map and rewrite Named types throughout the module
         let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
-        let rewrite_scheme = |scheme: TypeScheme<'db>| {
-            TypeScheme::new(
-                db,
-                scheme.type_params(db).clone(),
-                scheme.effect_params(db).clone(),
-                rewrite_ty(scheme.body(db)),
-            )
-            .with_row_unions(
-                db,
-                scheme
-                    .row_unions(db)
-                    .iter()
-                    .map(|union| {
-                        union.map_rows(|row| rewrite::rewrite_row(db, row, &type_rewrite_map))
-                    })
-                    .collect(),
-            )
-            .with_row_removals(
-                db,
-                scheme
-                    .row_removals(db)
-                    .iter()
-                    .map(|removal| {
-                        removal.map_rows(|row| rewrite::rewrite_row(db, row, &type_rewrite_map))
-                    })
-                    .collect(),
-            )
-        };
+        let rewrite_scheme =
+            |scheme: TypeScheme<'db>| scheme.to_builder(db).map_types(db, rewrite_ty).build(db);
         for (_, scheme) in &mut fn_types_vec {
             *scheme = rewrite_scheme(*scheme);
         }
@@ -301,13 +275,11 @@ fn specialize_struct_constructor_scheme<'db>(
     source_scheme: TypeScheme<'db>,
 ) -> (CtorId<'db>, TypeScheme<'db>) {
     let name = mangle::mangle_type_name(db, type_id, type_id.qualified(db), type_args);
-    let body = substitute_type(db, source_scheme.body(db), type_args);
-    let scheme = TypeScheme::new(
-        db,
-        Vec::new(),
-        source_scheme.effect_params(db).clone(),
-        body,
-    );
+    let scheme = source_scheme
+        .to_builder(db)
+        .map_types(db, |ty| substitute_type(db, ty, type_args))
+        .type_params(Vec::new())
+        .build(db);
     (CtorId::new(db, name), scheme)
 }
 

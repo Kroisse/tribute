@@ -2007,15 +2007,15 @@ impl<'db> TypeChecker<'db> {
                         effect_params.push(var);
                     }
                 }
-                TypeScheme::new(self.db(), type_params, effect_params, generalized)
-                    .with_row_unions(self.db(), unions)
-                    .with_row_removals(
-                        self.db(),
+                TypeScheme::builder(type_params, effect_params, generalized)
+                    .row_unions(unions)
+                    .row_removals(
                         removals
                             .iter()
                             .map(|r| solver.generalize_row_removal(r, &mapping))
                             .collect(),
                     )
+                    .build(self.db())
             } else {
                 TypeScheme::mono(self.db(), ty)
             };
