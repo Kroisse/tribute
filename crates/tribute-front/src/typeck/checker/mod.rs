@@ -8,7 +8,7 @@
 //! The type checker uses a two-level context system:
 //!
 //! - `ModuleTypeEnv`: Module-level type information (function signatures, constructors, type defs).
-//!   This is populated during `collect_declarations` and is read-only afterward.
+//!   Declaration collection initializes it; function checking publishes solved schemes.
 //!
 //! - `FunctionInferenceContext`: Per-function type inference state (local variables, constraints,
 //!   type variable counters). Each function gets its own context, ensuring type inference is
@@ -18,10 +18,14 @@
 //!
 //! - `collect`: Declaration collection (Phase 1) - populates ModuleTypeEnv
 //! - `func_check`: Function type checking (Phase 2) - per-function inference
+//! - `finalize`: Solved body substitution and binder-variable collection
+//! - `diagnostics`: Source-oriented rendering of inference failures
 //! - `expr`: Expression type checking - uses FunctionInferenceContext
 
 mod collect;
+mod diagnostics;
 mod expr;
+mod finalize;
 mod func_check;
 
 use std::collections::HashMap;
