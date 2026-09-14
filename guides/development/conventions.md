@@ -36,41 +36,19 @@ pub enum CompileError {
 
 ## Formatting Utilities
 
-Prefer `itertools::join` or `Itertools::join` over collecting strings just to
-call slice `join`. They accept items implementing `Display`, so avoid an
-intermediate `Vec<String>` and per-item `to_string()` when only joining output.
+Prefer `tribute_core::fmt::{joined, joined_by}` for formatting sequences in
+diagnostic messages:
 
 ```rust
-use itertools::{Itertools, join};
+use tribute_core::fmt::{joined, joined_by};
 
-let items = [1, 2, 3];
-let text = join(&items, ", ");
-assert_eq!(text, "1, 2, 3");
-assert_eq!(items.iter().join(", "), text);
+// joined(separator, iterable) -> impl Display
+format!("unhandled effects: {}", joined(", ", &effects))
+
+// joined_by(separator, iterable, formatter) -> impl Display
+// Custom formatting per item, zero allocation
+format!("{}", joined_by(", ", &items, |item, f| write!(f, "#{item}")))
 ```
-
-When embedding a sequence in a larger formatted message, use
-`Itertools::format` or `format_with` to write elements directly without
-allocating an intermediate joined string:
-
-```rust
-use itertools::Itertools;
-
-let items = [1, 2, 3];
-let message = format!("items: {}", items.iter().format(", "));
-let custom = format!(
-    "items: {}",
-    items.iter().format_with(", ", |item, f| f(&format_args!("#{item}")))
-);
-assert_eq!(message, "items: 1, 2, 3");
-assert_eq!(custom, "items: #1, #2, #3");
-```
-
-Formatting adapters are single-use; create a new one for each formatting
-operation. Keep collections needed for sorting or reuse; this preference
-does not imply that iterator joining is always faster for an existing slice.
-
-Use the existing itertools helpers instead of adding custom joining wrappers.
 
 ## Type System
 
