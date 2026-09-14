@@ -1,16 +1,16 @@
 //! Salsa-tracked query functions for incremental compilation.
 //!
-//! This module provides function-level caching for the compilation pipeline.
-//! Each function is processed independently, enabling incremental recompilation
-//! when only some functions change.
+//! Parsing, name resolution, and type checking are cached at module granularity.
+//! Function queries select a declaration from the cached module result; they do
+//! not run independent function-level inference.
 //!
 //! ## Caching Strategy
 //!
-//! - Module-level queries: Parse the entire module, build environments
-//! - Function-level queries: Process individual functions using the environment
+//! - Module-level queries: Parse, resolve, and type check the module
+//! - Function-level queries: Project individual declarations from those results
 //!
-//! When a function body changes, only that function needs reprocessing.
-//! When a signature changes, dependent functions are invalidated automatically.
+//! A body or signature edit can therefore cause module-wide reprocessing.
+//! Fine-grained inference requires separate declaration and body dependencies.
 
 use std::hash::{Hash, Hasher};
 
@@ -156,7 +156,7 @@ pub fn func_names<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Vec<S
 
 /// Resolve all names in a module.
 ///
-/// This delegates to function-level resolution and aggregates results.
+/// Resolution currently processes the complete module in one tracked query.
 #[salsa::tracked]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
