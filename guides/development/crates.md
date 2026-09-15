@@ -2,50 +2,25 @@
 
 The Tribute compiler is organized as a Rust Cargo workspace.
 
-## Design Principles
+## Responsibilities and Dependency Direction
 
-- **trunk-ir** is language-agnostic and must NOT depend on any tribute crate.
-- **tribute-ir** contains Tribute-specific dialects and depends only on trunk-ir.
-- **Backend crates** (trunk-ir-wasm-backend, trunk-ir-cranelift-backend)
-  depend only on trunk-ir, keeping them language-agnostic.
-- **tribute-passes** contains both shared and target-specific passes
-  (native/, wasm/ subdirectories).
+- The frontend owns parsing, name resolution, type checking, and lowering to IR.
+- Tribute-specific dialects and transformation passes build on the
+  language-agnostic IR infrastructure. Passes include shared and target-specific
+  transformations.
+- The IR infrastructure and code-generation backends remain language-agnostic;
+  they must not depend on Tribute-specific compiler layers.
+- The CLI and language server compose these layers into compilation pipelines.
 
-## Crates
+## Inspecting the Workspace
 
-| Crate | Role |
-| ----- | ---- |
-| `tribute` (src/) | CLI, LSP server, pipeline orchestration |
-| `tribute-front` | Frontend: CST → AST → resolve → typecheck → TDNR → TrunkIR |
-| `tribute-passes` | TrunkIR transformation passes (boxing, closures, effects, continuations, target-specific lowering) |
-| `trunk-ir` | Language-agnostic multi-level dialect IR system |
-| `tribute-ir` | Tribute-specific high-level dialects (ability, closure, tribute_rt) |
-| `tribute-core` | Shared compiler utilities (TargetInfo, diagnostics) |
-| `trunk-ir-wasm-backend` | WASM code generation via TrunkIR |
-| `trunk-ir-cranelift-backend` | Native code generation via Cranelift |
-| `tribute-runtime` | Runtime library for abilities/effects (static lib) |
-| `trunk-ir-macros` | Proc macro for `#[dialect]` definitions |
-| `tree-sitter-tribute` | Tree-sitter parser (external git dependency) |
+Use the root [Cargo.toml](../../Cargo.toml) for workspace membership and each
+member's `Cargo.toml` for its declared dependencies. Inspect the resolved
+dependency graph with:
 
-## Dependency Graph
-
-```text
-tribute (main)
-├── tribute-front
-│   ├── trunk-ir
-│   ├── tribute-ir
-│   └── tree-sitter-tribute
-├── tribute-passes
-│   ├── trunk-ir
-│   ├── tribute-ir
-│   └── trunk-ir-wasm-backend
-├── trunk-ir
-├── trunk-ir-wasm-backend
-│   └── trunk-ir
-├── trunk-ir-cranelift-backend
-│   └── trunk-ir
-└── tribute-ir
-    └── trunk-ir
+```bash
+cargo tree --workspace --edges normal
 ```
 
-Pipeline structure is documented in `src/pipeline.rs` (see top-of-file doc comment).
+Pipeline structure is documented in the top-of-file comment in
+[src/pipeline.rs](../../src/pipeline.rs).

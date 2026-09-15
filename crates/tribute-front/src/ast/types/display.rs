@@ -92,7 +92,8 @@ impl fmt::Display for Effect<'_> {
 impl fmt::Display for EffectRow<'_> {
     /// Format a canonical diagnostic row, hiding internal row-variable IDs.
     ///
-    /// Requires an attached Salsa database. Open tails use the name `e`.
+    /// Open tails use the name `e`. Without an attached Salsa database,
+    /// displays `<effect row>`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         salsa::with_attached_database(|db| {
             let effects = self.effects(db);
@@ -107,7 +108,7 @@ impl fmt::Display for EffectRow<'_> {
             }
             f.write_str("}")
         })
-        .expect("EffectRow formatting requires an attached Salsa database")
+        .unwrap_or_else(|| f.write_str("<effect row>"))
     }
 }
 
