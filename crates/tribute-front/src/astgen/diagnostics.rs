@@ -87,25 +87,15 @@ fn detect_unmatched_delimiter(text: &str) -> Option<String> {
                 }
             }
             '(' | '[' | '{' => stack.push(ch),
-            ')' => {
-                if stack.last() == Some(&'(') {
-                    stack.pop();
-                } else {
-                    return Some("syntax error: unmatched `)`".to_string());
-                }
-            }
-            ']' => {
-                if stack.last() == Some(&'[') {
-                    stack.pop();
-                } else {
-                    return Some("syntax error: unmatched `]`".to_string());
-                }
-            }
-            '}' => {
-                if stack.last() == Some(&'{') {
-                    stack.pop();
-                } else {
-                    return Some("syntax error: unmatched `}`".to_string());
+            ')' | ']' | '}' => {
+                let open = match ch {
+                    ')' => '(',
+                    ']' => '[',
+                    '}' => '{',
+                    _ => unreachable!(),
+                };
+                if stack.pop() != Some(open) {
+                    return Some(format!("syntax error: unmatched `{ch}`"));
                 }
             }
             _ => {}
@@ -126,4 +116,28 @@ fn detect_unmatched_delimiter(text: &str) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_unmatched_delimiter;
+
+    #[test]
+    fn delimiter_diagnostics_preserve_nesting_and_ignored_text() {
+        for (text, expected) in [
+            (")", Some("syntax error: unmatched `)`")),
+            ("]", Some("syntax error: unmatched `]`")),
+            ("}", Some("syntax error: unmatched `}`")),
+            ("{]", Some("syntax error: unmatched `]`")),
+            ("({[", Some("syntax error: unmatched `[`, expected `]`")),
+            ("([]{})", None),
+            ("\"}\" // ]\n()", None),
+        ] {
+            assert_eq!(
+                detect_unmatched_delimiter(text).as_deref(),
+                expected,
+                "{text:?}"
+            );
+        }
+    }
 }
