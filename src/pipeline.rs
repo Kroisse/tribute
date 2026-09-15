@@ -296,6 +296,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
+            local_instances: result.local_instances,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -475,6 +476,11 @@ pub fn prepare_frontend_for_lowering<'db>(
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: typed.constructor_types(db).iter().cloned().collect(),
             node_types: merged_node_types,
+            local_instances: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.expression_types(db).local_instances.clone())
+                .chain(typed.expression_types(db).local_instances.iter().cloned())
+                .collect(),
             function_instances,
             handler_operations: prelude_module(db)
                 .into_iter()
@@ -524,6 +530,8 @@ pub fn prepare_frontend_for_lowering<'db>(
         .into_iter()
         .collect();
     instances.sort_by_key(|(id, _)| *id);
+    let mut local_instances: Vec<_> = mono_result.metadata.local_instances.into_iter().collect();
+    local_instances.sort_by_key(|(id, _)| *id);
     Some(ast_typeck::TypeCheckOutput::new(
         db,
         mono_result.module,
@@ -536,6 +544,7 @@ pub fn prepare_frontend_for_lowering<'db>(
         ast_typeck::ExpressionTypeMetadata {
             node_types,
             function_instances: instances,
+            local_instances,
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
         typed.ability_definitions(db).clone(),
@@ -579,6 +588,12 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let module = lower(
         ast_to_ir::TypedModule {
             ast: typed.module(db).clone(),
+            local_instances: typed
+                .expression_types(db)
+                .local_instances
+                .iter()
+                .cloned()
+                .collect(),
             span_map: typed.span_map(db).clone(),
             function_types: typed.function_types(db).iter().cloned().collect(),
             constructor_types: typed.constructor_types(db).iter().cloned().collect(),
@@ -1551,6 +1566,7 @@ pub fn parse_and_lower_ast<'db>(
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
+            local_instances: result.local_instances,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),

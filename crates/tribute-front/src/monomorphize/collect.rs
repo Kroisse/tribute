@@ -276,7 +276,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     }
 }
 
-pub(super) fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+pub(crate) fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     match ty.kind(db) {
         TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
         TypeKind::Func {

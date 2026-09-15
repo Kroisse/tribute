@@ -100,6 +100,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Conversion reuses only these polymorphic instances; monomorphic locals
     /// are deliberately looked up again.
     quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
+    local_binding_owners: HashMap<LocalId, NodeId>,
+    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
 
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
@@ -133,6 +135,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Named rows share the function declaration's annotation scope.
     annotation_rows: HashMap<Symbol, EffectVar>,
+    /// Parent signature parameters are shared by all body annotations.
+    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
     /// Annotation revisits must not allocate unrelated inference variables.
     annotation_types: HashMap<NodeId, Type<'db>>,
 
@@ -201,6 +205,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_generalizations: HashMap::new(),
             function_instances: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
+            local_binding_owners: HashMap::new(),
+            local_instances: HashMap::new(),
             handler_operations: HashMap::new(),
             reported_handler_errors: HashSet::new(),
             perform_operations: HashMap::new(),
@@ -213,6 +219,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             annotation_rows: HashMap::new(),
+            annotation_type_parameters: HashMap::new(),
             annotation_types: HashMap::new(),
             current_effect: EffectRow::pure(db),
             effect_contract: None,
@@ -496,6 +503,32 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.local_scheme(local)
         }
         .or_else(|| self.local_scheme_by_name(name))?;
+        if !scheme.effect_params(self.db).is_empty()
+            && let Some(instance) = self.local_instances.get(&node)
+        {
+            return Some(instance.callable);
+        }
+        if scheme.type_params(self.db).is_empty()
+            && matches!(
+                scheme.body(self.db).kind(self.db),
+                crate::ast::TypeKind::Func { .. }
+            )
+            && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        {
+            let instance = self.instantiate_scheme_details(scheme);
+            let callable = instance.ty;
+            self.local_instances.insert(
+                node,
+                super::LocalCallableInstance {
+                    binding,
+                    local,
+                    scheme,
+                    row_arguments: instance.row_args,
+                    callable,
+                },
+            );
+            return Some(callable);
+        }
         if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
             if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
                 return Some(ty);
@@ -506,6 +539,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         } else {
             Some(self.instantiate_scheme(scheme))
         }
+    }
+
+    /// Retain the lexical owner when a let scheme is introduced.
+    pub(crate) fn record_local_binding_owner(&mut self, local: LocalId, binding: NodeId) {
+        self.local_binding_owners.insert(local, binding);
+    }
+
+    pub(crate) fn take_local_instances(
+        &mut self,
+    ) -> HashMap<NodeId, super::LocalCallableInstance<'db>> {
+        std::mem::take(&mut self.local_instances)
     }
 
     /// Record the exact semantic operation selected for a handler arm.
@@ -764,6 +808,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: EffectVar) {
         self.annotation_rows.insert(name, row);
+    }
+
+    pub(crate) fn bind_annotation_type_parameter(&mut self, name: Symbol, ty: Type<'db>) {
+        self.annotation_type_parameters.insert(name, ty);
+    }
+
+    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(&name).copied()
+    }
+
+    pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
+        self.annotation_type_parameters.values().copied()
     }
 
     pub(crate) fn annotation_row(&mut self, name: Symbol) -> EffectVar {

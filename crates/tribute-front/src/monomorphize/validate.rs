@@ -243,7 +243,10 @@ pub(super) fn validate<'db>(
     errors
 }
 
-fn walk<'a, 'db>(expr: &'a Expr<TypedRef<'db>>, visit: &mut impl FnMut(&'a Expr<TypedRef<'db>>)) {
+pub(crate) fn walk<'a, 'db>(
+    expr: &'a Expr<TypedRef<'db>>,
+    visit: &mut impl FnMut(&'a Expr<TypedRef<'db>>),
+) {
     visit(expr);
     match expr.kind.as_ref() {
         ExprKind::Call { callee, args } => {

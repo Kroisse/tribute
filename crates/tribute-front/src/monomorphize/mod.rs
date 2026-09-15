@@ -2,6 +2,8 @@ pub mod collect;
 pub mod mangle;
 mod rewrite;
 mod validate;
+pub(crate) use collect::is_concrete_type;
+pub(crate) use validate::walk as walk_typed_expr;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 
@@ -20,6 +22,7 @@ pub struct MonomorphizeMetadata<'db> {
     pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     pub handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
     pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
     pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
@@ -151,6 +154,17 @@ pub fn monomorphize_functions<'db>(
             }
         }
     }
+    for instance in metadata.local_instances.values() {
+        instance.scheme.for_each_type(db, |ty| extra_types.push(ty));
+        extra_types.push(instance.callable);
+        for row in &instance.row_arguments {
+            extra_types.extend(
+                row.effects(db)
+                    .iter()
+                    .flat_map(|effect| effect.args.iter().copied()),
+            );
+        }
+    }
     extra_types.extend(metadata.node_types.values().copied());
     extra_types.extend(
         metadata
@@ -202,6 +216,13 @@ pub fn monomorphize_functions<'db>(
             for ty in &mut instance.type_arguments {
                 *ty = rewrite_ty(*ty);
             }
+            for row in &mut instance.row_arguments {
+                *row = rewrite::rewrite_row(db, *row, &type_rewrite_map);
+            }
+        }
+        for instance in metadata.local_instances.values_mut() {
+            instance.scheme = rewrite_scheme(instance.scheme);
+            instance.callable = rewrite_ty(instance.callable);
             for row in &mut instance.row_arguments {
                 *row = rewrite::rewrite_row(db, *row, &type_rewrite_map);
             }
@@ -328,6 +349,30 @@ fn specialize_metadata<'db>(
             .collect();
         metadata
             .function_instances
+            .insert(id.with_variant(variant), instance);
+    }
+    let locals: Vec<_> = origins
+        .iter()
+        .filter_map(|id| {
+            metadata
+                .local_instances
+                .get(id)
+                .map(|instance| (*id, instance.clone()))
+        })
+        .collect();
+    for (id, mut instance) in locals {
+        instance.binding = instance.binding.with_variant(variant);
+        instance.callable = substitute_type(db, instance.callable, type_args);
+        instance.scheme = instance
+            .scheme
+            .to_builder(db)
+            .map_types(db, |ty| substitute_type(db, ty, type_args))
+            .build(db);
+        for row in &mut instance.row_arguments {
+            *row = crate::typeck::subst::substitute_effect_row(db, *row, type_args);
+        }
+        metadata
+            .local_instances
             .insert(id.with_variant(variant), instance);
     }
     let handlers: Vec<_> = origins
@@ -591,6 +636,16 @@ mod tests {
             constructor_types: HashMap::new(),
             node_types: HashMap::from([(origin, bound)]),
             function_instances: HashMap::new(),
+            local_instances: HashMap::from([(
+                origin,
+                crate::typeck::LocalCallableInstance {
+                    binding: NodeId::from_raw(2),
+                    local: crate::ast::LocalId::new(7),
+                    scheme: TypeScheme::mono(&db, function),
+                    callable: function,
+                    row_arguments: vec![],
+                },
+            )]),
             handler_operations: HashMap::from([(origin, operation(OpDeclKind::Op))]),
             perform_operations: HashMap::from([(
                 origin,
@@ -618,6 +673,15 @@ mod tests {
 
         let clone = origin.with_variant(specialize::type_args_variant(&type_args));
         assert_eq!(metadata.node_types.get(&clone), Some(&int));
+        let local = &metadata.local_instances[&clone];
+        assert_eq!(
+            local.binding,
+            NodeId::from_raw(2).with_variant(specialize::type_args_variant(&type_args))
+        );
+        assert_eq!(local.local, crate::ast::LocalId::new(7));
+        assert_eq!(local.callable, specialized_function);
+        assert_eq!(local.scheme.body(&db), specialized_function);
+        assert_eq!(metadata.local_instances[&origin].callable, function);
         assert_eq!(
             metadata
                 .handler_operations

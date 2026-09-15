@@ -15,7 +15,7 @@ use tribute_ir::dialect::{
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::{adt, arith, core, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
@@ -29,6 +29,8 @@ use crate::ast::{
 use super::super::context::IrLoweringCtx;
 use super::super::{FrontendIrModule, TypedModule};
 use super::{FuncSignature, IrBuilder, expr};
+
+mod local_callables;
 
 struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only
@@ -47,6 +49,8 @@ struct Declarations<'db> {
     lambda_signatures:
         std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
+    local_instances: HashMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    local_callables: local_callables::Plan<'db>,
 }
 
 /// Fully typed semantic inputs for one source ability-operation call.
@@ -126,6 +130,116 @@ fn func_sig_type(
     tribute_control::func_sig(ir, result, params, control_convention(convention)).as_type_ref()
 }
 
+/// Lower a named function value at its exact source-logical callable contract.
+///
+/// A `func_ref` may strengthen its target's convention, but it must preserve
+/// the source parameter and result types.  This is the only callable
+/// convention adaptation accepted at the source-logical boundary: a generic
+/// `unrealized_conversion_cast` cannot change a callable ABI.
+fn lower_function_ref<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    name: Symbol,
+    expected_ty: Option<TypeRef>,
+) -> ValueRef {
+    let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+        .unwrap_or_else(|| panic!("missing logical signature for function reference {name}"));
+    signature.convention = builder
+        .ctx
+        .function_calling_convention(name)
+        .unwrap_or(signature.convention);
+    ensure_prelude_declaration(builder, location, name, &signature);
+    let worker_ty = func_sig_type(
+        builder.ir,
+        signature.return_type,
+        signature.param_types,
+        signature.convention,
+    );
+    let ty = expected_ty
+        .filter(|expected_ty| {
+            let Some(expected) = tribute_control::FuncSig::from_type_ref(builder.ir, *expected_ty)
+            else {
+                return false;
+            };
+            let worker = tribute_control::FuncSig::from_type_ref(builder.ir, worker_ty)
+                .expect("worker function reference must have a logical callable type");
+            expected.result(builder.ir) == worker.result(builder.ir)
+                && expected.inputs(builder.ir) == worker.inputs(builder.ir)
+                && tribute_control::func_sig_convention(builder.ir, *expected_ty)
+                    >= tribute_control::func_sig_convention(builder.ir, worker_ty)
+        })
+        .unwrap_or(worker_ty);
+    let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
+        builder.result(ty).attr("func_ref", Attribute::Symbol(name))
+    });
+    result(builder.ir, op)
+}
+
+/// Lower a named function value under a callable parameter's exact contract.
+///
+/// This deliberately creates a fresh `func_ref`; a source value may be used
+/// under more than one legal convention in the same function.
+fn lower_expr_for_callable_parameter<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+    expected_ty: TypeRef,
+    declarations: &mut Declarations<'db>,
+) -> Option<ValueRef> {
+    match &*expr.kind {
+        ExprKind::Var(reference) => {
+            if let ResolvedRef::Local { id, .. } = reference.resolved {
+                if let Some(value) = local_callables::lookup(builder.ctx, expr.id, declarations) {
+                    return Some(value);
+                }
+                if let Some(value) = builder.ctx.lookup(id)
+                    && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
+                        builder.ir.value_def(value)
+                    && let Ok(named) = tribute_control::FuncRef::from_op(builder.ir, producer)
+                {
+                    let name = named.func_ref(builder.ir);
+                    return Some(lower_function_ref(
+                        builder,
+                        builder.location(expr.id),
+                        name,
+                        Some(expected_ty),
+                    ));
+                }
+                return lower_expr(builder, expr, declarations);
+            }
+            let ResolvedRef::Function { id } = reference.resolved else {
+                return lower_expr(builder, expr, declarations);
+            };
+            tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)
+                .map(|_| {
+                    lower_function_ref(
+                        builder,
+                        builder.location(expr.id),
+                        id.qualified(builder.ctx.db),
+                        Some(expected_ty),
+                    )
+                })
+                .or_else(|| lower_expr(builder, expr, declarations))
+        }
+        ExprKind::Lambda { params, body } => {
+            let signature = declarations
+                .lambda_signatures
+                .get(&expr.id)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing solved logical lambda signature"));
+            lower_lambda(
+                builder,
+                builder.location(expr.id),
+                signature,
+                params.clone(),
+                body.clone(),
+                declarations,
+                Some(expected_ty),
+            )
+        }
+        _ => lower_expr(builder, expr, declarations),
+    }
+}
+
 fn declaration_name(prefix: &mut String, name: Symbol) -> Symbol {
     if name.with_str(|text| text.contains("::")) {
         name
@@ -146,6 +260,7 @@ pub(super) fn lower_module<'db>(
         function_types,
         constructor_types,
         node_types,
+        local_instances,
         ability_conventions,
         ability_definitions,
         handler_operations,
@@ -182,6 +297,8 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        local_instances,
+        local_callables: local_callables::Plan::default(),
     };
     prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
     promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
@@ -683,6 +800,11 @@ fn lower_function<'db>(
             ctx.calling_convention_for_type(scheme.body(ctx.db))
                 .expect("root main has a function type")
         });
+    let parent_type_parameters = ctx
+        .lookup_function_type(ctx.qualify_name(function.name))
+        .expect("function has a typechecked signature")
+        .type_params(ctx.db)
+        .len();
     let signature = function_signature(ctx, ir, &function);
     let callable = func_sig_type(
         ir,
@@ -712,6 +834,13 @@ fn lower_function<'db>(
                 scope.bind(id, parameter.name, ir.block_arg(entry, index as u32));
             }
         }
+        declarations.local_callables = local_callables::Plan::collect(
+            &mut scope,
+            ir,
+            &function.body,
+            declarations,
+            parent_type_parameters,
+        );
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
@@ -1035,32 +1164,13 @@ fn lower_expr<'db>(
         }
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Local { id, .. } => Some(
-                builder
-                    .ctx
-                    .lookup(id)
+                local_callables::lookup(builder.ctx, expr.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
                     .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
             ),
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
-                    .unwrap_or_else(|| {
-                        panic!("missing logical signature for function reference {name}")
-                    });
-                signature.convention = builder
-                    .ctx
-                    .function_calling_convention(name)
-                    .unwrap_or(signature.convention);
-                ensure_prelude_declaration(builder, location, name, &signature);
-                let ty = func_sig_type(
-                    builder.ir,
-                    signature.return_type,
-                    signature.param_types,
-                    signature.convention,
-                );
-                let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
-                    builder.result(ty).attr("func_ref", Attribute::Symbol(name))
-                });
-                Some(result(builder.ir, op))
+                Some(lower_function_ref(builder, location, name, None))
             }
             ResolvedRef::AbilityOp { .. } => {
                 // Typechecking has already diagnosed this non-call operation
@@ -1154,7 +1264,15 @@ fn lower_expr<'db>(
                 .get(&expr.id)
                 .cloned()
                 .unwrap_or_else(|| panic!("missing solved logical lambda signature"));
-            lower_lambda(builder, location, signature, params, body, declarations)
+            lower_lambda(
+                builder,
+                location,
+                signature,
+                params,
+                body,
+                declarations,
+                None,
+            )
         }
         ExprKind::Handle { body, handlers } => {
             let result_ty = builder
@@ -1622,7 +1740,9 @@ fn lower_statement<'db>(
 ) {
     match statement {
         Stmt::Let { pattern, value, .. } => {
-            if let Some(value) = lower_expr(builder, value, declarations) {
+            let lowered = local_callables::materialize(builder, &pattern, &value, declarations)
+                .or_else(|| lower_expr(builder, value, declarations));
+            if let Some(value) = lowered {
                 bind_pattern(builder, &pattern, value);
             }
         }
@@ -1670,9 +1790,55 @@ fn lower_call<'db>(
     } else {
         Some(lower_expr(builder, callee.clone(), declarations)?)
     };
+    let named_signature = match &*callee.kind {
+        ExprKind::Var(reference) => match reference.resolved {
+            ResolvedRef::Function { id } => {
+                let name = id.qualified(builder.ctx.db);
+                Some(
+                    FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+                        .unwrap_or_else(|| panic!("missing logical signature for call {name}")),
+                )
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    let callable_value = indirect_callee.or_else(|| match &*callee.kind {
+        ExprKind::Var(reference) => match reference.resolved {
+            ResolvedRef::Local { id, .. } => {
+                local_callables::lookup(builder.ctx, callee.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    let parameter_types = named_signature
+        .as_ref()
+        .map(|signature| signature.param_types.clone())
+        .or_else(|| {
+            let value = callable_value?;
+            let signature =
+                tribute_control::FuncSig::from_type_ref(builder.ir, builder.ir.value_ty(value))?;
+            Some(signature.inputs(builder.ir).to_vec())
+        });
     let mut values = args
         .into_iter()
-        .map(|arg| lower_expr(builder, arg, declarations))
+        .enumerate()
+        .map(|(index, arg)| {
+            parameter_types
+                .as_ref()
+                .and_then(|parameters| parameters.get(index).copied())
+                .map(|expected_ty| {
+                    lower_expr_for_callable_parameter(
+                        builder,
+                        arg.clone(),
+                        expected_ty,
+                        declarations,
+                    )
+                })
+                .unwrap_or_else(|| lower_expr(builder, arg, declarations))
+        })
         .collect::<Option<Vec<_>>>()?;
     if let ExprKind::Var(reference) = *callee.kind {
         match reference.resolved {
@@ -1749,9 +1915,8 @@ fn lower_call<'db>(
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Local { id, .. } => {
-                let callable = builder
-                    .ctx
-                    .lookup(id)
+                let callable = local_callables::lookup(builder.ctx, callee.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
                     .unwrap_or_else(|| panic!("missing logical callable binding for local {id:?}"));
                 let callable_ty = builder.ir.value_ty(callable);
                 let callable_signature =
@@ -1824,6 +1989,7 @@ fn lower_lambda<'db>(
     params: Vec<crate::ast::Param>,
     body: Expr<TypedRef<'db>>,
     declarations: &mut Declarations<'db>,
+    expected_ty: Option<TypeRef>,
 ) -> Option<ValueRef> {
     let TypeKind::Func {
         params: signature_params,
@@ -1840,20 +2006,22 @@ fn lower_lambda<'db>(
     let result_type = builder
         .ctx
         .convert_logical_type(builder.ir, *signature_result);
-    let convention = signature.convention;
-    let mut free = HashSet::new();
-    super::lambda::collect_free_vars(&body, &mut free);
-    for parameter in &params {
-        if let Some(id) = parameter.local_id {
-            free.remove(&id);
-        }
-    }
-    let captures: Vec<_> = builder
-        .ctx
-        .all_bindings()
-        .filter(|(id, _, _)| free.contains(id))
-        .map(|(_, _, value)| value)
-        .collect();
+    let convention = expected_ty
+        .and_then(|expected_ty| {
+            let expected = tribute_control::FuncSig::from_type_ref(builder.ir, expected_ty)?;
+            let expected_convention =
+                tribute_control::func_sig_convention(builder.ir, expected_ty)?;
+            (expected.result(builder.ir) == result_type
+                && expected.inputs(builder.ir) == param_types
+                && expected_convention >= control_convention(signature.convention))
+            .then_some(expected_convention)
+        })
+        .map(|convention| match convention {
+            tribute_control::CallingConvention::Direct => CallingConvention::Direct,
+            tribute_control::CallingConvention::EvidenceDirect => CallingConvention::EvidenceDirect,
+            tribute_control::CallingConvention::Cps => CallingConvention::Cps,
+        })
+        .unwrap_or(signature.convention);
     let entry = builder.ir.create_block(BlockData {
         location,
         args: param_types
@@ -1896,6 +2064,7 @@ fn lower_lambda<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
+    let captures = local_callables::captures(builder.ctx, builder.ir, region);
     let callable = func_sig_type(builder.ir, result_type, param_types, convention);
     let lambda = op(builder.ir, builder.block, location, "lambda", |builder| {
         builder.operands(captures).result(callable).region(region)

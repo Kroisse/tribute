@@ -1933,6 +1933,14 @@ impl<'db> TypeChecker<'db> {
 
         let (mut environment_type_vars, mut environment_effect_vars) = solver.pending_variables();
         if should_generalize {
+            for ty in ctx.annotation_type_parameters() {
+                type_subst.collect_univars_from_type(
+                    self.db(),
+                    ty,
+                    &row_subst,
+                    &mut environment_type_vars,
+                );
+            }
             for scheme in ctx.visible_local_schemes() {
                 let body =
                     type_subst.apply_with_rows(self.db(), scheme.body(self.db()), &row_subst);
@@ -2021,6 +2029,7 @@ impl<'db> TypeChecker<'db> {
             };
             if let Some(local_id) = local_id {
                 ctx.bind_local_scheme(local_id, scheme);
+                ctx.record_local_binding_owner(local_id, scope);
             }
             ctx.bind_local_scheme_by_name(name, scheme);
         }
@@ -2919,6 +2928,10 @@ impl<'db> TypeChecker<'db> {
             return ty;
         }
         let ty = match &ann.kind {
+            TypeAnnotationKind::Named(name) if ctx.annotation_type_parameter(*name).is_some() => {
+                ctx.annotation_type_parameter(*name)
+                    .expect("known signature parameter")
+            }
             TypeAnnotationKind::Named(name) => {
                 if *name == "Int" {
                     ctx.int_type()

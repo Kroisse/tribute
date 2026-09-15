@@ -61,6 +61,7 @@ pub struct ModuleCheckResult<'db> {
     pub node_types: Vec<(NodeId, Type<'db>)>,
     /// Exact instantiated types selected for direct call callees.
     pub function_instances: Vec<(NodeId, super::FunctionInstance<'db>)>,
+    pub local_instances: Vec<(NodeId, super::LocalCallableInstance<'db>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
@@ -107,6 +108,7 @@ pub struct TypeChecker<'db> {
     node_types: HashMap<NodeId, Type<'db>>,
     function_rebindings: HashMap<(FuncDefId<'db>, TypeScheme<'db>), FunctionRebinding<'db>>,
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
+    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -118,6 +120,7 @@ pub struct TypeChecker<'db> {
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
     signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
+    signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -150,6 +153,7 @@ impl<'db> TypeChecker<'db> {
             span_map,
             node_types: HashMap::new(),
             function_instances: HashMap::new(),
+            local_instances: HashMap::new(),
             function_rebindings: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
@@ -158,6 +162,7 @@ impl<'db> TypeChecker<'db> {
             exhaustive_cases: Vec::new(),
             effect_annotation_origins: HashMap::new(),
             signature_row_names: HashMap::new(),
+            signature_type_names: HashMap::new(),
         }
     }
 
@@ -261,6 +266,8 @@ impl<'db> TypeChecker<'db> {
         let db = self.env.db();
         let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
         function_instances.sort_by_key(|(id, _)| *id);
+        let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
+        local_instances.sort_by_key(|(id, _)| *id);
         let mut next_row = function_instances
             .iter()
             .flat_map(|(_, instance)| {
@@ -326,6 +333,7 @@ impl<'db> TypeChecker<'db> {
             constructor_types,
             node_types,
             function_instances,
+            local_instances,
             ability_conventions,
             handler_operations,
             perform_operations,

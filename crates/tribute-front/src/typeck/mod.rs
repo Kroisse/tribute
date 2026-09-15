@@ -210,9 +210,20 @@ pub struct FunctionInstance<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct LocalCallableInstance<'db> {
+    pub binding: NodeId,
+    pub local: crate::ast::LocalId,
+    /// Only schemes without local data-type quantifiers are exported here.
+    pub scheme: TypeScheme<'db>,
+    pub row_arguments: Vec<crate::ast::EffectRow<'db>>,
+    pub callable: Type<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: Vec<(NodeId, Type<'db>)>,
     pub function_instances: Vec<(NodeId, FunctionInstance<'db>)>,
+    pub local_instances: Vec<(NodeId, LocalCallableInstance<'db>)>,
 }
 
 #[salsa::tracked]
@@ -323,6 +334,7 @@ pub fn typecheck_module<'db>(
         ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
+            local_instances: result.local_instances,
         },
         result.ability_conventions,
         ability_schemas(&result.ability_definitions),

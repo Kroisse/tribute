@@ -121,6 +121,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         constructor_types,
         node_types: node_types_map,
+        local_instances: result.local_instances.into_iter().collect(),
         ability_conventions,
         ability_definitions,
         handler_operations,

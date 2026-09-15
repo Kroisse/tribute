@@ -25,6 +25,18 @@ Direct < EvidenceDirect < Cps
 
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
+지역 source lambda의 검사된 인스턴스와 실제 소비 worker의 callable parameter
+계약을 구별한다. 고정된 데이터 타입의 lambda는 원래 binding 위치에서 각 필요한
+인스턴스와 convention으로 생성한다. 이는 이미 생성된 Cps 값을 Direct로 cast하는
+것이 아니다. Named callable은 정확한 target identity를 가진 `func_ref`의 기존
+adapter를 사용하며, semantic use가 pure여도 소비 worker가 요구하는 더 강한
+convention을 보존한다.
+
+Lambda capture 목록은 생성된 body가 실제 사용하는 외부 SSA 값과 일치해야 한다.
+Named reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은
+lexical scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를
+복제하거나 resume token의 affine capture 경로를 늘려서는 안 된다.
+
 Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
 결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
 cast해서는 안 된다. 실제 source `Never` operation의 결과 타입과 재개할 수 없다는
