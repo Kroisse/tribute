@@ -54,21 +54,7 @@ impl<'db> TypeSolver<'db> {
             seen
         };
         let reachability: Vec<_> = (0..joins.len()).map(reachable).collect();
-        let protected: Vec<_> = self
-            .pending_producers
-            .iter()
-            .map(|producer| self.type_subst.apply(self.db, producer.result))
-            .chain(
-                self.pending_relations
-                    .iter()
-                    .filter_map(|relation| match relation {
-                        Constraint::TypeJoin { result, .. } => {
-                            Some(self.type_subst.apply(self.db, *result))
-                        }
-                        _ => None,
-                    }),
-            )
-            .collect();
+        let protected = self.protected_relation_results();
         for (start, reachable_from_start) in reachability.iter().enumerate() {
             let component: Vec<_> = (0..joins.len())
                 .filter(|next| reachable_from_start[*next] && reachability[*next][start])

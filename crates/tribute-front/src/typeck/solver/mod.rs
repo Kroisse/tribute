@@ -191,6 +191,22 @@ impl<'db> TypeSolver<'db> {
         self.settle_relations(true)
     }
 
+    fn protected_relation_results(&self) -> Vec<Type<'db>> {
+        self.pending_producers
+            .iter()
+            .map(|producer| producer.result)
+            .chain(
+                self.pending_relations
+                    .iter()
+                    .filter_map(|relation| match relation {
+                        Constraint::TypeJoin { result, .. } => Some(*result),
+                        _ => None,
+                    }),
+            )
+            .map(|ty| self.type_subst.apply(self.db, ty))
+            .collect()
+    }
+
     fn settle_relations(&mut self, finalize: bool) -> Result<(), LocatedSolveError<'db>> {
         let mut first_error = None;
         loop {
@@ -200,23 +216,7 @@ impl<'db> TypeSolver<'db> {
                 self.pending_relations.len(),
                 self.pending_row_unions.len() + self.pending_row_removals.len(),
             );
-            let mut protected: Vec<_> = self
-                .pending_producers
-                .iter()
-                .map(|producer| producer.result)
-                .collect();
-            protected.extend(
-                self.pending_relations
-                    .iter()
-                    .filter_map(|relation| match relation {
-                        Constraint::TypeJoin { result, .. } => Some(*result),
-                        _ => None,
-                    }),
-            );
-            let protected: Vec<_> = protected
-                .into_iter()
-                .map(|ty| self.type_subst.apply(self.db, ty))
-                .collect();
+            let protected = self.protected_relation_results();
             for relation in std::mem::take(&mut self.pending_relations) {
                 let outcome = match &relation {
                     Constraint::TypeCoerce(actual, expected, origin) => {
