@@ -268,33 +268,14 @@ impl<'db> TypeChecker<'db> {
             row_subst,
             &mut body_univars,
         );
-        for rows in solver
-            .row_unions_for_type(inferred_func_ty)
-            .into_iter()
-            .map(|u| {
-                u.sources
-                    .into_iter()
-                    .chain(std::iter::once(u.result))
-                    .collect::<Vec<_>>()
-            })
-            .chain(
-                solver
-                    .row_removals_for_type(inferred_func_ty)
-                    .into_iter()
-                    .map(|r| r.rows().to_vec()),
-            )
-        {
-            for row in rows {
-                for effect in row.effects(self.db()) {
-                    for arg in &effect.args {
-                        type_subst.collect_univars_from_type(
-                            self.db(),
-                            *arg,
-                            row_subst,
-                            &mut all_univars,
-                        );
-                    }
-                }
+        let retained_unions = solver.row_unions_for_type(inferred_func_ty);
+        let retained_removals = solver.row_removals_for_type(inferred_func_ty);
+        let (union_univars, union_effect_vars) = solver.row_union_variables(&retained_unions);
+        let (removal_univars, removal_effect_vars) =
+            solver.row_removal_variables(&retained_removals);
+        for var in union_univars.into_iter().chain(removal_univars) {
+            if !all_univars.contains(&var) {
+                all_univars.push(var);
             }
         }
         for (index, var) in body_univars
@@ -423,30 +404,19 @@ impl<'db> TypeChecker<'db> {
             .collect();
 
         let mut effect_params = collect_effect_vars(self.db(), generalized);
-        for var in solver
-            .row_union_variables(&solver.row_unions_for_type(inferred_func_ty))
-            .1
-            .into_iter()
-            .chain(
-                solver
-                    .row_removal_variables(&solver.row_removals_for_type(inferred_func_ty))
-                    .1,
-            )
-        {
+        for var in union_effect_vars.into_iter().chain(removal_effect_vars) {
             if !effect_params.contains(&var) {
                 effect_params.push(var);
             }
         }
-        let unions = solver
-            .row_unions_for_type(inferred_func_ty)
+        let unions = retained_unions
             .iter()
             .map(|union| solver.generalize_row_union(union, &var_to_index))
             .collect();
         let new_scheme = TypeScheme::builder(type_params, effect_params, generalized)
             .row_unions(unions)
             .row_removals(
-                solver
-                    .row_removals_for_type(inferred_func_ty)
+                retained_removals
                     .iter()
                     .map(|r| solver.generalize_row_removal(r, &var_to_index))
                     .collect(),
