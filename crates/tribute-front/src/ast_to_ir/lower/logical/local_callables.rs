@@ -18,6 +18,7 @@ impl<'db> Plan<'db> {
         ir: &mut IrContext,
         body: &Expr<TypedRef<'db>>,
         declarations: &Declarations<'db>,
+        parent_type_parameters: usize,
     ) -> Self {
         let mut nodes = Vec::new();
         walk_typed_expr(body, &mut |expr| nodes.push(expr));
@@ -131,9 +132,23 @@ impl<'db> Plan<'db> {
                 || instance.callable != reference.ty
                 || root.is_none_or(|root| {
                     root.scheme.body(ctx.db) != seed.function_type
-                        || !fixed_instance(ctx, body, seed, root, declarations)
+                        || !fixed_instance(
+                            ctx,
+                            body,
+                            seed,
+                            root,
+                            declarations,
+                            parent_type_parameters,
+                        )
                 })
-                || !fixed_instance(ctx, body, seed, instance, declarations)
+                || !fixed_instance(
+                    ctx,
+                    body,
+                    seed,
+                    instance,
+                    declarations,
+                    parent_type_parameters,
+                )
             {
                 unsupported.insert(binding);
                 continue;
@@ -174,6 +189,35 @@ impl<'db> Plan<'db> {
     }
 }
 
+/// Parent-owned variables are fixed within this body, including the retained
+/// generic template. Local quantifiers and unsolved variables are not fixed.
+fn fixed_in_parent<'db>(db: &'db dyn salsa::Database, ty: Type<'db>, parameters: usize) -> bool {
+    let fixed = |ty| fixed_in_parent(db, ty, parameters);
+    let fixed_row = |row: crate::ast::EffectRow<'db>| {
+        row.rest(db).is_none()
+            && row
+                .effects(db)
+                .iter()
+                .all(|effect| effect.args.iter().copied().all(fixed))
+    };
+    match ty.kind(db) {
+        TypeKind::BoundVar { index } => (*index as usize) < parameters,
+        TypeKind::Named { args, .. } | TypeKind::Tuple(args) => args.iter().copied().all(fixed),
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            ..
+        } => params.iter().copied().all(fixed) && fixed(*result) && fixed_row(*effect),
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => fixed(*arg) && fixed(*result) && fixed_row(*effect),
+        _ => is_concrete_type(db, ty),
+    }
+}
+
 /// This boundary instantiates only a lambda's latent row. If that row also
 /// occurs in body metadata, general row-specialization owns the transformation.
 fn fixed_instance<'db>(
@@ -182,6 +226,7 @@ fn fixed_instance<'db>(
     seed: &LambdaSignature<'db>,
     instance: &crate::typeck::LocalCallableInstance<'db>,
     declarations: &Declarations<'db>,
+    parent_type_parameters: usize,
 ) -> bool {
     let db = ctx.db;
     if !instance.scheme.type_params(db).is_empty()
@@ -213,7 +258,7 @@ fn fixed_instance<'db>(
         || !params
             .iter()
             .chain(std::iter::once(result))
-            .all(|ty| is_concrete_type(db, *ty))
+            .all(|ty| fixed_in_parent(db, *ty, parent_type_parameters))
     {
         return false;
     }
@@ -245,18 +290,19 @@ fn fixed_instance<'db>(
             var
         })
         .collect();
-    let selected = crate::typeck::subst::instantiate_with_arguments(
-        db,
-        instance.scheme,
-        vec![],
-        fresh.clone(),
-    );
+    // Only this local scheme's rows are owned here. BoundVars in its body
+    // belong to the enclosing function and must survive row instantiation.
+    let mut freshening = crate::typeck::RowSubst::new();
+    for (owned, fresh) in instance.scheme.effect_params(db).iter().zip(&fresh) {
+        freshening.insert(owned.id, crate::ast::EffectRow::open(db, *fresh));
+    }
+    let selected =
+        crate::typeck::TypeSubst::new().apply_with_rows(db, instance.scheme.body(db), &freshening);
     let mut rows = crate::typeck::RowSubst::new();
     for (var, row) in fresh.into_iter().zip(&instance.row_arguments) {
         rows.insert(var.id, *row);
     }
-    if crate::typeck::TypeSubst::new().apply_with_rows(db, selected.ty, &rows) != instance.callable
-    {
+    if crate::typeck::TypeSubst::new().apply_with_rows(db, selected, &rows) != instance.callable {
         return false;
     }
     let TypeKind::Func {

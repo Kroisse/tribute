@@ -800,6 +800,11 @@ fn lower_function<'db>(
             ctx.calling_convention_for_type(scheme.body(ctx.db))
                 .expect("root main has a function type")
         });
+    let parent_type_parameters = ctx
+        .lookup_function_type(ctx.qualify_name(function.name))
+        .expect("function has a typechecked signature")
+        .type_params(ctx.db)
+        .len();
     let signature = function_signature(ctx, ir, &function);
     let callable = func_sig_type(
         ir,
@@ -829,8 +834,13 @@ fn lower_function<'db>(
                 scope.bind(id, parameter.name, ir.block_arg(entry, index as u32));
             }
         }
-        declarations.local_callables =
-            local_callables::Plan::collect(&mut scope, ir, &function.body, declarations);
+        declarations.local_callables = local_callables::Plan::collect(
+            &mut scope,
+            ir,
+            &function.body,
+            declarations,
+            parent_type_parameters,
+        );
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,

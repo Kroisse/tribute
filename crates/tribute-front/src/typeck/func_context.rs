@@ -135,6 +135,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Named rows share the function declaration's annotation scope.
     annotation_rows: HashMap<Symbol, EffectVar>,
+    /// Parent signature parameters are shared by all body annotations.
+    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
     /// Annotation revisits must not allocate unrelated inference variables.
     annotation_types: HashMap<NodeId, Type<'db>>,
 
@@ -217,6 +219,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             annotation_rows: HashMap::new(),
+            annotation_type_parameters: HashMap::new(),
             annotation_types: HashMap::new(),
             current_effect: EffectRow::pure(db),
             effect_contract: None,
@@ -805,6 +808,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: EffectVar) {
         self.annotation_rows.insert(name, row);
+    }
+
+    pub(crate) fn bind_annotation_type_parameter(&mut self, name: Symbol, ty: Type<'db>) {
+        self.annotation_type_parameters.insert(name, ty);
+    }
+
+    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(&name).copied()
+    }
+
+    pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
+        self.annotation_type_parameters.values().copied()
     }
 
     pub(crate) fn annotation_row(&mut self, name: Symbol) -> EffectVar {

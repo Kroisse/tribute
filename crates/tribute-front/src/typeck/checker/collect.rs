@@ -206,6 +206,7 @@ impl<'db> TypeChecker<'db> {
             self.effect_annotation_origins.insert(func_id, origins);
         }
         self.signature_row_names.insert(func_id, vars.rows);
+        self.signature_type_names.insert(func_id, vars.types);
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters

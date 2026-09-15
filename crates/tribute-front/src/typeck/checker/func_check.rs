@@ -46,6 +46,13 @@ impl<'db> TypeChecker<'db> {
         // Get the instantiated function type (with UniVars) for later generalization
         let (param_types, expected_return, instantiated_func_ty, signature_instance) =
             self.get_func_signature_with_type(&mut ctx, func_id, &func);
+        if let Some((_, instance)) = &signature_instance
+            && let Some(names) = self.signature_type_names.get(&func_id)
+        {
+            for (name, index) in names {
+                ctx.bind_annotation_type_parameter(*name, instance.type_args[*index as usize]);
+            }
+        }
         if let Some((scheme, instance)) = &signature_instance
             && let Some(names) = self.signature_row_names.get(&func_id)
         {

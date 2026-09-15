@@ -519,13 +519,21 @@ single instantiation. Variables in a monomorphic scheme are not freshened.
 
 ### 지역 callable 인스턴스의 전달
 
+함수 본문의 타입 주석에서 부모 함수의 타입 매개변수를 참조하면, 선언 signature의
+같은 매개변수 인스턴스를 사용한다. 이 변수는 지역 binding의 일반화 대상이 아니며,
+부모 함수가 특수화될 때 지역 callable의 매개변수·결과·capture 타입에도 같은
+치환을 적용한다. 부모 매개변수를 별도의 nominal 타입 이름으로 해석하지 않는다.
+
 지역 binding의 scheme과 참조별 instantiation은 서로 다른 정보다. 타입 검사는
 binding의 NodeId와 LocalId, scheme, 참조별 타입·row 인자와 선택된 callable 타입을
 함께 전달한다. 동일 참조의 재검사는 같은 인스턴스를 사용하며, 특수화는 enclosing
 함수의 복제와 함께 binding identity 및 이 메타데이터를 갱신한다.
 
 데이터 매개변수·결과·capture 타입이 고정된 source lambda는 검사된 지역 row
-인스턴스로 생성할 수 있다. 이 과정은 binding이 소유한 row만 치환하고 환경의
+인스턴스로 생성할 수 있다. 여기서 고정 타입에는 부모 함수가 소유한 타입
+매개변수도 포함된다. 특수화 전 generic 본문에서도 이 변수는 같은 부모 binder를
+참조하며, 지역 사용처마다 새로 인스턴스화하지 않는다. 이 과정은 binding이
+소유한 row만 치환하고 환경의
 자유 변수나 다른 지역 scheme을 닫지 않는다. Lowering은 lambda 본문 형상이나
 비어 있는 explicit effect 목록으로 purity를 다시 추론하지 않는다.
 
