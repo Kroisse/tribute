@@ -57,7 +57,8 @@ Operations use the same pattern:
 let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
 ```
 
-Matching uses typed wrappers (see conventions.md for ✅/❌ patterns):
+Matching uses typed wrappers (see [code conventions](conventions.md) for
+✅/❌ patterns):
 
 ```rust
 if let Ok(func) = func::Func::from_op(&ctx, op) { ... }

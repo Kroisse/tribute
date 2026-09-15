@@ -1077,11 +1077,69 @@ contract as secondary context. A frontend error stops the pipeline before AST
 to IR conversion and shared lowering so invalid source does not produce
 cascading diagnostics containing internal IR operation identities.
 
+타입과 effect의 진단 표기는 AST 타입 계층이 소유한다. Effect row의 구체적인
+effect들은 표시 문자열의 사전순으로 출력하고, 열린 tail은 마지막에 `e`로
+표시한다. 각 effect의 표시 문자열을 정렬 키와 출력에 함께 사용한다. 표시
+문자열이 같더라도 선언이나 타입의 identity가 같다는 뜻은 아니며, 이 문자열을
+추론·제약 해결의 동등성 판정에 사용하지 않는다.
+
 Effect-annotation conversion also preserves the source origin of each concrete
 effect separately from the semantic `EffectRow`. Duplicate annotations are
 diagnosed at the repeated annotation after solving, with the first matching
 annotation attached as secondary context; parameterized and qualified effects
 keep the origin recorded at their shared annotation-to-row conversion point.
+
+### 프론트엔드 단계 경계와 정보 소유권
+
+프론트엔드의 각 단계는 자신이 확정한 의미 정보와 원본 위치를 다음 단계에
+함께 전달한다. 다음 단계는 표현식 모양, 출력 이름, 물리 표현을 이용하여 이미
+확정된 타입이나 선언 identity를 다시 추론하지 않는다.
+
+| 경계 | 소유하는 정보와 책임 |
+| --- | --- |
+| 구문 분석 | unresolved AST, 원본 위치, 구문 진단 |
+| 이름 해석 | 선언과 참조의 identity, lexical binding |
+| 타입 검사 | typed AST, type schemes, 표현식 타입, 선택된 callable과 operation 인스턴스 |
+| 특수화 | 구체 인스턴스의 AST, 함께 치환된 메타데이터, 원본 위치 대응 |
+| 논리 IR 생성 | source-logical callable/control IR, 검증에 필요한 선언 메타데이터 |
+
+타입 검사 결과와 특수화 결과는 서로 다른 단계의 계약이다. Lowering 입력은
+특수화 결과에서 구성하며, AST 복제와 대응 메타데이터의 복제·치환을 하나의
+작업으로 취급한다. 선언 정보와 표현식·참조별 정보를 함께 전달하여 함수
+인스턴스, constructor scheme, handler/perform/lambda 정보, coverage 증명,
+nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
+동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
+
+Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. Receiver
+타입이 미해결인 호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은
+선택된 callee와 인스턴스를 소비하며 source annotation에서 타입을 재구성하지
+않는다. 해결되지 않은 참조는 원본 위치의 진단으로 남는다.
+
+타입 체커 내부에서 선언 환경, 표현식 검사, 제약 해결, 치환·일반화, 결과
+확정, 진단 출력은 구분된 책임이다. 제약 해결 상태와 해결 순서는 하나의
+solver가 소유한다. Equality, coercion, common-result join과 effect-row
+관계의 의미를 모듈 분리 때문에 바꾸지 않는다. 함수 binder, 지역 binder,
+추론 변수의 치환 정책은 구분하며, 타입 순회에는 effect 인자와 유지되는
+row 관계도 포함한다.
+
+진단은 제약의 source origin을 유지한 구조화된 오류에서 생성한다. 검사 중
+재방문에 필요한 기록과 다음 단계로 내보낼 결과는 수명이 다르며, 결과를
+확정할 때 AST와 메타데이터에 같은 치환·일반화를 적용한다. 미해결 solver
+변수를 downstream 의미 정보로 내보내지 않는다.
+
+CLI, LSP와 테스트는 같은 분석 의미를 사용하며 source와 외부 선언 환경을
+명시적으로 전달한다. Prelude 로딩과 타깃·공유 패스 조합은 root crate의
+책임이다. 오류가 있는 분석 결과를 조회하는 것과 IR 생성을 허용하는 것은
+구분한다. LSP는 부분 결과를 사용할 수 있지만 컴파일 경로는 frontend 오류가
+있으면 lowering을 시작하지 않는다.
+
+### 모듈 단위 캐싱과 함수 결과 조회
+
+현재 parse, resolve, typecheck는 모듈 단위 Salsa query이다. 함수별 조회
+query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 조회할 수 있다는
+사실은 함수 본문별로 독립적인 추론 query가 존재한다는 뜻이 아니다. 같은
+입력에 대한 모듈 결과 재사용과, 입력 변경 후 함수별 재검사 생략은 서로
+다른 보장이다.
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
