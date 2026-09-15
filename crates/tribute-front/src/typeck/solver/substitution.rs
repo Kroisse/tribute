@@ -166,7 +166,7 @@ impl<'db> TypeSubst<'db> {
         excluded: &[UniVarId<'db>],
     ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
         let mut univars = Vec::new();
-        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+        self.collect_univars_from_type(db, ty, row_subst, &mut univars);
         univars.retain(|id| !excluded.contains(id));
 
         let var_to_index: HashMap<UniVarId<'db>, u32> = univars
@@ -191,7 +191,7 @@ impl<'db> TypeSubst<'db> {
     ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
         // Pass 1: collect unresolved UniVars in appearance order
         let mut univars: Vec<UniVarId<'db>> = Vec::new();
-        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+        self.collect_univars_from_type(db, ty, row_subst, &mut univars);
 
         if univars.is_empty() {
             return (ty, Vec::new(), HashMap::new());
@@ -414,20 +414,7 @@ impl<'db> TypeSubst<'db> {
     }
 
     /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
-    ///
-    /// Public wrapper for use by other modules.
     pub fn collect_univars_from_type(
-        &self,
-        db: &'db dyn salsa::Database,
-        ty: Type<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        self.collect_unresolved_univars(db, ty, row_subst, out);
-    }
-
-    /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
-    fn collect_unresolved_univars(
         &self,
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
@@ -438,7 +425,7 @@ impl<'db> TypeSubst<'db> {
             TypeKind::UniVar { id } => {
                 // Follow substitution chain
                 if let Some(subst_ty) = self.get(*id) {
-                    self.collect_unresolved_univars(db, subst_ty, row_subst, out);
+                    self.collect_univars_from_type(db, subst_ty, row_subst, out);
                 } else if !out.contains(id) {
                     out.push(*id);
                 }
@@ -450,25 +437,25 @@ impl<'db> TypeSubst<'db> {
                 ..
             } => {
                 for p in params {
-                    self.collect_unresolved_univars(db, *p, row_subst, out);
+                    self.collect_univars_from_type(db, *p, row_subst, out);
                 }
-                self.collect_unresolved_univars(db, *result, row_subst, out);
+                self.collect_univars_from_type(db, *result, row_subst, out);
                 self.collect_univars_from_effect_row(db, *effect, row_subst, out);
             }
             TypeKind::Named { args, .. } => {
                 for a in args {
-                    self.collect_unresolved_univars(db, *a, row_subst, out);
+                    self.collect_univars_from_type(db, *a, row_subst, out);
                 }
             }
             TypeKind::Tuple(elems) => {
                 for e in elems {
-                    self.collect_unresolved_univars(db, *e, row_subst, out);
+                    self.collect_univars_from_type(db, *e, row_subst, out);
                 }
             }
             TypeKind::App { ctor, args } => {
-                self.collect_unresolved_univars(db, *ctor, row_subst, out);
+                self.collect_univars_from_type(db, *ctor, row_subst, out);
                 for a in args {
-                    self.collect_unresolved_univars(db, *a, row_subst, out);
+                    self.collect_univars_from_type(db, *a, row_subst, out);
                 }
             }
             TypeKind::Continuation {
@@ -476,8 +463,8 @@ impl<'db> TypeSubst<'db> {
                 result,
                 effect,
             } => {
-                self.collect_unresolved_univars(db, *arg, row_subst, out);
-                self.collect_unresolved_univars(db, *result, row_subst, out);
+                self.collect_univars_from_type(db, *arg, row_subst, out);
+                self.collect_univars_from_type(db, *result, row_subst, out);
                 self.collect_univars_from_effect_row(db, *effect, row_subst, out);
             }
             _ => {}
@@ -495,7 +482,7 @@ impl<'db> TypeSubst<'db> {
         let applied = row_subst.apply(db, effect);
         for e in applied.effects(db) {
             for a in &e.args {
-                self.collect_unresolved_univars(db, *a, row_subst, out);
+                self.collect_univars_from_type(db, *a, row_subst, out);
             }
         }
     }
