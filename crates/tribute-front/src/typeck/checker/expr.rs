@@ -2021,6 +2021,7 @@ impl<'db> TypeChecker<'db> {
             };
             if let Some(local_id) = local_id {
                 ctx.bind_local_scheme(local_id, scheme);
+                ctx.record_local_binding_owner(local_id, scope);
             }
             ctx.bind_local_scheme_by_name(name, scheme);
         }

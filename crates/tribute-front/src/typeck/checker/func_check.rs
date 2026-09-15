@@ -127,6 +127,7 @@ impl<'db> TypeChecker<'db> {
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
         let mut func_instances = ctx.take_function_instances();
+        let local_instances = ctx.take_local_instances();
         let func_handler_operations = ctx.take_handler_operations();
         let func_perform_operations = ctx.take_perform_operations();
         let func_lambda_signatures = ctx.take_lambda_signatures();
@@ -469,6 +470,28 @@ impl<'db> TypeChecker<'db> {
             &deferred_resolutions,
         );
 
+        for (node, mut instance) in local_instances {
+            instance.callable =
+                self.apply_subst_to_type(instance.callable, type_subst, row_subst, &var_to_index);
+            let map_type = |ty| self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
+            instance.scheme = instance
+                .scheme
+                .to_builder(self.db())
+                .map_types(self.db(), map_type)
+                .build(self.db());
+            instance.row_arguments = instance
+                .row_arguments
+                .into_iter()
+                .map(|row| {
+                    crate::typeck::solver::map_effect_row_type_args(
+                        self.db(),
+                        row_subst.apply(self.db(), row),
+                        map_type,
+                    )
+                })
+                .collect();
+            self.local_instances.insert(node, instance);
+        }
         for (node, mut instance) in func_instances {
             instance.callable =
                 self.apply_subst_to_type(instance.callable, type_subst, row_subst, &var_to_index);

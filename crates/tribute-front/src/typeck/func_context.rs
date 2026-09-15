@@ -100,6 +100,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Conversion reuses only these polymorphic instances; monomorphic locals
     /// are deliberately looked up again.
     quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
+    local_binding_owners: HashMap<LocalId, NodeId>,
+    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
 
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
@@ -201,6 +203,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_generalizations: HashMap::new(),
             function_instances: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
+            local_binding_owners: HashMap::new(),
+            local_instances: HashMap::new(),
             handler_operations: HashMap::new(),
             reported_handler_errors: HashSet::new(),
             perform_operations: HashMap::new(),
@@ -496,6 +500,32 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.local_scheme(local)
         }
         .or_else(|| self.local_scheme_by_name(name))?;
+        if !scheme.effect_params(self.db).is_empty()
+            && let Some(instance) = self.local_instances.get(&node)
+        {
+            return Some(instance.callable);
+        }
+        if scheme.type_params(self.db).is_empty()
+            && matches!(
+                scheme.body(self.db).kind(self.db),
+                crate::ast::TypeKind::Func { .. }
+            )
+            && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        {
+            let instance = self.instantiate_scheme_details(scheme);
+            let callable = instance.ty;
+            self.local_instances.insert(
+                node,
+                super::LocalCallableInstance {
+                    binding,
+                    local,
+                    scheme,
+                    row_arguments: instance.row_args,
+                    callable,
+                },
+            );
+            return Some(callable);
+        }
         if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
             if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
                 return Some(ty);
@@ -506,6 +536,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         } else {
             Some(self.instantiate_scheme(scheme))
         }
+    }
+
+    /// Retain the lexical owner when a let scheme is introduced.
+    pub(crate) fn record_local_binding_owner(&mut self, local: LocalId, binding: NodeId) {
+        self.local_binding_owners.insert(local, binding);
+    }
+
+    pub(crate) fn take_local_instances(
+        &mut self,
+    ) -> HashMap<NodeId, super::LocalCallableInstance<'db>> {
+        std::mem::take(&mut self.local_instances)
     }
 
     /// Record the exact semantic operation selected for a handler arm.

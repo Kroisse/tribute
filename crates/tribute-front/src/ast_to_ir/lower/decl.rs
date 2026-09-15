@@ -266,6 +266,7 @@ impl<'db> TypedModule<'db> {
             handler_operations: _,
             perform_operations: _,
             lambda_signatures: _,
+            local_instances: _,
             exhaustive_cases: _,
             compiler_intrinsics,
         } = self;

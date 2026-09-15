@@ -216,6 +216,12 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+            local_instances: checked
+                .expression_types(db)
+                .local_instances
+                .iter()
+                .cloned()
+                .collect(),
             function_instances: checked
                 .expression_types(db)
                 .function_instances
@@ -242,6 +248,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         node_types: mono.metadata.node_types,
+        local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
@@ -266,7 +273,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
 fn generic_specialization_transports_direct_callee_metadata_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
-) {
+) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
     let ast = parsed.module(db).clone();
     let checked = tribute_front::typeck::typecheck_module(
@@ -287,6 +294,12 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+            local_instances: checked
+                .expression_types(db)
+                .local_instances
+                .iter()
+                .cloned()
+                .collect(),
             function_instances: checked
                 .expression_types(db)
                 .function_instances
@@ -313,6 +326,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         node_types: mono.metadata.node_types,
+        local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
@@ -330,6 +344,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         ir_text.contains("tribute_control.func @\"apply$Int\""),
         "the specialized generic function must preserve its checked concrete call type:\n{ir_text}"
     );
+    ir_text
 }
 
 /// The public typecheck-to-logical-lowering boundary carries deterministic,
@@ -353,6 +368,12 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: typed,
+        local_instances: checked
+            .expression_types(db)
+            .local_instances
+            .iter()
+            .cloned()
+            .collect(),
         span_map: checked.span_map(db).clone(),
         function_types: checked.function_types(db).iter().cloned().collect(),
         constructor_types: checked.constructor_types(db).iter().cloned().collect(),
@@ -483,4 +504,30 @@ fn use_bool() ->{Audit(Bool)} Bool {
 "#,
     );
     public_logical_output_declarations_inner(db, source);
+}
+
+#[salsa_test]
+fn outer_generic_specialization_rekeys_local_binding_instances(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "specialized_local.trb",
+        r#"
+fn pure(f: fn(Int) ->{} Int, value: Int) ->{} Int { f(value) }
+fn apply(value: a) -> a {
+    let identity = fn(x: Int) {
+        let retained = value
+        x
+    }
+    let alias = identity
+    let result = pure(alias, +3)
+    value
+}
+fn use_int() ->{} Int { apply(+3) }
+fn use_bool() ->{} Bool { apply(True) }
+"#,
+    );
+    let ir = generic_specialization_transports_direct_callee_metadata_inner(db, source);
+    assert!(ir.contains("apply$Bool"), "{ir}");
+    assert!(ir.contains("tribute_control.lambda"), "{ir}");
+    assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
 }
