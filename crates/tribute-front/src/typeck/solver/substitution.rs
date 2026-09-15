@@ -139,27 +139,7 @@ impl<'db> TypeSubst<'db> {
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
     ) -> (Type<'db>, Vec<TypeParam>) {
-        // Pass 1: collect unresolved UniVars in appearance order
-        let mut univars: Vec<UniVarId<'db>> = Vec::new();
-        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
-
-        if univars.is_empty() {
-            return (ty, Vec::new());
-        }
-
-        // Build UniVar → BoundVar index mapping
-        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (id, i as u32))
-            .collect();
-
-        // Pass 2: replace UniVars with BoundVars
-        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
-
-        // Build type params (anonymous — names not tracked through UniVar)
-        let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
-
+        let (generalized, type_params, _) = self.generalize_with_mapping(db, ty, row_subst);
         (generalized, type_params)
     }
 
