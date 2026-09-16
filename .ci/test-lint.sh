@@ -76,7 +76,7 @@ expect_commands() {
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
-TESTS='cargo nextest run --workspace'
+TESTS='cargo nextest run --workspace -j 4'
 
 # Quick lint succeeds even though the Clippy fixture fails by default.
 expect_status 0 "$SCRIPT_DIR/lint.sh" --quick

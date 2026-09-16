@@ -73,7 +73,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace -j 4
 
   canonical-native:
     name: Canonical native example (${{ matrix.platform }})

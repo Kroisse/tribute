@@ -86,7 +86,7 @@ tests and CI.
 cargo build
 
 # Run all tests
-cargo nextest run --workspace
+cargo nextest run --workspace -j num-cpus
 
 # Compile one source file to a native executable
 cargo run -- compile lang-examples/native_effects.trb \

@@ -8,6 +8,6 @@ cd "$SCRIPT_DIR/.."
 "$SCRIPT_DIR/lint.sh"
 
 echo "Running tests..."
-cargo nextest run --workspace
+cargo nextest run --workspace -j 4
 
 echo "All checks passed!"
