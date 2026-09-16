@@ -73,7 +73,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Run tests
-        run: cargo nextest run --workspace -j 4
+        run: cargo nextest run --workspace -j 8
 
   canonical-native:
     name: Canonical native example (${{ matrix.platform }})
@@ -230,7 +230,7 @@ jobs:
           tool: cargo-llvm-cov,nextest,wasmtime
 
       - name: Generate coverage report
-        run: cargo llvm-cov nextest --workspace -j 4 --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --workspace -j 8 --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
