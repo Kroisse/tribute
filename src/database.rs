@@ -1,9 +1,8 @@
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::collections::{HashMap, hash_map::Entry};
 
-use dashmap::DashMap;
-use dashmap::mapref::entry::Entry;
 use lsp_types::Uri;
+use parking_lot::RwLock;
 use ropey::Rope;
 use tree_sitter::Tree;
 use tribute_front::source_file::parse_with_rope;
@@ -26,11 +25,11 @@ pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<T
     })
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
-    documents: Arc<DashMap<String, SourceCst>>,
+    documents: RwLock<HashMap<String, SourceCst>>,
 }
 
 #[salsa::db]
@@ -44,15 +43,20 @@ impl TributeDatabaseImpl {
         let path = path.canonicalize()?;
         let uri = path_to_uri(&path);
         let key = uri.as_str().to_owned();
-        match self.documents.entry(key) {
-            Entry::Occupied(entry) => Ok(*entry.get()),
-            Entry::Vacant(entry) => {
-                let file = std::fs::File::open(&path)?;
-                let contents = Rope::from_reader(file)?;
-                let tree = parse_with_thread_local(&contents, None);
-                let source_cst = SourceCst::new(self, uri, contents, tree);
-                entry.insert(source_cst);
-                Ok(source_cst)
+        if let Some(entry) = self.documents.read().get(&key) {
+            return Ok(*entry);
+        } else {
+            let file = std::fs::File::open(&path)?;
+            let contents = Rope::from_reader(file)?;
+            let tree = parse_with_thread_local(&contents, None);
+            let source_cst = SourceCst::new(self, uri, contents, tree);
+            let mut lock = self.documents.write();
+            match lock.entry(key) {
+                Entry::Occupied(entry) => Ok(*entry.get()),
+                Entry::Vacant(entry) => {
+                    entry.insert(source_cst);
+                    Ok(source_cst)
+                }
             }
         }
     }
@@ -61,17 +65,17 @@ impl TributeDatabaseImpl {
         let key = uri.as_str().to_owned();
         let tree = parse_with_thread_local(&text, None);
         let source_cst = SourceCst::new(self, (**uri).clone(), text, tree);
-        self.documents.insert(key, source_cst);
+        self.documents.write().insert(key, source_cst);
     }
 
     pub fn close_document(&self, uri: &Uri) {
         let key = uri.as_str();
-        self.documents.remove(key);
+        self.documents.write().remove(key);
     }
 
     pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
         let key = uri.as_str();
-        self.documents.get(key).map(|entry| *entry)
+        self.documents.read().get(key).map(|entry| *entry)
     }
 }
 
