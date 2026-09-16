@@ -214,7 +214,7 @@ fn define_rtti_infrastructure(
         }
 
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(obj_module.target_config());
     }
 
     let mut ctx = Context::for_function(cl_func);
@@ -316,7 +316,7 @@ fn build_dispatching_deep_release(
     // rtti_idx = load i32 from raw_ptr + RTTI_IDX_OFFSET (4)
     let rtti_idx = builder
         .ins()
-        .load(cl_types::I32, cl_ir::MemFlags::trusted(), raw_ptr, 4);
+        .load(cl_types::I32, cl_ir::MemFlagsData::trusted(), raw_ptr, 4);
 
     // entry_offset = uextend(rtti_idx) * ptr_size
     let rtti_idx_64 = builder.ins().uextend(ptr_ty, rtti_idx);
@@ -324,7 +324,7 @@ fn build_dispatching_deep_release(
     let entry_offset = builder.ins().imul(rtti_idx_64, ptr_size_val);
 
     // table_base = global_value for rtti_table
-    let table_base = builder.ins().global_value(ptr_ty, rtti_table_gv);
+    let table_base = builder.ins().symbol_value(ptr_ty, rtti_table_gv);
 
     // entry_addr = table_base + entry_offset
     let entry_addr = builder.ins().iadd(table_base, entry_offset);
@@ -332,7 +332,7 @@ fn build_dispatching_deep_release(
     // release_fn = load ptr from entry_addr
     let release_fn = builder
         .ins()
-        .load(ptr_ty, cl_ir::MemFlags::trusted(), entry_addr, 0);
+        .load(ptr_ty, cl_ir::MemFlagsData::trusted(), entry_addr, 0);
 
     // if release_fn == null: shallow, else: deep
     let null = builder.ins().iconst(ptr_ty, 0);
@@ -624,7 +624,7 @@ fn emit_module_impl(
             }
 
             translator.builder.seal_all_blocks();
-            translator.builder.finalize();
+            translator.builder.finalize(obj_module.target_config());
         }
 
         // Compile the function via Cranelift

@@ -467,10 +467,10 @@ impl<'a> FunctionTranslator<'a> {
             let operands = ctx.op_operands(op);
             let addr = self.lookup(operands[0])?;
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
-            let val = self
-                .builder
-                .ins()
-                .load(ty, cl_ir::MemFlags::new(), addr, load.offset(ctx));
+            let val =
+                self.builder
+                    .ins()
+                    .load(ty, cl_ir::MemFlagsData::new(), addr, load.offset(ctx));
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
             return Ok(());
@@ -484,7 +484,7 @@ impl<'a> FunctionTranslator<'a> {
             let addr = self.lookup(operands[1])?;
             self.builder
                 .ins()
-                .store(cl_ir::MemFlags::new(), value, addr, store.offset(ctx));
+                .store(cl_ir::MemFlagsData::new(), value, addr, store.offset(ctx));
             return Ok(());
         }
 
@@ -496,13 +496,13 @@ impl<'a> FunctionTranslator<'a> {
             let value = self.lookup(operands[1])?;
             let offset = armw.offset(ctx);
             if offset != 0 {
-                addr = self.builder.ins().iadd_imm(addr, i64::from(offset));
+                addr = self.builder.ins().iadd_imm_u(addr, i64::from(offset));
             }
             let rmw_op = parse_atomic_rmw_op(armw.op(ctx))?;
             let val =
                 self.builder
                     .ins()
-                    .atomic_rmw(ty, cl_ir::MemFlags::new(), rmw_op, addr, value);
+                    .atomic_rmw(ty, cl_ir::MemFlagsData::new(), rmw_op, addr, value);
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
             return Ok(());
@@ -515,7 +515,7 @@ impl<'a> FunctionTranslator<'a> {
             let val = if let Some(&func_ref) = self.func_refs.get(&sym) {
                 self.builder.ins().func_addr(self.ptr_ty, func_ref)
             } else if let Some(&gv) = self.data_refs.get(&sym) {
-                self.builder.ins().global_value(self.ptr_ty, gv)
+                self.builder.ins().symbol_value(self.ptr_ty, gv)
             } else {
                 return Err(CompilationError::codegen(format!(
                     "symbol not found in function or data refs: {}",
