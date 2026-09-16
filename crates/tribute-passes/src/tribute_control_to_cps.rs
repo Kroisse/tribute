@@ -4308,6 +4308,9 @@ mod tests {
     /// exact callable contract its callee was declared with. Emitting convention
     /// metadata without that contract is what the validator rejects, and the
     /// contract must never be reconstructed from the physical operands later.
+    ///
+    /// The callee can be a callable parameter, a named `func_ref`, or a local or
+    /// capturing lambda, so every one of those forms must carry its contract.
     #[test]
     fn source_data_indirect_calls_carry_their_exact_signature() {
         let input = r#"core.module @test {
@@ -4320,6 +4323,19 @@ mod tests {
     %result = tribute_control.call_indirect %f, %left, %right : core.i32
     tribute_control.return %result
   }
+  tribute_control.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
+    %ref = tribute_control.func_ref {func_ref = @add} : !direct
+    %called = tribute_control.call_indirect %ref, %left, %right : core.i32
+    tribute_control.return %called
+  }
+  tribute_control.func @capturing(%captured: core.i32, %value: core.i32) -> core.i32 convention(direct) {
+    %lambda = tribute_control.lambda(%inner: core.i32) -> core.i32 convention(direct) captures [%captured] {
+      %sum = arith.addi %inner, %captured : core.i32
+      tribute_control.return %sum
+    }
+    %called = tribute_control.call_indirect %lambda, %value : core.i32
+    tribute_control.return %called
+  }
   tribute_control.func @thunk(%f: !evidence, %value: core.i32) -> core.i32 convention(evidence_direct) {
     %called = tribute_control.call_indirect %f, %value : core.i32
     tribute_control.return %called
@@ -4329,10 +4345,20 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
 
         let transfers = convention_bearing_transfers(&ctx, module.op());
+        let mut conventions: Vec<_> = transfers
+            .iter()
+            .map(|transfer| tribute_core::get_calling_convention(&ctx, *transfer).unwrap())
+            .collect();
+        conventions.sort_unstable();
         assert_eq!(
-            transfers.len(),
-            2,
-            "both source-data indirect calls must convert: {}",
+            conventions,
+            [
+                CallingConvention::Direct,
+                CallingConvention::Direct,
+                CallingConvention::Direct,
+                CallingConvention::EvidenceDirect,
+            ],
+            "every source-data indirect call must convert: {}",
             print_module(&ctx, module.op())
         );
 
