@@ -1178,7 +1178,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_fresh_type_var_per_function_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_fresh_type_var_per_function_inner(db: &dyn salsa::Database) -> bool {
         let env = ModuleTypeEnv::new(db);
 
         // Two separate FunctionInferenceContexts with different function IDs
@@ -1216,7 +1216,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_instantiate_scheme_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_scheme_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic function type: forall a. a -> a
@@ -1463,7 +1463,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_instantiate_constructor_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_constructor_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic constructor: forall a. a -> Option(a)

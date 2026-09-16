@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 ariadne = "0.6"
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 cranelift-codegen = "0.135.2"
 cranelift-entity = "0.135.2"
 cranelift-frontend = "0.135.2"
@@ -36,17 +36,17 @@ proc-macro2 = "1.0"
 quote = "1.0"
 ropey = "1.6"
 rustc-hash = "2.1"
-salsa = "0.26.1"
+salsa = "0.26.2"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
+smallvec = { version = "1.16", features = ["union", "const_generics", "serde"] }
 strsim = "0.11"
 target-lexicon = "0.13"
 tempfile = "3.27"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tree-sitter = "0.26.8"
+tree-sitter = "0.26.13"
 tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.8.0" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-rc = { path = "crates/tribute-rc" }
@@ -59,7 +59,7 @@ tribute-runtime = { path = "crates/tribute-runtime" }
 trunk-ir-cranelift-backend = { path = "crates/trunk-ir-cranelift-backend" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
-wasm-encoder = "0.251.0"
+wasm-encoder = "0.259.0"
 wasmparser = { version = "0.258.0", default-features = false, features = ["std", "validate", "features"] }
 winnow = "1.0"
 zmij = "1"

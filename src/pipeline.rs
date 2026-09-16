@@ -1445,8 +1445,8 @@ fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> 
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
 #[salsa::tracked]
-pub fn compile_to_native_binary<'db>(
-    db: &'db dyn salsa::Database,
+pub fn compile_to_native_binary(
+    db: &dyn salsa::Database,
     source: SourceCst,
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {

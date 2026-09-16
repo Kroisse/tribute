@@ -172,8 +172,8 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 }
 
 #[salsa::tracked]
-fn tdnr_function_summary_inner<'db>(
-    db: &'db dyn salsa::Database,
+fn tdnr_function_summary_inner(
+    db: &dyn salsa::Database,
     source: SourceCst,
     function_name: String,
 ) -> TdnrSummary {

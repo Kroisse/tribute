@@ -2365,9 +2365,7 @@ mod tests {
     use trunk_ir::location::Span;
 
     #[salsa::tracked]
-    fn operation_arguments_use_resolved_parameter_types_inner<'db>(
-        db: &'db dyn salsa::Database,
-    ) -> bool {
+    fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
         let mut ir = IrContext::new();
         let path = ir.paths.intern("logical.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(

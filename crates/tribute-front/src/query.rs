@@ -119,8 +119,8 @@ pub fn parsed_ast_with_module_path<'db>(
 /// This is the entry point for parsing. The result is cached by Salsa.
 /// Use `span_map` to get the corresponding span information.
 #[salsa::tracked]
-pub fn parsed_module<'db>(
-    db: &'db dyn salsa::Database,
+pub fn parsed_module(
+    db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
     parsed_ast(db, source).map(|parsed| parsed.module(db))
@@ -131,7 +131,7 @@ pub fn parsed_module<'db>(
 /// The SpanMap maps NodeId → Span for looking up source locations.
 /// Use together with `parsed_module` - both are derived from the same parse.
 #[salsa::tracked]
-pub fn span_map<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
+pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 
@@ -139,7 +139,7 @@ pub fn span_map<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Option<
 ///
 /// This is used to iterate over functions for batch processing.
 #[salsa::tracked]
-pub fn func_names<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
+pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
     let Some(module) = parsed_module(db, source) else {
         return Vec::new();
     };
@@ -220,8 +220,8 @@ pub fn tdnr_module<'db>(
 
 /// Get a parsed function by name.
 #[salsa::tracked]
-pub fn parsed_func<'db>(
-    db: &'db dyn salsa::Database,
+pub fn parsed_func(
+    db: &dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
 ) -> Option<FuncDecl<UnresolvedName>> {
