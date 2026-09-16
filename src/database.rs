@@ -44,7 +44,7 @@ impl TributeDatabaseImpl {
         let uri = path_to_uri(&path);
         let key = uri.as_str().to_owned();
         if let Some(entry) = self.documents.read().get(&key) {
-            return Ok(*entry);
+            Ok(*entry)
         } else {
             let file = std::fs::File::open(&path)?;
             let contents = Rope::from_reader(file)?;
@@ -75,7 +75,7 @@ impl TributeDatabaseImpl {
 
     pub fn source_cst(&self, uri: &Uri) -> Option<SourceCst> {
         let key = uri.as_str();
-        self.documents.read().get(key).map(|entry| *entry)
+        self.documents.read().get(key).copied()
     }
 }
 
