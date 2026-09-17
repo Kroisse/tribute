@@ -2746,13 +2746,6 @@ fn validate_callable_origins(
                     data.attributes.get("abi"),
                     Some(Attribute::String(abi)) if abi == "C"
                 );
-                let intrinsic_directive = matches!(
-                    data.attributes.get("abi"),
-                    Some(Attribute::String(abi)) if abi == "intrinsic"
-                );
-                if intrinsic_directive && !exact_intrinsic && !registered.contains_key(&symbol) {
-                    push_op_error(ctx, op, errors, "unknown compiler intrinsic directive");
-                }
                 if !exact_intrinsic
                     && !trusted_c_ffi
                     && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())

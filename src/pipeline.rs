@@ -2887,10 +2887,13 @@ fn main() {
         });
     }
 
+    /// A declared `abi = "intrinsic"` declaration is trusted as written. Only a
+    /// declaration that claims an explicit compiler-intrinsic identity has to
+    /// match the registered declaration exactly.
     #[salsa_test]
-    fn unknown_intrinsic_directive_fails_before_cps(db: &salsa::DatabaseImpl) {
+    fn declared_intrinsic_directive_is_trusted_before_cps(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
-            "unknown_intrinsic.trb",
+            "declared_intrinsic.trb",
             r#"extern "intrinsic" fn user_intrinsic(value: Int) -> Int"#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
@@ -2901,15 +2904,11 @@ fn main() {
             &frontend.operation_declarations,
             &frontend.compiler_intrinsics,
         );
+        assert!(validation.is_ok(), "{validation}");
+        let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
         assert!(
-            !validation.is_ok(),
-            "unknown intrinsic directives must fail before CPS"
-        );
-        assert!(
-            validation
-                .to_string()
-                .contains("unknown compiler intrinsic directive"),
-            "{validation}"
+            logical.contains(r#"abi = "intrinsic""#),
+            "the declared intrinsic ABI must survive lowering:\n{logical}"
         );
     }
 
