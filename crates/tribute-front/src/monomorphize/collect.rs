@@ -14,9 +14,9 @@ pub fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
-    call_callee_types: &HashMap<crate::ast::NodeId, Type<'db>>,
+    function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut collector = InstantiationCollector::new(db, function_types, call_callee_types);
+    let mut collector = InstantiationCollector::new(db, function_types, function_instances);
     collector.visit_module(module);
     collector.instantiations
 }
@@ -27,7 +27,8 @@ pub fn collect_instantiations<'db>(
 ///
 /// Returns `None` if the scheme is monomorphic, or if extraction fails
 /// (e.g., structural mismatch or inconsistent BoundVar mappings).
-pub fn extract_type_args<'db>(
+#[cfg(test)]
+fn extract_type_args<'db>(
     db: &'db dyn salsa::Database,
     scheme: TypeScheme<'db>,
     concrete: Type<'db>,
@@ -43,6 +44,7 @@ pub fn extract_type_args<'db>(
     type_args.into_iter().collect()
 }
 
+#[cfg(test)]
 fn extract_recursive<'db>(
     db: &'db dyn salsa::Database,
     scheme_ty: Type<'db>,
@@ -122,7 +124,7 @@ fn extract_recursive<'db>(
 struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
     schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
-    call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
+    function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
 }
 
@@ -130,7 +132,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
-        call_callee_types: &'a HashMap<crate::ast::NodeId, Type<'db>>,
+        function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -140,7 +142,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         Self {
             db,
             schemes,
-            call_callee_types,
+            function_instances,
             instantiations: HashMap::new(),
         }
     }
@@ -152,14 +154,16 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         let Some(scheme) = self.schemes.get(id) else {
             return;
         };
-        let concrete = self
-            .call_callee_types
-            .get(&node_id)
-            .copied()
-            .unwrap_or(typed_ref.ty);
-        let Some(type_args) = extract_type_args(self.db, *scheme, concrete) else {
+        if scheme.type_params(self.db).is_empty() {
+            return;
+        }
+        let Some(instance) = self.function_instances.get(&node_id) else {
             return;
         };
+        if instance.function != *id {
+            return;
+        }
+        let type_args = instance.type_arguments.clone();
         if !type_args.iter().all(|ty| is_concrete_type(self.db, *ty)) {
             return;
         }
@@ -272,7 +276,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     }
 }
 
-fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+pub(crate) fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     match ty.kind(db) {
         TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
         TypeKind::Func {
@@ -334,6 +338,7 @@ fn is_concrete_effect_row(db: &dyn salsa::Database, row: crate::ast::EffectRow<'
 pub fn collect_type_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
+    extra_types: impl IntoIterator<Item = Type<'db>>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let generic_types = collect_generic_type_ids(db, module);
     let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
@@ -344,6 +349,9 @@ pub fn collect_type_instantiations<'db>(
         instantiations: &mut result,
     };
     visitor.visit_module(module);
+    for ty in extra_types {
+        collect_from_type(db, ty, &generic_types, &mut result);
+    }
     result
 }
 
@@ -409,12 +417,18 @@ fn collect_from_type<'db>(
         TypeKind::Func {
             params,
             result: ret,
+            effect,
             ..
         } => {
             for p in params {
                 collect_from_type(db, *p, generic_types, result);
             }
             collect_from_type(db, *ret, generic_types, result);
+            for effect in effect.effects(db) {
+                for arg in &effect.args {
+                    collect_from_type(db, *arg, generic_types, result);
+                }
+            }
         }
         TypeKind::Tuple(elems) => {
             for e in elems {
@@ -428,10 +442,17 @@ fn collect_from_type<'db>(
             }
         }
         TypeKind::Continuation {
-            arg, result: ret, ..
+            arg,
+            result: ret,
+            effect,
         } => {
             collect_from_type(db, *arg, generic_types, result);
             collect_from_type(db, *ret, generic_types, result);
+            for effect in effect.effects(db) {
+                for arg in &effect.args {
+                    collect_from_type(db, *arg, generic_types, result);
+                }
+            }
         }
         // Primitives and variables: no nested Named types
         _ => {}

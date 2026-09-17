@@ -13,14 +13,17 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
+#[cfg(test)]
+use crate::ast::Effect;
+
 use super::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 
 use crate::ast::{
-    CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
-    UniVarId, UniVarSource,
+    CtorId, EffectRow, EffectVar, Expr, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
+    TypedRef, UniVarId, UniVarSource,
 };
 
-use super::constraint::{ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
+use super::constraint::{Constraint, ConstraintOrigin, ConstraintOriginKind, ConstraintSet};
 use super::context::ModuleTypeEnv;
 use super::subst;
 
@@ -29,10 +32,12 @@ use super::subst;
 /// Captures the body type and body effect row so that handler arms
 /// can assign proper effect information to continuation variables.
 pub(crate) struct HandleContext<'db> {
+    pub node_id: NodeId,
     /// The source result of the complete handle expression after its `do` arm.
     pub answer_ty: Type<'db>,
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
+    pub handled_effects: EffectRow<'db>,
 }
 
 /// Function-level type inference context.
@@ -72,8 +77,16 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
 
-    /// Record expressions that already emitted a missing-field diagnostic.
-    reported_missing_record_fields: HashSet<NodeId>,
+    /// Completed lambda checks, shared by inference and typed AST conversion.
+    checked_lambdas: HashMap<NodeId, (Option<Type<'db>>, Expr<TypedRef<'db>>)>,
+
+    /// Record layouts already checked during this function's infer/check visits.
+    /// Child expression checking still runs on every visit.
+    checked_record_shapes: HashSet<NodeId>,
+
+    /// One full constructor instance per value occurrence, shared by inference
+    /// and conversion so phantom arguments and callable field rows stay linked.
+    constructor_reference_types: HashMap<NodeId, Type<'db>>,
 
     /// Function-local quantifiers introduced by pure `let` generalization.
     /// These are distinct from the enclosing function scheme's binders when
@@ -81,15 +94,20 @@ pub struct FunctionInferenceContext<'a, 'db> {
     local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
 
     /// The solved function type selected for each direct call callee.
-    call_callee_types: HashMap<NodeId, Type<'db>>,
+    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
 
     /// Inference-time instances for quantified local reference occurrences.
     /// Conversion reuses only these polymorphic instances; monomorphic locals
     /// are deliberately looked up again.
     quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
+    local_binding_owners: HashMap<LocalId, NodeId>,
+    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
 
     /// Fully instantiated operation metadata for handler arms.
     handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+
+    /// Handler validation is revisited during conversion; report each error once.
+    reported_handler_errors: HashSet<(NodeId, &'static str)>,
 
     /// Exact instantiated metadata for ability-operation call expressions.
     perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
@@ -100,16 +118,14 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// concrete node-type table consumed by legacy lowering.
     ability_op_callee_types: HashMap<NodeId, Type<'db>>,
 
-    /// Inference-time lambda expression types. Call conversion revisits lambda
-    /// children, so this keeps their call-constrained instance separate from
-    /// the concrete node-type table used by legacy lowering.
-    inferred_lambda_types: HashMap<NodeId, Type<'db>>,
-
     /// Source-logical callable signatures for lambda nodes.
     lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
 
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
+
+    /// One common-result relation per source expression, shared by infer/check visits.
+    result_joins: HashMap<NodeId, Constraint<'db>>,
 
     /// Counter for fresh type variables (local to this function).
     next_type_var: u64,
@@ -117,8 +133,16 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Counter for fresh effect row variables (local to this function).
     next_row_var: u64,
 
+    /// Named rows share the function declaration's annotation scope.
+    annotation_rows: HashMap<Symbol, EffectVar>,
+    /// Parent signature parameters are shared by all body annotations.
+    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
+    /// Annotation revisits must not allocate unrelated inference variables.
+    annotation_types: HashMap<NodeId, Type<'db>>,
+
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
+    pub(crate) effect_contract: Option<EffectRow<'db>>,
 
     /// Continuation effect rows captured while checking active lambdas.
     lambda_resume_effects: Vec<Option<EffectRow<'db>>>,
@@ -175,21 +199,30 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
-            reported_missing_record_fields: HashSet::new(),
+            checked_lambdas: HashMap::new(),
+            checked_record_shapes: HashSet::new(),
+            constructor_reference_types: HashMap::new(),
             local_generalizations: HashMap::new(),
-            call_callee_types: HashMap::new(),
+            function_instances: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
+            local_binding_owners: HashMap::new(),
+            local_instances: HashMap::new(),
             handler_operations: HashMap::new(),
+            reported_handler_errors: HashSet::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
-            inferred_lambda_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
             constraints: ConstraintSet::new(),
+            result_joins: HashMap::new(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
+            annotation_rows: HashMap::new(),
+            annotation_type_parameters: HashMap::new(),
+            annotation_types: HashMap::new(),
             current_effect: EffectRow::pure(db),
+            effect_contract: None,
             lambda_resume_effects: Vec::new(),
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::new(),
@@ -200,6 +233,42 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get the database.
     pub fn db(&self) -> &'db dyn salsa::Database {
         self.db
+    }
+
+    pub(crate) fn checked_lambda(
+        &self,
+        node: NodeId,
+        expected: Option<Type<'db>>,
+    ) -> Option<Expr<TypedRef<'db>>> {
+        let (previous_expected, expr) = self.checked_lambdas.get(&node)?;
+        (expected.is_none()
+            || expected == *previous_expected
+            || expected == self.get_node_type(node))
+        .then(|| expr.clone())
+    }
+
+    pub(crate) fn record_checked_lambda(
+        &mut self,
+        expected: Option<Type<'db>>,
+        expr: Expr<TypedRef<'db>>,
+    ) {
+        self.checked_lambdas.insert(expr.id, (expected, expr));
+    }
+
+    pub(crate) fn mark_handler_error(&mut self, arm: NodeId, reason: &'static str) -> bool {
+        self.reported_handler_errors.insert((arm, reason))
+    }
+
+    pub(crate) fn mark_record_shape_checked(&mut self, record: NodeId) -> bool {
+        self.checked_record_shapes.insert(record)
+    }
+
+    pub(crate) fn get_constructor_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
+        self.constructor_reference_types.get(&node).copied()
+    }
+
+    pub(crate) fn record_constructor_reference_type(&mut self, node: NodeId, ty: Type<'db>) {
+        self.constructor_reference_types.entry(node).or_insert(ty);
     }
 
     /// Get the module type environment.
@@ -343,11 +412,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.node_types.get(&node).copied()
     }
 
-    /// Returns whether this record expression has not reported a missing field yet.
-    pub fn mark_missing_record_field_reported(&mut self, node: NodeId) -> bool {
-        self.reported_missing_record_fields.insert(node)
-    }
-
     /// Record a resolved UFCS method for later conversion to Call.
     pub fn record_resolved_method(
         &mut self,
@@ -365,7 +429,30 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Record a deferred UFCS method call for post-solve resolution.
     pub fn record_deferred_method(&mut self, deferred: DeferredMethodCall<'db>) {
-        self.deferred_methods.push(deferred);
+        if let Some(existing) = self
+            .deferred_methods
+            .iter()
+            .find(|method| method.node_id == deferred.node_id)
+        {
+            let result = existing.result_ty;
+            let args = existing.arg_types.clone();
+            self.constrain_eq_at(
+                deferred.result_ty,
+                result,
+                deferred.node_id,
+                ConstraintOriginKind::Call,
+            );
+            for (actual, existing) in deferred.arg_types.into_iter().zip(args) {
+                self.constrain_eq_at(
+                    actual,
+                    existing,
+                    deferred.node_id,
+                    ConstraintOriginKind::Call,
+                );
+            }
+        } else {
+            self.deferred_methods.push(deferred);
+        }
     }
 
     /// Take ownership of deferred method calls.
@@ -398,16 +485,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.local_generalizations)
     }
 
-    pub fn record_call_callee_type(&mut self, callee: NodeId, ty: Type<'db>) {
-        self.call_callee_types.entry(callee).or_insert(ty);
-    }
-
-    pub fn take_call_callee_types(&mut self) -> HashMap<NodeId, Type<'db>> {
-        std::mem::take(&mut self.call_callee_types)
-    }
-
-    pub fn get_call_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
-        self.call_callee_types.get(&callee).copied()
+    pub fn get_function_reference_type(&self, node: NodeId) -> Option<Type<'db>> {
+        self.function_instances
+            .get(&node)
+            .map(|instance| instance.callable)
     }
 
     pub(crate) fn lookup_local_reference(
@@ -422,6 +503,32 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             self.local_scheme(local)
         }
         .or_else(|| self.local_scheme_by_name(name))?;
+        if !scheme.effect_params(self.db).is_empty()
+            && let Some(instance) = self.local_instances.get(&node)
+        {
+            return Some(instance.callable);
+        }
+        if scheme.type_params(self.db).is_empty()
+            && matches!(
+                scheme.body(self.db).kind(self.db),
+                crate::ast::TypeKind::Func { .. }
+            )
+            && let Some(binding) = self.local_binding_owners.get(&local).copied()
+        {
+            let instance = self.instantiate_scheme_details(scheme);
+            let callable = instance.ty;
+            self.local_instances.insert(
+                node,
+                super::LocalCallableInstance {
+                    binding,
+                    local,
+                    scheme,
+                    row_arguments: instance.row_args,
+                    callable,
+                },
+            );
+            return Some(callable);
+        }
         if !scheme.type_params(self.db).is_empty() || !scheme.effect_params(self.db).is_empty() {
             if let Some(ty) = self.quantified_local_reference_types.get(&node).copied() {
                 return Some(ty);
@@ -432,6 +539,17 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         } else {
             Some(self.instantiate_scheme(scheme))
         }
+    }
+
+    /// Retain the lexical owner when a let scheme is introduced.
+    pub(crate) fn record_local_binding_owner(&mut self, local: LocalId, binding: NodeId) {
+        self.local_binding_owners.insert(local, binding);
+    }
+
+    pub(crate) fn take_local_instances(
+        &mut self,
+    ) -> HashMap<NodeId, super::LocalCallableInstance<'db>> {
+        std::mem::take(&mut self.local_instances)
     }
 
     /// Record the exact semantic operation selected for a handler arm.
@@ -473,14 +591,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Return the inference-time type selected for an ability-operation callee.
     pub fn get_ability_op_callee_type(&self, callee: NodeId) -> Option<Type<'db>> {
         self.ability_op_callee_types.get(&callee).copied()
-    }
-
-    pub fn record_inferred_lambda_type(&mut self, lambda: NodeId, ty: Type<'db>) {
-        self.inferred_lambda_types.entry(lambda).or_insert(ty);
-    }
-
-    pub fn get_inferred_lambda_type(&self, lambda: NodeId) -> Option<Type<'db>> {
-        self.inferred_lambda_types.get(&lambda).copied()
     }
 
     pub fn record_lambda_signature(&mut self, lambda: NodeId, signature: LambdaSignature<'db>) {
@@ -533,39 +643,80 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         Some(self.instantiate_scheme(scheme))
     }
 
+    pub fn instantiate_function_reference(
+        &mut self,
+        node: NodeId,
+        function: FuncDefId<'db>,
+    ) -> Option<Type<'db>> {
+        if let Some(instance) = self.function_instances.get(&node) {
+            assert_eq!(
+                instance.function, function,
+                "one reference cannot select two declarations"
+            );
+            return Some(instance.callable);
+        }
+        let scheme = self.env.lookup_function(function)?;
+        let instance = self.instantiate_scheme_details(scheme);
+        let callable = instance.ty;
+        self.function_instances.insert(
+            node,
+            super::FunctionInstance {
+                origin: super::FunctionInstanceOrigin::Declaration,
+                function,
+                scheme,
+                callable,
+                type_arguments: instance.type_args,
+                row_arguments: instance.row_args,
+            },
+        );
+        Some(callable)
+    }
+
+    pub(crate) fn record_field_instance(
+        &mut self,
+        node: NodeId,
+        instance: super::FunctionInstance<'db>,
+    ) {
+        self.function_instances.entry(node).or_insert(instance);
+    }
+
+    pub fn take_function_instances(&mut self) -> HashMap<NodeId, super::FunctionInstance<'db>> {
+        std::mem::take(&mut self.function_instances)
+    }
+
     /// Instantiate a type scheme with fresh type variables.
     ///
     /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`, and each
     /// quantified effect-row variable with a fresh row variable. Repeated
     /// occurrences of the same row variable remain shared within one instantiation.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
-        let params = scheme.type_params(self.db);
-        let instantiated = if params.is_empty() {
-            scheme.body(self.db)
-        } else {
-            // Generate fresh variables for each parameter
-            let fresh_vars: Vec<Type<'db>> =
-                (0..params.len()).map(|_| self.fresh_type_var()).collect();
-
-            // Substitute bound variables with fresh variables
-            self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
-        };
-
-        let quantified_rows = scheme.effect_params(self.db);
-        let db = self.db;
-        subst::freshen_effect_vars(db, instantiated, quantified_rows, || self.fresh_row_var())
+        self.instantiate_scheme_details(scheme).ty
     }
 
-    /// Substitute bound variables with given types.
-    ///
-    /// Panics if a BoundVar index is out of bounds.
-    fn substitute_bound_vars(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
-        subst::substitute_bound_vars(self.db, ty, args).unwrap_or_else(|index, max| {
-            panic!(
-                "BoundVar index out of range: index={}, subst.len()={}",
-                index, max
-            )
-        })
+    pub fn instantiate_scheme_details(
+        &mut self,
+        scheme: TypeScheme<'db>,
+    ) -> subst::SchemeInstance<'db> {
+        let types = scheme
+            .type_params(self.db)
+            .iter()
+            .map(|_| self.fresh_type_var())
+            .collect();
+        let rows = scheme
+            .effect_params(self.db)
+            .iter()
+            .map(|_| self.fresh_row_var())
+            .collect();
+        let instance = subst::instantiate_with_arguments(self.db, scheme, types, rows);
+        for union in &instance.row_unions {
+            self.constraints
+                .add(super::constraint::Constraint::RowUnion(union.clone(), None));
+        }
+        for removal in &instance.row_removals {
+            self.constraints
+                .add(Constraint::RowRemoval(removal.clone(), None));
+        }
+        instance
     }
 
     // =========================================================================
@@ -575,6 +726,125 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Add a type equality constraint.
     pub fn constrain_eq(&mut self, t1: Type<'db>, t2: Type<'db>) {
         self.constraints.add_type_eq(t1, t2);
+    }
+
+    pub fn constrain_coerce(&mut self, actual: Type<'db>, expected: Type<'db>, node_id: NodeId) {
+        self.constrain_coerce_at(actual, expected, node_id, ConstraintOriginKind::Expression);
+    }
+
+    pub fn constrain_coerce_at(
+        &mut self,
+        actual: Type<'db>,
+        expected: Type<'db>,
+        node_id: NodeId,
+        kind: ConstraintOriginKind,
+    ) {
+        self.constraints
+            .add_type_coerce(actual, expected, ConstraintOrigin { node_id, kind });
+    }
+
+    /// Reuse the result identity while collecting this source node's candidates.
+    pub fn begin_result_join(&mut self, node_id: NodeId) -> Type<'db> {
+        if let Some(Constraint::TypeJoin {
+            result, complete, ..
+        }) = self.result_joins.get_mut(&node_id)
+        {
+            *complete = false;
+            return *result;
+        }
+        let result = self.fresh_type_var();
+        self.result_joins.insert(
+            node_id,
+            Constraint::TypeJoin {
+                sources: Vec::new(),
+                result,
+                origin: ConstraintOrigin {
+                    node_id,
+                    kind: ConstraintOriginKind::Expression,
+                },
+                complete: false,
+            },
+        );
+        result
+    }
+
+    pub fn add_result_source(&mut self, owner: NodeId, source: NodeId, actual: Type<'db>) {
+        let Some(Constraint::TypeJoin { sources, .. }) = self.result_joins.get_mut(&owner) else {
+            unreachable!("result group must be opened before adding a candidate");
+        };
+        if let Some((existing, _)) = sources.iter().find(|(_, origin)| origin.node_id == source) {
+            let existing = *existing;
+            self.constrain_eq_at(actual, existing, source, ConstraintOriginKind::Expression);
+        } else {
+            sources.push((
+                actual,
+                ConstraintOrigin {
+                    node_id: source,
+                    kind: ConstraintOriginKind::Expression,
+                },
+            ));
+        }
+    }
+
+    pub fn finish_result_join(&mut self, node_id: NodeId) {
+        let Some(Constraint::TypeJoin { complete, .. }) = self.result_joins.get_mut(&node_id)
+        else {
+            unreachable!("result group must be opened before completion");
+        };
+        *complete = true;
+    }
+
+    pub fn deferred_methods(&self) -> &[DeferredMethodCall<'db>] {
+        &self.deferred_methods
+    }
+
+    pub(crate) fn next_row_var(&self) -> u64 {
+        self.next_row_var
+    }
+
+    pub(crate) fn reserve_row_vars(&mut self, next: u64) {
+        self.next_row_var = self.next_row_var.max(next);
+    }
+
+    pub(crate) fn bind_annotation_row(&mut self, name: Symbol, row: EffectVar) {
+        self.annotation_rows.insert(name, row);
+    }
+
+    pub(crate) fn bind_annotation_type_parameter(&mut self, name: Symbol, ty: Type<'db>) {
+        self.annotation_type_parameters.insert(name, ty);
+    }
+
+    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(&name).copied()
+    }
+
+    pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
+        self.annotation_type_parameters.values().copied()
+    }
+
+    pub(crate) fn annotation_row(&mut self, name: Symbol) -> EffectVar {
+        if let Some(row) = self.annotation_rows.get(&name) {
+            return *row;
+        }
+        let row = self.fresh_row_var();
+        self.annotation_rows.insert(name, row);
+        row
+    }
+
+    pub(crate) fn annotation_type(&self, node: NodeId) -> Option<Type<'db>> {
+        self.annotation_types.get(&node).copied()
+    }
+
+    pub(crate) fn record_annotation_type(&mut self, node: NodeId, ty: Type<'db>) {
+        self.annotation_types.insert(node, ty);
+    }
+
+    pub(crate) fn constrain_row_union(&mut self, union: crate::ast::RowUnion<'db>) {
+        self.constraints.add(Constraint::RowUnion(union, None));
+    }
+
+    pub(crate) fn constrain_row_removal(&mut self, removal: crate::ast::RowRemoval<'db>) {
+        self.constraints.add(Constraint::RowRemoval(removal, None));
     }
 
     /// Add a type equality constraint tied to a source AST node.
@@ -624,12 +894,20 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
-        std::mem::take(&mut self.constraints)
+        let mut constraints = std::mem::take(&mut self.constraints);
+        for (_, join) in self.result_joins.drain() {
+            constraints.add(join);
+        }
+        constraints
     }
 
     /// Clone constraints generated so far for prefix solving at a let binding.
     pub fn constraints_snapshot(&self) -> ConstraintSet<'db> {
-        self.constraints.clone()
+        let mut constraints = self.constraints.clone();
+        for join in self.result_joins.values() {
+            constraints.add(join.clone());
+        }
+        constraints
     }
 
     /// Return all schemes visible in the local environment.
@@ -686,19 +964,38 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Implements row-polymorphic effect union:
     /// - `{} ∪ ρ = ρ` (pure is identity)
     /// - `{A} ∪ {B} = {A, B}` (closed rows merge directly)
-    /// - `{A | e1} ∪ {B | e2} = {A, B | e3}` with constraints:
-    ///   - `e1 = {B | e3}`
-    ///   - `e2 = {A | e3}`
+    /// - `{A | e1} ∪ {B | e2} = {A, B | e3}` retains a `RowUnion`
+    ///   relation without equating the independent source tails.
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
         self.merge_effect_with_origin(effect, None);
     }
 
     /// Merge an effect and tie any resulting type/arity constraint to a call.
     pub fn merge_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
-        self.merge_effect_with_origin(effect, Some(node_id));
+        self.merge_effect_with_origin(
+            effect,
+            Some(ConstraintOrigin {
+                node_id,
+                kind: ConstraintOriginKind::Call,
+            }),
+        );
     }
 
-    fn merge_effect_with_origin(&mut self, effect: EffectRow<'db>, origin: Option<NodeId>) {
+    pub(crate) fn merge_handler_effect_at(&mut self, effect: EffectRow<'db>, node_id: NodeId) {
+        self.merge_effect_with_origin(
+            effect,
+            Some(ConstraintOrigin {
+                node_id,
+                kind: ConstraintOriginKind::HandlerBoundary,
+            }),
+        );
+    }
+
+    fn merge_effect_with_origin(
+        &mut self,
+        effect: EffectRow<'db>,
+        origin: Option<ConstraintOrigin>,
+    ) {
         let db = self.db;
         let current = self.current_effect;
 
@@ -713,90 +1010,44 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             return;
         }
 
-        // Helper closure to merge effects with unification of type args for same ability
-        let merge_effects_with_unification =
-            |ctx: &mut Self, base: &[Effect<'db>], incoming: &[Effect<'db>]| -> Vec<Effect<'db>> {
-                let mut result = base.to_vec();
-                for e in incoming {
-                    // Check if there's already an effect with the same ability_id
-                    if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
-                        // Same ability: unify type args instead of adding duplicate
-                        if existing.args.len() != e.args.len() {
-                            let existing_row = EffectRow::single(db, existing.clone());
-                            let incoming_row = EffectRow::single(db, e.clone());
-                            if let Some(node_id) = origin {
-                                ctx.constrain_row_eq_at(
-                                    incoming_row,
-                                    existing_row,
-                                    node_id,
-                                    ConstraintOriginKind::Call,
-                                );
-                            } else {
-                                ctx.constrain_row_eq(incoming_row, existing_row);
-                            }
-                            continue;
-                        }
-                        for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
-                        {
-                            if let Some(node_id) = origin {
-                                ctx.constrain_eq_at(
-                                    *existing_arg,
-                                    *incoming_arg,
-                                    node_id,
-                                    ConstraintOriginKind::Call,
-                                );
-                            } else {
-                                ctx.constrain_eq(*existing_arg, *incoming_arg);
-                            }
-                        }
-                        // Don't add the effect since it's already present (with unified args)
-                    } else {
-                        // Different ability: add to result
-                        result.push(e.clone());
-                    }
-                }
-                result
-            };
-
-        match (current.rest(db), effect.rest(db)) {
-            (None, None) | (Some(_), None) | (None, Some(_)) => {
-                // At most one row is open: union with unification
-                let effects =
-                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
-                let rest = match (current.rest(db), effect.rest(db)) {
-                    (None, None) => None,
-                    (Some(v), None) | (None, Some(v)) => Some(v),
-                    (Some(_), Some(_)) => unreachable!(),
+        // Arity belongs to the declaration, so even distinct instances of one
+        // ability must agree on it. Type arguments themselves are set keys.
+        for incoming in effect.effects(db) {
+            if let Some(existing) = current.effects(db).iter().find(|existing| {
+                existing.ability_id == incoming.ability_id
+                    && existing.args.len() != incoming.args.len()
+            }) {
+                // The first encountered row may itself be the malformed
+                // source annotation. Do not treat its arity as authoritative.
+                let expected = self
+                    .env
+                    .lookup_ability(incoming.ability_id)
+                    .map_or(existing.args.len(), |ability| ability.type_params.len());
+                let invalid = if existing.args.len() != expected {
+                    existing
+                } else {
+                    incoming
                 };
-                self.current_effect = EffectRow::new(db, effects, rest);
+                let left = EffectRow::single(
+                    db,
+                    crate::ast::Effect {
+                        ability_id: incoming.ability_id,
+                        args: (0..expected).map(|_| self.fresh_type_var()).collect(),
+                    },
+                );
+                let right = EffectRow::single(db, invalid.clone());
+                if let Some(origin) = origin {
+                    self.constrain_row_eq_at(left, right, origin.node_id, origin.kind);
+                } else {
+                    self.constrain_row_eq(left, right);
+                }
             }
-            (Some(e1), Some(e2)) if e1 == e2 => {
-                // Both open with the same rest variable: union with unification
-                let effects =
-                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
-                self.current_effect = EffectRow::new(db, effects, Some(e1));
-            }
-            (Some(_e1), Some(_e2)) => {
-                // Both open with different rest variables.
-                //
-                // We accumulate the concrete effects into the current row with
-                // a fresh tail variable. We intentionally do NOT add constraints
-                // like `e1 = {incoming_effects | e3}` here, because the row
-                // variable tails may have semantic constraints from other parts
-                // of the type checker (e.g., a handler's return effect that
-                // excludes handled abilities). Forcing concrete effects into
-                // those tail variables would create conflicts.
-                //
-                // The sub-expression row variables (e1, e2) are independently
-                // constrained through callee type unification and ability
-                // operation typing. The overall function effect will be checked
-                // against the declared effect annotation at the end.
-                let e3 = self.fresh_row_var();
-
-                let effects =
-                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
-                self.current_effect = EffectRow::new(db, effects, Some(e3));
-            }
+        }
+        let (result, relation) =
+            super::effect_row::union(db, current, effect, || self.fresh_row_var());
+        self.current_effect = result;
+        if let Some(relation) = relation {
+            self.constraints.add(Constraint::RowUnion(relation, origin));
         }
     }
 
@@ -927,7 +1178,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_fresh_type_var_per_function_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_fresh_type_var_per_function_inner(db: &dyn salsa::Database) -> bool {
         let env = ModuleTypeEnv::new(db);
 
         // Two separate FunctionInferenceContexts with different function IDs
@@ -965,7 +1216,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_instantiate_scheme_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_scheme_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic function type: forall a. a -> a
@@ -1212,7 +1463,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_instantiate_constructor_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_constructor_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
@@ -1391,10 +1642,10 @@ mod merge_effect_tests {
         assert_ne!(e3, e1);
         assert_ne!(e3, e2);
 
-        // No row constraints are generated — the sub-expression row variables
-        // (e1, e2) are independently constrained through callee type unification.
         let constraints = ctx.take_constraints();
-        assert!(constraints.is_empty());
+        assert!(
+            matches!(constraints.constraints(), [Constraint::RowUnion(union, None)] if union.sources == vec![row1,row2] && union.result == result)
+        );
     }
 
     #[salsa_test]
@@ -1419,7 +1670,7 @@ mod merge_effect_tests {
     }
 
     #[salsa_test]
-    fn merge_parameterized_effects_adds_unlocated_constraints(db: &dyn salsa::Database) {
+    fn merge_preserves_distinct_instances_and_checks_arity(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
         let func_id = FuncDefId::new(db, Symbol::new("test"));
         let ability_id = test_ability_id(db, "State");
@@ -1439,11 +1690,8 @@ mod merge_effect_tests {
                 args: vec![ctx.bool_type()],
             },
         ));
-        assert_eq!(ctx.current_effect().effects(db).len(), 1);
-        assert!(matches!(
-            ctx.take_constraints().into_constraints().as_slice(),
-            [Constraint::TypeEq(_, _)]
-        ));
+        assert_eq!(ctx.current_effect().effects(db).len(), 2);
+        assert!(ctx.take_constraints().into_constraints().is_empty());
 
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
         ctx.set_current_effect(EffectRow::single(
@@ -1464,6 +1712,44 @@ mod merge_effect_tests {
             ctx.take_constraints().into_constraints().as_slice(),
             [Constraint::RowEq(_, _)]
         ));
+    }
+
+    #[salsa_test]
+    fn merge_arity_diagnostic_uses_declaration_in_both_orders(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let ability_id = test_ability_id(db, "State");
+        env.register_ability(
+            ability_id,
+            super::super::context::AbilityInfo {
+                id: ability_id,
+                type_params: vec![crate::ast::TypeParam::anonymous()],
+                operations: std::collections::HashMap::new(),
+            },
+        );
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
+        for (left, right, found) in [(1, 2, 2), (2, 1, 2), (1, 0, 0), (0, 1, 0), (2, 0, 2)] {
+            let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+            let row = |count| {
+                EffectRow::single(
+                    db,
+                    Effect {
+                        ability_id,
+                        args: vec![env.int_type(); count],
+                    },
+                )
+            };
+            ctx.set_current_effect(row(left));
+            ctx.merge_effect(row(right));
+            let mut solver = super::super::solver::TypeSolver::new(db);
+            assert!(matches!(
+                solver.solve(ctx.take_constraints()),
+                Err(super::super::solver::SolveError::EffectArgArityMismatch {
+                    expected: 1,
+                    found: actual,
+                    ..
+                }) if actual == found
+            ));
+        }
     }
 
     #[salsa_test]

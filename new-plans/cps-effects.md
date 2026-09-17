@@ -25,6 +25,24 @@ Direct < EvidenceDirect < Cps
 
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
+지역 source lambda의 검사된 인스턴스와 실제 소비 worker의 callable parameter
+계약을 구별한다. 고정된 데이터 타입의 lambda는 원래 binding 위치에서 각 필요한
+인스턴스와 convention으로 생성한다. 이는 이미 생성된 Cps 값을 Direct로 cast하는
+것이 아니다. Named callable은 정확한 target identity를 가진 `func_ref`의 기존
+adapter를 사용하며, semantic use가 pure여도 소비 worker가 요구하는 더 강한
+convention을 보존한다.
+
+Lambda capture 목록은 생성된 body가 실제 사용하는 외부 SSA 값과 일치해야 한다.
+Named reference를 새 `func_ref`로 대체하여 사라진 capture는 제거하고, 남는 값은
+lexical scope와 dominance를 유지하여 중복 없이 전달한다. 이 변환은 RHS 평가를
+복제하거나 resume token의 affine capture 경로를 늘려서는 안 된다.
+
+Source 타입 검사는 정확한 equality, `Never` 표현식의 방향성 있는 제거, 공통 source
+결과 추론을 구별한다. 분기의 answer를 맞추기 위해 정상 source 값을 `Never`로
+cast해서는 안 된다. 실제 source `Never` operation의 결과 타입과 재개할 수 없다는
+의미는 그대로 보존한다. 이 표현식 규칙은 logical CPS의 `core.never` 결과나
+target이 담당하는 물리적인 빈 결과 표현을 변경하지 않는다.
+
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="pre-cps-callable-shape"></a>
 
@@ -70,7 +88,9 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
   담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
   `func.tail_call_indirect`를 쓴다. Evidence, ContinuationFrame과 environment는 `CallableAbi`
-  순서로 삽입한다.
+  순서로 삽입한다. `call_indirect`의 callee는 logical callable type에 exact contract를
+  보존하므로 변환된 `func.call_indirect`는 그 converted closure contract에서 유도한 exact
+  `signature`를 싣는다. environment는 여기서 아직 interpose하지 않는다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
   `Cps`에서는 ContinuationFrame의 `Done<R>`으로 `value`를 이전하며 뒤에
   `func.return`이나 result가 없다.

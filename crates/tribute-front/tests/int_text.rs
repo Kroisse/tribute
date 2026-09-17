@@ -216,15 +216,21 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
-            node_types: checked
+            local_instances: checked
                 .expression_types(db)
-                .node_types
+                .local_instances
                 .iter()
                 .cloned()
                 .collect(),
-            call_callee_types: checked
+            function_instances: checked
                 .expression_types(db)
-                .call_callee_types
+                .function_instances
+                .iter()
+                .cloned()
+                .collect(),
+            node_types: checked
+                .expression_types(db)
+                .node_types
                 .iter()
                 .cloned()
                 .collect(),
@@ -234,7 +240,8 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
             compiler_intrinsics: std::collections::HashMap::new(),
         },
-    );
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
@@ -242,6 +249,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         node_types: mono.metadata.node_types,
+        local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
@@ -261,12 +269,11 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     );
 }
 
-// This query provides the Salsa accumulator context used by the type checker.
-#[salsa::tracked]
-fn generic_specialization_transports_direct_callee_metadata_inner(
+// The callers supply the tracked accumulator context.
+fn lower_specialized_source(
     db: &dyn salsa::Database,
     source: SourceCst,
-) {
+) -> (IrContext, tribute_front::ast_to_ir::FrontendIrModule) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
     let ast = parsed.module(db).clone();
     let checked = tribute_front::typeck::typecheck_module(
@@ -287,15 +294,21 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: checked.constructor_types(db).iter().cloned().collect(),
-            node_types: checked
+            local_instances: checked
                 .expression_types(db)
-                .node_types
+                .local_instances
                 .iter()
                 .cloned()
                 .collect(),
-            call_callee_types: checked
+            function_instances: checked
                 .expression_types(db)
-                .call_callee_types
+                .function_instances
+                .iter()
+                .cloned()
+                .collect(),
+            node_types: checked
+                .expression_types(db)
+                .node_types
                 .iter()
                 .cloned()
                 .collect(),
@@ -305,7 +318,8 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
             compiler_intrinsics: std::collections::HashMap::new(),
         },
-    );
+    )
+    .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
@@ -313,6 +327,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         node_types: mono.metadata.node_types,
+        local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
@@ -325,11 +340,21 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
         compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
+    (ir, output)
+}
+
+#[salsa::tracked]
+fn generic_specialization_transports_direct_callee_metadata_inner(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> String {
+    let (ir, output) = lower_specialized_source(db, source);
     let ir_text = print_module(&ir, output.module.op());
     assert!(
         ir_text.contains("tribute_control.func @\"apply$Int\""),
         "the specialized generic function must preserve its checked concrete call type:\n{ir_text}"
     );
+    ir_text
 }
 
 /// The public typecheck-to-logical-lowering boundary carries deterministic,
@@ -353,6 +378,12 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: typed,
+        local_instances: checked
+            .expression_types(db)
+            .local_instances
+            .iter()
+            .cloned()
+            .collect(),
         span_map: checked.span_map(db).clone(),
         function_types: checked.function_types(db).iter().cloned().collect(),
         constructor_types: checked.constructor_types(db).iter().cloned().collect(),
@@ -483,4 +514,120 @@ fn use_bool() ->{Audit(Bool)} Bool {
 "#,
     );
     public_logical_output_declarations_inner(db, source);
+}
+
+#[salsa_test]
+fn outer_generic_specialization_rekeys_local_binding_instances(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "specialized_local.trb",
+        r#"
+fn pure(f: fn(Int) ->{} Int, value: Int) ->{} Int { f(value) }
+fn apply(value: a) -> a {
+    let identity = fn(x: Int) {
+        let retained = value
+        x
+    }
+    let alias = identity
+    let result = pure(alias, +3)
+    value
+}
+fn use_int() ->{} Int { apply(+3) }
+fn use_bool() ->{} Bool { apply(True) }
+"#,
+    );
+    let ir = generic_specialization_transports_direct_callee_metadata_inner(db, source);
+    assert!(ir.contains("apply$Bool"), "{ir}");
+    assert!(ir.contains("tribute_control.lambda"), "{ir}");
+    assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
+}
+
+#[salsa_test]
+fn outer_generic_arguments_determine_local_callable_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "outer_local_signature.trb",
+        r#"
+fn pure(f: fn(a) ->{} a, value: a) ->{} a { f(value) }
+fn apply(value: a) ->{} a {
+    let identity = fn(x: a) x
+    let alias = identity
+    pure(alias, value)
+}
+fn use_int() ->{} Int { apply(+3) }
+fn use_bool() ->{} Bool { apply(True) }
+"#,
+    );
+    assert_outer_local_signatures(db, source);
+    let errors = assert_outer_local_signatures::accumulated::<tribute_core::Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[salsa::tracked]
+fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};
+    use trunk_ir::ops::{DialectOp, DialectType};
+    use trunk_ir::walk::{WalkAction, walk_typed};
+
+    let (ir, output) = lower_specialized_source(db, source);
+    let validation = tribute_ir::dialect::tribute_control::validate(
+        &ir,
+        output.module,
+        &output.operation_declarations,
+        &output.compiler_intrinsics,
+    );
+    assert!(
+        validation.is_ok(),
+        "including retained generic bodies: {validation}"
+    );
+    let mut functions = std::collections::HashMap::new();
+    let _: ControlFlow<()> =
+        walk_typed::<Func, ()>(&ir, output.module.body(&ir).unwrap(), &mut |func| {
+            functions.insert(func.sym_name(&ir), func);
+            ControlFlow::Continue(WalkAction::Skip)
+        });
+    for (argument, primitive) in [("Int", "i32"), ("Bool", "i1")] {
+        let parent = functions[&Symbol::from_dynamic(&format!("apply${argument}"))];
+        let consumer = functions[&Symbol::from_dynamic(&format!("pure${argument}"))];
+        let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
+        let data_type = parent_signature.result(&ir);
+        assert_eq!(parent_signature.inputs(&ir), [data_type]);
+        assert_eq!(ir.types.get(data_type).dialect, Symbol::new("core"));
+        assert_eq!(
+            ir.types.get(data_type).name,
+            Symbol::from_dynamic(primitive)
+        );
+        let mut lambdas = Vec::new();
+        let mut calls = Vec::new();
+        let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {
+            if let Ok(lambda) = Lambda::from_op(&ir, op) {
+                lambdas.push(lambda);
+                return ControlFlow::Continue(WalkAction::Skip);
+            }
+            if let Ok(call) = Call::from_op(&ir, op) {
+                calls.push(call);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert_eq!(lambdas.len(), 1, "{argument}");
+        assert_eq!(calls.len(), 1, "{argument}");
+        let value = lambdas[0].result(&ir);
+        let signature = FuncSig::from_type_ref(&ir, ir.value_ty(value)).unwrap();
+        assert_eq!(signature.inputs(&ir), [data_type]);
+        assert_eq!(signature.result(&ir), data_type);
+        assert_eq!(signature.convention(&ir), CallingConvention::Direct);
+        assert_eq!(calls[0].callee(&ir), consumer.sym_name(&ir));
+        assert_eq!(
+            calls[0].args(&ir)[0],
+            value,
+            "pass the actual lambda, without a cast"
+        );
+        let consumer_signature = FuncSig::from_type_ref(&ir, consumer.r#type(&ir)).unwrap();
+        assert_eq!(
+            consumer_signature.inputs(&ir),
+            [signature.as_type_ref(), data_type]
+        );
+        assert_eq!(consumer_signature.result(&ir), data_type);
+    }
 }

@@ -2249,6 +2249,15 @@ mod tests {
             ),
             (
                 r#"core.module @test {
+  func.func @pure(%callee: func.func_sig<(core.i32, core.i32) -> core.i32>, %left: core.i32, %right: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %result = func.call_indirect %callee, %left, %right {tribute.calling_convention = 0} : core.i32
+    func.return %result
+  }
+}"#,
+                "lacks exact callable signature",
+            ),
+            (
+                r#"core.module @test {
   func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = 2}
   }

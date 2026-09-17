@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_cons_constructed_type_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_cons_constructed_type_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
         let option_name = Symbol::new("Option");
@@ -1122,7 +1122,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_cons_non_func_ctor_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_cons_non_func_ctor_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
         let point_name = Symbol::new("Point");
@@ -1293,7 +1293,7 @@ mod tests {
     // =========================================================================
 
     #[salsa::tracked]
-    fn test_lookup_single_candidate_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_lookup_single_candidate_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 
         let type_name = Symbol::new("Foo");
@@ -1347,7 +1347,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_lookup_ambiguous_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_lookup_ambiguous_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 
         let type_name = Symbol::new("Foo");
@@ -1412,7 +1412,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_lookup_no_candidates_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_lookup_no_candidates_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
         let receiver_ty = Some(Type::new(
@@ -1437,7 +1437,7 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn test_lookup_app_receiver_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_lookup_app_receiver_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 
         let type_name = Symbol::new("List");

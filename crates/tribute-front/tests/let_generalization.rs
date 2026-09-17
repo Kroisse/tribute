@@ -268,9 +268,9 @@ fn pass(value: a) -> a {
         .chain(
             output
                 .expression_types(db)
-                .call_callee_types
+                .function_instances
                 .iter()
-                .map(|(_, ty)| *ty),
+                .map(|(_, instance)| instance.callable),
         )
         .chain(
             output
@@ -676,4 +676,43 @@ fn restricted() -> Nil {
                 || error.contains("expected `Bool`, found `Nat`")),
         "expected captured shorthand type to remain monomorphic, got: {errors:#?}"
     );
+}
+
+#[salsa_test]
+fn return_only_parent_type_parameter_is_not_locally_generalized(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "parent_return_parameter.trb",
+        r#"
+fn make() ->{} fn(a) ->{} a {
+    let identity = fn(x: a) x
+    identity
+}
+"#,
+    );
+    let output = tribute_front::query::type_check_output(db, source).unwrap();
+    let errors = tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source);
+    assert!(errors.is_empty(), "{errors:?}");
+    let scheme = output
+        .function_types(db)
+        .iter()
+        .find(|(name, _)| *name == Symbol::new("make"))
+        .unwrap()
+        .1;
+    assert_eq!(scheme.type_params(db).len(), 1);
+    let TypeKind::Func {
+        result: returned_callable,
+        ..
+    } = scheme.body(db).kind(db)
+    else {
+        panic!("make must remain a generic function");
+    };
+    let bound = Type::new(db, TypeKind::BoundVar { index: 0 });
+    assert!(func_ref_has_param_and_result(db, *returned_callable, bound));
+    let instances = &output.expression_types(db).local_instances;
+    assert!(!instances.is_empty());
+    for (_, instance) in instances {
+        assert!(instance.scheme.type_params(db).is_empty());
+        assert!(func_ref_has_param_and_result(db, instance.callable, bound));
+    }
 }

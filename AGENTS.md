@@ -21,14 +21,16 @@ Key design docs:
 
 ## Working Rules
 
+- Prefer Korean prose in `new-plans/`; retain code identifiers and technical
+  terms where useful.
 - When changing language, type, ability, module, IR, or backend rules, update
   the relevant `new-plans/*.md` file first.
 - Design documents under `new-plans/` must stand independently of work progress:
   state durable contracts and compiler-phase ownership, not issue or PR numbers,
   temporary branches or commits, or task sequencing and status. Track
   implementation and handoff work in GitHub.
-- Use `.claude/rules/` for crate structure, pipeline, IR, and code convention
-  reference material.
+- Use `guides/development/` for crate structure, pipeline, IR, and code
+  convention reference material. `.claude/rules` links to this directory.
 - Use the `tribute-testing` skill for test commands, Salsa test patterns,
   nextest, and snapshot testing.
 - Implementation work is tracked in GitHub Issues. Use `gh issue list` when

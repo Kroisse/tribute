@@ -10,9 +10,10 @@ mod common;
 use salsa::Database;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
-use tribute::pipeline::{compile_ast, compile_frontend, compile_with_diagnostics};
+use tribute::pipeline::{compile_ast, compile_with_diagnostics};
 use tribute_front::SourceCst;
-use tribute_passes::diagnostic::CompilationPhase;
+use tribute_passes::diagnostic::{CompilationPhase, DiagnosticSeverity};
+use trunk_ir::Span;
 
 // =============================================================================
 // Name resolution errors
@@ -195,21 +196,8 @@ fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
 }
 
 // =============================================================================
-// Record construction diagnostics
+// Record field errors
 // =============================================================================
-
-#[salsa::tracked]
-fn collect_lowering_diagnostics(db: &dyn salsa::Database, source: SourceCst) {
-    let _ = compile_ast(db, source);
-}
-
-fn lowering_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    collect_lowering_diagnostics(db, source);
-    collect_lowering_diagnostics::accumulated::<Diagnostic>(db, source)
-        .into_iter()
-        .cloned()
-        .collect()
-}
 
 #[salsa_test]
 fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
@@ -224,8 +212,9 @@ fn test() -> Point {
 }
 "#,
     );
-    let diagnostics = lowering_diagnostics(db, source);
-    assert!(!diagnostics.is_empty());
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.module.is_none());
+    let diagnostics = result.diagnostics;
     insta::assert_yaml_snapshot!(diagnostics);
 }
 
@@ -244,81 +233,96 @@ fn test() -> Point {
     );
     let result = compile_with_diagnostics(db, source);
     assert!(result.module.is_none());
-    assert_eq!(result.diagnostics.len(), 1, "{:#?}", result.diagnostics);
-    assert_eq!(result.diagnostics[0].inner.message, "missing field: y");
-    assert!(compile_frontend(db, source).is_none());
-
-    let diagnostics = lowering_diagnostics(db, source);
-    assert!(!diagnostics.is_empty());
+    let diagnostics = result.diagnostics;
     insta::assert_yaml_snapshot!(diagnostics);
 }
 
 #[salsa_test]
-fn record_errors_do_not_gain_missing_field_diagnostics(db: &salsa::DatabaseImpl) {
-    let cases = [
-        (
-            "unknown",
-            r#"
-struct Point { x: Int, y: Int }
-
-fn test() -> Point {
-    Point { x: +1, y: +2, z: +3 }
-}
-"#,
-            "unknown field `z` for struct `Point`",
-        ),
-        (
-            "duplicate",
-            r#"
+fn diag_duplicate_struct_field(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
 struct Point { x: Int, y: Int }
 
 fn test() -> Point {
     Point { x: +1, x: +2, y: +3 }
 }
 "#,
-            "duplicate field `x`",
-        ),
-        (
-            "field_type",
-            r#"
-struct Point { x: Int, y: Int }
-
-fn test() -> Point {
-    Point { x: True, y: +2 }
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.module.is_none());
+    let diagnostics = result.diagnostics;
+    insta::assert_yaml_snapshot!(diagnostics);
 }
-"#,
-            "type error in function 'test': expected `Bool`, found `Int`",
+
+#[salsa_test]
+fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl) {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "Point { x: +1, y: +2, z: +3 }",
+            &["unknown field `z` for struct `Point`"],
+        ),
+        ("Point { x: +1, x: +2, y: +3 }", &["duplicate field `x`"]),
+        ("Point { x: +1 }", &["missing field: y"]),
+        (
+            "Point { x: +1, x: +2, z: +3 }",
+            &[
+                "duplicate field `x`",
+                "missing field: y",
+                "unknown field `z` for struct `Point`",
+            ],
         ),
     ];
-
-    for (name, text, message) in cases {
-        let file_name = format!("{name}.trb");
-        let source = SourceCst::from_source_str(db, &file_name, text);
-        let diagnostics = lowering_diagnostics(db, source);
-        assert_eq!(diagnostics.len(), 1, "{name}: {:#?}", diagnostics);
-        assert_eq!(diagnostics[0].inner.message, message, "{name}");
+    for (record, messages) in cases {
+        let text =
+            format!("struct Point {{ x: Int, y: Int }}\nfn test() -> Point {{ {record} }}\n");
+        let source = SourceCst::from_source_str(db, "test.trb", &text);
+        let result = compile_with_diagnostics(db, source);
+        let start = text.find(record).expect("record expression");
+        let expected: Vec<_> = messages
+            .iter()
+            .map(|message| {
+                Diagnostic::new(
+                    *message,
+                    Span::new(start, start + record.len()),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+            })
+            .collect();
+        // Public diagnostics retain phase/span/message sorting, including mixed errors.
+        // Exact equality also rejects spurious missing-field diagnostics.
+        assert_eq!(result.diagnostics, expected, "{record}");
+        assert!(result.module.is_none(), "{record}");
+        assert!(tribute::compile_frontend(db, source).is_none(), "{record}");
+        assert!(matches!(compile_ast(db, source), Ok(None)), "{record}");
     }
 }
 
 #[salsa_test]
-fn nested_missing_struct_field_is_reported_once(db: &salsa::DatabaseImpl) {
+fn generic_record_spread_mismatch_blocks_ir(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
-        "nested_missing_struct_field.trb",
+        "generic_spread.trb",
         r#"
-struct Point { x: Int, y: Int }
-struct Wrapper { point: Point }
-
-fn test() -> Wrapper {
-    Wrapper { point: Point { x: +1 } }
+struct Pair(a, b) { first: a, second: b }
+fn invalid(base: Pair(Int, Bool)) -> Pair(Int, Int) {
+    Pair { first: +1, second: +2, ..base }
 }
 "#,
     );
-
-    let diagnostics = lowering_diagnostics(db, source);
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-    assert_eq!(diagnostics[0].inner.message, "missing field: y");
-    assert_eq!(diagnostics[0].phase, CompilationPhase::TypeChecking);
+    let result = compile_with_diagnostics(db, source);
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    let diagnostic = &result.diagnostics[0];
+    assert_eq!(diagnostic.phase, CompilationPhase::TypeChecking);
+    assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
+    assert!(diagnostic.inner.message.contains("type error"));
+    assert!(diagnostic.inner.message.contains("Int"));
+    assert!(diagnostic.inner.message.contains("Bool"));
+    assert!(result.module.is_none());
+    assert!(tribute::compile_frontend(db, source).is_none());
+    assert!(matches!(compile_ast(db, source), Ok(None)));
 }
 
 // =============================================================================

@@ -1544,8 +1544,7 @@ mod tests {
             match self.client.receiver.recv().unwrap() {
                 Message::Response(resp) => {
                     assert_eq!(resp.id, id);
-                    assert!(resp.error.is_none(), "Request failed: {:?}", resp.error);
-                    serde_json::from_value(resp.result.unwrap()).unwrap()
+                    serde_json::from_value(resp.response_result.unwrap()).unwrap()
                 }
                 other => panic!("Expected response message, got {:?}", other),
             }

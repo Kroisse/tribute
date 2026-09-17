@@ -15,7 +15,7 @@ use tribute_ir::dialect::{
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::{adt, arith, core, scf};
-use trunk_ir::ops::DialectType;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
@@ -29,6 +29,8 @@ use crate::ast::{
 use super::super::context::IrLoweringCtx;
 use super::super::{FrontendIrModule, TypedModule};
 use super::{FuncSignature, IrBuilder, expr};
+
+mod local_callables;
 
 struct Declarations<'db> {
     // TypeRef is an arena index and therefore has deterministic total order only
@@ -47,6 +49,8 @@ struct Declarations<'db> {
     lambda_signatures:
         std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
+    local_instances: HashMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    local_callables: local_callables::Plan<'db>,
 }
 
 /// Fully typed semantic inputs for one source ability-operation call.
@@ -183,6 +187,25 @@ fn lower_expr_for_callable_parameter<'db>(
 ) -> Option<ValueRef> {
     match &*expr.kind {
         ExprKind::Var(reference) => {
+            if let ResolvedRef::Local { id, .. } = reference.resolved {
+                if let Some(value) = local_callables::lookup(builder.ctx, expr.id, declarations) {
+                    return Some(value);
+                }
+                if let Some(value) = builder.ctx.lookup(id)
+                    && let trunk_ir::refs::ValueDef::OpResult(producer, _) =
+                        builder.ir.value_def(value)
+                    && let Ok(named) = tribute_control::FuncRef::from_op(builder.ir, producer)
+                {
+                    let name = named.func_ref(builder.ir);
+                    return Some(lower_function_ref(
+                        builder,
+                        builder.location(expr.id),
+                        name,
+                        Some(expected_ty),
+                    ));
+                }
+                return lower_expr(builder, expr, declarations);
+            }
             let ResolvedRef::Function { id } = reference.resolved else {
                 return lower_expr(builder, expr, declarations);
             };
@@ -237,6 +260,7 @@ pub(super) fn lower_module<'db>(
         function_types,
         constructor_types,
         node_types,
+        local_instances,
         ability_conventions,
         ability_definitions,
         handler_operations,
@@ -273,6 +297,8 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        local_instances,
+        local_callables: local_callables::Plan::default(),
     };
     prescan_definition_conventions(&mut ctx, &ast.decls, &mut String::new());
     promote_definition_conventions_to_fixed_point(&mut ctx, &ast.decls, &mut String::new());
@@ -774,6 +800,11 @@ fn lower_function<'db>(
             ctx.calling_convention_for_type(scheme.body(ctx.db))
                 .expect("root main has a function type")
         });
+    let parent_type_parameters = ctx
+        .lookup_function_type(ctx.qualify_name(function.name))
+        .expect("function has a typechecked signature")
+        .type_params(ctx.db)
+        .len();
     let signature = function_signature(ctx, ir, &function);
     let callable = func_sig_type(
         ir,
@@ -803,6 +834,13 @@ fn lower_function<'db>(
                 scope.bind(id, parameter.name, ir.block_arg(entry, index as u32));
             }
         }
+        declarations.local_callables = local_callables::Plan::collect(
+            &mut scope,
+            ir,
+            &function.body,
+            declarations,
+            parent_type_parameters,
+        );
         let value = lower_expr(
             &mut IrBuilder::new(&mut scope, ir, entry),
             function.body,
@@ -1126,9 +1164,8 @@ fn lower_expr<'db>(
         }
         ExprKind::Var(reference) => match reference.resolved {
             ResolvedRef::Local { id, .. } => Some(
-                builder
-                    .ctx
-                    .lookup(id)
+                local_callables::lookup(builder.ctx, expr.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
                     .unwrap_or_else(|| panic!("missing logical binding for local {id:?}")),
             ),
             ResolvedRef::Function { id } => {
@@ -1703,7 +1740,9 @@ fn lower_statement<'db>(
 ) {
     match statement {
         Stmt::Let { pattern, value, .. } => {
-            if let Some(value) = lower_expr(builder, value, declarations) {
+            let lowered = local_callables::materialize(builder, &pattern, &value, declarations)
+                .or_else(|| lower_expr(builder, value, declarations));
+            if let Some(value) = lowered {
                 bind_pattern(builder, &pattern, value);
             }
         }
@@ -1764,13 +1803,32 @@ fn lower_call<'db>(
         },
         _ => None,
     };
+    let callable_value = indirect_callee.or_else(|| match &*callee.kind {
+        ExprKind::Var(reference) => match reference.resolved {
+            ResolvedRef::Local { id, .. } => {
+                local_callables::lookup(builder.ctx, callee.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    let parameter_types = named_signature
+        .as_ref()
+        .map(|signature| signature.param_types.clone())
+        .or_else(|| {
+            let value = callable_value?;
+            let signature =
+                tribute_control::FuncSig::from_type_ref(builder.ir, builder.ir.value_ty(value))?;
+            Some(signature.inputs(builder.ir).to_vec())
+        });
     let mut values = args
         .into_iter()
         .enumerate()
         .map(|(index, arg)| {
-            named_signature
+            parameter_types
                 .as_ref()
-                .and_then(|signature| signature.param_types.get(index).copied())
+                .and_then(|parameters| parameters.get(index).copied())
                 .map(|expected_ty| {
                     lower_expr_for_callable_parameter(
                         builder,
@@ -1857,9 +1915,8 @@ fn lower_call<'db>(
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Local { id, .. } => {
-                let callable = builder
-                    .ctx
-                    .lookup(id)
+                let callable = local_callables::lookup(builder.ctx, callee.id, declarations)
+                    .or_else(|| builder.ctx.lookup(id))
                     .unwrap_or_else(|| panic!("missing logical callable binding for local {id:?}"));
                 let callable_ty = builder.ir.value_ty(callable);
                 let callable_signature =
@@ -1965,19 +2022,6 @@ fn lower_lambda<'db>(
             tribute_control::CallingConvention::Cps => CallingConvention::Cps,
         })
         .unwrap_or(signature.convention);
-    let mut free = HashSet::new();
-    super::lambda::collect_free_vars(&body, &mut free);
-    for parameter in &params {
-        if let Some(id) = parameter.local_id {
-            free.remove(&id);
-        }
-    }
-    let captures: Vec<_> = builder
-        .ctx
-        .all_bindings()
-        .filter(|(id, _, _)| free.contains(id))
-        .map(|(_, _, value)| value)
-        .collect();
     let entry = builder.ir.create_block(BlockData {
         location,
         args: param_types
@@ -2020,6 +2064,7 @@ fn lower_lambda<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
+    let captures = local_callables::captures(builder.ctx, builder.ir, region);
     let callable = func_sig_type(builder.ir, result_type, param_types, convention);
     let lambda = op(builder.ir, builder.block, location, "lambda", |builder| {
         builder.operands(captures).result(callable).region(region)
@@ -2320,9 +2365,7 @@ mod tests {
     use trunk_ir::location::Span;
 
     #[salsa::tracked]
-    fn operation_arguments_use_resolved_parameter_types_inner<'db>(
-        db: &'db dyn salsa::Database,
-    ) -> bool {
+    fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
         let mut ir = IrContext::new();
         let path = ir.paths.intern("logical.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(

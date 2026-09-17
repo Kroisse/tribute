@@ -121,6 +121,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         constructor_types,
         node_types: node_types_map,
+        local_instances: result.local_instances.into_iter().collect(),
         ability_conventions,
         ability_definitions,
         handler_operations,
@@ -171,8 +172,8 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 }
 
 #[salsa::tracked]
-fn tdnr_function_summary_inner<'db>(
-    db: &'db dyn salsa::Database,
+fn tdnr_function_summary_inner(
+    db: &dyn salsa::Database,
     source: SourceCst,
     function_name: String,
 ) -> TdnrSummary {
@@ -383,14 +384,22 @@ pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
     let _ = run_ast_pipeline_with_ir(db, source);
 }
 
-/// Run the full AST pipeline and return error diagnostic messages.
-pub fn ast_pipeline_error_messages(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+/// Run the frontend through TDNR, without lowering invalid ASTs to IR.
+pub fn ast_pipeline_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
     run_frontend_pipeline_inner(db, source);
     run_frontend_pipeline_inner::accumulated::<Diagnostic>(db, source)
-        .iter()
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// Run the frontend and return error diagnostic messages.
+pub fn ast_pipeline_error_messages(db: &dyn salsa::Database, source: SourceCst) -> Vec<String> {
+    ast_pipeline_diagnostics(db, source)
+        .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
         })
-        .map(|diagnostic| diagnostic.inner.message.clone())
+        .map(|diagnostic| diagnostic.inner.message)
         .collect()
 }

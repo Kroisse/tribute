@@ -16,7 +16,7 @@ description: |
 ## Running Tests
 
 ```bash
-cargo nextest run --workspace           # All tests (preferred)
+cargo nextest run --workspace -j 4      # All tests (preferred)
 cargo nextest run -p tribute            # Specific crate
 cargo nextest run -p tree-sitter-tribute
 cargo nextest run -p tribute-passes

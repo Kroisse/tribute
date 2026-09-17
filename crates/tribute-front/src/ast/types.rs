@@ -8,9 +8,8 @@
 //! - Functions are stored with TypeSchemes (they can be polymorphic)
 //! - During type checking, TypeSchemes are instantiated to Types with fresh type variables
 
-use std::fmt;
+mod display;
 
-use itertools::Itertools;
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -195,70 +194,11 @@ impl<'db> TypeKind<'db> {
     }
 }
 
-impl fmt::Display for Type<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| write!(f, "{}", self.kind(db)))
-            .unwrap_or(Err(fmt::Error))
-    }
-}
-
-impl fmt::Display for TypeKind<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| match self {
-            Self::Int => f.write_str("Int"),
-            Self::Nat => f.write_str("Nat"),
-            Self::Float => f.write_str("Float"),
-            Self::Bool => f.write_str("Bool"),
-            Self::Bytes => f.write_str("Bytes"),
-            Self::Rune => f.write_str("Rune"),
-            Self::Nil => f.write_str("Nil"),
-            Self::Never => f.write_str("Never"),
-            Self::Named { name, args, .. } => {
-                name.with_str(|s| f.write_str(s))?;
-                if !args.is_empty() {
-                    let args = args
-                        .iter()
-                        .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                    write!(f, "({args})")
-                } else {
-                    Ok(())
-                }
-            }
-            Self::Func { params, result, .. } => {
-                let params = params
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "fn({params}) -> {}", result.kind(db))
-            }
-            Self::Tuple(elems) => {
-                let elems = elems
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "#({elems})")
-            }
-            Self::BoundVar { index } => write!(f, "_{}", index),
-            Self::LocalBoundVar { index, .. } => write!(f, "_local{}", index),
-            Self::UniVar { .. } => f.write_str("_"),
-            Self::App { ctor, args } => {
-                let args = args
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                write!(f, "{}({args})", ctor.kind(db))
-            }
-            Self::Continuation { arg, result, .. } => {
-                write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
-            }
-            Self::Error => f.write_str("<error>"),
-        })
-        .unwrap_or(Err(fmt::Error))
-    }
-}
-
 /// A polymorphic type scheme with universally quantified type parameters.
 ///
 /// TypeSchemes represent types that can be instantiated with different type arguments.
 /// For example, `fn identity(x: a) -> a` has the scheme `forall a. a -> a`.
-#[salsa::interned(debug)]
+#[salsa::interned(debug, constructor = intern)]
 pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
@@ -268,11 +208,111 @@ pub struct TypeScheme<'db> {
     /// Effect-row variables quantified by this scheme.
     #[returns(ref)]
     pub effect_params: Vec<EffectVar>,
+    /// Retained exact effect unions, quantified together with the body.
+    #[returns(ref)]
+    pub row_unions: Vec<RowUnion<'db>>,
+    #[returns(ref)]
+    pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
     pub body: Type<'db>,
 }
 
+/// An exact set union retained through inference and generalization.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct RowUnion<'db> {
+    pub sources: Vec<EffectRow<'db>>,
+    pub result: EffectRow<'db>,
+}
+
+/// Exact handler subtraction, retained while source tails or type arguments are open.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct RowRemoval<'db> {
+    pub source: EffectRow<'db>,
+    pub removed: EffectRow<'db>,
+    pub result: EffectRow<'db>,
+}
+
+impl<'db> RowRemoval<'db> {
+    pub fn rows(&self) -> [EffectRow<'db>; 3] {
+        [self.source, self.removed, self.result]
+    }
+
+    /// Visit source, removed, then result, updating their row handles in place.
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+        f(&mut self.source);
+        f(&mut self.removed);
+        f(&mut self.result);
+    }
+}
+
+impl<'db> RowUnion<'db> {
+    /// Visit sources in order, then result, reusing the source vector.
+    pub fn for_each_row_mut(&mut self, mut f: impl FnMut(&mut EffectRow<'db>)) {
+        for source in &mut self.sources {
+            f(source);
+        }
+        f(&mut self.result);
+    }
+}
+
 impl<'db> TypeScheme<'db> {
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        type_params: Vec<TypeParam>,
+        effect_params: Vec<EffectVar>,
+        body: Type<'db>,
+    ) -> Self {
+        Self::builder(type_params, effect_params, body).build(db)
+    }
+
+    pub fn builder(
+        type_params: Vec<TypeParam>,
+        effect_params: Vec<EffectVar>,
+        body: Type<'db>,
+    ) -> TypeSchemeBuilder<'db> {
+        TypeSchemeBuilder {
+            type_params,
+            effect_params,
+            row_unions: Vec::new(),
+            row_removals: Vec::new(),
+            body,
+        }
+    }
+
+    /// Copy the complete scheme into ordinary data for rewriting before publication.
+    pub fn to_builder(self, db: &'db dyn salsa::Database) -> TypeSchemeBuilder<'db> {
+        TypeSchemeBuilder {
+            type_params: self.type_params(db).clone(),
+            effect_params: self.effect_params(db).clone(),
+            row_unions: self.row_unions(db).clone(),
+            row_removals: self.row_removals(db).clone(),
+            body: self.body(db),
+        }
+    }
+
+    /// Visit the body and each type argument in retained row constraints.
+    /// The caller owns recursive traversal within each type.
+    pub fn for_each_type(self, db: &'db dyn salsa::Database, mut f: impl FnMut(Type<'db>)) {
+        f(self.body(db));
+        let mut visit_row = |row: EffectRow<'db>| {
+            for effect in row.effects(db) {
+                for argument in &effect.args {
+                    f(*argument);
+                }
+            }
+        };
+        for union in self.row_unions(db) {
+            for row in union.sources.iter().chain(std::iter::once(&union.result)) {
+                visit_row(*row);
+            }
+        }
+        for removal in self.row_removals(db) {
+            for row in removal.rows() {
+                visit_row(row);
+            }
+        }
+    }
+
     /// Create a monomorphic scheme (no quantified variables).
     pub fn mono(db: &'db dyn salsa::Database, ty: Type<'db>) -> Self {
         Self::new(db, Vec::new(), Vec::new(), ty)
@@ -286,6 +326,76 @@ impl<'db> TypeScheme<'db> {
     /// Get the number of type parameters.
     pub fn arity(&self, db: &'db dyn salsa::Database) -> usize {
         self.type_params(db).len()
+    }
+}
+
+/// Mutable construction data; only `build` interns a scheme.
+#[must_use]
+pub struct TypeSchemeBuilder<'db> {
+    type_params: Vec<TypeParam>,
+    effect_params: Vec<EffectVar>,
+    row_unions: Vec<RowUnion<'db>>,
+    row_removals: Vec<RowRemoval<'db>>,
+    body: Type<'db>,
+}
+
+impl<'db> TypeSchemeBuilder<'db> {
+    pub fn type_params(mut self, params: Vec<TypeParam>) -> Self {
+        self.type_params = params;
+        self
+    }
+
+    pub fn row_unions(mut self, unions: Vec<RowUnion<'db>>) -> Self {
+        self.row_unions = unions;
+        self
+    }
+
+    pub fn row_removals(mut self, removals: Vec<RowRemoval<'db>>) -> Self {
+        self.row_removals = removals;
+        self
+    }
+
+    /// Transform the body and every type argument in retained constraints.
+    /// The callback owns recursive traversal within each type; binder identities
+    /// and constraint order remain unchanged. Owned constraint vectors are reused;
+    /// interned rows remain immutable.
+    pub fn map_types(
+        mut self,
+        db: &'db dyn salsa::Database,
+        mut map: impl FnMut(Type<'db>) -> Type<'db>,
+    ) -> Self {
+        self.body = map(self.body);
+        let mut map_row = |row: &mut EffectRow<'db>| {
+            *row = EffectRow::new(
+                db,
+                row.effects(db)
+                    .iter()
+                    .map(|effect| Effect {
+                        ability_id: effect.ability_id,
+                        args: effect.args.iter().copied().map(&mut map).collect(),
+                    })
+                    .collect::<Vec<_>>(),
+                row.rest(db),
+            );
+        };
+        for union in &mut self.row_unions {
+            union.for_each_row_mut(&mut map_row);
+        }
+        for removal in &mut self.row_removals {
+            removal.for_each_row_mut(&mut map_row);
+        }
+        self
+    }
+
+    pub fn build(self, db: &'db dyn salsa::Database) -> TypeScheme<'db> {
+        TypeScheme::intern(
+            db,
+            self.type_params,
+            self.effect_params,
+            self.row_unions,
+            self.row_removals,
+            self.body,
+        )
     }
 }
 
@@ -372,30 +482,6 @@ pub struct Effect<'db> {
     pub ability_id: super::AbilityId<'db>,
     /// Type arguments for parameterized abilities.
     pub args: Vec<Type<'db>>,
-}
-
-impl fmt::Display for Effect<'_> {
-    /// Formats this effect for diagnostic messages.
-    ///
-    /// Produces strings like `"State(Int)"` or `"Console"`.
-    ///
-    /// Requires an attached salsa database on the current thread
-    /// (i.e., must be called inside `db.attach()`).
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| {
-            let name = self.ability_id.name(db);
-            if self.args.is_empty() {
-                name.with_str(|s| f.write_str(s))
-            } else {
-                let args = self
-                    .args
-                    .iter()
-                    .format_with(", ", |ty, f| f(&format_args!("{}", ty.kind(db))));
-                name.with_str(|s| write!(f, "{}({args})", s))
-            }
-        })
-        .unwrap_or(Err(fmt::Error))
-    }
 }
 
 /// Effect row variable for row-polymorphic effects.

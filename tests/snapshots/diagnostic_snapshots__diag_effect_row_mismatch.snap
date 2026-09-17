@@ -2,7 +2,7 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "function 'test' uses undeclared effects: Bar"
+- message: "type error in function 'test': effect mismatch: expected `{Foo}`, found `{Bar, Foo}`"
   span:
     start: 75
     end: 115

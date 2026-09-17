@@ -184,7 +184,9 @@ fn main() { }
     eprintln!("Correctly rejected effectful lambda for pure parameter");
 }
 
-/// Test nested lambdas - each should have independent effect variables.
+/// Fixed local callable contracts keep nested lambdas independent of State.
+/// Generalized nested rows require body-wide instantiation, which is separate
+/// from this effect-isolation regression.
 #[salsa_test]
 fn test_nested_lambda_effects(db: &salsa::DatabaseImpl) {
     let code = r#"
@@ -193,11 +195,13 @@ ability State(s) {
     fn set(value: s) -> Nil
 }
 
+fn fixed(f: fn(Int) ->{} Int) ->{} fn(Int) ->{} Int { f }
+
 fn nested_lambdas() ->{State(Int)} Int {
-    let outer = fn(x: Int) {
-        let inner = fn(y: Int) { y + +1 }
+    let outer = fixed(fn(x: Int) {
+        let inner = fixed(fn(y: Int) { y + +1 })
         inner(x)
-    }
+    })
     let n = State::get()
     outer(n)
 }

@@ -328,7 +328,17 @@ impl<'db> ModuleTypeEnv<'db> {
         self.lookup_type_def(name)
     }
 
-    /// Look up struct field type by struct name and field name.
+    /// Look up fields in declaration order using the exact struct identity.
+    pub(crate) fn lookup_struct_fields(
+        &self,
+        struct_id: TypeDefId<'db>,
+    ) -> Option<&[(Symbol, Type<'db>)]> {
+        self.struct_fields
+            .get(&struct_id)
+            .map(|(_, fields)| fields.as_slice())
+    }
+
+    /// Look up struct field type by declaration identity and field name.
     /// Returns (type_params, field_type) if found.
     pub fn lookup_struct_field(
         &self,
@@ -342,16 +352,6 @@ impl<'db> ModuleTypeEnv<'db> {
             }
         }
         None
-    }
-
-    /// Look up struct fields in declaration order.
-    pub fn lookup_struct_fields(
-        &self,
-        struct_id: TypeDefId<'db>,
-    ) -> Option<&[(Symbol, Type<'db>)]> {
-        self.struct_fields
-            .get(&struct_id)
-            .map(|(_, fields)| fields.as_slice())
     }
 
     /// Return the number of registered constructors.

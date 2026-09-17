@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: diagnostics
+---
+- message: "duplicate field `x`"
+  span:
+    start: 59
+    end: 88
+  severity: Error
+  phase: TypeChecking

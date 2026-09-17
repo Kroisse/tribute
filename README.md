@@ -86,7 +86,7 @@ tests and CI.
 cargo build
 
 # Run all tests
-cargo nextest run --workspace
+cargo nextest run --workspace -j num-cpus
 
 # Compile one source file to a native executable
 cargo run -- compile lang-examples/native_effects.trb \
@@ -115,14 +115,31 @@ fixtures, design-only examples, or legacy samples.
 
 ## Development
 
+The pre-commit hook checks staged changes for whitespace errors and conflict
+markers, then runs Rust formatting and Markdown lint across the workspace.
+It does not run Clippy or tests. Formatting and Markdown lint inspect the
+working tree, including unstaged changes, and do not modify files.
+
 ```bash
+# Fast lint (also used by the pre-commit hook)
+.ci/lint.sh --quick
+
 # Focused package tests
 cargo nextest run -p tribute
 cargo nextest run -p tribute-passes
 
+# Full local validation: formatting, Clippy, Markdown lint, then all tests
+.ci/check.sh
+
 # Review snapshot changes when a snapshot test fails
 cargo insta review
 ```
+
+Run relevant regression and package tests while developing. Use `.ci/check.sh`
+for full local validation, especially for changes spanning compiler stages.
+Codex and Claude stop hooks continue to run `.ci/lint.sh`: formatting, Clippy,
+and Markdown lint, without tests. CI retains full tests, strict Clippy,
+coverage, and platform checks; require successful CI before merging.
 
 ## Design Documents
 

@@ -8,9 +8,9 @@ expression: result.diagnostics
     end: 23
   severity: Error
   phase: TypeChecking
-- message: "type error in function 'main': expected `Nat`, found `Foo`"
+- message: "type error in function 'main': expected `Foo`, found `Nat`"
   span:
-    start: 0
+    start: 17
     end: 23
   severity: Error
   phase: TypeChecking

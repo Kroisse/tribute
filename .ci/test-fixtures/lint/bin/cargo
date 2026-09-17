@@ -1,10 +1,16 @@
 #!/bin/sh
 
+: "${LINT_TEST_COMMAND_LOG:?must be set by test-lint.sh}"
+echo "cargo $*" >>"$LINT_TEST_COMMAND_LOG"
+
 case "$1" in
     fmt)
-        exit 0
+        exit "${LINT_TEST_FMT_STATUS:-0}"
         ;;
     clippy)
+        if [ "${LINT_TEST_CLIPPY_STATUS:-1}" -eq 0 ]; then
+            exit 0
+        fi
         line=1
         while [ "$line" -le 100 ]; do
             echo "clippy output $line"
@@ -13,7 +19,11 @@ case "$1" in
         echo "CLIPPY_FAILURE_MARKER"
         exit 1
         ;;
+    nextest)
+        exit "${LINT_TEST_NEXTEST_STATUS:-0}"
+        ;;
     *)
-        exit 0
+        echo "Unexpected cargo command: $*" >&2
+        exit 1
         ;;
 esac

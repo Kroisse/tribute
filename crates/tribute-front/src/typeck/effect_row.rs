@@ -134,21 +134,26 @@ pub fn union<'db>(
     row1: EffectRow<'db>,
     row2: EffectRow<'db>,
     fresh_var: impl FnOnce() -> EffectVar,
-) -> EffectRow<'db> {
+) -> (EffectRow<'db>, Option<crate::ast::RowUnion<'db>>) {
     let mut effects = row1.effects(db).clone();
     for effect in row2.effects(db) {
         if !effects.contains(effect) {
             effects.push(effect.clone());
         }
     }
-
+    let independent = matches!((row1.rest(db), row2.rest(db)), (Some(a), Some(b)) if a != b);
     let rest = match (row1.rest(db), row2.rest(db)) {
         (None, None) => None,
         (Some(v), None) | (None, Some(v)) => Some(v),
+        (Some(a), Some(b)) if a == b => Some(a),
         (Some(_), Some(_)) => Some(fresh_var()),
     };
-
-    EffectRow::new(db, effects, rest)
+    let result = EffectRow::new(db, effects, rest);
+    let constraint = independent.then(|| crate::ast::RowUnion {
+        sources: vec![row1, row2],
+        result,
+    });
+    (result, constraint)
 }
 
 /// Check for duplicate effects in an effect row.
@@ -364,7 +369,7 @@ mod tests {
         let row2 = EffectRow::new(&db, vec![io.clone()], None);
 
         let mut counter = 0u64;
-        let union_row = union(&db, row1, row2, || {
+        let (union_row, relation) = union(&db, row1, row2, || {
             counter += 1;
             EffectVar { id: counter }
         });
@@ -373,6 +378,7 @@ mod tests {
         assert!(contains(&db, union_row, &io));
         assert!(union_row.rest(&db).is_none());
         assert_eq!(counter, 0); // No fresh var needed
+        assert!(relation.is_none());
     }
 
     #[test]
@@ -387,7 +393,7 @@ mod tests {
         let row2 = EffectRow::new(&db, vec![io.clone()], Some(EffectVar { id: 2 }));
 
         let mut counter = 100u64;
-        let union_row = union(&db, row1, row2, || {
+        let (union_row, relation) = union(&db, row1, row2, || {
             counter += 1;
             EffectVar { id: counter }
         });
@@ -395,6 +401,7 @@ mod tests {
         assert!(contains(&db, union_row, &console));
         assert!(contains(&db, union_row, &io));
         assert_eq!(union_row.rest(&db), Some(EffectVar { id: 101 }));
+        assert_eq!(relation.unwrap().sources, vec![row1, row2]);
     }
 
     #[test]

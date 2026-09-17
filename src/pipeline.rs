@@ -242,7 +242,8 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
 /// Returns both the parsed AST and the SourceCst to avoid redundant creation.
-fn parse_prelude(db: &dyn salsa::Database) -> Option<(ParsedAst<'_>, crate::SourceCst)> {
+#[salsa::tracked]
+fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, crate::SourceCst)> {
     let prelude_source = create_prelude_source(db)?;
     let parsed = ast_query::parsed_ast_with_module_path(
         db,
@@ -296,7 +297,8 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         result.constructor_types,
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
-            call_callee_types: result.call_callee_types,
+            function_instances: result.function_instances,
+            local_instances: result.local_instances,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -376,23 +378,36 @@ fn merge_and_lower_to_ir<'db>(
     }
 }
 
-fn merge_and_lower_to_ir_with<'db, M>(
+/// Specialized frontend output together with the exact compiler-intrinsic
+/// identities the shared CPS boundary needs.
+#[derive(Clone, PartialEq, Eq, salsa::Update)]
+struct PreparedFrontend<'db> {
+    typed: ast_typeck::TypeCheckOutput<'db>,
+    compiler_intrinsics: std::collections::HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+}
+
+/// Merge and specialize inside a tracked query so specialization failures
+/// become source diagnostics before either public IR lowering route runs.
+#[salsa::tracked]
+pub fn prepare_frontend_for_lowering<'db>(
     db: &'db dyn salsa::Database,
-    typed: &ast_typeck::TypeCheckOutput<'db>,
+    typed: ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-    lower: impl FnOnce(ast_to_ir::TypedModule<'db>, &'db dyn salsa::Database, &mut IrContext, &str) -> M,
-) -> (IrContext, M) {
+) -> Option<ast_typeck::TypeCheckOutput<'db>> {
+    prepare_frontend_details(db, typed, source).map(|prepared| prepared.typed)
+}
+
+#[salsa::tracked]
+fn prepare_frontend_details<'db>(
+    db: &'db dyn salsa::Database,
+    typed: ast_typeck::TypeCheckOutput<'db>,
+    _source: SourceCst,
+) -> Option<PreparedFrontend<'db>> {
     use tribute_front::ast::TypedRef;
 
     let user_module = typed.module(db);
     let user_fn_types = typed.function_types(db);
     let user_node_types = &typed.expression_types(db).node_types;
-    let user_call_callee_types = &typed.expression_types(db).call_callee_types;
-    let user_ability_definitions = typed.ability_definitions(db);
-    let user_handler_operations = typed.handler_operations(db);
-    let user_perform_operations = typed.perform_operations(db);
-    let user_lambda_signatures = typed.lambda_signatures(db);
-    let user_exhaustive_cases = typed.exhaustive_cases(db);
     let user_span_map = typed.span_map(db);
 
     // Merge prelude at AST level
@@ -401,26 +416,15 @@ fn merge_and_lower_to_ir_with<'db, M>(
         merged_module,
         merged_fn_types,
         merged_node_types,
-        merged_call_callee_types,
         merged_ability_conventions,
-        merged_ability_definitions,
-        merged_handler_operations,
-        merged_perform_operations,
-        merged_lambda_signatures,
-        merged_exhaustive_cases,
         merged_span_map,
         compiler_intrinsics,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
+        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(prelude_module_ast);
         let prelude_fn_types = prelude.function_types(db);
         let prelude_node_types = &prelude.expression_types(db).node_types;
-        let prelude_call_callee_types = &prelude.expression_types(db).call_callee_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
-        let prelude_ability_definitions = prelude.ability_definitions(db);
-        let prelude_handler_operations = prelude.handler_operations(db);
-        let prelude_perform_operations = prelude.perform_operations(db);
-        let prelude_lambda_signatures = prelude.lambda_signatures(db);
-        let prelude_exhaustive_cases = prelude.exhaustive_cases(db);
         let prelude_span_map = prelude.span_map(db);
 
         // Prepend prelude decls before user decls
@@ -432,7 +436,6 @@ fn merge_and_lower_to_ir_with<'db, M>(
             user_module.name,
             merged_decls,
         );
-        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(&merged_ast);
 
         // Merge function_types: prelude first, user overrides
         let mut fn_types: std::collections::HashMap<_, _> =
@@ -444,35 +447,9 @@ fn merge_and_lower_to_ir_with<'db, M>(
             prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
-        let mut call_callee_types: std::collections::HashMap<_, _> =
-            prelude_call_callee_types.iter().cloned().collect();
-        call_callee_types.extend(user_call_callee_types.iter().cloned());
-
         let mut ability_conventions: std::collections::HashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
-
-        let mut ability_definitions = prelude_ability_definitions.clone();
-        for definition in user_ability_definitions {
-            ability_definitions.retain(|existing| existing.0 != definition.0);
-            ability_definitions.push(definition.clone());
-        }
-
-        let mut handler_operations: std::collections::HashMap<_, _> =
-            prelude_handler_operations.iter().cloned().collect();
-        handler_operations.extend(user_handler_operations.iter().cloned());
-
-        let mut perform_operations: std::collections::HashMap<_, _> =
-            prelude_perform_operations.iter().cloned().collect();
-        perform_operations.extend(user_perform_operations.iter().cloned());
-
-        let mut lambda_signatures: std::collections::HashMap<_, _> =
-            prelude_lambda_signatures.iter().cloned().collect();
-        lambda_signatures.extend(user_lambda_signatures.iter().cloned());
-
-        let mut exhaustive_cases: std::collections::HashSet<_> =
-            prelude_exhaustive_cases.iter().copied().collect();
-        exhaustive_cases.extend(user_exhaustive_cases.iter().copied());
 
         // Merge span maps (user overrides prelude on conflict)
         let merged_span_map = user_span_map.merge(&prelude_span_map);
@@ -481,48 +458,42 @@ fn merge_and_lower_to_ir_with<'db, M>(
             merged_ast,
             fn_types,
             node_types,
-            call_callee_types,
             ability_conventions,
-            ability_definitions,
-            handler_operations,
-            perform_operations,
-            lambda_signatures,
-            exhaustive_cases,
             merged_span_map,
             compiler_intrinsics,
         )
     } else {
         let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
         let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
-        let call_callee_types: std::collections::HashMap<_, _> =
-            user_call_callee_types.iter().cloned().collect();
         let ability_conventions: std::collections::HashMap<_, _> =
             user_ability_conventions.iter().cloned().collect();
-        let ability_definitions = user_ability_definitions.clone();
-        let handler_operations: std::collections::HashMap<_, _> =
-            user_handler_operations.iter().cloned().collect();
-        let perform_operations: std::collections::HashMap<_, _> =
-            user_perform_operations.iter().cloned().collect();
-        let lambda_signatures: std::collections::HashMap<_, _> =
-            user_lambda_signatures.iter().cloned().collect();
-        let exhaustive_cases: std::collections::HashSet<_> =
-            user_exhaustive_cases.iter().copied().collect();
         (
             user_module.clone(),
             fn_types,
             node_types,
-            call_callee_types,
             ability_conventions,
-            ability_definitions,
-            handler_operations,
-            perform_operations,
-            lambda_signatures,
-            exhaustive_cases,
             user_span_map.clone(),
-            ast_to_ir::registered_compiler_intrinsics(user_module),
+            std::collections::HashMap::new(),
         )
     };
 
+    let mut function_instances: std::collections::HashMap<_, _> = prelude_module(db)
+        .map(|prelude| {
+            prelude
+                .expression_types(db)
+                .function_instances
+                .iter()
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    function_instances.extend(
+        typed
+            .expression_types(db)
+            .function_instances
+            .iter()
+            .cloned(),
+    );
     // Monomorphize generic functions
     let mono_result = tribute_front::monomorphize::monomorphize_functions(
         db,
@@ -531,44 +502,153 @@ fn merge_and_lower_to_ir_with<'db, M>(
         tribute_front::monomorphize::MonomorphizeMetadata {
             constructor_types: typed.constructor_types(db).iter().cloned().collect(),
             node_types: merged_node_types,
-            call_callee_types: merged_call_callee_types,
-            handler_operations: merged_handler_operations,
-            perform_operations: merged_perform_operations,
-            lambda_signatures: merged_lambda_signatures,
-            exhaustive_cases: merged_exhaustive_cases,
+            local_instances: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.expression_types(db).local_instances.clone())
+                .chain(typed.expression_types(db).local_instances.iter().cloned())
+                .collect(),
+            function_instances,
+            handler_operations: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.handler_operations(db).clone())
+                .chain(typed.handler_operations(db).iter().cloned())
+                .collect(),
+            perform_operations: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.perform_operations(db).clone())
+                .chain(typed.perform_operations(db).iter().cloned())
+                .collect(),
+            lambda_signatures: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.lambda_signatures(db).clone())
+                .chain(typed.lambda_signatures(db).iter().cloned())
+                .collect(),
+            exhaustive_cases: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.exhaustive_cases(db).clone())
+                .chain(typed.exhaustive_cases(db).iter().copied())
+                .collect(),
             compiler_intrinsics,
         },
     );
-    let merged_module = mono_result.module;
-    let merged_fn_types: std::collections::HashMap<_, _> =
-        mono_result.function_types.into_iter().collect();
+    let mono_result = match mono_result {
+        Ok(result) => result,
+        Err(errors) => {
+            for error in errors {
+                Diagnostic::new(
+                    format!(
+                        "invalid function instance at {}: {:?}",
+                        error.node, error.kind
+                    ),
+                    merged_span_map.get_or_default(error.node),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(db);
+            }
+            return None;
+        }
+    };
+    let mut node_types: Vec<_> = mono_result.metadata.node_types.into_iter().collect();
+    node_types.sort_by_key(|(id, _)| *id);
+    let mut instances: Vec<_> = mono_result
+        .metadata
+        .function_instances
+        .into_iter()
+        .collect();
+    instances.sort_by_key(|(id, _)| *id);
+    let mut local_instances: Vec<_> = mono_result.metadata.local_instances.into_iter().collect();
+    local_instances.sort_by_key(|(id, _)| *id);
+    let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
+    let typed = ast_typeck::TypeCheckOutput::new(
+        db,
+        mono_result.module,
+        mono_result.function_types,
+        mono_result
+            .metadata
+            .constructor_types
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ast_typeck::ExpressionTypeMetadata {
+            node_types,
+            function_instances: instances,
+            local_instances,
+        },
+        merged_ability_conventions.into_iter().collect::<Vec<_>>(),
+        typed.ability_definitions(db).clone(),
+        mono_result
+            .metadata
+            .handler_operations
+            .into_iter()
+            .collect::<Vec<_>>(),
+        mono_result
+            .metadata
+            .perform_operations
+            .into_iter()
+            .collect::<Vec<_>>(),
+        mono_result
+            .metadata
+            .lambda_signatures
+            .into_iter()
+            .collect::<Vec<_>>(),
+        mono_result
+            .metadata
+            .exhaustive_cases
+            .into_iter()
+            .collect::<Vec<_>>(),
+        typed.well_known_types(db),
+        merged_span_map,
+    );
+    Some(PreparedFrontend {
+        typed,
+        compiler_intrinsics,
+    })
+}
 
-    // AST → TrunkIR (arena)
-    let source_uri = source.uri(db).as_str();
+fn merge_and_lower_to_ir_with<'db, M>(
+    db: &'db dyn salsa::Database,
+    typed: &ast_typeck::TypeCheckOutput<'db>,
+    source: SourceCst,
+    lower: impl FnOnce(ast_to_ir::TypedModule<'db>, &'db dyn salsa::Database, &mut IrContext, &str) -> M,
+) -> (IrContext, M) {
+    let prepared = prepare_frontend_details(db, *typed, source)
+        .expect("frontend instances must be checked before lowering");
+    let typed = prepared.typed;
+    let compiler_intrinsics = prepared.compiler_intrinsics;
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
-            ast: merged_module,
-            span_map: merged_span_map,
-            function_types: merged_fn_types,
-            constructor_types: mono_result.metadata.constructor_types,
-            node_types: mono_result.metadata.node_types,
-            ability_conventions: merged_ability_conventions,
+            ast: typed.module(db).clone(),
+            local_instances: typed
+                .expression_types(db)
+                .local_instances
+                .iter()
+                .cloned()
+                .collect(),
+            span_map: typed.span_map(db).clone(),
+            function_types: typed.function_types(db).iter().cloned().collect(),
+            constructor_types: typed.constructor_types(db).iter().cloned().collect(),
+            node_types: typed
+                .expression_types(db)
+                .node_types
+                .iter()
+                .cloned()
+                .collect(),
+            ability_conventions: typed.ability_conventions(db).iter().cloned().collect(),
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
-                &merged_ability_definitions,
+                typed.ability_definitions(db),
             ),
-            handler_operations: mono_result.metadata.handler_operations,
-            perform_operations: mono_result.metadata.perform_operations,
-            lambda_signatures: mono_result.metadata.lambda_signatures,
-            exhaustive_cases: mono_result.metadata.exhaustive_cases,
+            handler_operations: typed.handler_operations(db).iter().cloned().collect(),
+            perform_operations: typed.perform_operations(db).iter().cloned().collect(),
+            lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
+            exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
             well_known_types: typed.well_known_types(db),
-            compiler_intrinsics: mono_result.metadata.compiler_intrinsics,
+            compiler_intrinsics,
         },
         db,
         &mut ir,
-        source_uri,
+        source.uri(db).as_str(),
     );
-
     (ir, module)
 }
 
@@ -604,6 +684,7 @@ fn compile_frontend_for_shared_route(
     if has_frontend_errors {
         return None;
     }
+    prepare_frontend_for_lowering(db, typed, source)?;
     Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
@@ -1439,8 +1520,8 @@ fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> 
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
 #[salsa::tracked]
-pub fn compile_to_native_binary<'db>(
-    db: &'db dyn salsa::Database,
+pub fn compile_to_native_binary(
+    db: &dyn salsa::Database,
     source: SourceCst,
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
@@ -1559,7 +1640,8 @@ pub fn parse_and_lower_ast<'db>(
         result.constructor_types,
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
-            call_callee_types: result.call_callee_types,
+            function_instances: result.function_instances,
+            local_instances: result.local_instances,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -2475,6 +2557,20 @@ fn main() ->{std::io::Io} Nil {
     fn test_prelude_loads(db: &salsa::DatabaseImpl) {
         let prelude = prelude_module(db);
         assert!(prelude.is_some(), "Prelude should load successfully");
+    }
+
+    #[salsa_test]
+    fn test_prelude_exports_share_typed_declaration_identity(db: &salsa::DatabaseImpl) {
+        let exports = prelude_exports(db).expect("prelude exports");
+        let typed = prelude_module(db).expect("typed prelude");
+        for (id, exported) in exports.function_types(db) {
+            let (_, definition) = typed
+                .function_types(db)
+                .iter()
+                .find(|(name, _)| *name == id.qualified(db))
+                .expect("exported function has a typed declaration");
+            assert_eq!(exported, definition, "{}", id.qualified(db));
+        }
     }
 
     #[salsa_test]
