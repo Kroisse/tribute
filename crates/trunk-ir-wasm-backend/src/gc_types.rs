@@ -233,9 +233,33 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
     ]
 }
 
+/// Whether the builtin GC type at `index` has struct layout.
+///
+/// The physical reference relation uses this to tell struct-layout builtins
+/// (assignable to `wasm.structref`) from array-layout builtins (assignable to
+/// `wasm.arrayref`). `builtin_struct_indices_match_the_layout` pins the
+/// classification against [`builtin_types`], so reindexing the builtin layout
+/// cannot silently change a physical classification.
+pub(crate) fn is_builtin_struct_index(index: u32) -> bool {
+    index < FIRST_USER_TYPE_IDX && !matches!(index, BYTES_ARRAY_IDX | EVIDENCE_IDX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_struct_indices_match_the_layout() {
+        for (index, definition) in builtin_types().iter().enumerate() {
+            let index = index as u32;
+            assert_eq!(
+                is_builtin_struct_index(index),
+                matches!(definition, GcTypeDef::Struct(_)),
+                "builtin index {index} classification"
+            );
+        }
+        assert!(!is_builtin_struct_index(FIRST_USER_TYPE_IDX));
+    }
 
     #[test]
     fn test_builtin_types() {

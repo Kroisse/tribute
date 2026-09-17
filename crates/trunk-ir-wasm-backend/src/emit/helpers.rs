@@ -99,6 +99,36 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
     Some((function.inputs(ctx), function.results(ctx)))
 }
 
+/// Whether this IR type is registered by the backend as a concrete WasmGC
+/// struct reference, and is therefore assignable to the abstract `wasm.structref`
+/// without a runtime cast.
+///
+/// Registration follows the same structure the rest of the backend uses: builtin
+/// layouts at their reserved indices (`core.bytes`, `_closure`, `_Step`,
+/// `_Marker`, ...) and the ADT types that
+/// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
+/// abstract struct supertype (`adt.typeref` and concrete variant instances
+/// carrying `base_enum`). An ADT spelling without that registration evidence
+/// proves nothing and stays rejected.
+fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
+    if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
+        return crate::gc_types::is_builtin_struct_index(index);
+    }
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("adt")
+        && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
+}
+
+/// Whether this IR type is registered by the backend as a concrete WasmGC array
+/// reference, and is therefore assignable to the abstract `wasm.arrayref`
+/// without a runtime cast. Only builtin array layouts (Bytes backing arrays and
+/// the Evidence array) qualify; `core.array` spellings are handled by the
+/// abstract array rule and never acquire a concrete index on their own.
+fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
+    crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty)
+        .is_some_and(|index| !crate::gc_types::is_builtin_struct_index(index))
+}
+
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm
 /// backend's physical type mapping.
 pub(crate) fn is_wasm_physical_argument_assignable(
@@ -118,10 +148,21 @@ pub(crate) fn is_wasm_physical_argument_assignable(
     let argument_is_typeref = is_type(ctx, argument, "adt", "typeref");
     let argument_is_structref = is_type(ctx, argument, "wasm", "structref");
     let parameter_is_structref = is_type(ctx, parameter, "wasm", "structref");
+    let parameter_is_arrayref = is_type(ctx, parameter, "wasm", "arrayref");
     let parameter_is_anyref = is_type(ctx, parameter, "wasm", "anyref");
 
     // `adt.typeref` is emitted as the abstract Wasm `structref` type.
     if argument_is_typeref && (parameter_is_structref || parameter_is_anyref) {
+        return true;
+    }
+
+    // Registered concrete GC references widen to the abstract heap type the
+    // emission chose for the slot. Reaching a concrete type from an abstract one
+    // still requires `wasm.ref_cast`, so the reverse directions remain false.
+    if parameter_is_structref && is_registered_gc_struct_reference(ctx, argument) {
+        return true;
+    }
+    if parameter_is_arrayref && is_registered_gc_array_reference(ctx, argument) {
         return true;
     }
 
@@ -132,7 +173,6 @@ pub(crate) fn is_wasm_physical_argument_assignable(
     }
 
     let argument_is_core_array = is_type(ctx, argument, "core", "array");
-    let parameter_is_arrayref = is_type(ctx, parameter, "wasm", "arrayref");
     if argument_is_core_array && parameter_is_arrayref {
         return true;
     }
