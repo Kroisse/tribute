@@ -526,6 +526,50 @@ mod tests {
     }
 
     #[test]
+    fn accepts_registered_gc_references_in_anyref_slots() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Marker = adt.struct() {fields = [], name = @_Marker}
+  !Evidence = core.array(!Marker)
+  !Array = core.array(core.i32)
+  wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
+  wasm.func @caller(%bytes: core.bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
+    wasm.call %bytes {callee = @byAny}
+    wasm.call %evidence {callee = @byAny}
+    wasm.call %array {callee = @byAny}
+    wasm.call %erased {callee = @byAny}
+    wasm.return
+  }
+}"#,
+        );
+        validate_wasm_ir(&ctx, module).expect("registered GC references satisfy an anyref slot");
+
+        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
+  wasm.func @caller(%value: {value_ty}) -> core.nil {{
+    wasm.call %value {{callee = @byAny}}
+    wasm.return
+  }}
+}}"#
+                ),
+            );
+            let error = validate_wasm_ir(&ctx, module)
+                .expect_err("non-internal reference families cannot satisfy anyref");
+            assert!(
+                error.to_string().contains("call argument #0 type mismatch"),
+                "{value_ty}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_unregistered_and_narrowing_gc_reference_arguments() {
         for (value_ty, parameter_ty) in [
             ("!Unregistered", "wasm.structref"),

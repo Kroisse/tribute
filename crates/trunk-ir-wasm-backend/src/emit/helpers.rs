@@ -131,7 +131,11 @@ fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Whether an argument can satisfy an indirect-tail parameter after the Wasm
 /// backend's physical type mapping.
-pub(crate) fn is_wasm_physical_argument_assignable(
+///
+/// This is the narrow physical assignability relation shared by argument,
+/// result, exact indirect/tail signature, and CPS dispatch payload checks. It
+/// only accepts widenings that emission performs without a runtime cast.
+pub fn is_wasm_physical_argument_assignable(
     ctx: &IrContext,
     argument: TypeRef,
     parameter: TypeRef,
@@ -163,6 +167,16 @@ pub(crate) fn is_wasm_physical_argument_assignable(
         return true;
     }
     if parameter_is_arrayref && is_registered_gc_array_reference(ctx, argument) {
+        return true;
+    }
+    // Every registered reference denotes a struct or array, and `anyref` is their
+    // common supertype, so the same registration evidence satisfies an `anyref`
+    // slot. `core.array` spellings are emitted as the abstract array reference.
+    if parameter_is_anyref
+        && (is_registered_gc_struct_reference(ctx, argument)
+            || is_registered_gc_array_reference(ctx, argument)
+            || is_type(ctx, argument, "core", "array"))
+    {
         return true;
     }
 

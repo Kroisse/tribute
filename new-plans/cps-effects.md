@@ -305,6 +305,14 @@ convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 cl
    Closure 입력은 canonical `_closure` ADT이며 일반 `wasm.structref`로 대체하지
    않는다. 기존 대상 타입 변환은 정확한 공통 closure 저장 타입을 이 ADT로 변환한다.
 
+Evidence 배열 참조와 두 closure 입력은 canonical 타입 동일성을 그대로 요구한다.
+다른 배열 표기는 evidence 배열이 아니며, 일반 `wasm.structref`는 공통 closure
+layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-backend.md)을
+받아들인다. Payload packing의 `anyref` upcast가 no-op이면 concrete 참조가 남으므로,
+등록된 struct·array 참조, `core.array` 표기, 소거된 ADT 표기가 `anyref` 슬롯을
+만족한다. 고정 ABI의 입력 개수와 순서, 그리고 `answer_type`에서 독립적으로
+구성되는 signature는 이 완화와 무관하게 유지한다.
+
 의미 계약은 closure 타입 소거와 physicalization 변경 전에 검증한다. 최종 target
 lowering은 실제 operand와 독립적으로 고정 signature를 구성하고 operand를 대조한다.
 서로 다른 유효한 `R`도 동일한 물리 ABI를 가지며 resume의 frame은 별도 dispatch
