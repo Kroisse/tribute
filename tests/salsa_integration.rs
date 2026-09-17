@@ -155,7 +155,7 @@ fn test_salsa_incremental_computation_detailed() {
 }
 
 #[test]
-fn record_shape_diagnostics_follow_incremental_declaration_edits() {
+fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
     const ORIGINAL: &str =
         "struct Point { x: Int, y: Int }\nfn test() -> Point { Point { x: +1, y: +2 } }\n";
     const RECORD: &str = "Point { x: +1, y: +2 }";
