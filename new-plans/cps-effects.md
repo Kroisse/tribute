@@ -88,7 +88,9 @@ direct/indirect call, return의 대응 관계를 검증하고 physical symbol과
   physical `func.call`과 `func.call_indirect`가 된다. `Cps` call은 suffix를
   담은 `ContinuationFrame<R>`를 전달하고 named target에는 `func.tail_call`, dynamic target에는
   `func.tail_call_indirect`를 쓴다. Evidence, ContinuationFrame과 environment는 `CallableAbi`
-  순서로 삽입한다.
+  순서로 삽입한다. `call_indirect`의 callee는 logical callable type에 exact contract를
+  보존하므로 변환된 `func.call_indirect`는 그 converted closure contract에서 유도한 exact
+  `signature`를 싣는다. environment는 여기서 아직 interpose하지 않는다.
 - `tribute_control.return`은 `Direct`/`EvidenceDirect`에서 `func.return`이 된다.
   `Cps`에서는 ContinuationFrame의 `Done<R>`으로 `value`를 이전하며 뒤에
   `func.return`이나 result가 없다.

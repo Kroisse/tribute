@@ -3545,8 +3545,31 @@ impl<'a> Converter<'a> {
                             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                     );
                     let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
-                    let call =
-                        func::call_indirect(self.ctx, location, callee, args, [result_type], None);
+                    // The source-data callee keeps its exact callable contract in its
+                    // converted closure type. Carry that contract onto the transfer
+                    // instead of inferring it from the physical operands later.
+                    let converted_callee = self.convert_type(logical_type);
+                    let signature = physical_closure_function_type(
+                        self.ctx,
+                        converted_callee,
+                        convention,
+                    )
+                    .ok_or_else(|| {
+                        TributeControlToCpsError::one(
+                            POST_CPS_BOUNDARY,
+                            Some(source),
+                            Some(location),
+                            "indirect callee has no exact provenance-bearing closure contract",
+                        )
+                    })?;
+                    let call = func::call_indirect(
+                        self.ctx,
+                        location,
+                        callee,
+                        args,
+                        [result_type],
+                        Some(signature),
+                    );
                     set_calling_convention(self.ctx, call.op_ref(), convention);
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -4256,6 +4279,109 @@ mod tests {
         assert!(
             !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
             "{lowered}"
+        );
+    }
+
+    /// Every converted indirect transfer that carries convention metadata, in
+    /// source order.
+    fn convention_bearing_transfers(ctx: &IrContext, op: OpRef) -> Vec<OpRef> {
+        fn visit(ctx: &IrContext, op: OpRef, transfers: &mut Vec<OpRef>) {
+            if (func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op))
+                && tribute_core::get_calling_convention(ctx, op).is_some()
+            {
+                transfers.push(op);
+            }
+            for region in ctx.op(op).regions.iter().copied() {
+                for block in ctx.region(region).blocks.iter().copied() {
+                    for child in ctx.block(block).ops.iter().copied() {
+                        visit(ctx, child, transfers);
+                    }
+                }
+            }
+        }
+        let mut transfers = Vec::new();
+        visit(ctx, op, &mut transfers);
+        transfers
+    }
+
+    /// A source-data indirect call must reach the target ABI boundary with the
+    /// exact callable contract its callee was declared with. Emitting convention
+    /// metadata without that contract is what the validator rejects, and the
+    /// contract must never be reconstructed from the physical operands later.
+    ///
+    /// The callee can be a callable parameter, a named `func_ref`, or a local or
+    /// capturing lambda, so every one of those forms must carry its contract.
+    #[test]
+    fn source_data_indirect_calls_carry_their_exact_signature() {
+        let input = r#"core.module @test {
+  !direct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
+  tribute_control.func @add(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %left
+  }
+  tribute_control.func @pure(%f: !direct, %left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
+    %result = tribute_control.call_indirect %f, %left, %right : core.i32
+    tribute_control.return %result
+  }
+  tribute_control.func @named_ref(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
+    %ref = tribute_control.func_ref {func_ref = @add} : !direct
+    %called = tribute_control.call_indirect %ref, %left, %right : core.i32
+    tribute_control.return %called
+  }
+  tribute_control.func @capturing(%captured: core.i32, %value: core.i32) -> core.i32 convention(direct) {
+    %lambda = tribute_control.lambda(%inner: core.i32) -> core.i32 convention(direct) captures [%captured] {
+      %sum = arith.addi %inner, %captured : core.i32
+      tribute_control.return %sum
+    }
+    %called = tribute_control.call_indirect %lambda, %value : core.i32
+    tribute_control.return %called
+  }
+  tribute_control.func @thunk(%f: !evidence, %value: core.i32) -> core.i32 convention(evidence_direct) {
+    %called = tribute_control.call_indirect %f, %value : core.i32
+    tribute_control.return %called
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+
+        let transfers = convention_bearing_transfers(&ctx, module.op());
+        let mut conventions: Vec<_> = transfers
+            .iter()
+            .map(|transfer| tribute_core::get_calling_convention(&ctx, *transfer).unwrap())
+            .collect();
+        conventions.sort_unstable();
+        assert_eq!(
+            conventions,
+            [
+                CallingConvention::Direct,
+                CallingConvention::Direct,
+                CallingConvention::Direct,
+                CallingConvention::EvidenceDirect,
+            ],
+            "every source-data indirect call must convert: {}",
+            print_module(&ctx, module.op())
+        );
+
+        for transfer in &transfers {
+            let convention = tribute_core::get_calling_convention(&ctx, *transfer).unwrap();
+            let callee =
+                trunk_ir::op_interface::IndirectCallLikeOps::callee(&ctx, *transfer).unwrap();
+            let expected = physical_closure_function_type(&ctx, ctx.value_ty(callee), convention)
+                .expect("the converted callee retains an exact closure contract");
+            assert_eq!(
+                trunk_ir::op_interface::IndirectCallLikeOps::exact_signature(&ctx, *transfer),
+                Some(expected),
+                "{convention:?} transfer must carry its exact callee contract: {}",
+                print_module(&ctx, module.op())
+            );
+        }
+
+        // The converted contract must survive the passes that run before the
+        // target ABI boundary, which validates and physicalizes it.
+        crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+        crate::closure_lower::prepare_closure_lowering(&mut ctx, module);
+        crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).expect(
+            "exact signatures must let the converted transfers cross the target ABI boundary",
         );
     }
 
