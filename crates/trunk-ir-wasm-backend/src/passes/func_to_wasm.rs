@@ -496,7 +496,9 @@ impl RewritePattern for FuncCallPattern {
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
-        let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+        // The `wasm.call` declares target result types, so a shared IR spelling
+        // such as `adt.typeref` must not survive into the backend.
+        let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
         let new_op = wasm_dialect::call(ctx, loc, args, result_types, callee);
         rewriter.replace_op(new_op.op_ref());
@@ -525,7 +527,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         let all_operands = std::iter::once(call.callee(ctx))
             .chain(CallLike::call_args(&call, ctx).iter().copied())
             .collect::<Vec<_>>();
-        let result_types = CallLike::call_result_types(&call, ctx).to_vec();
+        let result_types = rewriter.result_types(ctx, op);
 
         let signature = if let Some(signature) = call.exact_signature(ctx) {
             let Some(signature) =
@@ -533,7 +535,16 @@ impl RewritePattern for FuncCallIndirectPattern {
             else {
                 return false;
             };
-            if crate::emit::helpers::exact_call_indirect_signature_with(ctx, op, signature).is_err()
+            // The candidate declares converted results, so the exact signature
+            // must be validated against that candidate rather than against the
+            // still-unconverted operation.
+            if crate::emit::helpers::exact_call_indirect_signature_with_results(
+                ctx,
+                op,
+                signature,
+                &result_types,
+            )
+            .is_err()
             {
                 return false;
             }
@@ -1155,5 +1166,62 @@ mod tests {
             "{output}"
         );
         assert!(!output.contains("wasm.return_call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn converts_direct_and_exact_indirect_call_results_to_target_types() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @target(%value: core.i32) -> adt.typeref {
+    func.return
+  }
+  func.func @direct(%value: core.i32) -> adt.typeref {
+    %result = func.call %value {callee = @target} : adt.typeref
+    func.return %result
+  }
+  func.func @indirect(%table_index: core.i32, %value: core.i32) -> adt.typeref {
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> adt.typeref>} : adt.typeref
+    func.return %result
+  }
+}"#,
+        );
+
+        let structref_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build());
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            ctx.types
+                .is_dialect(ty, Symbol::new("adt"), Symbol::new("typeref"))
+                .then_some(structref_ty)
+        });
+        lower(&mut ctx, module, type_converter);
+
+        let mut direct = 0;
+        let mut indirect = 0;
+        for func in module.ops(&ctx) {
+            for &region in &ctx.op(func).regions {
+                for &block in &ctx.region(region).blocks {
+                    for &op in &ctx.block(block).ops {
+                        if wasm_dialect::Call::from_op(&ctx, op).is_ok() {
+                            assert_eq!(ctx.op_result_types(op), [structref_ty]);
+                            direct += 1;
+                        }
+                        if wasm_dialect::CallIndirect::from_op(&ctx, op).is_ok() {
+                            assert_eq!(ctx.op_result_types(op), [structref_ty]);
+                            indirect += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            (direct, indirect),
+            (1, 1),
+            "{}",
+            print_module(&ctx, module.op())
+        );
     }
 }

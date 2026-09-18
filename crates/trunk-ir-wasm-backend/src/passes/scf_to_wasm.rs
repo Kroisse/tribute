@@ -337,8 +337,10 @@ impl RewritePattern for ScfIfPattern {
 
         let loc = ctx.op(op).location;
 
-        // Get result type (default to nil if none); reject multi-result
-        let result_types = ctx.op_result_types(op);
+        // Get result type (default to nil if none); reject multi-result. The
+        // created `wasm.if` must declare target types, so read them through the
+        // converter instead of copying the shared IR spelling.
+        let result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
             return false;
         }
@@ -383,8 +385,9 @@ impl RewritePattern for ScfLoopPattern {
 
         let loc = ctx.op(op).location;
 
-        // Get result type; reject multi-result loops
-        let result_types = ctx.op_result_types(op);
+        // Get result type; reject multi-result loops. The created
+        // `wasm.block`/`wasm.loop` must declare target types.
+        let result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
             return false;
         }
@@ -808,5 +811,51 @@ mod tests {
         assert_no_scf_switch_wrappers(&output);
         assert!(!output.contains("wasm.i32_eq"), "{output}");
         assert!(output.contains("func.return"), "{output}");
+    }
+
+    #[test]
+    fn converts_if_result_through_the_type_converter() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @select(%cond: core.i1, %value: core.array(core.i32)) -> core.array(core.i32) {
+    %result = scf.if %cond : core.array(core.i32) {
+      scf.yield %value
+    } {
+      scf.yield %value
+    }
+    func.return %result
+  }
+}"#,
+        );
+
+        let arrayref_ty = ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(
+                trunk_ir::Symbol::new("wasm"),
+                trunk_ir::Symbol::new("arrayref"),
+            )
+            .build(),
+        );
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |ctx, ty| {
+            ctx.types
+                .is_dialect(
+                    ty,
+                    trunk_ir::Symbol::new("core"),
+                    trunk_ir::Symbol::new("array"),
+                )
+                .then_some(arrayref_ty)
+        });
+        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
+
+        let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("scf."), "{output}");
+        assert!(
+            output.contains("wasm.if") && output.contains(": wasm.arrayref"),
+            "the created wasm.if must declare the converted result: {output}"
+        );
     }
 }
