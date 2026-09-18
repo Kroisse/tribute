@@ -590,10 +590,9 @@ fn collect_wasm_ops_from_region(
             }
 
             if let Ok(func_op) = wasm_dialect::Func::from_op(ctx, op) {
-                if let Ok(func_def) = extract_function_def(ctx, func_op) {
-                    debug!("Including function: {}", func_def.name);
-                    info.funcs.push(func_def);
-                }
+                let func_def = extract_function_def(ctx, func_op)?;
+                debug!("Including function: {}", func_def.name);
+                info.funcs.push(func_def);
             } else if let Ok(import_op) = wasm_dialect::ImportFunc::from_op(ctx, op) {
                 info.imports.push(extract_import_def(ctx, import_op)?);
             } else if let Ok(export_op) = wasm_dialect::ExportFunc::from_op(ctx, op) {

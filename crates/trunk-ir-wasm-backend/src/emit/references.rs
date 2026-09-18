@@ -445,6 +445,27 @@ mod tests {
     }
 
     #[test]
+    fn malformed_bodyless_declaration_is_rejected_even_when_unreferenced() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func {abi = "C", sym_name = @helper, type = core.i32}
+  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} { wasm.return }
+}"#,
+        );
+        let error = crate::emit_module_to_wasm(&mut ctx, module)
+            .err()
+            .expect("a bodyless declaration without a func_sig type is not well-formed");
+        assert!(
+            error
+                .to_string()
+                .contains("requires valid wasm.func_sig type"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn present_but_empty_body_is_a_malformed_definition_not_a_declaration() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
