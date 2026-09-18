@@ -180,9 +180,12 @@ pub fn is_wasm_physical_argument_assignable(
         return true;
     }
 
-    let argument_is_generic_adt_struct = is_type(ctx, argument, "adt", "struct")
-        || ctx.types.get(argument).attrs.get_bool("is_variant") == Some(true);
-    if argument_is_generic_adt_struct && parameter_is_anyref {
+    // An unregistered `adt.struct` spelling is emitted as the erased `anyref`
+    // reference, so it satisfies an `anyref` slot. A variant-marked type is not
+    // a second spelling of that erasure: it must carry registration evidence
+    // (`base_enum`), which the registered-struct rule above already accepts, and
+    // a variant instance without it is malformed rather than erased.
+    if parameter_is_anyref && is_type(ctx, argument, "adt", "struct") {
         return true;
     }
 

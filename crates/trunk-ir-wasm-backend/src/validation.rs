@@ -546,12 +546,13 @@ mod tests {
         );
         validate_wasm_ir(&ctx, module).expect("registered GC references satisfy an anyref slot");
 
-        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64"] {
+        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64", "!TagOnly"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
+  !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @byAny}}
@@ -560,8 +561,9 @@ mod tests {
 }}"#
                 ),
             );
-            let error = validate_wasm_ir(&ctx, module)
-                .expect_err("non-internal reference families cannot satisfy anyref");
+            let error = validate_wasm_ir(&ctx, module).expect_err(
+                "non-internal references and unregistered variant spellings cannot satisfy anyref",
+            );
             assert!(
                 error.to_string().contains("call argument #0 type mismatch"),
                 "{value_ty}: {error}"

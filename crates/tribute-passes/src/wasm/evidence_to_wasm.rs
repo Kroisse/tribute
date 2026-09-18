@@ -1609,6 +1609,7 @@ mod tests {
                 r#"core.module @test {{
           !closure = adt.struct() {{fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}}
           !Payload = adt.struct() {{fields = [[@value, core.i32]], name = @Payload}}
+          !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
           !Array = core.array(core.i32)
           func.func @run(%ev: {evidence_ty}, %dispatch: !closure, %resume: !closure, %payload: {payload_ty}) {{
             effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = core.i32}}
@@ -1640,6 +1641,7 @@ mod tests {
             ("core.i64", "wasm.anyref"),
             ("wasm.arrayref", "core.i64"),
             ("wasm.arrayref", "wasm.funcref"),
+            ("wasm.arrayref", "!TagOnly"),
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &dispatch_source(evidence_ty, payload_ty));
