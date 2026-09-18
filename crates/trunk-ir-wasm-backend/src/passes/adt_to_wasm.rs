@@ -163,10 +163,12 @@ impl RewritePattern for StructGetPattern {
 
         let loc = ctx.op(op).location;
         let ref_val = struct_get.r#ref(ctx);
-        let result_ty = struct_get.result_ty(ctx);
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
         let field_idx = struct_get.field(ctx);
 
-        // Build wasm.struct_get: just change dialect/name
+        // Build wasm.struct_get with the converted field result type.
         // field attribute is already u32, emit will read it directly
         let new_op = wasm_gc_dialect::struct_get(
             ctx,
