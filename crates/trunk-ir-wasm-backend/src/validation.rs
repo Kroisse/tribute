@@ -497,6 +497,160 @@ mod tests {
     }
 
     #[test]
+    fn accepts_registered_concrete_gc_references_in_abstract_argument_slots() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String}
+  !Leaf = adt.enum() {base_enum = !String, is_variant = true, variant_tag = @Leaf}
+  !Closure = adt.struct() {fields = [], name = @_closure}
+  !Marker = adt.struct() {fields = [], name = @_Marker}
+  !Evidence = core.array(!Marker)
+  wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
+  wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
+  wasm.func @caller(%leaf: !Leaf, %bytes: core.bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
+    wasm.call %leaf {callee = @byRef}
+    wasm.call %bytes {callee = @byRef}
+    wasm.call %typeref {callee = @byRef}
+    wasm.call %closure {callee = @byRef}
+    wasm.call %marker {callee = @byRef}
+    wasm.call %evidence {callee = @byArray}
+    wasm.return
+  }
+}"#,
+        );
+
+        validate_wasm_ir(&ctx, module)
+            .expect("registered concrete GC references widen to abstract argument slots");
+    }
+
+    #[test]
+    fn accepts_registered_gc_references_in_anyref_slots() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Marker = adt.struct() {fields = [], name = @_Marker}
+  !Evidence = core.array(!Marker)
+  !Array = core.array(core.i32)
+  wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
+  wasm.func @caller(%bytes: core.bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
+    wasm.call %bytes {callee = @byAny}
+    wasm.call %evidence {callee = @byAny}
+    wasm.call %array {callee = @byAny}
+    wasm.call %erased {callee = @byAny}
+    wasm.return
+  }
+}"#,
+        );
+        validate_wasm_ir(&ctx, module).expect("registered GC references satisfy an anyref slot");
+
+        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64", "!TagOnly"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
+  wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
+  wasm.func @caller(%value: {value_ty}) -> core.nil {{
+    wasm.call %value {{callee = @byAny}}
+    wasm.return
+  }}
+}}"#
+                ),
+            );
+            let error = validate_wasm_ir(&ctx, module).expect_err(
+                "non-internal references and unregistered variant spellings cannot satisfy anyref",
+            );
+            assert!(
+                error.to_string().contains("call argument #0 type mismatch"),
+                "{value_ty}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unregistered_and_narrowing_gc_reference_arguments() {
+        for (value_ty, parameter_ty) in [
+            ("!Unregistered", "wasm.structref"),
+            ("!TagOnly", "wasm.structref"),
+            ("wasm.anyref", "wasm.structref"),
+            ("wasm.arrayref", "wasm.structref"),
+            ("wasm.funcref", "wasm.structref"),
+            ("wasm.i31ref", "wasm.structref"),
+            ("core.bytes", "wasm.arrayref"),
+            ("wasm.structref", "wasm.arrayref"),
+            ("!Leaf", "wasm.arrayref"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !String = adt.enum() {{name = @String}}
+  !Leaf = adt.enum() {{base_enum = !String, is_variant = true, variant_tag = @Leaf}}
+  !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
+  !Unregistered = adt.struct() {{fields = [[@value, core.i32]], name = @Unregistered}}
+  wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
+  wasm.func @caller(%value: {value_ty}) -> core.nil {{
+    wasm.call %value {{callee = @callee}}
+    wasm.return
+  }}
+}}"#
+                ),
+            );
+
+            let error = validate_wasm_ir(&ctx, module)
+                .expect_err("unregistered or narrowing GC reference argument must be rejected");
+            assert!(
+                error.to_string().contains("call argument #0 type mismatch"),
+                "{value_ty} -> {parameter_ty}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn widens_registered_concrete_gc_results_but_rejects_narrowing() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String}
+  !Leaf = adt.enum() {base_enum = !String, is_variant = true, variant_tag = @Leaf}
+  wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
+  wasm.func @caller(%leaf: !Leaf) -> core.nil {
+    %value = wasm.call %leaf {callee = @produces} : wasm.structref
+    wasm.return
+  }
+}"#,
+        );
+        validate_wasm_ir(&ctx, module)
+            .expect("a registered concrete GC result widens to the declared abstract result");
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !String = adt.enum() {name = @String}
+  !Leaf = adt.enum() {base_enum = !String, is_variant = true, variant_tag = @Leaf}
+  wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
+  wasm.func @caller(%value: wasm.structref) -> core.nil {
+    %leaf = wasm.call %value {callee = @produces} : !Leaf
+    wasm.return
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module)
+            .expect_err("an abstract result cannot narrow to a concrete declared result");
+        assert!(
+            error.to_string().contains("wasm.call result list mismatch"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn validates_direct_call_and_return_result_contracts() {
         let rejects = |source: &str, diagnostic: &str| {
             let mut ctx = IrContext::new();

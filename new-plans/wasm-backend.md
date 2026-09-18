@@ -209,6 +209,31 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
 (type $Point (struct (field f64) (field f64)))
 ```
 
+### 물리적 참조 할당 가능성
+
+WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struct`의
+서브타입이므로, concrete struct 참조는 추상 참조 슬롯에 런타임 캐스트 없이
+대입된다. 인자, 결과, 정확 indirect/tail 시그니처 경계는 모두 하나의 물리적
+할당 가능성 관계를 공유하며, 그 관계는 다음 확장만 인정한다.
+
+| 값 타입 | 슬롯 | 판정 |
+| --- | --- | --- |
+| builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, `_closure`, `_Marker` 등) | `structref`, `anyref` | 허용 |
+| `adt.typeref` | `structref`, `anyref` | 허용 |
+| `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |
+| builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |
+| `core.array` | `arrayref`, `anyref` | 허용 |
+| 등록 근거가 없는 ADT 표기 (선언 타입 등) | `structref` | 거부 |
+| `anyref` | `structref` | 거부 (downcast) |
+| `arrayref`, `funcref`, `externref`, `i31ref` | `structref` | 거부 |
+| `structref` 또는 등록된 struct | `arrayref` | 거부 |
+
+여기서 "등록"은 backend-ready 경계에서 해당 타입이 concrete GC 인덱스를
+받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스, `adt.typeref`,
+그리고 `base_enum`을 가진 variant instance뿐이며, ADT 이름이나 레이아웃
+모양만으로는 등록을 추론하지 않는다. 추상 참조에서 concrete 타입으로
+좁히는 방향은 `wasm.ref_cast`가 필요하므로 검증에서 거부한다.
+
 ---
 
 ## 설계 결정 배경

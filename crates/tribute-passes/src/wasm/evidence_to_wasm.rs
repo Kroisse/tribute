@@ -503,13 +503,22 @@ fn final_dispatch_signature(
     let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
     let closure_ty = super::type_converter::closure_adt_type(ctx);
     let i32_ty = intern_i32(ctx);
-    let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
-    if ctx
-        .op_operands(op)
+    // The canonical operands keep their exact identity: another array spelling
+    // is not the evidence array, and a plain `wasm.structref` is not the shared
+    // `_closure` layout. Only the payload slot accepts the verified physical
+    // widening, because its producer may leave a concrete reference after a
+    // no-op `anyref` upcast.
+    let operands = ctx.op_operands(op);
+    let canonical_match = operands
         .iter()
-        .zip(expected)
-        .any(|(value, expected)| ctx.value_ty(*value) != expected)
-    {
+        .zip([evidence_ty, closure_ty, closure_ty])
+        .all(|(value, expected)| ctx.value_ty(*value) == expected);
+    let payload_match = trunk_ir_wasm_backend::is_wasm_physical_argument_assignable(
+        ctx,
+        ctx.value_ty(operands[3]),
+        anyref_ty,
+    );
+    if !canonical_match || !payload_match {
         return Err(EvidenceValidationError::DispatchOperandMismatch);
     }
     Ok(wasm_dialect::func_sig(
@@ -1590,6 +1599,57 @@ mod tests {
                 assert_eq!(print_module(&ctx, module.op()), before);
                 assert_eq!(module.ops(&ctx), ops);
             }
+        }
+    }
+
+    #[test]
+    fn dispatch_payload_accepts_registered_references_but_canonical_operands_stay_exact() {
+        let dispatch_source = |evidence_ty: &str, payload_ty: &str| {
+            format!(
+                r#"core.module @test {{
+          !closure = adt.struct() {{fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}}
+          !Payload = adt.struct() {{fields = [[@value, core.i32]], name = @Payload}}
+          !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
+          !Array = core.array(core.i32)
+          func.func @run(%ev: {evidence_ty}, %dispatch: !closure, %resume: !closure, %payload: {payload_ty}) {{
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = core.i32}}
+          }}
+        }}"#
+            )
+        };
+        let fixed_signature = "wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>";
+
+        for payload_ty in [
+            "wasm.anyref",
+            "adt.typeref",
+            "!Payload",
+            "core.bytes",
+            "!Array",
+            "wasm.i31ref",
+            "wasm.arrayref",
+        ] {
+            let output = lower_text(&dispatch_source("wasm.arrayref", payload_ty));
+            assert!(
+                output.contains(fixed_signature),
+                "payload {payload_ty}: {output}"
+            );
+        }
+
+        for (evidence_ty, payload_ty) in [
+            ("!Array", "wasm.anyref"),
+            ("wasm.anyref", "wasm.anyref"),
+            ("core.i64", "wasm.anyref"),
+            ("wasm.arrayref", "core.i64"),
+            ("wasm.arrayref", "wasm.funcref"),
+            ("wasm.arrayref", "!TagOnly"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &dispatch_source(evidence_ty, payload_ty));
+            assert_eq!(
+                lower_evidence_to_wasm(&mut ctx, module).unwrap_err(),
+                EvidenceValidationError::DispatchOperandMismatch,
+                "evidence {evidence_ty}, payload {payload_ty}"
+            );
         }
     }
 
