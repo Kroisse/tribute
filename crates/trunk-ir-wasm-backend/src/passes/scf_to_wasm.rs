@@ -403,6 +403,21 @@ impl RewritePattern for ScfLoopPattern {
         let body = loop_op.body(ctx);
         ctx.detach_region(body);
 
+        // The created `wasm.loop` owns the detached body, so its block
+        // arguments become Wasm-level parameters. Declare them with target
+        // types instead of leaving the SCF spelling on the boundary.
+        let body_blocks: Vec<_> = ctx.region(body).blocks.to_vec();
+        for block in body_blocks {
+            let block_args = ctx.block_args(block).to_vec();
+            for (index, arg) in block_args.into_iter().enumerate() {
+                let raw_ty = ctx.value_ty(arg);
+                let converted = rewriter.get_value_type(ctx, arg);
+                if converted != raw_ty {
+                    ctx.set_block_arg_type(block, index as u32, converted);
+                }
+            }
+        }
+
         // Create wasm.loop with init operands and the body region
         let wasm_loop = wasm_dialect::r#loop(ctx, loc, init, result_ty, body);
 
@@ -830,6 +845,54 @@ mod tests {
 }"#,
         );
 
+        let type_converter = array_to_arrayref_converter(&mut ctx);
+        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
+
+        let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("scf."), "{output}");
+        assert!(
+            output.contains("wasm.if") && output.contains(": wasm.arrayref"),
+            "the created wasm.if must declare the converted result: {output}"
+        );
+    }
+
+    #[test]
+    fn converts_loop_body_block_argument_through_the_type_converter() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @carry(%init: core.array(core.i32)) -> core.nil {
+    scf.loop %init : core.nil {
+      ^header(%iter: core.array(core.i32)):
+        scf.continue %iter
+    }
+    func.return
+  }
+}"#,
+        );
+
+        let type_converter = array_to_arrayref_converter(&mut ctx);
+        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
+
+        let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
+        assert!(use_chains.is_ok(), "{use_chains}");
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("scf."), "{output}");
+        assert!(
+            output.contains("wasm.loop") && output.contains(": wasm.arrayref)"),
+            "the created wasm.loop body argument must declare the converted type: {output}"
+        );
+        assert!(
+            output.contains("core.array(core.i32)"),
+            "operand types must keep their producer spelling: {output}"
+        );
+    }
+
+    /// Convert `core.array` to the abstract `wasm.arrayref` type.
+    fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
         let arrayref_ty = ctx.types.intern(
             trunk_ir::types::TypeDataBuilder::new(
                 trunk_ir::Symbol::new("wasm"),
@@ -847,15 +910,6 @@ mod tests {
                 )
                 .then_some(arrayref_ty)
         });
-        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
-
-        let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
-        assert!(use_chains.is_ok(), "{use_chains}");
-        let output = print_module(&ctx, module.op());
-        assert!(!output.contains("scf."), "{output}");
-        assert!(
-            output.contains("wasm.if") && output.contains(": wasm.arrayref"),
-            "the created wasm.if must declare the converted result: {output}"
-        );
+        type_converter
     }
 }
