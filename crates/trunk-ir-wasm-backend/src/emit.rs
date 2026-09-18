@@ -8,6 +8,7 @@ mod definitions;
 mod gc_types_collection;
 mod handlers;
 pub(crate) mod helpers;
+mod references;
 mod value_emission;
 
 use call_indirect_collection::*;
@@ -625,6 +626,15 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
 
     collect_wasm_ops_from_region(ctx, body, &mut info)?;
+
+    // Target lowering can leave well-formed bodyless `wasm.func` declarations:
+    // ordinary C helpers that survived call rewriting and registered intrinsics
+    // whose calls were already removed. Resolve the surviving references freshly
+    // from this final IR and drop the declarations nothing uses. Emission is
+    // read-only here, distinct from generic DCE and authenticated intrinsic
+    // deletion; see `new-plans/wasm-backend.md`.
+    let references = references::collect_function_references(ctx, module)?;
+    references::dispose_bodyless_declarations(ctx, &mut info.funcs, &info.imports, &references)?;
 
     // Collect GC types
     let (gc_types, mut type_idx_by_type) = collect_gc_types(ctx, module)?;

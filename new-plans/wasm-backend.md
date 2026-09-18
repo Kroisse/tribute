@@ -165,6 +165,41 @@ focused Wasm evidence.
 
 ---
 
+## Emission 경계
+
+### Bodyless 선언의 처분
+
+Backend-ready 경계에는 본문 없는 `wasm.func` 선언이 남을 수 있다. 이는 target call
+rewriting 이후에도 유지되는 ordinary C helper 선언과, 호출이 제거된 등록 compiler
+intrinsic 선언이다. Wasm module은 import가 아닌 모든 function에 code entry와 body를
+요구하므로 bodyless 선언은 explicit import로만 emit될 수 있다.
+
+Emitter는 IR을 수정하지 않는 read-only 처분으로 이 상황을 해결한다.
+
+- 함수 심볼 참조는 마지막 helper rewrite 이후의 최종 IR에서 새로 수집한다. 이전
+  단계의 resolved-reference 사실이나 cached 분석을 재사용하지 않으므로, 오래된
+  사실이 살아있는 참조를 가리거나 무참조 선언을 잘못 남기지 않는다.
+- 참조 모델은 최종 경계에 허용된 연산만 다룬다. `wasm.call`과
+  `wasm.return_call`의 `callee`, `wasm.ref_func`의 `func_name`,
+  `wasm.export_func`의 `func`가 함수 심볼을 지칭한다. `wasm.elem`은 자식 `funcs`
+  region을 재귀 순회해 그 안의 `wasm.ref_func`를 element segment 참조로 분류한다.
+  Container 연산이 스스로 심볼 속성을 갖지 않는다는 사실은 자식 참조 사용을
+  부정하지 않는다.
+- 모델에 없는 연산이 함수 심볼 속성을 소유하거나, 모델에 있는 연산의 심볼 속성이
+  없거나 malformed면 silent non-user로 넘기지 않고 거부한다.
+- 참조가 없는 well-formed bodyless 선언만 emitted definition/type-index/code 목록에서
+  제외한다. 본문 없는 선언을 남기는 것 자체는 오류가 아니다.
+- 살아남은 참조의 목적지는 import-first 인덱싱을 유지한 명시적 `wasm.import_func`의
+  `sym_name` 또는 본문 보유 `wasm.func`여야 한다. 그렇지 않으면 bodyless 선언과
+  미해결 참조를 각각 정확한 진단으로 구분해 보고한다.
+- 본문이 있는 C 함수와 명시적 import는 그대로 emit된다. body region은 있으나 entry
+  block이 없는 malformed `wasm.func`는 bodyless 선언이 아니므로 계속 거부한다.
+
+이 처분은 공통 DCE reachability나 인증된 intrinsic 삭제와 별개다. IR을 변경하지
+않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다.
+
+---
+
 ## WasmGC 타입 처리
 
 ### Backend에서 타입 수집

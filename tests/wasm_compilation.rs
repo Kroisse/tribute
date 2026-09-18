@@ -43,6 +43,48 @@ fn test_compile_failure_returns_diagnostics(db: &salsa::DatabaseImpl) {
     assert!(!diagnostics.is_empty());
 }
 
+#[salsa_test]
+fn test_compile_unsupported_wasm_read_line(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "wasm_read_line.trb",
+        r#"use abilities::Throw
+use std::io::{Error as IoError, Io, print_line, read_line}
+
+fn next_line() ->{Io} String {
+    handle read_line() {
+        do line { line }
+        op Throw::throw(error) {
+            case error {
+                IoError::EndOfFile -> ""
+                IoError::InvalidEncoding -> ""
+                IoError::System(_) -> ""
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(next_line())
+}
+"#,
+    );
+    let Err(diagnostics) = compile_to_wasm_binary(db, source) else {
+        panic!("Wasm read_line must remain explicitly unsupported");
+    };
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("io-to-wasm")
+                && message.contains("tribute_io.read_line")),
+        "read_line must fail at the explicit io-to-wasm boundary, not as a missing body: {messages:?}"
+    );
+}
+
 // =============================================================================
 // Passing end-to-end tests
 // =============================================================================

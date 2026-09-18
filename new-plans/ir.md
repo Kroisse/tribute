@@ -157,6 +157,17 @@ implicit unmatched path when no default exists). The wrappers also expose
 their own parent/body boundary, so generic nested-region walkers never need to
 decode the switch's container shape themselves.
 
+최종 코드 생성 경계의 bodyless 선언은 malformed가 아니다. `wasm.func`처럼 body
+region이 optional인 정의 operation은 zero-region 선언을 정상 입력으로 받으며, 그
+선언을 코드 목록에 포함할지 여부는 IR legality가 아니라 target emitter의 read-only
+처분이 결정한다. 이 처분은 대상 symbol 삭제 pass나 generic DCE reachability와
+구분되며 IR을 변경하지 않는다.
+
+Symbol 사용 질의는 operation-local이다. Container operation이 직접 symbol 속성을
+갖지 않는다는 사실은 자식 region의 사용을 부정하지 않는다. Symbol 사용을 수집하는
+consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음"을 자식 순회 생략의
+근거로 삼아서는 안 된다.
+
 ## Core Invariants
 
 - A `core.module` owns the top-level region for a compilation unit.
