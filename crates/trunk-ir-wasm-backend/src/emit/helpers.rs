@@ -221,6 +221,22 @@ pub(crate) fn exact_call_indirect_signature_with(
     op: OpRef,
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
+    let results = ctx.op_result_types(op).to_vec();
+    exact_call_indirect_signature_with_results(ctx, op, signature, &results)
+}
+
+/// Validate an exact ordinary indirect-call signature against an explicit result
+/// list.
+///
+/// The lowering boundary holds a candidate replacement whose results are already
+/// converted to target types, so the physical check must compare that candidate
+/// list rather than the still-unconverted operation.
+pub(crate) fn exact_call_indirect_signature_with_results(
+    ctx: &IrContext,
+    op: OpRef,
+    signature: TypeRef,
+    results: &[TypeRef],
+) -> CompilationResult<TypeRef> {
     let (params, signature_results) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.call_indirect signature must be wasm.func_sig")
     })?;
@@ -234,7 +250,6 @@ pub(crate) fn exact_call_indirect_signature_with(
             "wasm.call_indirect has malformed operands",
         ));
     };
-    let results = ctx.op_result_types(op);
     // The established omitted-result-slot compatibility allows a `[nil]`
     // target signature for a resultless transfer. Ordinary empty signatures
     // match only an empty result list; nil operands remain nullable refs.

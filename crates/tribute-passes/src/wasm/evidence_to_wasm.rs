@@ -30,9 +30,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::ops::DialectType;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
-};
+use trunk_ir::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, RewriteScope};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_IDX};
@@ -117,7 +115,11 @@ impl Pass for LowerEvidenceToWasm {
 }
 
 fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    // The operations created here are `wasm.*`, so they must declare target
+    // types. Evidence lowering therefore runs with the shared WASM type
+    // converter instead of an identity converter.
+    let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(EffectExtendPattern)
         .add_pattern(EffectDispatchTailPattern)
         .add_pattern(LegacyEffectDispatchCpsPattern)
@@ -208,7 +210,7 @@ impl RewritePattern for LegacyEffectDispatchCpsPattern {
         let Ok(dispatch_op) = effect::LegacyDispatchCps::from_op(ctx, op) else {
             return false;
         };
-        let result_types = ctx.op_result_types(op).to_vec();
+        let result_types = rewriter.result_types(ctx, op);
         let [result_ty] = result_types.as_slice() else {
             return false;
         };
@@ -334,7 +336,9 @@ impl RewritePattern for EvidenceLookupPattern {
         };
 
         let evidence_val = lookup_op.evidence(ctx);
-        let result_ty = lookup_op.result_ty(ctx);
+        let result_ty = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, lookup_op.result_ty(ctx));
         let loc = ctx.op(op).location;
 
         // Extract ability_id from the ability_ref type attribute
@@ -386,7 +390,9 @@ impl RewritePattern for EffectExtendPattern {
             return false;
         };
 
-        let result_ty = ctx.op_result_types(op)[0];
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
         let call_result = insert_evidence_extend_call(
             ctx,
@@ -427,7 +433,9 @@ impl RewritePattern for EffectDispatchTailPattern {
         };
 
         let loc = ctx.op(op).location;
-        let result_ty = ctx.op_result_types(op)[0];
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
         let ability_ref = dispatch_op.ability_ref(ctx);
         let dispatch_closure = insert_dispatch_closure_lookup(
             ctx,
@@ -623,7 +631,9 @@ impl RewritePattern for EvidenceExtendPattern {
         };
 
         let evidence_val = extend_op.evidence(ctx);
-        let result_ty = extend_op.result_ty(ctx);
+        let result_ty = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, extend_op.result_ty(ctx));
         let loc = ctx.op(op).location;
 
         // The marker value is already constructed by an earlier pass and passed
@@ -1773,6 +1783,46 @@ mod tests {
         assert!(!output.contains("effect.extend"), "{output}");
         assert!(output.contains("wasm.struct_new"), "{output}");
         assert!(output.contains("__tribute_evidence_extend"), "{output}");
+    }
+
+    #[test]
+    fn extend_result_is_produced_as_a_target_type() {
+        // `effect.extend` lowers to a `wasm.call`, so its declared result must be
+        // the converted evidence reference even when the shared IR still spells
+        // the evidence array logically.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  func.func @run(%ev: !Evidence, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) {
+    %result = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : !Evidence
+  }
+}"#,
+        );
+        lower_evidence_to_wasm(&mut ctx, module).unwrap();
+
+        let fixture = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| {
+                ctx.op(op).dialect == Symbol::new("func")
+                    && ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("run"))
+            })
+            .expect("the fixture function must survive lowering");
+        let body = ctx.op(fixture).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let calls: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .copied()
+            .filter_map(|op| wasm_dialect::Call::from_op(&ctx, op).ok())
+            .collect();
+
+        assert_eq!(calls.len(), 1, "{}", print_module(&ctx, module.op()));
+        let expected = crate::wasm::type_converter::evidence_wasm_type(&mut ctx);
+        assert_eq!(ctx.op_result_types(calls[0].op_ref()), [expected]);
     }
 
     #[test]

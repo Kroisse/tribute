@@ -101,6 +101,24 @@ emit하여 해당 operation을 제거하는 Wasm 경계다.
 입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
+### 생성 operation의 타입 출처
+
+Wasm 경계를 넘어 새로 생성되는 모든 `wasm.*` operation의 result type과 block
+argument type은 Wasm target `TypeConverter`가 만든 값이어야 한다. Shared IR
+spelling을 그대로 복사하면 `adt.typeref`나 logical `core.array`가 backend-ready
+경계까지 남아, physical assignability와 GC layout 검증이 정상 producer를
+거부한다. 이것은 구현 편의가 아니라 [ir.md](ir.md)의 backend-ready 소거
+요구를 Wasm 쪽에서 만족시키는 조건이다.
+
+Pass가 새 operation을 만들며 결과 타입을 정할 때는 identity converter 대신
+Wasm target converter를 사용하고 `PatternRewriter::result_type` /
+`result_types`로 result type을 읽는다. `scf.loop` body처럼 새 operation이
+detached region을 소유하면 그 region의 block argument도 같은 converter가 만든
+타입으로 선언한다. Operand type은 producer가 정한 값
+타입이므로 여기서 다시 변환하지 않는다. 이미 존재하는 `wasm.*` operation의
+결과를 검증할 때는 candidate의 변환된 result 목록과 비교하며, 변환된
+signature를 still-unconverted operation과 맞대지 않는다.
+
 ### Entrypoint contract
 
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
