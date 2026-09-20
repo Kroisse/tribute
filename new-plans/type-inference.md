@@ -496,27 +496,30 @@ constraints generated up to the binding, `let p = e` generalizes variables in
 the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
 Variables free in the surrounding environment are never generalized.
 
-Named function의 effect annotation 생략은 signature가 미리 가진 open tail을 본문
-검사 뒤에 재부착한다. Local lambda에는 이 tail을 자동으로 새로 만들지 않으며,
-lambda literal을 검사한 callable context의 tail과 본문에서 남은 open row만
-보존한다. 이 구분은 lambda를 생성하는 평가가 pure라는 사실과 lambda를 호출할
-때의 latent effect를 혼동하지 않으면서, local callable의 convention을 named
-function과 같은 row 결과에서 계산하게 한다.
+앞의 lambda inference 규칙으로 얻은 callable effect row는 lambda literal을
+평가하는 효과와 구별한다. 따라서 local callable의 generalization은 실제로 추론된
+type과 row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지
+않는다.
 
 This is an effect-based value restriction, not a restriction to a syntactic
 class of values. A lambda evaluates purely, so its type can be generalized even
 when calling the resulting function later performs effects:
 
+다음은 toplevel function 본문 안의 local `let` binding이다.
+
 ```rust
-let id = fn(x) x
-// id : forall a, e. fn(a) ->{e} a
+fn example() ->{State(Int)} Nil {
+    let id = fn(x) x
+    // id : forall a. fn(a) ->{} a
 
-let read = fn() State::get()
-// evaluating the lambda is pure; State is a latent call effect
-// read : forall s, e. fn() ->{e, State(s)} s
+    let read = fn() State::get()
+    // evaluating the lambda is pure; State is a latent call effect
+    // read : forall s. fn() ->{State(s)} s
 
-let current = State::get()
-// evaluating the RHS performs State, so current remains monomorphic
+    let current = State::get()
+    // evaluating the RHS performs State, so current remains monomorphic
+    Nil
+}
 ```
 
 For a destructuring pattern, each introduced name receives the corresponding
