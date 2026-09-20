@@ -1,0 +1,40 @@
+use std::collections::List as Sequence
+use std::collections::List::prepend as push
+
+pub mod List {
+    pub fn prepend(value: Nat, tail: Nat) -> Nat { value + tail }
+}
+
+pub mod A {
+    pub fn prepend(value: a, tail: a) -> a { value }
+}
+
+pub mod B {
+    pub fn prepend(value: a, tail: a) -> a { tail }
+}
+
+pub mod Other {
+    pub mod List {
+        pub fn prepend(value: a, tail: std::collections::List(a)) -> std::collections::List(a) {
+            tail
+        }
+    }
+}
+
+fn apply(f: fn(Nat, Sequence(Nat)) -> Sequence(Nat), tail: Sequence(Nat)) -> Sequence(Nat) {
+    f(3, tail)
+}
+
+fn main() {
+    let first = std::collections::List::prepend(1, [])
+    let second = Sequence::prepend(2, first)
+    let third = apply(push, second)
+    let head = case Other::List::prepend(99, third) {
+        [value, .._] -> value
+        _ -> 0
+    }
+    __tribute_print_nat(List::prepend(20, 22))
+    __tribute_print_nat(head)
+    __tribute_print_nat(A::prepend(4, 5))
+    __tribute_print_nat(B::prepend(6, 7))
+}

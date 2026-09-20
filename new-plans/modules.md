@@ -57,10 +57,24 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 
 ### 모듈 선언과 Use
 
+표준 라이브러리의 canonical root는 `std`다. List의 함수 namespace는
+`std::collections::List`이며, public prepend 선언의 canonical path는
+`std::collections::List::prepend`다. Prelude는 같은 선언을 가리키는 짧은
+`List` binding을 제공한다. `List::prepend`와 완전한 경로는 이 binding을
+선택할 때 동일한 선언을 참조하며, 별도 wrapper나 선언 복제를 만들지 않는다.
+Compiler-owned List 타입도 같은 조회 경로에서 사용할 수 있지만 source 타입으로
+재선언하지 않는다.
+
+Canonical declaration path와 scope 안의 조회 이름은 구분한다. 사용자 `mod List`는
+짧은 prelude binding을 shadow할 수 있지만 표준 선언의 canonical path나 이미
+해석된 prelude 내부 참조를 바꾸지 않는다. Import alias는 참조하는 선언의
+identity를 바꾸지 않으며, 이후 단계는 이름 해석이 선택한 선언을 보존한다.
+
 ```rust
 // List(a)는 compiler-owned opaque nominal type이다.
 // Empty/Cons constructor나 backend layout은 이 namespace에 export하지 않는다.
 // Source-visible dynamic construction is specified as a sequence operation.
+// std::collections 내부:
 pub mod List {
     pub fn prepend(value: a, tail: List(a)) -> List(a) { ... }
 }
@@ -69,7 +83,7 @@ pub mod List {
 현재 List public surface는 literal, sequence-view pattern,
 `List::prepend(value, tail) -> List(a)`로 제한된다. Prelude의 public wrapper는
 registry-verified private compiler intrinsic을 호출하고, shared pipeline은 그
-private call만 `list.prepend`로 lower한다. 같은 public qualified name을 가진 일반
+private call만 `list.prepend`로 lower한다. 같은 source-visible 조회 경로를 가진 일반
 source function은 intrinsic이 아니다. Private intrinsic declaration은 별도 source
 API가 아니다.
 Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,

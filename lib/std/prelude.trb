@@ -1,6 +1,8 @@
 // Tribute Standard Library - Prelude
 // These types are automatically available in all Tribute programs.
 
+use std::collections::List
+
 /// A type that represents an optional value.
 /// Either contains `Some(value)` or `None`.
 enum Option(a) {
@@ -110,22 +112,6 @@ pub mod Result {
             Error(_) -> True
         }
     }
-}
-
-// =============================================================================
-// Opaque List construction
-// =============================================================================
-
-pub mod List {
-    /// Return a new list with value before every element of tail.
-    pub fn prepend(value: a, tail: List(a)) -> List(a) {
-        List::__tribute_list_prepend_intrinsic(value, tail)
-    }
-
-    extern "intrinsic" fn __tribute_list_prepend_intrinsic(
-        value: a,
-        tail: List(a),
-    ) -> List(a)
 }
 
 // =============================================================================
@@ -628,6 +614,20 @@ pub mod abilities {
 // =============================================================================
 
 pub mod std {
+    pub mod collections {
+        pub mod List {
+            /// Return a new list with value before every element of tail.
+            pub fn prepend(value: a, tail: List(a)) -> List(a) {
+                std::collections::List::__tribute_list_prepend_intrinsic(value, tail)
+            }
+
+            extern "intrinsic" fn __tribute_list_prepend_intrinsic(
+                value: a,
+                tail: List(a),
+            ) -> List(a)
+        }
+    }
+
     pub mod io {
         /// Platform error details reported by an I/O operation.
         pub struct SystemError { code: Int, message: String }

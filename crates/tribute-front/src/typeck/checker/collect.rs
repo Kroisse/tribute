@@ -41,7 +41,43 @@ impl<'db> TypeChecker<'db> {
     /// Collect type definitions and function signatures from declarations.
     pub(crate) fn collect_declarations(&mut self, module: &Module<ResolvedRef<'db>>) {
         self.predeclare_nominal_types(&module.decls);
+        self.collect_type_imports(&module.decls);
         self.collect_declarations_in_order(module);
+    }
+
+    /// Import a type scheme without inventing a nominal identity for its alias.
+    /// Local nominal declarations retain precedence, including forward ones.
+    fn collect_type_imports(&mut self, declarations: &[Decl<ResolvedRef<'db>>]) {
+        for declaration in declarations {
+            match declaration {
+                Decl::Use(import) => {
+                    let Some(target) = crate::qualified_path_symbol(&import.path) else {
+                        continue;
+                    };
+                    let Some(scheme) = self.env.lookup_type_def(target) else {
+                        continue;
+                    };
+                    let name = import.alias.unwrap_or(*import.path.last().unwrap());
+                    if declarations.iter().any(|decl| match decl {
+                        Decl::Struct(decl) => decl.name == name,
+                        Decl::Enum(decl) => decl.name == name,
+                        _ => false,
+                    }) {
+                        continue;
+                    }
+                    let qualified = crate::qualified_symbol(&mut self.prefix, name);
+                    self.env.register_type_def(qualified, scheme);
+                }
+                Decl::Module(module) => {
+                    if let Some(body) = &module.body {
+                        let saved = crate::push_prefix(&mut self.prefix, module.name);
+                        self.collect_type_imports(body);
+                        self.prefix.truncate(saved);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn collect_declarations_in_order(&mut self, module: &Module<ResolvedRef<'db>>) {

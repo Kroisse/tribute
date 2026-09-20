@@ -60,7 +60,7 @@ pub struct FrontendIrModule {
 
 static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(|| {
     [
-        "List::__tribute_list_prepend_intrinsic",
+        "std::collections::List::__tribute_list_prepend_intrinsic",
         "Int::+",
         "Int::-",
         "Int::*",

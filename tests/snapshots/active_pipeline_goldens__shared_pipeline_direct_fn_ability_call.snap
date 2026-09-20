@@ -5,7 +5,7 @@ expression: ir_text
 core.module @direct_fn {
   !_closure = adt.struct() {fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], name = @_closure}
   !"String::Cursor" = adt.enum() {name = @"String::Cursor", variants = [[@CursorDone, []], [@CursorPending, [tribute_rt.anyref, tribute_rt.anyref]], [@CursorChunk, [core.bytes, core.i32, core.i32, tribute_rt.anyref]]]}
-  !String = adt.enum() {name = @String, tribute.definition.end = 11022, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10957, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !String = adt.enum() {name = @String, tribute.definition.end = 10532, tribute.definition.source = 4923843560778033168, tribute.definition.start = 10467, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
   !Result = adt.enum() {name = @Result, variants = [[@Ok, [tribute_rt.anyref]], [@Error, [tribute_rt.anyref]]]}
   !Option = adt.enum() {name = @Option, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}
   !"std::io::ReadLineResult" = adt.enum() {name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}

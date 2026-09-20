@@ -15,7 +15,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-const PREPEND_INTRINSIC: &str = "List::__tribute_list_prepend_intrinsic";
+const PREPEND_INTRINSIC: &str = "std::collections::List::__tribute_list_prepend_intrinsic";
 
 fn is_prepend_intrinsic(name: Symbol) -> bool {
     name.with_str(|name| {
@@ -180,14 +180,14 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
+                func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -200,7 +200,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(output.contains("list.prepend"), "{output}");
         assert!(
-            !output.contains("List::__tribute_list_prepend_intrinsic"),
+            !output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
             "{output}"
         );
     }
@@ -240,14 +240,14 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
-                    attributes {tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
+                func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
+                    attributes {tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.return %0
                 }
                 func.func @caller(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
+                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic"} : tribute_rt.int
                     func.return %2
                 }
             }
@@ -260,7 +260,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(
-            output.contains("List::__tribute_list_prepend_intrinsic"),
+            output.contains("std::collections::List::__tribute_list_prepend_intrinsic"),
             "{output}"
         );
     }
@@ -272,18 +272,18 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"List::__tribute_list_prepend_intrinsic"} {
+                func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
-                func.func @"List::__tribute_list_prepend_intrinsic$String"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
+                func.func @"std::collections::List::__tribute_list_prepend_intrinsic$String"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
                     func.return %0
                 }
                 func.func @caller(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
+                    %2 = func.call %0, %1 {callee = @"std::collections::List::__tribute_list_prepend_intrinsic$String"} : tribute_rt.anyref
                     func.return %2
                 }
             }
@@ -297,11 +297,15 @@ mod tests {
         assert!(!output.contains("list.prepend"), "{output}");
         assert!(output.contains("func.call"), "{output}");
         assert!(
-            output.contains(r#"func.func @"List::__tribute_list_prepend_intrinsic$String""#),
+            output.contains(
+                r#"func.func @"std::collections::List::__tribute_list_prepend_intrinsic$String""#
+            ),
             "{output}"
         );
         assert!(
-            !output.contains(r#"func.func @"List::__tribute_list_prepend_intrinsic"("#),
+            !output.contains(
+                r#"func.func @"std::collections::List::__tribute_list_prepend_intrinsic"("#
+            ),
             "{output}"
         );
     }

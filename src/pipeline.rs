@@ -2772,7 +2772,7 @@ fn main() {
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
             let ast = format!("{:#?}", monomorphized.ast);
-            let concrete = "List::__tribute_list_prepend_intrinsic$Int";
+            let concrete = "std::collections::List::__tribute_list_prepend_intrinsic$Int";
 
             assert!(
                 monomorphized
@@ -2785,10 +2785,104 @@ fn main() {
                 "specialized List body must call the concrete intrinsic:\n{ast}"
             );
             assert!(
-                !ast.contains("List::__tribute_list_prepend_intrinsic$T"),
+                !ast.contains("std::collections::List::__tribute_list_prepend_intrinsic$T"),
                 "specialized List body must not retain generic intrinsic binders:\n{ast}"
             );
         });
+    }
+
+    #[salsa_test]
+    fn list_import_paths_share_canonical_specialization(db: &salsa::DatabaseImpl) {
+        use tribute_front::ast::Decl;
+        use trunk_ir::Symbol;
+
+        let source = source_from_str(
+            "list_import_paths.trb",
+            r#"
+use std::collections::List as Sequence
+use std::collections::List::prepend as push
+
+fn main() {
+    let first = List::prepend(1, [])
+    let second = std::collections::List::prepend(2, first)
+    let third = Sequence::prepend(3, second)
+    let _ = push(4, third)
+}
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let instances = &typed.expression_types(db).function_instances;
+        let canonical = Symbol::new("std::collections::List::prepend");
+        assert_eq!(instances.len(), 4);
+        let declaration = instances[0].1.function;
+        assert_eq!(declaration.qualified(db), canonical);
+        assert!(
+            instances
+                .iter()
+                .all(|(_, instance)| instance.function == declaration),
+            "{instances:#?}"
+        );
+
+        let (_, prepared) = merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
+        let specialized = Symbol::new("std::collections::List::prepend$Nat");
+        assert_eq!(
+            prepared
+                .ast
+                .decls
+                .iter()
+                .filter(|decl| {
+                    matches!(decl, Decl::Function(function) if function.name == specialized)
+                })
+                .count(),
+            1,
+            "all import paths must share one specialized definition"
+        );
+        assert!(prepared.function_types.contains_key(&specialized));
+        assert!(
+            !prepared
+                .function_types
+                .contains_key(&Symbol::new("List::prepend$Nat"))
+        );
+    }
+
+    #[salsa_test]
+    fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::tribute_control;
+        use trunk_ir::{Symbol, ops::DialectOp};
+
+        let source = source_from_str(
+            "unused_source_list.trb",
+            "enum List(a) { SourceList(a), }\nfn main() {}",
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let (ir, logical) = merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
+            typed.lower_to_ir(db, ir, uri)
+        });
+        let mut checked = 0;
+        for operation in logical.module.ops(&ir) {
+            let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
+                continue;
+            };
+            if function.sym_name(&ir) == Symbol::new("std::collections::List::prepend") {
+                let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
+                    .expect("logical signature");
+                let result = ir.types.get(signature.result(&ir));
+                assert_eq!(result.dialect, Symbol::new("tribute_rt"));
+                assert_eq!(result.name, Symbol::new("anyref"));
+                assert_eq!(signature.inputs(&ir)[1], signature.result(&ir));
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 1);
+        let validation = tribute_control::validate(
+            &ir,
+            logical.module,
+            &logical.operation_declarations,
+            &logical.compiler_intrinsics,
+        );
+        assert!(validation.is_ok(), "{validation}");
     }
 
     #[test]
