@@ -2249,12 +2249,8 @@ fn main() {
         );
         let call = calls[0];
         let signature = clif_indirect_signature(&ctx, call);
-        assert_eq!(signature.inputs(&ctx).len(), 3);
-        assert_eq!(signature.inputs(&ctx)[2], pointer_type);
-        assert_eq!(
-            ctx.value_ty(*ctx.op_operands(call).last().unwrap()),
-            pointer_type
-        );
+        assert_eq!(signature.inputs(&ctx), [pointer_type; 3]);
+        assert_eq!(signature.results(&ctx), [pointer_type]);
     }
 
     #[cfg(unix)]
