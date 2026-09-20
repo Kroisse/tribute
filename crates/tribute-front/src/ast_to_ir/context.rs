@@ -712,11 +712,14 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::BoundVar { .. }
             | TypeKind::LocalBoundVar { .. }
             | TypeKind::UniVar { .. } => self.anyref_type(ir),
-            TypeKind::Named { name, .. }
-                if self.get_type(*name).is_some()
-                    || self.logical_nominal_declarations.contains(name) =>
+            TypeKind::Named { id, .. } if id.is_builtin_list(self.db) => self.anyref_type(ir),
+            TypeKind::Named { id, .. }
+                if self.get_type(id.qualified(self.db)).is_some()
+                    || self
+                        .logical_nominal_declarations
+                        .contains(&id.qualified(self.db)) =>
             {
-                self.adt_typeref(ir, *name)
+                self.adt_typeref(ir, id.qualified(self.db))
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func { params, result, .. } => {
@@ -1389,19 +1392,81 @@ mod tests {
             ctx.adt_typeref(&mut ir, tuple_name)
         );
 
-        let nominal_name = Symbol::new("Forward");
+        let nominal_name = Symbol::new("Nested::Forward");
         ctx.declare_logical_nominal(nominal_name);
         let forward = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::builtin_list(&db),
-                name: nominal_name,
+                id: crate::ast::TypeDefId::synthetic(&db, nominal_name),
+                name: Symbol::new("Forward"),
                 args: vec![],
             },
         );
         assert_eq!(
             ctx.convert_logical_type(&mut ir, forward),
             ctx.adt_typeref(&mut ir, nominal_name)
+        );
+
+        // A source declaration named List must not capture the builtin type,
+        // including when it occurs recursively inside a callable or tuple.
+        let list_name = Symbol::new("List");
+        ctx.declare_logical_nominal(list_name);
+        let source_list = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::synthetic(&db, list_name),
+                name: list_name,
+                args: vec![],
+            },
+        );
+        let builtin_list = AstType::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: list_name,
+                args: vec![int],
+            },
+        );
+        let list_callable = AstType::new(
+            &db,
+            TypeKind::Func {
+                params: vec![builtin_list, source_list],
+                result: builtin_list,
+                effect,
+                minimum_convention: CallingConvention::Direct,
+            },
+        );
+        let callable_ir = ctx.convert_logical_type(&mut ir, list_callable);
+        let list_signature =
+            tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, callable_ir).unwrap();
+        let anyref = ctx.anyref_type(&mut ir);
+        let nominal_list = ctx.adt_typeref(&mut ir, list_name);
+        assert_eq!(list_signature.inputs(&ir), &[anyref, nominal_list]);
+        assert_eq!(list_signature.result(&ir), anyref);
+        let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));
+        ctx.convert_logical_type(&mut ir, tuple);
+        let tuple_name = ctx.logical_tuple_name(tuple);
+        let (_, layout) = ir
+            .types
+            .iter()
+            .find(|(_, data)| {
+                data.dialect == Symbol::new("adt")
+                    && data.name == Symbol::new("struct")
+                    && data.attrs.get_symbol("name") == Some(tuple_name)
+            })
+            .expect("logical tuple layout");
+        assert_eq!(
+            layout.attrs.get("fields"),
+            Some(&Attribute::List(vec![
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("0")),
+                    Attribute::Type(anyref)
+                ]),
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::new("1")),
+                    Attribute::Type(nominal_list)
+                ]),
+            ]))
         );
 
         let generated = Symbol::new("Forward::value");
