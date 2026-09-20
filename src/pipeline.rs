@@ -2118,7 +2118,39 @@ mod tests {
             .expect("attached db")
     }
 
-    fn has_boxed_closure_call_pointer_witness(
+    fn has_exact_direct_closure_call_witness(
+        ctx: &IrContext,
+        module: Module,
+        pointer_type: trunk_ir::TypeRef,
+        i32_type: trunk_ir::TypeRef,
+    ) -> bool {
+        let body = module.body(ctx).expect("module must have a body");
+        let mut found = false;
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if clif::CallIndirect::matches(ctx, op) {
+                let signature = ctx
+                    .op(op)
+                    .attributes
+                    .get_type("sig")
+                    .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
+                let operands = ctx.op_operands(op);
+                if let Some(signature) = signature
+                    && operands.len() == 3
+                    && signature.inputs(ctx) == [pointer_type, i32_type]
+                    && signature.results(ctx) == [i32_type]
+                    && ctx.value_ty(operands[1]) == pointer_type
+                    && ctx.value_ty(operands[2]) == i32_type
+                    && ctx.op_result_types(op) == [i32_type]
+                {
+                    found = true;
+                }
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        found
+    }
+
+    fn has_cps_boxed_closure_call_pointer_witness(
         ctx: &IrContext,
         module: Module,
         pointer_type: trunk_ir::TypeRef,
@@ -2153,9 +2185,54 @@ mod tests {
     }
 
     #[salsa_test]
-    fn native_preparation_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+    fn native_preparation_direct_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
         let source = source_from_str(
             "closure_exec_simple.trb",
+            r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn main() {
+    let f = fn(x) { x + 1 }
+    __tribute_print_nat(f(41))
+}
+"#,
+        );
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        validate_and_report_arity(db, &ctx, module);
+        run_native_target_pipeline(&mut ctx, module).expect("native target lowering must succeed");
+        prepare_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+            None,
+        )
+        .expect("native preparation must succeed");
+
+        trunk_ir_cranelift_backend::validate_clif_ir(&ctx, module)
+            .expect("prepared native IR must satisfy exact callable slot contracts");
+        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == trunk_ir::Symbol::new("core")
+                    && data.name == trunk_ir::Symbol::new("i32"))
+                .then_some(ty)
+            })
+            .expect("fixture must contain core.i32");
+        assert!(
+            has_exact_direct_closure_call_witness(&ctx, module, pointer_type, i32_type),
+            "pure closure fixture must use the exact Direct indirect-call ABI"
+        );
+    }
+
+    #[salsa_test]
+    fn native_preparation_cps_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+        let source = source_from_str(
+            "closure_exec_callback.trb",
             r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
@@ -2184,8 +2261,8 @@ fn main() {
             .expect("prepared native IR must satisfy exact callable slot contracts");
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
         assert!(
-            has_boxed_closure_call_pointer_witness(&ctx, module, pointer_type),
-            "closure execution fixture must pass a core.ptr boxed value to its indirect call"
+            has_cps_boxed_closure_call_pointer_witness(&ctx, module, pointer_type),
+            "open callback fixture must pass a core.ptr boxed value to its CPS indirect call"
         );
     }
 
