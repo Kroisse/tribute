@@ -2248,6 +2248,29 @@ fn main() {
             "open callback fixture must have one CPS call with the addition result"
         );
         let call = calls[0];
+        let [_, evidence, continuation_environment, value] = ctx.op_operands(call) else {
+            panic!("CPS indirect call must have one callee and three arguments");
+        };
+        let trunk_ir::refs::ValueDef::BlockArg(entry, 0) = ctx.value_def(*evidence) else {
+            panic!("the CPS evidence argument must be the first entry block argument");
+        };
+        let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
+            ctx.value_def(*continuation_environment)
+        else {
+            panic!("the CPS continuation environment must be loaded from its closure");
+        };
+        let environment_load = clif::Load::from_op(&ctx, environment_load)
+            .expect("the CPS continuation environment must come from clif.load");
+        assert_eq!(
+            ctx.op_operands(environment_load.op_ref()),
+            [ctx.block_args(entry)[2]]
+        );
+        assert_eq!(environment_load.offset(&ctx), 8);
+        assert!(matches!(
+            ctx.value_def(*value),
+            trunk_ir::refs::ValueDef::OpResult(producer, 0)
+                if clif::Iadd::matches(&ctx, producer)
+        ));
         let signature = clif_indirect_signature(&ctx, call);
         assert_eq!(signature.inputs(&ctx), [pointer_type; 3]);
         assert_eq!(signature.results(&ctx), [pointer_type]);
