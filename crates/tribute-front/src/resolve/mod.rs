@@ -72,9 +72,12 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
     // Collect Module bindings that need resolution
     let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
         .iter_imports()
-        .filter_map(|(name, binding)| match binding {
-            Binding::Module { path } if path.len() >= 2 => Some((name, path.clone())),
-            _ => None,
+        .filter_map(|(name, binding)| {
+            let path = match binding {
+                Binding::Module { path } => Some(path),
+                _ => env.get_use_path(name),
+            }?;
+            (path.len() >= 2).then(|| (name, path.clone()))
         })
         .collect();
 
@@ -130,6 +133,9 @@ pub fn build_env<'db>(
     }
 
     inject_builtin_bindings(db, &mut env);
+    // Resolve imports of declarations already present in this module. Imports
+    // from another module are resolved again after its environment is merged.
+    resolve_use_imports(&mut env);
 
     env
 }
@@ -142,13 +148,22 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
             id: TypeDefId::builtin_list(db),
         },
     );
-    env.add_to_namespace_if_absent(
-        Symbol::new("std::collections"),
-        Symbol::new("List"),
-        Binding::TypeDef {
-            id: TypeDefId::builtin_list(db),
-        },
-    );
+    // The source List module contributes members, not a new nominal type.
+    // Keep its namespace while exposing the compiler-owned type at this path.
+    let collections = Symbol::new("std::collections");
+    let list = Symbol::new("List");
+    if matches!(
+        env.lookup_qualified(collections, list),
+        None | Some(Binding::Module { .. })
+    ) {
+        env.add_to_namespace(
+            collections,
+            list,
+            Binding::TypeDef {
+                id: TypeDefId::builtin_list(db),
+            },
+        );
+    }
     env.add_to_namespace(
         Symbol::new("std::io"),
         Symbol::new("Io"),

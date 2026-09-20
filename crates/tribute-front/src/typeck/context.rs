@@ -197,6 +197,7 @@ impl<'db> ModuleTypeEnv<'db> {
         );
         let mut type_defs = HashMap::new();
         type_defs.insert(list_name, list_scheme);
+        type_defs.insert(Symbol::new("std::collections::List"), list_scheme);
 
         Self {
             db,
@@ -965,7 +966,8 @@ mod tests {
                 Symbol::new("Alpha"),
                 Symbol::new("List"),
                 Symbol::new("Middle"),
-                Symbol::new("Zebra")
+                Symbol::new("Zebra"),
+                Symbol::new("std::collections::List"),
             ]
         );
     }

@@ -44,6 +44,27 @@ fn test_compile_failure_returns_diagnostics(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
+fn test_compile_source_list_prepend_is_an_ordinary_function(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "source_list_prepend.trb",
+        r#"
+use std::io::{Io, print_line}
+pub mod List {
+    pub fn prepend(value: Nat, tail: Nat) -> Nat { value + tail }
+}
+fn main() ->{Io} Nil {
+    print_line(case List::prepend(20, 22) {
+        42 -> "ok"
+        _ -> "bad"
+    })
+}
+"#,
+    );
+    expect_wasm_compilation_success(db, source, "Source List::prepend must remain ordinary");
+}
+
+#[salsa_test]
 fn test_compile_unsupported_wasm_read_line(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

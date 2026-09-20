@@ -305,6 +305,11 @@ Nominal 타입의 수집 시작점은 AST 안의 typed reference와 재작성 �
 복원하지 않는다. 예를 들어 `identity`와 `[Int]`는 `identity$Int`로 표현하고, 중첩
 타입 인자는 `$0`/`$1`로 감싸지만 특수화 키는 정확한 선언 ID와 타입 인자로 유지한다.
 
+Import alias와 prelude의 짧은 조회 이름은 선언의 canonical path를 대체하지
+않는다. `List::prepend`가 표준 binding을 선택했다면 특수화 대상은
+`std::collections::List::prepend`이며, 완전한 경로로 선택한 동일 인스턴스와
+특수화 정의를 공유한다. 사용자 `List::prepend`의 인스턴스는 별도로 유지한다.
+
 ---
 
 ## References

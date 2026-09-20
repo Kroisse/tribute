@@ -326,6 +326,12 @@ source-logical `adt.typeref`를 받을 수 없다. 아직 별도 user FFI 계약
 declaration은 managed semantic parameter나 result를 사용할 수 없다. Textual attribute,
 symbol spelling, 위치 또는 printed IR만으로 origin을 복구하거나 승격하지 않는다.
 
+Frontend는 해석된 canonical declaration과 specialization을 module-local symbol에
+대응시킨다. 정의, 직접 호출, 함수 참조와 intrinsic declaration metadata는 같은
+대응을 사용한다. Import alias나 prelude의 짧은 이름을 이 심볼의 선언 경로로
+사용하지 않는다. 소유 symbol table 안에서 심볼은 유일해야 하며, 이 대응은
+source lookup이나 외부 linkage 계약을 변경하지 않는다.
+
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
 대조한다. Direct call은 module-local symbol을 유일하게 resolve하고 완전한 signature를
 맞춰야 한다. Indirect call은 exact `tribute_control.func_sig` signature와 source-logical
@@ -706,6 +712,12 @@ compiler/prelude boundary, not an additional public symbol or a layout contract.
 List patterns lower to sequence observations. Exact-length patterns require an
 empty remainder; prefix-rest patterns return the remainder as the same canonical
 List type. A backend must eliminate `list.*` before its backend-ready boundary.
+
+List의 logical representation은 compiler-owned nominal identity로 선택한다.
+동명 source ADT의 등록은 이 선택을 바꾸지 않는다. 현재 lowering이 사용하는
+`tribute_rt.anyref`는 표현상의 선택이며 List의 semantic identity를 대신하지
+않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
+specialization에 대응해야 한다.
 
 The root `core.module` carries Tribute-specific well-known type identities as
 `TypeRef` attributes. In particular, `tribute.type.string` is the exact

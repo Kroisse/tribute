@@ -172,6 +172,11 @@ generic `trunk-ir`로 옮기지 않는다.
 
 ## Nominal Type Identity
 
+Prelude 병합은 해석된 선언의 canonical path와 참조를 보존한다. Prelude의
+짧은 이름은 선언을 가리키는 binding이며, AST 병합이나 metadata 조회를 위해
+canonical path를 다시 짧은 이름으로 바꾸지 않는다. 함수 스킴, 특수화 대상,
+생성된 정의와 호출은 동일한 해석 결과를 사용한다.
+
 The resolved AST stores a declaration-backed identity on every named type.
 Source declarations derive that identity from their declaration node and carry
 it through annotation conversion, type checking, substitution, TDNR receiver
@@ -1308,7 +1313,9 @@ let idx = evidence_lookup(ev, STATE_ID)  // binary search
 
    **결론**: 당장은 Location 기반으로 충분함
    - Source-level equivalence ("같은 소스에서 유래"): Location으로 해결
-   - Fine-grained query (함수/타입 단위): top-level item의 Symbol로 식별
+   - Fine-grained query (함수/타입 단위): 선언 환경에서 해석된 선언 identity로
+     대상을 구별한다. Symbol은 해당 환경의 이름 조회에 사용하며, 서로 다른
+     선언 환경의 이름을 표기가 같다는 이유만으로 동일한 선언으로 취급하지 않는다.
    - 별도 ID 시스템은 필요성이 구체화될 때 도입 검토
 
    **주의 사항**

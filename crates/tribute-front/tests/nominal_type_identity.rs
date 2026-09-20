@@ -5,6 +5,29 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
 #[salsa_test]
+fn local_nominal_shadows_imported_list_type_alias(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "shadowed_list_alias.trb",
+        r#"
+use std::collections::List as Sequence
+
+fn take_source(value: Sequence(Nat)) {}
+
+enum Sequence(a) { UserSequence(a) }
+
+fn main() { take_source([1]) }
+"#,
+    );
+    let errors = ast_pipeline_error_messages(db, source);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("expected `Sequence(Nat)`, found `List(Nat)`"),
+        "{errors:?}"
+    );
+}
+
+#[salsa_test]
 fn unqualified_annotation_uses_nested_module_type_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

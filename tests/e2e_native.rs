@@ -437,6 +437,15 @@ fn main() {
     );
 }
 
+#[test]
+fn test_native_list_namespace_aliases_and_source_shadowing() {
+    assert_native_output(
+        "list_namespace.trb",
+        include_str!("fixtures/list_namespace.trb"),
+        "42\n3\n4\n7",
+    );
+}
+
 // =============================================================================
 // Intermediate Feature Tests
 // =============================================================================
