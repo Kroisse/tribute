@@ -19,7 +19,78 @@ fn main() ->{} Int {
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
     assert!(ir.contains("tribute_control.lambda"));
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("tribute_control.lambda(") && line.contains("convention(direct)")
+        }),
+        "a pure lambda passed to an effect-free consumer must be Direct:\n{ir}"
+    );
     assert!(!ir.contains("unrealized_conversion_cast"), "{ir}");
+}
+
+#[salsa_test]
+fn escaping_lambda_retains_open_callable_contract(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "escaping_lambda.trb",
+        r#"
+fn make() -> fn(Int) -> Int { fn(x) x }
+fn main() {}
+"#,
+    );
+    let ir = common::run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
+        }),
+        "a returned lambda must retain the open callable contract:\n{ir}"
+    );
+}
+
+#[salsa_test]
+fn open_effect_consumer_keeps_lambda_cps(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "open_lambda_consumer.trb",
+        r#"
+fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
+fn main() { open(fn(x) x, +3) }
+"#,
+    );
+    let ir = common::run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("tribute_control.lambda(") && line.contains("convention(cps)")
+        }),
+        "an open-effect consumer must receive a CPS lambda:\n{ir}"
+    );
+}
+
+#[salsa_test]
+fn effectful_lambda_keeps_effect_convention(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "effectful_lambda_convention.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+}
+
+fn run(f: fn() ->{State(Int)} Int) -> Int {
+    handle f() {
+        do result { result }
+        op State::get() { resume +0 }
+    }
+}
+
+fn main() -> Int { run(fn() State::get()) }
+"#,
+    );
+    let ir = common::run_ast_pipeline_with_ir(db, source);
+    assert!(
+        ir.contains("tribute_control.lambda() -> core.i32 convention(cps)"),
+        "a lambda that performs an effect must remain CPS:\n{ir}"
+    );
 }
 
 #[salsa_test]

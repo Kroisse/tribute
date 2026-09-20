@@ -2118,53 +2118,12 @@ mod tests {
             .expect("attached db")
     }
 
-    fn has_boxed_closure_call_pointer_witness(
-        ctx: &IrContext,
-        module: Module,
-        pointer_type: trunk_ir::TypeRef,
-    ) -> bool {
-        let body = module.body(ctx).expect("module must have a body");
-        let mut found = false;
-        let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if clif::CallIndirect::matches(ctx, op) {
-                let signature = ctx
-                    .op(op)
-                    .attributes
-                    .get_type("sig")
-                    .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
-                let operands = ctx.op_operands(op);
-                if let (Some(signature), Some(&argument)) = (signature, operands.get(3))
-                    && operands.len() == 4
-                    && signature.inputs(ctx).len() == 3
-                    && signature.inputs(ctx)[2] == pointer_type
-                    && ctx.value_ty(argument) == pointer_type
-                    && matches!(
-                        ctx.value_def(argument),
-                        trunk_ir::refs::ValueDef::OpResult(producer, _)
-                            if clif::Iadd::matches(ctx, producer)
-                    )
-                {
-                    found = true;
-                }
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        found
-    }
-
-    #[salsa_test]
-    fn native_preparation_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
-        let source = source_from_str(
-            "closure_exec_simple.trb",
-            r#"
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
-
-fn main() {
-    let f = fn(x) { x + 1 }
-    __tribute_print_nat(f(41))
-}
-"#,
-        );
+    fn prepare_native_fixture(
+        db: &crate::TributeDatabaseImpl,
+        path: &str,
+        text: &str,
+    ) -> (IrContext, Module) {
+        let source = source_from_str(path, text);
         let (mut ctx, module) = run_shared_pipeline(db, source)
             .expect("shared pipeline must succeed")
             .expect("fixture must lower");
@@ -2178,14 +2137,143 @@ fn main() {
             None,
         )
         .expect("native preparation must succeed");
-
         trunk_ir_cranelift_backend::validate_clif_ir(&ctx, module)
             .expect("prepared native IR must satisfy exact callable slot contracts");
-        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
-        assert!(
-            has_boxed_closure_call_pointer_witness(&ctx, module, pointer_type),
-            "closure execution fixture must pass a core.ptr boxed value to its indirect call"
+        (ctx, module)
+    }
+
+    fn clif_indirect_calls(ctx: &IrContext, module: Module) -> Vec<trunk_ir::OpRef> {
+        let body = module.body(ctx).expect("module must have a body");
+        let mut calls = Vec::new();
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if clif::CallIndirect::matches(ctx, op) {
+                calls.push(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        calls
+    }
+
+    fn clif_indirect_signature(ctx: &IrContext, call: trunk_ir::OpRef) -> clif::FuncSig {
+        let signature = ctx
+            .op(call)
+            .attributes
+            .get_type("sig")
+            .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
+            .expect("indirect call must have an exact signature");
+        let operands = ctx.op_operands(call);
+        assert_eq!(
+            operands[1..]
+                .iter()
+                .map(|&operand| ctx.value_ty(operand))
+                .collect::<Vec<_>>(),
+            signature.inputs(ctx),
+            "indirect call operands must match its exact signature"
         );
+        assert_eq!(
+            ctx.op_result_types(call),
+            signature.results(ctx),
+            "indirect call results must match its exact signature"
+        );
+        signature
+    }
+
+    #[salsa_test]
+    fn native_preparation_direct_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+        let (mut ctx, module) = prepare_native_fixture(
+            db,
+            "closure_exec_simple.trb",
+            r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn main() {
+    let f = fn(x) { x + 1 }
+    __tribute_print_nat(f(41))
+}
+"#,
+        );
+        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let i32_type = ctx
+            .types
+            .iter()
+            .find_map(|(ty, data)| {
+                (data.dialect == trunk_ir::Symbol::new("core")
+                    && data.name == trunk_ir::Symbol::new("i32"))
+                .then_some(ty)
+            })
+            .expect("fixture must contain core.i32");
+        let calls = clif_indirect_calls(&ctx, module);
+        assert_eq!(
+            calls.len(),
+            1,
+            "pure closure fixture must have one Direct indirect call"
+        );
+        let call = calls[0];
+        let signature = clif_indirect_signature(&ctx, call);
+        assert_eq!(signature.inputs(&ctx), [pointer_type, i32_type]);
+        assert_eq!(signature.results(&ctx), [i32_type]);
+    }
+
+    #[salsa_test]
+    fn native_preparation_cps_closure_call_slots_are_exact(db: &crate::TributeDatabaseImpl) {
+        let (mut ctx, module) = prepare_native_fixture(
+            db,
+            "closure_exec_callback.trb",
+            r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn apply(f: fn(Nat) -> Nat, value: Nat) -> Nat { f(value) }
+
+fn main() {
+    __tribute_print_nat(apply(fn(x) { x + 1 }, 41))
+}
+"#,
+        );
+        let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
+        let calls: Vec<_> = clif_indirect_calls(&ctx, module)
+            .into_iter()
+            .filter(|&call| {
+                ctx.op_operands(call).last().is_some_and(|&argument| {
+                    matches!(
+                        ctx.value_def(argument),
+                        trunk_ir::refs::ValueDef::OpResult(producer, _)
+                            if clif::Iadd::matches(&ctx, producer)
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "open callback fixture must have one CPS call with the addition result"
+        );
+        let call = calls[0];
+        let [_, evidence, continuation_environment, value] = ctx.op_operands(call) else {
+            panic!("CPS indirect call must have one callee and three arguments");
+        };
+        let trunk_ir::refs::ValueDef::BlockArg(entry, 0) = ctx.value_def(*evidence) else {
+            panic!("the CPS evidence argument must be the first entry block argument");
+        };
+        let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
+            ctx.value_def(*continuation_environment)
+        else {
+            panic!("the CPS continuation environment must be loaded from its closure");
+        };
+        let environment_load = clif::Load::from_op(&ctx, environment_load)
+            .expect("the CPS continuation environment must come from clif.load");
+        assert_eq!(
+            ctx.op_operands(environment_load.op_ref()),
+            [ctx.block_args(entry)[2]]
+        );
+        assert_eq!(environment_load.offset(&ctx), 8);
+        assert!(matches!(
+            ctx.value_def(*value),
+            trunk_ir::refs::ValueDef::OpResult(producer, 0)
+                if clif::Iadd::matches(&ctx, producer)
+        ));
+        let signature = clif_indirect_signature(&ctx, call);
+        assert_eq!(signature.inputs(&ctx), [pointer_type; 3]);
+        assert_eq!(signature.results(&ctx), [pointer_type]);
     }
 
     #[cfg(unix)]

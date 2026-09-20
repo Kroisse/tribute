@@ -25,6 +25,16 @@ Direct < EvidenceDirect < Cps
 
 Effect row, convention 순서, 실행 region 내부의 ANF invariant는 바뀌지 않는다.
 
+Local lambda의 convention도 typechecking이 확정한 effect row에서 계산한다. Lambda
+본문은 닫힌 빈 accumulator로 검사하고, 본문이 남긴 open row 또는 lambda를
+검사한 callable context의 open tail만 callable type에 남긴다. pure body와
+effect-free consumer의 lambda는 `Direct`가 될 수 있다. 반대로 반환되거나
+escaping 저장 위치에 들어가 open callable contract를 받거나, open-effect
+consumer가 요구하는 callback이면 open row를 유지하여 `Cps`가 된다. 본문이
+요구한 ability도 row에 남으며 그 ability의 convention lower bound를 적용한다.
+이 선택은 이미 생성된 Cps 값을 Direct로 바꾸는 후처리가 아니며,
+`calling_convention_for_effect_row`의 open-row ⇒ `Cps` 규칙을 완화하지 않는다.
+
 지역 source lambda의 검사된 인스턴스와 실제 소비 worker의 callable parameter
 계약을 구별한다. 고정된 데이터 타입의 lambda는 원래 binding 위치에서 각 필요한
 인스턴스와 convention으로 생성한다. 이는 이미 생성된 Cps 값을 Direct로 cast하는

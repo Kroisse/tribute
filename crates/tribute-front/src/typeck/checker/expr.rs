@@ -372,13 +372,17 @@ impl<'db> TypeChecker<'db> {
                     Mode::Infer => self.infer_expr_type_with_ctx(ctx, body),
                 };
 
-                // The lambda's effect is what accumulated during body inference
+                // Match omitted-effect named functions: retain an already-open
+                // residual row, otherwise reattach only the open tail supplied
+                // by the contextual callable contract. An infer-only local
+                // lambda therefore stays closed when its body is pure.
                 let accumulated = ctx.current_effect();
                 let inferred_effect = if accumulated.rest(self.db()).is_none() {
                     EffectRow::new(
                         self.db(),
                         accumulated.effects(self.db()).clone(),
-                        Some(ctx.fresh_row_var()),
+                        expected_effect
+                            .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
                     )
                 } else {
                     accumulated

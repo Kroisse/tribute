@@ -392,6 +392,16 @@ fresh α, β, e
 Γ ⊢ fn(x) body ⇒ fn(α) ->{e} β ; {}
 ```
 
+람다 본문을 검사할 때의 누적기는 항상 닫힌 빈 row `{}`에서 시작한다. 본문이
+실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
+기록한다. 잔여 row가 닫혀 있으면 named function의 생략 effect 규칙과 같이
+본문에서 확정한 concrete effect만 보존하고, 람다가 검사된 문맥의 callable
+signature가 제공한 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
+새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
+escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
+받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
+계산한다.
+
 #### 함수 적용 (Infer)
 
 ```text
@@ -486,20 +496,30 @@ constraints generated up to the binding, `let p = e` generalizes variables in
 the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
 Variables free in the surrounding environment are never generalized.
 
+앞의 lambda inference 규칙으로 얻은 callable effect row는 lambda literal을
+평가하는 효과와 구별한다. 따라서 local callable의 generalization은 실제로 추론된
+type과 row의 변수만 대상으로 하며, generalization을 위해 새 open tail을 만들지
+않는다.
+
 This is an effect-based value restriction, not a restriction to a syntactic
 class of values. A lambda evaluates purely, so its type can be generalized even
 when calling the resulting function later performs effects:
 
+다음은 toplevel function 본문 안의 local `let` binding이다.
+
 ```rust
-let id = fn(x) x
-// id : forall a, e. fn(a) ->{e} a
+fn example() ->{State(Int)} Nil {
+    let id = fn(x) x
+    // id : forall a. fn(a) ->{} a
 
-let read = fn() State::get()
-// evaluating the lambda is pure; State is a latent call effect
-// read : forall s, e. fn() ->{e, State(s)} s
+    let read = fn() State::get()
+    // evaluating the lambda is pure; State is a latent call effect
+    // read : forall s. fn() ->{State(s)} s
 
-let current = State::get()
-// evaluating the RHS performs State, so current remains monomorphic
+    let current = State::get()
+    // evaluating the RHS performs State, so current remains monomorphic
+    Nil
+}
 ```
 
 For a destructuring pattern, each introduced name receives the corresponding
