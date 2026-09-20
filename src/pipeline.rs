@@ -2159,9 +2159,10 @@ mod tests {
             r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
+fn apply(f: fn(Nat) -> Nat, value: Nat) -> Nat { f(value) }
+
 fn main() {
-    let f = fn(x) { x + 1 }
-    __tribute_print_nat(f(41))
+    __tribute_print_nat(apply(fn(x) { x + 1 }, 41))
 }
 "#,
         );

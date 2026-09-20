@@ -392,6 +392,16 @@ fresh α, β, e
 Γ ⊢ fn(x) body ⇒ fn(α) ->{e} β ; {}
 ```
 
+람다 본문을 검사할 때의 누적기는 항상 닫힌 빈 row `{}`에서 시작한다. 본문이
+실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
+기록한다. 잔여 row가 닫혀 있으면 named function의 생략 effect 규칙과 같이
+본문에서 확정한 concrete effect만 보존하고, 람다가 검사된 문맥의 callable
+signature가 제공한 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
+새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
+escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
+받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
+계산한다.
+
 #### 함수 적용 (Infer)
 
 ```text
@@ -485,6 +495,13 @@ side now** from effects latent in a function value. After solving the
 constraints generated up to the binding, `let p = e` generalizes variables in
 the type of `e` exactly when evaluating `e` has the closed-empty effect `{}`.
 Variables free in the surrounding environment are never generalized.
+
+Named function의 effect annotation 생략은 signature가 미리 가진 open tail을 본문
+검사 뒤에 재부착한다. Local lambda에는 이 tail을 자동으로 새로 만들지 않으며,
+lambda literal을 검사한 callable context의 tail과 본문에서 남은 open row만
+보존한다. 이 구분은 lambda를 생성하는 평가가 pure라는 사실과 lambda를 호출할
+때의 latent effect를 혼동하지 않으면서, local callable의 convention을 named
+function과 같은 row 결과에서 계산하게 한다.
 
 This is an effect-based value restriction, not a restriction to a syntactic
 class of values. A lambda evaluates purely, so its type can be generalized even
