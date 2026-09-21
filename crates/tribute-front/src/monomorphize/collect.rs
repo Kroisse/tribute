@@ -276,22 +276,37 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     }
 }
 
-pub(crate) fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    match ty.kind(db) {
-        TypeKind::Named { args, .. } => args.iter().all(|arg| is_concrete_type(db, *arg)),
+pub(crate) fn is_concrete_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    is_concrete_type_cached(db, ty, &mut HashMap::new())
+}
+
+fn is_concrete_type_cached<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    cache: &mut HashMap<Type<'db>, bool>,
+) -> bool {
+    if let Some(concrete) = cache.get(&ty) {
+        return *concrete;
+    }
+    let concrete = match ty.kind(db) {
+        TypeKind::Named { args, .. } => args
+            .iter()
+            .all(|arg| is_concrete_type_cached(db, *arg, cache)),
         TypeKind::Func {
             params,
             result,
             effect,
             ..
         } => {
-            params.iter().all(|param| is_concrete_type(db, *param))
-                && is_concrete_type(db, *result)
-                && is_concrete_effect_row(db, *effect)
+            params
+                .iter()
+                .all(|param| is_concrete_type_cached(db, *param, cache))
+                && is_concrete_type_cached(db, *result, cache)
+                && is_concrete_effect_row_cached(db, *effect, cache)
         }
         TypeKind::Tuple(elements) => elements
             .iter()
-            .all(|element| is_concrete_type(db, *element)),
+            .all(|element| is_concrete_type_cached(db, *element, cache)),
         TypeKind::Int
         | TypeKind::Nat
         | TypeKind::Float
@@ -310,19 +325,27 @@ pub(crate) fn is_concrete_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
             result,
             effect,
         } => {
-            is_concrete_type(db, *arg)
-                && is_concrete_type(db, *result)
-                && is_concrete_effect_row(db, *effect)
+            is_concrete_type_cached(db, *arg, cache)
+                && is_concrete_type_cached(db, *result, cache)
+                && is_concrete_effect_row_cached(db, *effect, cache)
         }
-    }
+    };
+    cache.insert(ty, concrete);
+    concrete
 }
 
-fn is_concrete_effect_row(db: &dyn salsa::Database, row: crate::ast::EffectRow<'_>) -> bool {
+fn is_concrete_effect_row_cached<'db>(
+    db: &'db dyn salsa::Database,
+    row: crate::ast::EffectRow<'db>,
+    cache: &mut HashMap<Type<'db>, bool>,
+) -> bool {
     row.rest(db).is_none()
-        && row
-            .effects(db)
-            .iter()
-            .all(|effect| effect.args.iter().all(|arg| is_concrete_type(db, *arg)))
+        && row.effects(db).iter().all(|effect| {
+            effect
+                .args
+                .iter()
+                .all(|arg| is_concrete_type_cached(db, *arg, cache))
+        })
 }
 
 // ============================================================================
@@ -395,12 +418,27 @@ fn collect_generic_type_ids_inner<'db>(
 }
 
 /// Recursively walk a Type and collect all declaration-backed generic types.
-fn collect_from_type<'db>(
+pub(super) fn collect_from_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     generic_types: &HashSet<TypeDefId<'db>>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
+    collect_from_type_inner(db, ty, generic_types, result, &mut HashSet::new());
+}
+
+// Interned types form a DAG. Visit shared arguments once, including during
+// expanding nominal dependency discovery, so its round limit remains effective.
+fn collect_from_type_inner<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    generic_types: &HashSet<TypeDefId<'db>>,
+    result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    seen: &mut HashSet<Type<'db>>,
+) {
+    if !seen.insert(ty) {
+        return;
+    }
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } => {
             if !args.is_empty()
@@ -411,7 +449,7 @@ fn collect_from_type<'db>(
             }
             // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
             for arg in args {
-                collect_from_type(db, *arg, generic_types, result);
+                collect_from_type_inner(db, *arg, generic_types, result, seen);
             }
         }
         TypeKind::Func {
@@ -421,24 +459,24 @@ fn collect_from_type<'db>(
             ..
         } => {
             for p in params {
-                collect_from_type(db, *p, generic_types, result);
+                collect_from_type_inner(db, *p, generic_types, result, seen);
             }
-            collect_from_type(db, *ret, generic_types, result);
+            collect_from_type_inner(db, *ret, generic_types, result, seen);
             for effect in effect.effects(db) {
                 for arg in &effect.args {
-                    collect_from_type(db, *arg, generic_types, result);
+                    collect_from_type_inner(db, *arg, generic_types, result, seen);
                 }
             }
         }
         TypeKind::Tuple(elems) => {
             for e in elems {
-                collect_from_type(db, *e, generic_types, result);
+                collect_from_type_inner(db, *e, generic_types, result, seen);
             }
         }
         TypeKind::App { ctor, args } => {
-            collect_from_type(db, *ctor, generic_types, result);
+            collect_from_type_inner(db, *ctor, generic_types, result, seen);
             for a in args {
-                collect_from_type(db, *a, generic_types, result);
+                collect_from_type_inner(db, *a, generic_types, result, seen);
             }
         }
         TypeKind::Continuation {
@@ -446,11 +484,11 @@ fn collect_from_type<'db>(
             result: ret,
             effect,
         } => {
-            collect_from_type(db, *arg, generic_types, result);
-            collect_from_type(db, *ret, generic_types, result);
+            collect_from_type_inner(db, *arg, generic_types, result, seen);
+            collect_from_type_inner(db, *ret, generic_types, result, seen);
             for effect in effect.effects(db) {
                 for arg in &effect.args {
-                    collect_from_type(db, *arg, generic_types, result);
+                    collect_from_type_inner(db, *arg, generic_types, result, seen);
                 }
             }
         }

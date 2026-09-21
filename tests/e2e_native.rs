@@ -1677,3 +1677,12 @@ fn main() {
         "0",
     );
 }
+
+#[test]
+fn test_native_specialized_enum_payloads() {
+    assert_native_output(
+        "specialized_enum_payloads.trb",
+        include_str!("specialized_enum_payloads.trb"),
+        "43\n1",
+    );
+}

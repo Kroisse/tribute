@@ -259,6 +259,7 @@ pub(super) fn lower_module<'db>(
         span_map,
         function_types,
         constructor_types,
+        specialized_enum_variants,
         node_types,
         local_instances,
         ability_conventions,
@@ -311,6 +312,7 @@ pub(super) fn lower_module<'db>(
         &mut String::new(),
         &mut well_known_type_prescan,
         &constructor_types,
+        &specialized_enum_variants,
     );
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.decls);
     prescan_source_functions(&mut ctx, &ast.decls);
@@ -472,6 +474,7 @@ fn prescan_logical_nominal_layouts<'db>(
     prefix: &mut String,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
+    specialized_enum_variants: &HashMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
     for declaration in declarations {
         match declaration {
@@ -505,12 +508,21 @@ fn prescan_logical_nominal_layouts<'db>(
                     .map(|variant| {
                         let variant_ctor =
                             CtorId::new(ctx.db, crate::qualified_symbol(prefix, variant.name));
-                        let fields = constructor_fields(
-                            ctx,
-                            constructors,
-                            variant_ctor,
-                            variant.fields.len(),
-                        )
+                        let fields = if enumeration.id.variant().is_some() {
+                            let scheme = *specialized_enum_variants.get(&variant.id)
+                                .expect("missing specialized enum variant schema");
+                            let result = match scheme.body(ctx.db).kind(ctx.db) {
+                                TypeKind::Func { result, .. } => *result,
+                                _ => scheme.body(ctx.db),
+                            };
+                            assert!(matches!(result.kind(ctx.db), TypeKind::Named { id, args, .. }
+                                if args.is_empty() && id.qualified(ctx.db) == qualified
+                                    && id.origin(ctx.db) == crate::ast::TypeOrigin::Source(enumeration.id.origin())),
+                                "specialized enum variant schema has wrong owner");
+                            constructor_schema_fields(ctx, scheme, variant.fields.len())
+                        } else {
+                            constructor_fields(ctx, constructors, variant_ctor, variant.fields.len())
+                        }
                         .into_iter()
                         .map(|ty| ctx.convert_logical_type(ir, ty))
                         .collect();
@@ -543,6 +555,7 @@ fn prescan_logical_nominal_layouts<'db>(
                         prefix,
                         well_known_types,
                         constructors,
+                        specialized_enum_variants,
                     );
                     prefix.truncate(saved);
                 }
@@ -601,6 +614,14 @@ fn constructor_fields<'db>(
     let scheme = constructors
         .get(&constructor)
         .unwrap_or_else(|| panic!("missing typechecked constructor schema for {constructor:?}"));
+    constructor_schema_fields(ctx, *scheme, field_count)
+}
+
+fn constructor_schema_fields<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    scheme: crate::ast::TypeScheme<'db>,
+    field_count: usize,
+) -> Vec<crate::ast::Type<'db>> {
     match scheme.body(ctx.db()).kind(ctx.db()) {
         TypeKind::Func { params, .. } => {
             assert_eq!(

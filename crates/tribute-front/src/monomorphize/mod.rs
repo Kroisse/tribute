@@ -1,5 +1,6 @@
 pub mod collect;
 pub mod mangle;
+mod nominal;
 mod rewrite;
 mod validate;
 pub(crate) use collect::is_concrete_type;
@@ -20,6 +21,7 @@ const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 /// Exact typechecking metadata keyed by source NodeId.
 pub struct MonomorphizeMetadata<'db> {
     pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
+    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
@@ -142,6 +144,7 @@ pub fn monomorphize_functions<'db>(
         .iter()
         .map(|(_, scheme)| *scheme)
         .chain(metadata.constructor_types.values().copied())
+        .chain(metadata.specialized_enum_variants.values().copied())
     {
         scheme.for_each_type(db, |ty| extra_types.push(ty));
     }
@@ -182,7 +185,18 @@ pub fn monomorphize_functions<'db>(
         extra_types.extend(op.params.iter().copied());
         extra_types.push(op.result);
     }
-    let type_instantiations = collect::collect_type_instantiations(db, &module, extra_types);
+    let seeds = collect::collect_type_instantiations(db, &module, extra_types);
+    let nominal = nominal::collect(db, &module, &metadata.constructor_types, seeds)?;
+    let type_instantiations = nominal.instances;
+    for (node, scheme) in nominal.enum_variants {
+        assert!(
+            metadata
+                .specialized_enum_variants
+                .insert(node, scheme)
+                .is_none(),
+            "specialized enum variant schema already exists"
+        );
+    }
 
     let module = if !type_instantiations.is_empty() {
         // Generate specialized struct/enum declarations
@@ -206,6 +220,9 @@ pub fn monomorphize_functions<'db>(
             *scheme = rewrite_scheme(*scheme);
         }
         for scheme in metadata.constructor_types.values_mut() {
+            *scheme = rewrite_scheme(*scheme);
+        }
+        for scheme in metadata.specialized_enum_variants.values_mut() {
             *scheme = rewrite_scheme(*scheme);
         }
         for ty in metadata.node_types.values_mut() {
@@ -634,6 +651,7 @@ mod tests {
         };
         let mut metadata = MonomorphizeMetadata {
             constructor_types: HashMap::new(),
+            specialized_enum_variants: HashMap::new(),
             node_types: HashMap::from([(origin, bound)]),
             function_instances: HashMap::new(),
             local_instances: HashMap::from([(

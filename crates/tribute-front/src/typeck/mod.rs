@@ -226,6 +226,22 @@ pub struct ExpressionTypeMetadata<'db> {
     pub local_instances: Vec<(NodeId, LocalCallableInstance<'db>)>,
 }
 
+/// Constructor declarations and exact schemes for cloned enum variants.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ConstructorTypeMetadata<'db> {
+    pub schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>,
+    pub specialized_enum_variants: Vec<(NodeId, TypeScheme<'db>)>,
+}
+
+impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<'db> {
+    fn from(schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>) -> Self {
+        Self {
+            schemes,
+            specialized_enum_variants: Vec::new(),
+        }
+    }
+}
+
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
@@ -238,7 +254,7 @@ pub struct TypeCheckOutput<'db> {
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
     #[returns(ref)]
-    pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
+    pub constructor_types: ConstructorTypeMetadata<'db>,
     /// Exact expression types and callee instantiations.
     #[returns(ref)]
     pub expression_types: ExpressionTypeMetadata<'db>,
@@ -330,7 +346,7 @@ pub fn typecheck_module<'db>(
         db,
         result.module,
         result.function_types,
-        result.constructor_types,
+        result.constructor_types.into(),
         ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
