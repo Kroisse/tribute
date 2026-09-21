@@ -170,6 +170,15 @@ Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계�
 zero-result 형상을 지원하며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
 
+### Tail-resumptive dispatch의 함수 시그니처
+
+`effect.dispatch_tail`의 Wasm lowering은 `(Evidence, env: anyref, op_idx: i32,
+payload: anyref) -> anyref` 시그니처를 명시한다. Evidence와 반환 표현은 정확히
+일치해야 하며 packed payload는 검증된 GC widening만 허용한다. Lowering은
+operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_indirect`에
+보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻으며,
+lowering의 placeholder `type_idx`가 그 결과를 덮어쓰지 않는다.
+
 ### Nil 값과 callable result의 구분
 
 `Nil`을 값으로 생성하는 Wasm 연산은 `ref.null none`을 포함한 실제 stack 값을

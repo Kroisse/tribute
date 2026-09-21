@@ -478,3 +478,27 @@ fn main() ->{std::io::Io} Nil {
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
 }
+
+#[test]
+fn test_validate_fixed_wasm_dispatch_abis() {
+    let mut ctx = trunk_ir::IrContext::new();
+    let module = trunk_ir::parser::parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+        !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
+        func.func @tail(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+            %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+            func.return %result
+        }
+        func.func @cps(%ev: wasm.arrayref, %dispatch: !Closure, %resume: !Closure, %payload: wasm.anyref) {
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+        }
+    }"#,
+    );
+    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
+    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+    let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary.bytes)
+        .expect("both fixed dispatch ABIs must encode valid function types");
+}
