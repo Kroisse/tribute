@@ -193,6 +193,13 @@ fn register_builtin_evidence_type(
 ///
 /// Normalizes tribute_rt types and variant instances to their canonical form.
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    // Wasm has no i1 storage type. Match type_to_valtype before comparing
+    // constructor, getter, and setter observations of the same field.
+    if helpers::is_type(ctx, ty, "core", "i1") {
+        return ctx.types.intern(
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
+        );
+    }
     let data = ctx.types.get(ty);
 
     // `_closure` is the target-private builtin closure layout. Logical closure
@@ -885,6 +892,61 @@ mod tests {
         let ty = ctx.type_alias_by_name(Symbol::new("Marker")).unwrap();
         let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
         assert!(!map.contains_key(&ty));
+    }
+
+    #[test]
+    fn boolean_struct_fields_use_i32_independently_of_collection_order() {
+        for stored in ["core.i1", "core.i32"] {
+            for projected in ["core.i1", "core.i32", "core.i64", "core.f32", "wasm.anyref"] {
+                for projection_first in [false, true] {
+                    let index = FIRST_USER_TYPE_IDX;
+                    let projection = format!(
+                        "wasm.func @observe(%cell: !Cell) {{
+%value = wasm.struct_get %cell {{type_idx = {index}, field_idx = 0}} : {projected}
+wasm.struct_set %cell, %value {{type_idx = {index}, field_idx = 0}}
+wasm.return
+}}"
+                    );
+                    let constructor = format!(
+                        "wasm.func @make() {{
+%zero = wasm.i32_const {{value = 0}} : {stored}
+%cell = wasm.struct_new %zero {{type_idx = {index}}} : !Cell
+wasm.return
+}}"
+                    );
+                    let functions = if projection_first {
+                        format!("{projection}\n{constructor}")
+                    } else {
+                        format!("{constructor}\n{projection}")
+                    };
+                    let mut ctx = IrContext::new();
+                    let module = trunk_ir::parser::parse_test_module(
+                        &mut ctx,
+                        &format!(
+                            "core.module @test {{
+!Cell = adt.typeref() {{name = @Cell}}
+{functions}
+}}"
+                        ),
+                    );
+                    if matches!(projected, "core.i1" | "core.i32") {
+                        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+                        let GcTypeDef::Struct(fields) = &types[index as usize] else {
+                            panic!("struct field expected")
+                        };
+                        assert_eq!(fields.len(), 1);
+                        assert_eq!(fields[0].element_type, StorageType::Val(ValType::I32));
+                        let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
+                        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+                            .validate_all(&binary.bytes)
+                            .unwrap();
+                    } else {
+                        let error = collect_gc_types(&mut ctx, module).unwrap_err();
+                        assert!(error.to_string().contains("type mismatch"), "{error}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -302,6 +302,14 @@ Concrete nominal 타입의 등록과 연산별 narrowing cast는 그대로 유�
 현재 Evidence 배열 ABI에서 명시적으로 부여하는 `arrayref` 매핑은 별도 계약이며,
 일반 GC 연산에서 이를 새로 유추하거나 덮어쓰지 않는다.
 
+### GC struct 필드의 scalar 표현
+
+GC struct 필드 수집은 타입 비교와 저장 전에 Wasm의 물리적 scalar 표현을
+정규화한다. `core.i1`과 `core.i32`는 모두 Wasm `i32` 필드로 표현하므로,
+생성·읽기·쓰기에서 두 타입이 섞이더라도 수집 순서와 무관하게 `i32`를 사용한다.
+이 동등성은 Bool의 target 표현에 한정한다. `i64`, 부동소수점, 참조 타입의
+불일치를 같은 크기나 비슷한 레이아웃으로 허용하지 않는다.
+
 ### 물리적 참조 할당 가능성
 
 WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struct`의
