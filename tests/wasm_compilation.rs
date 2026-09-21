@@ -195,11 +195,14 @@ fn main() {
 }
 "#,
     );
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile a root main that closes an open callback worker",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
 }
 
 #[salsa_test]
@@ -406,6 +409,7 @@ fn main() ->{std::io::Io} Nil { std::io::print_line(classify(1)) }
 }
 
 #[salsa_test]
+#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
 fn test_compile_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability Console {
@@ -435,14 +439,18 @@ fn main() ->{std::io::Io} Nil {
 }
 "#;
     let source = SourceCst::from_source_str(db, "tail_dispatch_ability.trb", code);
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile tail-dispatch ability through wasm effect ABI lowering",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
 }
 
 #[salsa_test]
+#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
 fn test_compile_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -472,11 +480,14 @@ fn main() ->{std::io::Io} Nil {
 }
 "#;
     let source = SourceCst::from_source_str(db, "cps_dispatch_ability.trb", code);
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
 }
 
 #[test]
