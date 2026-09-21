@@ -205,6 +205,66 @@ fn nested(x: Nat, y: Bool) -> Nat {
     assert_snapshot!(ir_text);
 }
 
+#[salsa_test]
+fn list_constructor_pattern_retains_callable_metadata(db: &salsa::DatabaseImpl) {
+    use tribute_front::ast::{PatternKind, TypeKind};
+
+    let source = SourceCst::from_source_str(
+        db,
+        "list_constructor_metadata.trb",
+        r#"
+enum Item { Number(Nat) }
+fn observe(values: List(Item)) -> Nat {
+    case values { [Number(value)] -> value, _ -> 0 }
+}
+"#,
+    );
+    let checked = tribute_front::query::type_check_output(db, source).expect("typed fixture");
+    let function = checked
+        .module(db)
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Function(function) => Some(function),
+            _ => None,
+        })
+        .expect("observe function");
+    let ExprKind::Block { value, .. } = &*function.body.kind else {
+        panic!("function block");
+    };
+    let ExprKind::Case { arms, .. } = &*value.kind else {
+        panic!("case expression");
+    };
+    let whole = &arms[0].pattern;
+    let PatternKind::List(elements) = &*whole.kind else {
+        panic!("exact list pattern");
+    };
+    let PatternKind::Variant { ctor, .. } = &*elements[0].kind else {
+        panic!("Number constructor pattern");
+    };
+    let node_type = |id| {
+        checked
+            .expression_types(db)
+            .node_types
+            .iter()
+            .find_map(|(node, ty)| (*node == id).then_some(*ty))
+            .expect("recorded node type")
+    };
+    let TypeKind::Named { id, args, .. } = node_type(whole.id).kind(db) else {
+        panic!("whole-list type");
+    };
+    assert!(id.is_builtin_list(db));
+    let TypeKind::Func { params, result, .. } = ctor.ty.kind(db) else {
+        panic!("constructor must retain its callable signature");
+    };
+    assert_eq!(params.len(), 1);
+    assert!(matches!(params[0].kind(db), TypeKind::Nat));
+    assert_eq!(args.as_slice(), &[*result]);
+    assert_eq!(node_type(elements[0].id), ctor.ty);
+    assert_ne!(ctor.ty, *result);
+    assert!(ast_pipeline_error_messages(db, source).is_empty());
+}
+
 fn nested_case_ids(
     module: &tribute_front::ast::Module<tribute_front::ast::TypedRef<'_>>,
 ) -> (tribute_front::ast::NodeId, tribute_front::ast::NodeId) {

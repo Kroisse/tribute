@@ -745,6 +745,11 @@ List patterns lower to sequence observations. Exact-length patterns require an
 empty remainder; prefix-rest patterns return the remainder as the same canonical
 List type. A backend must eliminate `list.*` before its backend-ready boundary.
 
+Source-logical List 패턴의 `list.head` 결과 타입은 `element_type`과 같아야 한다.
+둘 다 전체 패턴의 검증된 `List(a)`에서 논리 타입으로 변환한 `a`를 사용한다.
+원소 생성자 패턴 노드의 callable 메타데이터에서 결과 타입을 가져오지 않는다.
+이 계약은 매칭 검사와 성공한 arm의 바인딩에 동일하게 적용한다.
+
 List의 logical representation은 compiler-owned nominal identity로 선택한다.
 동명 source ADT의 등록은 이 선택을 바꾸지 않는다. 현재 lowering이 사용하는
 `tribute_rt.anyref`는 표현상의 선택이며 List의 semantic identity를 대신하지
