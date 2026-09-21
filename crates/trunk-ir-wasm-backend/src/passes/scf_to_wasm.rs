@@ -8,8 +8,10 @@
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
@@ -21,10 +23,9 @@ use trunk_ir::rewrite::{
     PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::transforms::scf_control_flow::{
-    has_only_terminal_region_successors, has_terminal_unused_never_result,
-};
+use trunk_ir::transforms::scf_control_flow::StructuredControlAnalysis;
 use trunk_ir::types::Attribute;
+use trunk_ir::walk::{WalkAction, walk_op};
 
 const SCF_TO_WASM_BOUNDARY: &str = "scf-to-wasm";
 
@@ -42,17 +43,34 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let terminal = Arc::new(analyze_structured_control(ctx, module)?);
-    PatternApplicator::new(type_converter)
-        .add_pattern(ScfIfPattern(terminal.clone()))
-        .add_pattern(ScfSwitchPattern(terminal.clone()))
-        .add_pattern(ScfLoopPattern(terminal))
-        .add_pattern(ScfYieldPattern)
-        .add_pattern(ScfContinuePattern)
-        .add_pattern(ScfBreakPattern)
-        .with_target(scf_to_wasm_target())
-        .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
-    Ok(())
+    AnalysisCache::scope(ctx, |ctx, cache| {
+        let analysis = cache
+            .get::<StructuredControlAnalysis>(ctx, module.op())
+            .expect("structured control analysis is infallible");
+        let mut plan = ScfLoweringPlan::default();
+        validate_structured_control(ctx, module, &analysis, |op, decision| match decision {
+            ControlLowering::DropNeverResult => {
+                plan.drop_never_results.insert(op);
+            }
+            ControlLowering::ResultlessSwitch => {
+                plan.resultless_switches.insert(op);
+            }
+        })?;
+        // Patterns consume decisions about source operations. They must not
+        // query cached source facts after nested operations have been rewritten.
+        cache.invalidate::<StructuredControlAnalysis>(module.op());
+        let plan = Arc::new(plan);
+        PatternApplicator::new(type_converter)
+            .add_pattern(ScfIfPattern(plan.clone()))
+            .add_pattern(ScfSwitchPattern(plan.clone()))
+            .add_pattern(ScfLoopPattern(plan))
+            .add_pattern(ScfYieldPattern)
+            .add_pattern(ScfContinuePattern)
+            .add_pattern(ScfBreakPattern)
+            .with_target(scf_to_wasm_target())
+            .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
+        Ok(())
+    })
 }
 
 /// Validate structured control before any target pipeline mutation.
@@ -60,42 +78,45 @@ pub fn validate_lowerable_structured_control(
     ctx: &IrContext,
     module: Module,
 ) -> Result<(), ConversionError> {
-    analyze_structured_control(ctx, module).map(|_| ())
+    let analysis = AnalysisCache::new()
+        .get::<StructuredControlAnalysis>(ctx, module.op())
+        .expect("structured control analysis is infallible");
+    validate_structured_control(ctx, module, &analysis, |_, _| {})
 }
 
-/// Snapshot source terminal proofs before the bottom-up pattern walk rewrites
-/// nested SCF operations. Target operations do not carry the source interfaces.
-fn analyze_structured_control(
+/// Wasm-specific decisions for the original operations, not cached IR facts.
+#[derive(Default)]
+struct ScfLoweringPlan {
+    drop_never_results: HashSet<OpRef>,
+    resultless_switches: HashSet<OpRef>,
+}
+
+enum ControlLowering {
+    DropNeverResult,
+    ResultlessSwitch,
+}
+
+/// Apply target legality to common facts. Validation-only callers need not
+/// allocate a rewrite plan; lowering records accepted decisions before mutation.
+fn validate_structured_control(
     ctx: &IrContext,
     module: Module,
-) -> Result<HashSet<OpRef>, ConversionError> {
+    analysis: &StructuredControlAnalysis,
+    mut accept: impl FnMut(OpRef, ControlLowering),
+) -> Result<(), ConversionError> {
     validate_lowerable_switches(ctx, module)?;
-    fn visit(
-        ctx: &IrContext,
-        op: OpRef,
-        terminal: &mut HashSet<OpRef>,
-    ) -> Result<(), ConversionError> {
-        let is_value_control = scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op);
-        let results = ctx.op_results(op);
-        let has_never = is_value_control
-            && results.iter().any(|&value| {
+    let result = walk_op(ctx, module.op(), &mut |op| {
+        let has_never = (scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op))
+            && ctx.op_results(op).iter().any(|&value| {
                 let ty = ctx.types.get(ctx.value_ty(value));
                 ty.dialect == "core" && ty.name == "never"
             });
-        if has_never || scf::Switch::matches(ctx, op) {
-            let is_terminal = if has_never {
-                has_terminal_unused_never_result(ctx, op)
+        if has_never {
+            if analysis.has_terminal_unused_never_result(op) {
+                accept(op, ControlLowering::DropNeverResult);
             } else {
-                ctx.op(op)
-                    .parent_block
-                    .is_some_and(|block| ctx.block(block).ops.last() == Some(&op))
-                    && has_only_terminal_region_successors(ctx, op)
-            };
-            if is_terminal {
-                terminal.insert(op);
-            } else if has_never {
                 let data = ctx.op(op);
-                return Err(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
+                return ControlFlow::Break(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
                     op,
                     dialect: data.dialect,
                     name: data.name,
@@ -103,19 +124,15 @@ fn analyze_structured_control(
                     reason: Some("Never control requires one unused result, final block position, and terminal region successors".into()),
                 }]));
             }
+        } else if analysis.is_terminal_resultless_switch(op) {
+            accept(op, ControlLowering::ResultlessSwitch);
         }
-        for &region in &ctx.op(op).regions {
-            for &block in &ctx.region(region).blocks {
-                for &nested in &ctx.block(block).ops {
-                    visit(ctx, nested, terminal)?;
-                }
-            }
-        }
-        Ok(())
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    match result {
+        ControlFlow::Break(error) => Err(error),
+        ControlFlow::Continue(()) => Ok(()),
     }
-    let mut terminal = HashSet::new();
-    visit(ctx, module.op(), &mut terminal)?;
-    Ok(terminal)
 }
 
 /// Reject switches this target cannot lower without mutating the module.
@@ -323,7 +340,7 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> Vec<OpRef> {
 }
 
 /// Pattern for a resultless `scf.switch` -> nested `wasm.if` comparisons.
-struct ScfSwitchPattern(Arc<HashSet<OpRef>>);
+struct ScfSwitchPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfSwitchPattern {
     fn match_and_rewrite(
@@ -340,7 +357,7 @@ impl RewritePattern for ScfSwitchPattern {
         };
         let loc = ctx.op(op).location;
         let nil_ty = core::nil(ctx).as_type_ref();
-        let result_types = if self.0.contains(&op) {
+        let result_types = if self.0.resultless_switches.contains(&op) {
             vec![]
         } else {
             vec![nil_ty]
@@ -403,7 +420,7 @@ impl RewritePattern for ScfSwitchPattern {
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
-struct ScfIfPattern(Arc<HashSet<OpRef>>);
+struct ScfIfPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfIfPattern {
     fn match_and_rewrite(
@@ -425,7 +442,7 @@ impl RewritePattern for ScfIfPattern {
         if result_types.len() > 1 {
             return false;
         }
-        let drop_result = self.0.contains(&op);
+        let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();
         }
@@ -455,7 +472,7 @@ impl RewritePattern for ScfIfPattern {
 /// From inside a `wasm.if` within the loop body:
 /// - `wasm.br(target=1)` branches to the loop (continue)
 /// - `wasm.br(target=2)` branches to the block (break)
-struct ScfLoopPattern(Arc<HashSet<OpRef>>);
+struct ScfLoopPattern(Arc<ScfLoweringPlan>);
 
 impl RewritePattern for ScfLoopPattern {
     fn match_and_rewrite(
@@ -476,7 +493,7 @@ impl RewritePattern for ScfLoopPattern {
         if result_types.len() > 1 {
             return false;
         }
-        let drop_result = self.0.contains(&op);
+        let drop_result = self.0.drop_never_results.contains(&op);
         if drop_result {
             result_types.clear();
         }

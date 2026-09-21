@@ -131,6 +131,18 @@ must retain the merge path. The same conservative query is shared with Wasm
 structured lowering; it does not imply arbitrary multi-block or loop CFG
 termination analysis.
 
+이 보수적 판정은 target-independent `StructuredControlAnalysis`가 소유한다.
+분석은 `Analysis` 계약에 따라 IR을 읽기만 하며, 자식에서 부모 순서로 각
+region과 SCF operation의 증명 결과를 저장한다. 부모 판정은 저장된 자식 결과를
+조회하므로 중첩 subtree를 다시 탐색하지 않는다. 증명되지 않은 terminal 성질은
+정상적인 분석 결과이며, interface 오류도 terminal 증거로 사용하지 않는다.
+Wasm switch의 지원 타입이나 target conversion 진단은 분석의 책임이 아니다.
+
+Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조회하고,
+각 target의 검증과 변환 결정을 도출한다. Mutation 전에 캐시를 무효화하며,
+rewrite는 원래 operation에 대한 변환 전 결정만 소비한다. 보존성을 증명하지
+않은 다른 pass를 가로질러 이 결정을 재사용하지 않는다.
+
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
 SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.

@@ -30,12 +30,10 @@
 //! ```
 
 use smallvec::SmallVec;
+use std::{collections::HashSet, ops::ControlFlow};
 
-#[cfg(test)]
-use super::scf_control_flow::is_terminal_region;
-use super::scf_control_flow::{
-    has_only_terminal_region_successors, has_terminal_unused_never_result,
-};
+use super::scf_control_flow::StructuredControlAnalysis;
+use crate::analysis::AnalysisCache;
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
 use crate::ops::DialectOp;
@@ -45,6 +43,7 @@ use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
 use crate::types::{Attribute, Location};
+use crate::walk::{WalkAction, walk_op};
 
 /// Lower all `scf` operations in a module to `cf` operations.
 pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
@@ -52,7 +51,7 @@ pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
         Some(r) => r,
         None => return,
     };
-    transform_region(ctx, body);
+    lower_region(ctx, module.op(), body);
 }
 
 /// Lower all `scf` operations in one function to `cf` operations.
@@ -60,7 +59,7 @@ pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
     let Some(body) = func.body_if_present(ctx) else {
         return;
     };
-    transform_region(ctx, body);
+    lower_region(ctx, func.op_ref(), body);
 }
 
 /// Build a function-anchored SCF-to-CF lowering pass.
@@ -71,8 +70,34 @@ pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
     })
 }
 
+/// Decisions for the original SCF operations, consumed after invalidation.
+struct ScfToCfPlan {
+    without_merge: HashSet<OpRef>,
+}
+
+fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef) {
+    AnalysisCache::scope(ctx, |ctx, cache| {
+        let analysis = cache
+            .get::<StructuredControlAnalysis>(ctx, target)
+            .expect("structured control analysis is infallible");
+        let mut plan = ScfToCfPlan {
+            without_merge: HashSet::new(),
+        };
+        let _ = walk_op::<()>(ctx, target, &mut |op| {
+            if (scf::If::matches(ctx, op) && analysis.has_terminal_unused_never_result(op))
+                || analysis.is_terminal_resultless_switch(op)
+            {
+                plan.without_merge.insert(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        cache.invalidate::<StructuredControlAnalysis>(target);
+        transform_region(ctx, body, &plan);
+    });
+}
+
 /// Transform all blocks in a region, lowering scf ops to cf.
-fn transform_region(ctx: &mut IrContext, region: RegionRef) {
+fn transform_region(ctx: &mut IrContext, region: RegionRef, plan: &ScfToCfPlan) {
     // We iterate blocks by index because new blocks may be inserted.
     // Process each block: if it contains an scf op, split and expand.
     let mut i = 0;
@@ -82,7 +107,7 @@ fn transform_region(ctx: &mut IrContext, region: RegionRef) {
             break;
         }
         let block = blocks[i];
-        transform_block(ctx, block);
+        transform_block(ctx, block, plan);
         i += 1;
     }
 }
@@ -92,7 +117,7 @@ fn transform_region(ctx: &mut IrContext, region: RegionRef) {
 /// If found, the block is split and expanded. The merge block (containing
 /// operations after the scf op) will be processed in a subsequent iteration
 /// of the region loop.
-fn transform_block(ctx: &mut IrContext, block: BlockRef) {
+fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
     // First, recursively transform nested regions in non-scf ops
@@ -102,7 +127,7 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef) {
         }
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
-            transform_region(ctx, region);
+            transform_region(ctx, region, plan);
         }
     }
 
@@ -116,11 +141,11 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef) {
     let loc = ctx.op(scf_op).location;
 
     if scf::If::matches(ctx, scf_op) {
-        lower_scf_if(ctx, block, scf_op, loc);
+        lower_scf_if(ctx, block, scf_op, loc, plan);
     } else if scf::Loop::matches(ctx, scf_op) {
-        lower_scf_loop(ctx, block, scf_op, loc);
+        lower_scf_loop(ctx, block, scf_op, loc, plan);
     } else if scf::Switch::matches(ctx, scf_op) {
-        lower_scf_switch(ctx, block, scf_op, loc);
+        lower_scf_switch(ctx, block, scf_op, loc, plan);
     }
 }
 
@@ -139,11 +164,12 @@ fn lower_terminal_never_if(
     ctx: &mut IrContext,
     block: BlockRef,
     scf_op: OpRef,
-    loc: Location,
+    plan: &ScfToCfPlan,
     cond: ValueRef,
     then_region: RegionRef,
     else_region: RegionRef,
 ) {
+    let loc = ctx.op(scf_op).location;
     let parent_region = ctx.block(block).parent_region.unwrap();
     let blocks = ctx.region(parent_region).blocks.to_vec();
     let insert_before = blocks
@@ -160,19 +186,25 @@ fn lower_terminal_never_if(
     ctx.push_op(block, cond_br.op_ref());
 
     for &branch in then_blocks.iter().chain(&else_blocks) {
-        transform_block(ctx, branch);
+        transform_block(ctx, branch, plan);
     }
 }
 
 /// Lower `scf.if` to cf.cond_br + then/else/merge blocks.
-fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
+fn lower_scf_if(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    loc: Location,
+    plan: &ScfToCfPlan,
+) {
     let if_op = scf::If::from_op(ctx, scf_op).unwrap();
     let cond = if_op.cond(ctx);
     let then_region = if_op.then_region(ctx);
     let else_region = if_op.else_region(ctx);
 
-    if has_terminal_unused_never_result(ctx, scf_op) {
-        lower_terminal_never_if(ctx, block, scf_op, loc, cond, then_region, else_region);
+    if plan.without_merge.contains(&scf_op) {
+        lower_terminal_never_if(ctx, block, scf_op, plan, cond, then_region, else_region);
         return;
     }
 
@@ -224,15 +256,21 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
 
     // Recursively transform then/else blocks (they may contain nested scf ops)
     for &b in &then_blocks {
-        transform_block(ctx, b);
+        transform_block(ctx, b, plan);
     }
     for &b in &else_blocks {
-        transform_block(ctx, b);
+        transform_block(ctx, b, plan);
     }
 }
 
 /// Lower `scf.loop` to cf header + exit blocks.
-fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
+fn lower_scf_loop(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    loc: Location,
+    plan: &ScfToCfPlan,
+) {
     let loop_op = scf::Loop::from_op(ctx, scf_op).unwrap();
     let init_values: Vec<_> = loop_op.init(ctx).to_vec();
     let body_region = loop_op.body(ctx);
@@ -280,7 +318,7 @@ fn lower_scf_loop(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Loca
 
     // Recursively transform body blocks
     for &b in &body_blocks {
-        transform_block(ctx, b);
+        transform_block(ctx, b, plan);
     }
 }
 
@@ -347,12 +385,6 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
     })
 }
 
-/// Whether a resultless switch is the final operation in its block and every
-/// selectable arm transfers control, leaving no continuation to merge into.
-fn is_terminal_resultless_switch(ctx: &IrContext, block: BlockRef, scf_op: OpRef) -> bool {
-    ctx.block(block).ops.last() == Some(&scf_op) && has_only_terminal_region_successors(ctx, scf_op)
-}
-
 /// Lower a terminal resultless switch without manufacturing an unreachable
 /// merge block. The explicit default is required because an unmatched switch
 /// must also transfer control.
@@ -360,11 +392,12 @@ fn lower_terminal_resultless_switch(
     ctx: &mut IrContext,
     block: BlockRef,
     scf_op: OpRef,
-    loc: Location,
+    plan: &ScfToCfPlan,
     discriminant: ValueRef,
     cases: Vec<(Attribute, RegionRef)>,
     default_region: RegionRef,
 ) {
+    let loc = ctx.op(scf_op).location;
     let parent_region = ctx.block(block).parent_region.unwrap();
     let blocks = ctx.region(parent_region).blocks.to_vec();
     let insert_before = blocks
@@ -397,23 +430,29 @@ fn lower_terminal_resultless_switch(
 
     for group in &all_inlined {
         for &branch in group {
-            transform_block(ctx, branch);
+            transform_block(ctx, branch, plan);
         }
     }
 }
 
 /// Lower `scf.switch` to chained cond_br comparisons.
-fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Location) {
+fn lower_scf_switch(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    scf_op: OpRef,
+    loc: Location,
+    plan: &ScfToCfPlan,
+) {
     let Some(arms) = switch_arms(ctx, scf_op) else {
         return;
     };
 
-    if is_terminal_resultless_switch(ctx, block, scf_op) {
+    if plan.without_merge.contains(&scf_op) {
         lower_terminal_resultless_switch(
             ctx,
             block,
             scf_op,
-            loc,
+            plan,
             arms.discriminant,
             arms.cases,
             arms.default_region.unwrap(),
@@ -496,7 +535,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
     // Recursively transform inlined blocks
     for group in &all_inlined {
         for &b in group {
-            transform_block(ctx, b);
+            transform_block(ctx, b, plan);
         }
     }
 }
@@ -1461,15 +1500,16 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = crate::parser::parse_test_module(&mut ctx, input);
             let (switch, arm) = first_switch_and_arm_region(&ctx, module);
+            let analysis = AnalysisCache::new()
+                .get::<StructuredControlAnalysis>(&ctx, module.op())
+                .unwrap();
             assert_eq!(
-                is_terminal_region(&ctx, arm),
+                analysis.is_terminal_region(arm),
                 !arm_must_be_nonterminal,
                 "unexpected arm termination proof: {input}"
             );
-            let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
-            let entry = ctx.region(function.body(&ctx)).blocks[0];
             assert!(
-                !is_terminal_resultless_switch(&ctx, entry, switch),
+                !analysis.is_terminal_resultless_switch(switch),
                 "switch must retain a continuation: {input}"
             );
         }

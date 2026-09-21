@@ -116,9 +116,14 @@ Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.blo
 포함한 모든 arm이 terminal이면 결과 없는 Wasm 비교 분기들을 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
 
-중첩 pattern이 source operation을 바꾸기 전에 전체 입력을 검사하고 terminal
-판정을 수집한다. 사용 중이거나 terminal 증명이 안 되는 `Never` 결과는 mutation
-전에 거부한다. 결과 제거 API는 모든 기존 결과가 미사용이고 새 결과가 비어
+중첩 pattern이 source operation을 바꾸기 전에 공통 `StructuredControlAnalysis`를
+조회한다. Wasm 소비자는 switch 지원 조건과 `Never` 결과의 적법성을 검사하고,
+`Never` 결과 제거와 terminal switch의 결과 없는 분기 생성을 별도 변환 결정으로
+기록한다. 분석 자체는 Wasm 지원 조건을 검사하거나 conversion 오류를 만들지
+않는다. Pipeline 진입점의 사전 검사와 SCF lowering 사이에 다른 pass가 실행되면
+분석을 다시 계산하고, 변환 직전에는 캐시를 무효화한 뒤 결정만 pattern에 전달한다.
+사용 중이거나 terminal 증명이 안 되는 `Never` 결과는 mutation 전에 거부한다.
+결과 제거 API는 모든 기존 결과가 미사용이고 새 결과가 비어
 있음을 확인하며, 일반 rewrite의 결과 개수 일치 조건을 완화하지 않는다.
 
 이 규칙은 [CPS 적법화 경계](cps-effects.md#적법화-경계)의 callable 결과 물리화와
