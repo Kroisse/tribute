@@ -80,7 +80,31 @@ fn try_get_builder(builders: &mut Vec<GcTypeBuilder>, idx: u32) -> Option<&mut G
 }
 
 /// Register a type in the type_idx_by_type map
-fn register_type(type_idx_by_type: &mut HashMap<TypeRef, u32>, idx: u32, ty: TypeRef) {
+fn register_type(
+    ctx: &IrContext,
+    type_idx_by_type: &mut HashMap<TypeRef, u32>,
+    idx: u32,
+    ty: TypeRef,
+) {
+    // An operation index identifies its layout, not every value of an abstract
+    // reference type elsewhere in the module. Builtin ABI mappings are seeded
+    // separately and must not be inferred from individual operations.
+    let data = ctx.types.get(ty);
+    if data.dialect == Symbol::new("wasm")
+        && [
+            "anyref",
+            "structref",
+            "arrayref",
+            "funcref",
+            "externref",
+            "i31ref",
+            "eqref",
+        ]
+        .iter()
+        .any(|name| data.name == Symbol::new(name))
+    {
+        return;
+    }
     type_idx_by_type.entry(ty).or_insert(idx);
 }
 
@@ -160,7 +184,7 @@ fn register_builtin_evidence_type(
             ctx.types.get(ty).params[0]
         };
         validate_marker_layout(ctx, marker)?;
-        register_type(map, index, ty);
+        register_type(ctx, map, index, ty);
     }
     Ok(())
 }
@@ -481,7 +505,7 @@ pub(crate) fn collect_gc_types(
                 }
 
                 if let Some(result_ty) = result_type {
-                    register_type(&mut type_idx_by_type, type_idx, result_ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, result_ty);
                 }
                 for (field_idx, &value) in operands.iter().enumerate() {
                     let ty = helpers::value_type(ctx, value);
@@ -523,7 +547,7 @@ pub(crate) fn collect_gc_types(
                 }
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
-                    register_type(&mut type_idx_by_type, type_idx, ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
                 // Record field type from result type
                 // Note: type variables should be resolved to concrete types before emit
@@ -563,7 +587,7 @@ pub(crate) fn collect_gc_types(
                 }
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
-                    register_type(&mut type_idx_by_type, type_idx, ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
                 if let Some(&second_operand) = operands.get(1) {
                     let ty = helpers::value_type(ctx, second_operand);
@@ -588,7 +612,7 @@ pub(crate) fn collect_gc_types(
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
                 builder.kind = GcKind::Array;
                 if let Some(&result_ty) = result_types.first() {
-                    register_type(&mut type_idx_by_type, type_idx, result_ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, result_ty);
                 }
                 let operands = ctx.op_operands(op).to_vec();
                 if let Some(&second_operand) = operands.get(1) {
@@ -610,7 +634,7 @@ pub(crate) fn collect_gc_types(
                 builder.kind = GcKind::Array;
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
-                    register_type(&mut type_idx_by_type, type_idx, ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
                 // Record element type from result type
                 // Note: type variables should be resolved to concrete types before emit
@@ -628,7 +652,7 @@ pub(crate) fn collect_gc_types(
                 builder.kind = GcKind::Array;
                 if let Some(&first_operand) = operands.first() {
                     let ty = helpers::value_type(ctx, first_operand);
-                    register_type(&mut type_idx_by_type, type_idx, ty);
+                    register_type(ctx, &mut type_idx_by_type, type_idx, ty);
                 }
                 if let Some(&third_operand) = operands.get(2) {
                     let ty = helpers::value_type(ctx, third_operand);
@@ -658,7 +682,7 @@ pub(crate) fn collect_gc_types(
                 continue;
             };
             if let Some(&result_ty) = result_types.first() {
-                register_type(&mut type_idx_by_type, type_idx, result_ty);
+                register_type(ctx, &mut type_idx_by_type, type_idx, result_ty);
             }
             if let Some(builder) = try_get_builder(&mut builders, type_idx)
                 && builder.kind == GcKind::Unknown
@@ -710,6 +734,79 @@ pub(crate) fn collect_gc_types(
 mod tests {
     use super::*;
     use trunk_ir::types::{Attribute, TypeDataBuilder};
+
+    #[test]
+    fn unrelated_indexed_operations_preserve_abstract_function_parameters() {
+        for reference in ["wasm.structref", "wasm.anyref"] {
+            for projection in ["get", "null", "cast", "new"] {
+                for observer_first in [false, true] {
+                    let a = FIRST_USER_TYPE_IDX;
+                    let b = a + 1;
+                    let operation = match projection {
+                        "get" => format!(
+                            "%v = wasm.struct_get %arg {{type_idx = {a}, field_idx = 0}} : core.i32"
+                        ),
+                        "null" => format!("%v = wasm.ref_null {{type_idx = {a}}} : {reference}"),
+                        "cast" => format!(
+                            "%v = wasm.ref_cast %arg {{target_type = {reference}, type_idx = {a}}} : {reference}"
+                        ),
+                        "new" => format!(
+                            "%x = wasm.i32_const {{value = 0}} : core.i32\n%v = wasm.struct_new %x {{type_idx = {a}}} : {reference}"
+                        ),
+                        _ => unreachable!(),
+                    };
+                    let observer = format!(
+                        "wasm.func @observe(%arg: {reference}) {{ {operation}\nwasm.return }}"
+                    );
+                    let accept = format!("wasm.func @accept(%arg: {reference}) {{ wasm.return }}");
+                    let functions = if observer_first {
+                        format!("{observer}\n{accept}")
+                    } else {
+                        format!("{accept}\n{observer}")
+                    };
+                    let mut ctx = IrContext::new();
+                    let module = trunk_ir::parser::parse_test_module(
+                        &mut ctx,
+                        &format!(
+                            r#"core.module @test {{
+                        !A = adt.typeref() {{name = @A}}
+                        !B = adt.typeref() {{name = @B}}
+                        wasm.func @make_a() {{
+                            %x = wasm.i32_const {{value = 0}} : core.i32
+                            %a = wasm.struct_new %x {{type_idx = {a}}} : !A
+                            wasm.return
+                        }}
+                        {functions}
+                        wasm.func @main() {{
+                            %x = wasm.i64_const {{value = 42}} : core.i64
+                            %b = wasm.struct_new %x {{type_idx = {b}}} : !B
+                            wasm.call %b {{callee = @accept}}
+                            wasm.return
+                        }}
+                    }}"#
+                        ),
+                    );
+                    let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
+                    let a_ty = ctx.type_alias_by_name(Symbol::new("A")).unwrap();
+                    let b_ty = ctx.type_alias_by_name(Symbol::new("B")).unwrap();
+                    assert_eq!(map.get(&a_ty), Some(&a));
+                    assert_eq!(map.get(&b_ty), Some(&b));
+                    let abstract_ty = ctx.types.intern(
+                        TypeDataBuilder::new(
+                            Symbol::new("wasm"),
+                            Symbol::new(reference.strip_prefix("wasm.").unwrap()),
+                        )
+                        .build(),
+                    );
+                    assert!(!map.contains_key(&abstract_ty), "{reference}: {projection}");
+                    let binary = crate::emit_module_to_wasm(&mut ctx, module).unwrap();
+                    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+                        .validate_all(&binary.bytes)
+                        .unwrap_or_else(|error| panic!("{reference}: {projection}: {error}"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn incompatible_named_marker_and_evidence_layouts_are_rejected_before_emission() {

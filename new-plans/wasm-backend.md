@@ -292,6 +292,16 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
 (type $Point (struct (field f64) (field f64)))
 ```
 
+### GC 인덱스 등록의 소유권
+
+GC 연산의 concrete `type_idx`는 해당 연산이 접근하는 레이아웃을 지정한다.
+수집기는 이를 근거로 입력·결과의 추상 Wasm 참조 타입을 concrete 타입으로
+전역 등록하지 않는다. `structref`·`anyref` 인자와 필드는 다른 함수의
+projection, 생성 또는 참조 연산의 등장 순서와 무관하게 추상 타입을 유지한다.
+Concrete nominal 타입의 등록과 연산별 narrowing cast는 그대로 유지한다.
+현재 Evidence 배열 ABI에서 명시적으로 부여하는 `arrayref` 매핑은 별도 계약이며,
+일반 GC 연산에서 이를 새로 유추하거나 덮어쓰지 않는다.
+
 ### 물리적 참조 할당 가능성
 
 WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struct`의
