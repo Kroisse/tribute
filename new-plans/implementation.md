@@ -222,13 +222,8 @@ only on the non-empty control-flow path established by `list.is_empty`.
 Backends retain a trap path for either observation if malformed shared IR
 violates that precondition; they never synthesize a fallback element or tail.
 
-Source-logical frontend는 List 패턴 전체의 canonical `List(a)`를 검증한 뒤
-변환한 원소 타입 `a`를 검사와 바인딩 양쪽의 `list.head` 결과 타입 및
-`element_type`으로 사용한다. 생성자 패턴 노드에 기록된 callable 타입은
-생성자와 variant layout 해석을 위한 메타데이터로 유지한다. 원소 타입을
-선택하는 책임은 frontend에 있으며, backend ownership 검사는 잘못된
-projection 타입을 계속 거부한다. 원소 관찰의 non-empty guard와 생성자
-payload 관찰의 tag guard는 타입 선택과 독립적으로 유지한다.
+Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
+[List IR 계약](ir.md)을 따른다.
 
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,

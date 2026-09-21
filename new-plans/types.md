@@ -226,9 +226,7 @@ Exact patterns require the stated length. Prefix-rest patterns require at least
 the prefix length and bind the remaining sequence without copying or mutation.
 Element subpatterns are matched left to right.
 
-`List(a)` 원소 패턴이 관찰하고 바인딩하는 값의 타입은 `a`다. Payload를 받는
-생성자 패턴의 callable 타입 메타데이터는 생성자 해석을 위해 보존하며, 원소
-값의 타입으로 사용하지 않는다. 이 구분은 중첩 패턴과 generic 원소에도 적용한다.
+`List(a)` 원소 패턴이 관찰하고 바인딩하는 값의 타입은 `a`다.
 
 Every backend represents `List(a)` as an RRB tree. The branching factor, node
 packing, and allocation layout are target-private, while persistence, logarithmic
