@@ -170,6 +170,14 @@ Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계�
 zero-result 형상을 지원하며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
 
+### Nil 값과 callable result의 구분
+
+`Nil`을 값으로 생성하는 Wasm 연산은 `ref.null none`을 포함한 실제 stack 값을
+만들며, emitter는 그 값을 해당 SSA local에 저장한다. 사용되지 않은 Nil 값도
+stack에 남겨 두지 않는다. 반면 callable의 Nil result slot은 기존 ABI에서
+생략하므로 call 결과를 저장할 때만 그 slot을 건너뛴다. 이 구분은 Nil을 인자나
+필드로 전달하는 것과 zero-result call을 모두 보존한다.
+
 ### 올바른 꼬리 호출 계약
 
 [WebAssembly 3.0 validation](https://webassembly.github.io/spec/core/valid/instructions.html#valid-return-call-indirect)은
