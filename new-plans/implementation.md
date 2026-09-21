@@ -222,6 +222,9 @@ only on the non-empty control-flow path established by `list.is_empty`.
 Backends retain a trap path for either observation if malformed shared IR
 violates that precondition; they never synthesize a fallback element or tail.
 
+Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
+[List IR 계약](ir.md)을 따른다.
+
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
 and the shared pipeline replaces only that registry-verified private call with

@@ -226,6 +226,8 @@ Exact patterns require the stated length. Prefix-rest patterns require at least
 the prefix length and bind the remaining sequence without copying or mutation.
 Element subpatterns are matched left to right.
 
+`List(a)` 원소 패턴이 관찰하고 바인딩하는 값의 타입은 `a`다.
+
 Every backend represents `List(a)` as an RRB tree. The branching factor, node
 packing, and allocation layout are target-private, while persistence, logarithmic
 concatenation, and efficient slicing are representation requirements. A

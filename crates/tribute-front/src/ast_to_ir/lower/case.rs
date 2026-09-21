@@ -814,13 +814,7 @@ fn emit_logical_list_pattern_suffix<'db>(
     });
     let then_value = {
         let mut nested = IrBuilder::new(builder.ctx, builder.ir, then_block);
-        let head_type = nested
-            .ctx
-            .get_node_type(element.id)
-            .copied()
-            .map(|ty| nested.ctx.convert_logical_type(nested.ir, ty))
-            .unwrap_or_else(|| panic!("missing logical list pattern element type"));
-        let head = list::head(nested.ir, location, current, head_type, element_ty);
+        let head = list::head(nested.ir, location, current, element_ty, element_ty);
         nested.ir.push_op(nested.block, head.op_ref());
         let head_value = head.result(nested.ir);
         let condition = emit_logical_pattern_check(&mut nested, location, head_value, element)?;
@@ -1598,12 +1592,7 @@ fn bind_logical_list_pattern_fields<'db>(
     let (list_ty, element_ty) = logical_list_types(ctx, ir, whole_pattern);
     let mut current = scrutinee;
     for element in elements {
-        let result_ty = ctx
-            .get_node_type(element.id)
-            .copied()
-            .map(|ty| ctx.convert_logical_type(ir, ty))
-            .unwrap_or_else(|| panic!("missing logical list pattern field type"));
-        let head = list::head(ir, location, current, result_ty, element_ty);
+        let head = list::head(ir, location, current, element_ty, element_ty);
         ir.push_op(block, head.op_ref());
         bind_logical_pattern_fields(ctx, ir, block, location, head.result(ir), element);
         let tail = list::tail(ir, location, current, list_ty, element_ty);

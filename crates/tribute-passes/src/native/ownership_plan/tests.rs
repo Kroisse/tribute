@@ -854,6 +854,27 @@ fn malformed_projection_arity_fails_before_mutation() {
 }
 
 #[test]
+fn mismatched_projection_managed_types_fail_before_mutation() {
+    for (source_ty, result_ty) in [("!BoxRef", "!BoxRef"), ("!ChildRef", "!ChildRef")] {
+        assert_plan_error_unchanged(
+            &format!(
+                r#"core.module @test {{
+  !Child = adt.struct() {{name = @Child, fields = [[@value, core.i32]]}}
+  !ChildRef = adt.typeref() {{name = @Child}}
+  !Box = adt.struct() {{name = @Box, fields = [[@child, !ChildRef]]}}
+  !BoxRef = adt.typeref() {{name = @Box}}
+  func.func @load(%owner: {source_ty}) -> {result_ty} {{
+    %child = adt.struct_get %owner {{field = 0, type = !Box}} : {result_ty}
+    func.return %child
+  }}
+}}"#
+            ),
+            "ADT projection managed type contract is malformed",
+        );
+    }
+}
+
+#[test]
 fn early_native_terminators_and_successors_fail_before_mutation() {
     for ir in [
         r#"core.module @test {
