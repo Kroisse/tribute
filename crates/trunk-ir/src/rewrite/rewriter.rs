@@ -9,6 +9,7 @@ use crate::rewrite::type_converter::TypeConverter;
 
 /// Accumulated mutations from a pattern rewrite.
 pub(crate) struct Mutations {
+    drop_unused_results: bool,
     /// Operations to insert before the current op's position.
     pub(crate) prefix_ops: Vec<OpRef>,
     /// The replacement operation (if any).
@@ -28,6 +29,7 @@ pub(crate) struct Mutations {
 /// operands are read directly from the context, and value replacements are
 /// done via `IrContext::replace_all_uses`.
 pub struct PatternRewriter<'a> {
+    drop_unused_results: bool,
     type_converter: &'a TypeConverter,
     prefix_ops: Vec<OpRef>,
     replacement: Option<OpRef>,
@@ -39,6 +41,7 @@ impl<'a> PatternRewriter<'a> {
     /// Create a new empty rewriter with a reference to the type converter.
     pub(crate) fn new(type_converter: &'a TypeConverter) -> Self {
         Self {
+            drop_unused_results: false,
             type_converter,
             prefix_ops: Vec::new(),
             replacement: None,
@@ -74,6 +77,29 @@ impl<'a> PatternRewriter<'a> {
         self.replacement = Some(new_op);
     }
 
+    /// Replace the current operation with a resultless operation, without RAUW.
+    ///
+    /// Returns false without recording a mutation if any old result is used or
+    /// the replacement has results. The applicator rechecks before mutation.
+    pub fn replace_op_dropping_unused_results(
+        &mut self,
+        ctx: &IrContext,
+        old_op: OpRef,
+        new_op: OpRef,
+    ) -> bool {
+        if !ctx.op_results(new_op).is_empty()
+            || ctx
+                .op_results(old_op)
+                .iter()
+                .any(|&value| ctx.has_uses(value))
+        {
+            return false;
+        }
+        self.replace_op(new_op);
+        self.drop_unused_results = true;
+        true
+    }
+
     /// Erase the current operation, mapping its results to the given values.
     ///
     /// The replacement values must match the original result count.
@@ -104,6 +130,7 @@ impl<'a> PatternRewriter<'a> {
     /// Consume the rewriter and return accumulated mutations.
     pub(crate) fn take_mutations(self) -> Mutations {
         Mutations {
+            drop_unused_results: self.drop_unused_results,
             prefix_ops: self.prefix_ops,
             replacement: self.replacement,
             erase_values: self.erase_values,
@@ -152,6 +179,17 @@ pub(crate) fn apply_mutations(
     mutations: Mutations,
     module_first_block: Option<crate::refs::BlockRef>,
 ) {
+    if mutations.drop_unused_results {
+        let replacement = mutations
+            .replacement
+            .expect("result removal requires replacement");
+        assert!(ctx.op_results(replacement).is_empty());
+        assert!(
+            ctx.op_results(original_op)
+                .iter()
+                .all(|&value| !ctx.has_uses(value))
+        );
+    }
     let parent_block = ctx.op(original_op).parent_block;
 
     // 1. Insert prefix ops before the original op
@@ -166,13 +204,15 @@ pub(crate) fn apply_mutations(
         // RAUW old results → new results
         let old_results: Vec<ValueRef> = ctx.op_results(original_op).to_vec();
         let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
-        debug_assert_eq!(
-            old_results.len(),
-            new_results.len(),
-            "replace_op: result count mismatch ({} vs {})",
-            old_results.len(),
-            new_results.len()
-        );
+        if !mutations.drop_unused_results {
+            debug_assert_eq!(
+                old_results.len(),
+                new_results.len(),
+                "replace_op: result count mismatch ({} vs {})",
+                old_results.len(),
+                new_results.len()
+            );
+        }
         for (old_v, new_v) in old_results.iter().zip(new_results.iter()) {
             ctx.replace_all_uses(*old_v, *new_v);
         }
@@ -224,5 +264,63 @@ pub(crate) fn apply_mutations(
         for module_op in mutations.module_ops {
             ctx.push_op(module_block, module_op);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialect::func;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    #[test]
+    fn resultless_replacement_requires_unused_results() {
+        for used in [false, true] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ func.func @main() -> core.nil {{ %v = arith.const {{value = 1}} : core.i32 func.return {} }} }}",
+                    if used { "%v" } else { "" },
+                ),
+            );
+            let function = ctx.block(module.first_block(&ctx).unwrap()).ops[0];
+            let region = ctx.op(function).regions[0];
+            let block = ctx.region(region).blocks[0];
+            let old = ctx.block(block).ops[0];
+            let loc = ctx.op(old).location;
+            let replacement = func::unreachable(&mut ctx, loc).op_ref();
+            let converter = TypeConverter::new();
+            let mut rewriter = PatternRewriter::new(&converter);
+            let before = print_module(&ctx, module.op());
+            assert_eq!(
+                rewriter.replace_op_dropping_unused_results(&ctx, old, replacement),
+                !used
+            );
+            if used {
+                assert!(!rewriter.has_mutations());
+                assert_eq!(print_module(&ctx, module.op()), before);
+            } else {
+                apply_mutations(&mut ctx, old, rewriter.take_mutations(), None);
+                assert_eq!(ctx.block(block).ops[0], replacement);
+                assert!(ctx.op_results(replacement).is_empty());
+                assert!(crate::validation::validate_use_chains(&ctx, module).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn result_removal_rejects_a_value_producing_replacement() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test { %a = arith.const {value = 1} : core.i32 %b = arith.const {value = 2} : core.i32 }",
+        );
+        let ops = &ctx.block(module.first_block(&ctx).unwrap()).ops;
+        let converter = TypeConverter::new();
+        let mut rewriter = PatternRewriter::new(&converter);
+        assert!(!rewriter.replace_op_dropping_unused_results(&ctx, ops[0], ops[1]));
+        assert!(!rewriter.has_mutations());
     }
 }

@@ -9,6 +9,7 @@ pub mod canonicalize;
 pub mod dce;
 pub mod global_dce;
 pub mod inline;
+pub mod scf_control_flow;
 pub mod scf_to_cf;
 
 pub use call_graph::{CallGraph, build_call_graph, recursive_functions, tarjan_scc};

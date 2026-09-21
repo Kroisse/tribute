@@ -868,7 +868,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     // Build the search loop
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
     let loop_region = build_lookup_loop_body(ctx, location, ev_val, target_id_val, i32_ty);
-    let loop_op = wasm_dialect::r#loop(ctx, location, [], nil_ty, loop_region);
+    let loop_op = wasm_dialect::r#loop(ctx, location, [], [nil_ty], loop_region);
     ctx.push_op(body_block, loop_op.op_ref());
 
     // unreachable after loop (should never reach here - loop always returns)
@@ -955,7 +955,7 @@ fn build_lookup_loop_body(
         ctx,
         location,
         ge_check.result(ctx),
-        nil_ty,
+        [nil_ty],
         unreachable_then,
         empty_else,
     );
@@ -1063,7 +1063,7 @@ fn build_lookup_loop_body(
             ctx,
             location,
             lt_check.result(ctx),
-            nil_ty,
+            [nil_ty],
             update_low,
             update_high,
         );
@@ -1084,7 +1084,7 @@ fn build_lookup_loop_body(
         ctx,
         location,
         eq_check.result(ctx),
-        nil_ty,
+        [nil_ty],
         found_then,
         continue_else,
     );
@@ -1160,7 +1160,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     // Binary search loop to find insertion point
     // After loop, LOW contains the insertion index
     let search_loop = build_extend_search_loop(ctx, location, ev_val, marker_id, i32_ty);
-    let loop_op = wasm_dialect::r#loop(ctx, location, [], nil_ty, search_loop);
+    let loop_op = wasm_dialect::r#loop(ctx, location, [], [nil_ty], search_loop);
 
     // Wrap loop in block for br_if(..., 1) target
     let loop_wrapper_block = ctx.create_block(BlockData {
@@ -1175,7 +1175,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         blocks: smallvec![loop_wrapper_block],
         parent_op: None,
     });
-    let block_op = wasm_dialect::block(ctx, location, nil_ty, loop_region);
+    let block_op = wasm_dialect::block(ctx, location, [nil_ty], loop_region);
     ctx.push_op(body_block, block_op.op_ref());
 
     // insert_idx = local.get LOW
@@ -1248,7 +1248,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         ctx,
         location,
         gt_zero.result(ctx),
-        nil_ty,
+        [nil_ty],
         copy_prefix_then,
         empty_else1,
     );
@@ -1318,7 +1318,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         ctx,
         location,
         gt_zero2.result(ctx),
-        nil_ty,
+        [nil_ty],
         copy_suffix_then,
         empty_else2,
     );
@@ -1456,7 +1456,7 @@ fn build_extend_search_loop(
         ctx,
         location,
         lt_check.result(ctx),
-        nil_ty,
+        [nil_ty],
         update_low,
         update_high,
     );

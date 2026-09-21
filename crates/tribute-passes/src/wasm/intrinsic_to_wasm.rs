@@ -287,7 +287,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             ctx,
             location,
             done.result(ctx),
-            nil_ty,
+            [nil_ty],
             done_then,
             done_else,
         );
@@ -331,7 +331,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             ctx,
             location,
             mismatch.result(ctx),
-            nil_ty,
+            [nil_ty],
             mismatch_then,
             mismatch_else,
         );
@@ -352,7 +352,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             parent_op: None,
         });
         let compare_loop =
-            wasm_dialect::r#loop(ctx, location, [zero.result(ctx)], result_ty, loop_region);
+            wasm_dialect::r#loop(ctx, location, [zero.result(ctx)], [result_ty], loop_region);
         let outer_block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -364,7 +364,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             blocks: smallvec![outer_block],
             parent_op: None,
         });
-        let compare = wasm_dialect::block(ctx, location, result_ty, outer_region);
+        let compare = wasm_dialect::block(ctx, location, [result_ty], outer_region);
 
         for field_op in left_ops.into_iter().chain(right_ops) {
             rewriter.insert_op(field_op);
