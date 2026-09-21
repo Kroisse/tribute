@@ -180,8 +180,15 @@ fn main() { }
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(&ir, "run");
+    let string_ref = ir
+        .lines()
+        .find_map(|line| {
+            let (alias, definition) = line.trim().split_once(" = ")?;
+            (definition == "adt.typeref() {name = @String}").then_some(alias)
+        })
+        .expect("nominal String reference");
     assert!(
-        run.contains("resume_token(!String, core.i32)"),
+        run.contains(&format!("resume_token({string_ref}, core.i32)")),
         "handler token must retain its exact input and answer types:\n{run}"
     );
     assert_in_order(
@@ -196,7 +203,7 @@ fn main() { }
         .lines()
         .find(|line| line.contains("core.unrealized_conversion_cast"))
         .expect("resume input materialization");
-    assert!(cast.contains(": !String"), "{run}");
+    assert!(cast.ends_with(&format!(": {string_ref}")), "{run}");
     let resume = run
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
@@ -1680,6 +1687,68 @@ fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -
     assert!(!first_or.contains("func.func_sig"));
 }
 
+/// Constructor metadata must not become the result type of list observations,
+/// either while checking a pattern or while binding its successful arm.
+#[salsa_test]
+fn logical_list_constructor_patterns_use_element_types(db: &salsa::DatabaseImpl) {
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::list;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    for (body, expected_heads) in [
+        (
+            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y)] -> x, _ -> 0 } }",
+            4,
+        ),
+        (
+            "fn observe(xs: List(Item)) -> Nat { case xs { [Number(x), Number(y), ..tail] -> y, _ -> 0 } }",
+            4,
+        ),
+        (
+            "fn observe(xs: List(List(Item))) -> Nat { case xs { [[Nested(Number(x))]] -> x, _ -> 0 } }",
+            4,
+        ),
+        (
+            "fn observe(xs: List(Boxed(a)), fallback: a) -> a { case xs { [Box(x), ..tail] -> x, _ -> fallback } }",
+            2,
+        ),
+        (
+            "fn observe(xs: List(Item), fallback: String) -> String { case xs { [Text(x)] -> x, _ -> fallback } }",
+            2,
+        ),
+    ] {
+        let source = SourceCst::from_source_str(
+            db,
+            "list_constructor_patterns.trb",
+            &format!(
+                "enum Item {{ Number(Nat), Nested(Item), Text(String), Other }}\nenum Boxed(a) {{ Box(a) }}\n{body}"
+            ),
+        );
+        assert!(ast_pipeline_error_messages(db, source).is_empty());
+        let text = run_ast_pipeline_with_ir(db, source);
+        assert_logical_boundary(&text);
+        let mut ir = IrContext::new();
+        let module = parse_test_module(&mut ir, &text);
+        let mut heads = 0;
+        let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
+            if let Ok(head) = list::Head::from_op(&ir, op) {
+                heads += 1;
+                assert_eq!(
+                    ir.value_ty(head.result(&ir)),
+                    head.element_type(&ir),
+                    "checking and binding must project the whole-list element type: {body}\n{text}"
+                );
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        // Each source observation occurs in both the check and binding paths.
+        assert_eq!(heads, expected_heads, "{body}\n{text}");
+    }
+}
+
 /// Nonempty list and tuple pattern checks both extract callable values through
 /// the logical aggregate layouts before choosing the corresponding `scf` arm.
 #[salsa_test]
@@ -1862,9 +1931,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node_1 = adt.struct() {fields = [[@next, !Node]], name = @Node}",
-        "!First_1 = adt.struct() {fields = [[@second, !Second]], name = @First}",
-        "!Second_1 = adt.struct() {fields = [[@first, !First]], name = @Second}",
+        "!Node = adt.struct() {fields = [[@next, adt.typeref() {name = @Node}]], name = @Node}",
+        "!First = adt.struct() {fields = [[@second, adt.typeref() {name = @Second}]], name = @First}",
+        "!Second = adt.struct() {fields = [[@first, adt.typeref() {name = @First}]], name = @Second}",
     ] {
         assert!(
             ir.contains(field),

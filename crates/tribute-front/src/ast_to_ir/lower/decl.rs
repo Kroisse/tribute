@@ -259,6 +259,7 @@ impl<'db> TypedModule<'db> {
             span_map,
             function_types,
             constructor_types: _,
+            specialized_enum_variants: _,
             node_types,
             ability_conventions,
             well_known_types,

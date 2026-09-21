@@ -51,9 +51,14 @@ pub fn lower(
         validate_structured_control(ctx, module, &analysis, |op, decision| match decision {
             ControlLowering::DropNeverResult => {
                 plan.drop_never_results.insert(op);
+                plan.terminal_controls.insert(op);
             }
             ControlLowering::ResultlessSwitch => {
                 plan.resultless_switches.insert(op);
+                plan.terminal_controls.insert(op);
+            }
+            ControlLowering::TerminalResultless => {
+                plan.terminal_controls.insert(op);
             }
         })?;
         // Patterns consume decisions about source operations. They must not
@@ -89,11 +94,13 @@ pub fn validate_lowerable_structured_control(
 struct ScfLoweringPlan {
     drop_never_results: HashSet<OpRef>,
     resultless_switches: HashSet<OpRef>,
+    terminal_controls: HashSet<OpRef>,
 }
 
 enum ControlLowering {
     DropNeverResult,
     ResultlessSwitch,
+    TerminalResultless,
 }
 
 /// Apply target legality to common facts. Validation-only callers need not
@@ -126,6 +133,11 @@ fn validate_structured_control(
             }
         } else if analysis.is_terminal_resultless_switch(op) {
             accept(op, ControlLowering::ResultlessSwitch);
+        } else if (scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op))
+            && ctx.op_results(op).is_empty()
+            && analysis.has_only_terminal_region_successors(op)
+        {
+            accept(op, ControlLowering::TerminalResultless);
         }
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -414,6 +426,10 @@ impl RewritePattern for ScfSwitchPattern {
         for inserted in outer_ops.expect("nonempty switch cases build an outer dispatch") {
             rewriter.insert_op(inserted);
         }
+        if self.0.terminal_controls.contains(&op) {
+            let unreachable = wasm_dialect::unreachable(ctx, loc);
+            rewriter.insert_op(unreachable.op_ref());
+        }
         rewriter.erase_op(vec![]);
         true
     }
@@ -457,11 +473,14 @@ impl RewritePattern for ScfIfPattern {
         ctx.detach_region(else_region);
 
         let new_op = wasm_dialect::r#if(ctx, loc, cond, result_types, then_region, else_region);
-        if drop_result {
-            assert!(rewriter.replace_op_dropping_unused_results(ctx, op, new_op.op_ref()));
-        } else {
-            rewriter.replace_op(new_op.op_ref());
-        }
+        replace_control(
+            ctx,
+            op,
+            new_op.op_ref(),
+            self.0.terminal_controls.contains(&op),
+            drop_result,
+            rewriter,
+        );
         true
     }
 }
@@ -539,11 +558,14 @@ impl RewritePattern for ScfLoopPattern {
         });
 
         let wasm_block = wasm_dialect::block(ctx, loc, result_types, block_body);
-        if drop_result {
-            assert!(rewriter.replace_op_dropping_unused_results(ctx, op, wasm_block.op_ref()));
-        } else {
-            rewriter.replace_op(wasm_block.op_ref());
-        }
+        replace_control(
+            ctx,
+            op,
+            wasm_block.op_ref(),
+            self.0.terminal_controls.contains(&op),
+            drop_result,
+            rewriter,
+        );
         true
     }
 }
@@ -680,6 +702,28 @@ impl RewritePattern for ScfBreakPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Make proven non-returning structured control visible after Wasm's `end`.
+fn replace_control(
+    ctx: &mut IrContext,
+    op: OpRef,
+    lowered: OpRef,
+    terminal: bool,
+    drop_result: bool,
+    rewriter: &mut PatternRewriter<'_>,
+) {
+    let replacement = if terminal {
+        rewriter.insert_op(lowered);
+        wasm_dialect::unreachable(ctx, ctx.op(op).location).op_ref()
+    } else {
+        lowered
+    };
+    if drop_result {
+        assert!(rewriter.replace_op_dropping_unused_results(ctx, op, replacement));
+    } else {
+        rewriter.replace_op(replacement);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1106,6 +1150,48 @@ mod tests {
                 .validate_all(&bytes)
                 .expect(body);
         }
+    }
+
+    #[test]
+    fn terminal_controls_preserve_unreachability_in_value_returning_functions() {
+        for body in [
+            "scf.if %cond { func.return %choice } { func.unreachable }",
+            "%n = scf.if %cond : core.never { func.return %choice } { func.unreachable }",
+            "scf.loop { func.return %choice }",
+            "%n = scf.loop : core.never { func.return %choice }",
+            "scf.switch %choice { scf.case {value = 0} { func.return %choice } scf.default { func.unreachable } }",
+            "scf.if %cond { scf.if %cond { func.return %choice } { func.unreachable } } { func.return %choice }",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ func.func @main(%cond: core.i1, %choice: core.i32) -> core.i32 {{ {body} }} }}"
+                ),
+            );
+            lower(&mut ctx, module, TypeConverter::new()).unwrap();
+            crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
+            let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .expect(body);
+        }
+
+        // A reachable fallthrough must not become an implicit trap that hides
+        // a missing return in a value-returning function.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            func.func @main(%cond: core.i1, %unit: core.nil) -> core.i32 {
+                scf.if %cond { scf.yield %unit } { scf.yield %unit }
+            }
+        }"#,
+        );
+        lower(&mut ctx, module, TypeConverter::new()).unwrap();
+        crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
+        assert!(wasmparser::Validator::new().validate_all(&bytes).is_err());
     }
 
     #[test]

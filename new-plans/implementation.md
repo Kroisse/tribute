@@ -222,6 +222,9 @@ only on the non-empty control-flow path established by `list.is_empty`.
 Backends retain a trap path for either observation if malformed shared IR
 violates that precondition; they never synthesize a fallback element or tail.
 
+Source-logical frontend의 원소 타입 선택과 생성자 메타데이터 구분은
+[List IR 계약](ir.md)을 따른다.
+
 The prelude declares `List::prepend(value, tail)` as the minimal public dynamic
 construction API. Its source wrapper delegates to a private compiler intrinsic,
 and the shared pipeline replaces only that registry-verified private call with
@@ -1121,6 +1124,11 @@ keep the origin recorded at their shared annotation-to-row conversion point.
 인스턴스, constructor scheme, handler/perform/lambda 정보, coverage 증명,
 nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
 동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
+
+Nominal 선언 인덱스와 치환된 constructor 스킴은 frontend 준비 단계가 소유한다.
+Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인스턴스 수집,
+스킴 재사용, variant 연결과 확장 한도의 상세 계약은
+[Generics — Nominal 타입 수집과 재작성](generics.md#nominal-타입-수집과-재작성)을 따른다.
 
 Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. Receiver
 타입이 미해결인 호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은

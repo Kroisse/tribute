@@ -294,7 +294,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         db,
         tdnr_ast,
         result.function_types,
-        result.constructor_types,
+        result.constructor_types.into(),
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
@@ -500,7 +500,18 @@ fn prepare_frontend_details<'db>(
         merged_module,
         merged_fn_types,
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: typed.constructor_types(db).iter().cloned().collect(),
+            constructor_types: typed
+                .constructor_types(db)
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: typed
+                .constructor_types(db)
+                .specialized_enum_variants
+                .iter()
+                .cloned()
+                .collect(),
             node_types: merged_node_types,
             local_instances: prelude_module(db)
                 .into_iter()
@@ -537,7 +548,7 @@ fn prepare_frontend_details<'db>(
             for error in errors {
                 Diagnostic::new(
                     format!(
-                        "invalid function instance at {}: {:?}",
+                        "invalid specialization instance at {}: {:?}",
                         error.node, error.kind
                     ),
                     merged_span_map.get_or_default(error.node),
@@ -564,11 +575,18 @@ fn prepare_frontend_details<'db>(
         db,
         mono_result.module,
         mono_result.function_types,
-        mono_result
-            .metadata
-            .constructor_types
-            .into_iter()
-            .collect::<Vec<_>>(),
+        ast_typeck::ConstructorTypeMetadata {
+            schemes: mono_result.metadata.constructor_types.into_iter().collect(),
+            specialized_enum_variants: {
+                let mut variants: Vec<_> = mono_result
+                    .metadata
+                    .specialized_enum_variants
+                    .into_iter()
+                    .collect();
+                variants.sort_by_key(|(id, _)| *id);
+                variants
+            },
+        },
         ast_typeck::ExpressionTypeMetadata {
             node_types,
             function_instances: instances,
@@ -627,7 +645,18 @@ fn merge_and_lower_to_ir_with<'db, M>(
                 .collect(),
             span_map: typed.span_map(db).clone(),
             function_types: typed.function_types(db).iter().cloned().collect(),
-            constructor_types: typed.constructor_types(db).iter().cloned().collect(),
+            constructor_types: typed
+                .constructor_types(db)
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: typed
+                .constructor_types(db)
+                .specialized_enum_variants
+                .iter()
+                .cloned()
+                .collect(),
             node_types: typed
                 .expression_types(db)
                 .node_types
@@ -1637,7 +1666,7 @@ pub fn parse_and_lower_ast<'db>(
         db,
         tdnr_ast,
         result.function_types,
-        result.constructor_types,
+        result.constructor_types.into(),
         ast_typeck::ExpressionTypeMetadata {
             node_types: result.node_types,
             function_instances: result.function_instances,
@@ -2979,6 +3008,337 @@ fn main() {
                 .function_types
                 .contains_key(&Symbol::new("List::prepend$Nat"))
         );
+    }
+
+    #[salsa_test]
+    fn logical_enum_layout_rejects_missing_or_wrong_specialized_schema(db: &salsa::DatabaseImpl) {
+        use tribute_front::ast::{Decl, Type, TypeKind, TypeScheme};
+        let source = source_from_str(
+            "invalid_enum_schema.trb",
+            "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() {}",
+        );
+        let typed = parse_and_lower_ast(db, source).unwrap();
+        for (missing, expected) in [
+            (true, "missing specialized enum variant schema"),
+            (false, "specialized enum variant schema has wrong owner"),
+        ] {
+            let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                merge_and_lower_to_ir_with(db, &typed, source, |mut input, db, ir, uri| {
+                    let variant = input
+                        .ast
+                        .decls
+                        .iter()
+                        .find_map(|d| match d {
+                            Decl::Enum(e) if e.name == trunk_ir::Symbol::new("Boxed$Int") => {
+                                Some(e.variants[0].id)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    if missing {
+                        input.specialized_enum_variants.remove(&variant);
+                    } else {
+                        input
+                            .specialized_enum_variants
+                            .insert(variant, TypeScheme::mono(db, Type::new(db, TypeKind::Int)));
+                    }
+                    input.lower_to_ir(db, ir, uri)
+                })
+            }));
+            let Err(error) = failure else {
+                panic!("invalid specialized schema was accepted")
+            };
+            let message = error
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| error.downcast_ref::<&str>().copied())
+                .unwrap_or("");
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[salsa_test]
+    fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::DatabaseImpl) {
+        use tribute_front::ast::{Decl, TypeKind};
+        use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
+        use trunk_ir::{Symbol, TypeRef};
+
+        fn alias(ir: &IrContext, name: &str) -> TypeRef {
+            let name = Symbol::from_dynamic(name);
+            let ty = ir
+                .type_alias_by_name(name)
+                .expect("dependency layout is published");
+            assert_eq!(ir.types.get(ty).attrs.get_symbol("name"), Some(name));
+            ty
+        }
+        fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
+            let data = ir.types.get(ty);
+            assert_eq!(data.name, Symbol::new("typeref"));
+            ir.type_alias_by_name(data.attrs.get_symbol("name").unwrap())
+                .expect("referenced layout")
+        }
+        let source = source_from_str(
+            "specialized_enum_dependencies.trb",
+            r#"
+struct Inner(a) { value: a }
+enum Outer(a) { Wrap(Inner(a)), Pair(#(a, fn(a) -> a)), Empty, Both(a, Bool), Label(String) }
+struct Envelope(a) { outer: Outer(a) }
+struct Link(a) { tail: Loop(a) }
+enum Loop(a) { Next(Link(a)), Done(a) }
+pub mod A { pub enum Token(a) { Item(a), Empty } }
+pub mod B { pub enum Token(a) { Item(a), Empty } }
+enum Boxed(a) { Box(a), EmptyBox }
+fn keep(value: Envelope(Int)) -> Envelope(Int) { value }
+fn keep_bool(value: Outer(Bool)) -> Outer(Bool) { value }
+fn keep_loop(value: Loop(Int)) -> Loop(Int) { value }
+fn keep_a(value: A::Token(Int)) -> A::Token(Int) { value }
+fn keep_b(value: B::Token(Bool)) -> B::Token(Bool) { value }
+fn int_payload(value: Boxed(Int)) -> Int { case value { Box(x) -> x, EmptyBox -> +0 } }
+fn bool_payload(value: Boxed(Bool)) -> Bool { case value { Box(x) -> x, EmptyBox -> False } }
+fn main() {}
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("typed fixture");
+        let prepared =
+            prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
+        let schemas = &prepared.constructor_types(db).specialized_enum_variants;
+        let mut seen = std::collections::HashSet::new();
+        for declaration in &prepared.module(db).decls {
+            if let Decl::Enum(e) = declaration
+                && e.id.variant().is_some()
+            {
+                for v in &e.variants {
+                    assert!(seen.insert(v.id));
+                    let matching: Vec<_> = schemas.iter().filter(|(id, _)| *id == v.id).collect();
+                    assert_eq!(matching.len(), 1);
+                    let scheme = matching[0].1;
+                    assert!(scheme.type_params(db).is_empty());
+                    let result = match scheme.body(db).kind(db) {
+                        TypeKind::Func { params, result, .. } => {
+                            assert_eq!(params.len(), v.fields.len());
+                            *result
+                        }
+                        _ => {
+                            assert!(v.fields.is_empty());
+                            scheme.body(db)
+                        }
+                    };
+                    assert!(matches!(result.kind(db), TypeKind::Named { id, args, .. }
+                        if id.qualified(db) == e.name && args.is_empty()));
+                }
+            }
+        }
+        assert_eq!(seen.len(), schemas.len());
+        for (id, source_scheme) in &typed.constructor_types(db).schemes {
+            if id.qualified(db) == Symbol::new("Box") {
+                let retained = prepared
+                    .constructor_types(db)
+                    .schemes
+                    .iter()
+                    .find(|(key, _)| key == id)
+                    .unwrap()
+                    .1;
+                assert_eq!(
+                    retained, *source_scheme,
+                    "source generic schema is preserved"
+                );
+            }
+        }
+        let (mut ir, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
+                typed.lower_to_ir(db, ir, uri)
+            });
+        for after_cps in [false, true] {
+            if after_cps {
+                tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
+                    &mut ir,
+                    logical.module,
+                    &logical.operation_declarations,
+                    &logical.compiler_intrinsics,
+                )
+                .unwrap();
+            }
+            for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
+                let inner = alias(&ir, &format!("Inner${suffix}"));
+                let value = get_struct_fields(&ir, inner).unwrap()[0].1;
+                assert_eq!(ir.types.get(value).name, Symbol::from_dynamic(primitive));
+                let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
+                assert_eq!(outer[0].0, Symbol::new("Wrap"));
+                assert_eq!(target(&ir, outer[0].1[0]), inner);
+                assert!(outer[2].1.is_empty());
+                assert_eq!(outer[3].1.len(), 2);
+                assert_eq!(outer[3].1[0], value);
+                assert_eq!(ir.types.get(outer[3].1[1]).name, Symbol::new("i1"));
+                assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "String"));
+                let tuple = target(&ir, outer[1].1[0]);
+                let fields = get_struct_fields(&ir, tuple).unwrap();
+                assert_eq!(fields[0].1, value);
+                let callback = ir.types.get(fields[1].1);
+                assert_eq!(
+                    callback.dialect,
+                    Symbol::new(if after_cps {
+                        "closure"
+                    } else {
+                        "tribute_control"
+                    })
+                );
+                let boxed = get_enum_variants(&ir, alias(&ir, &format!("Boxed${suffix}"))).unwrap();
+                assert_eq!(boxed[0].1, vec![value]);
+            }
+            let envelope = get_struct_fields(&ir, alias(&ir, "Envelope$Int")).unwrap();
+            assert_eq!(target(&ir, envelope[0].1), alias(&ir, "Outer$Int"));
+            let link = get_struct_fields(&ir, alias(&ir, "Link$Int")).unwrap();
+            assert_eq!(target(&ir, link[0].1), alias(&ir, "Loop$Int"));
+            let recursive = get_enum_variants(&ir, alias(&ir, "Loop$Int")).unwrap();
+            assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "Link$Int"));
+            for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
+                let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
+                assert_eq!(variants[0].0, Symbol::new("Item"));
+                assert_eq!(
+                    ir.types.get(variants[0].1[0]).name,
+                    Symbol::from_dynamic(primitive)
+                );
+            }
+            let output = trunk_ir::printer::print_module(&ir, logical.module.op());
+            for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
+                assert!(
+                    output.lines().any(|line| line.contains("adt.variant_get")
+                        && line.contains(name)
+                        && line.ends_with(primitive)),
+                    "{output}"
+                );
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::tribute_control;
+        use trunk_ir::adt_layout::get_struct_fields;
+        use trunk_ir::{Symbol, TypeRef};
+
+        fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {
+            let ty = ir
+                .type_alias_by_name(name)
+                .expect("published nominal layout");
+            let data = ir.types.get(ty);
+            assert_eq!(data.dialect, Symbol::new("adt"));
+            assert_eq!(data.name, Symbol::from_dynamic(kind));
+            assert_eq!(data.attrs.get_symbol("name"), Some(name));
+            assert_eq!(
+                ir.type_aliases()
+                    .iter()
+                    .filter(|(_, ty)| ir.types.get(*ty).attrs.get_symbol("name") == Some(name))
+                    .count(),
+                1,
+                "one published layout for {name}"
+            );
+            ty
+        }
+
+        fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
+            let data = ir.types.get(ty);
+            assert_eq!(data.dialect, Symbol::new("adt"));
+            assert_eq!(data.name, Symbol::new("typeref"));
+            data.attrs.get_symbol("name").expect("nominal identity")
+        }
+
+        // These specializations occur only in signatures, never in allocations.
+        let source = source_from_str(
+            "published_nominal_layouts.trb",
+            r#"
+pub mod A { pub struct Token(a) {} }
+pub mod B { pub struct Token(a) {} }
+enum Choice(a) { Item(a), Empty }
+struct Holder { pair: #(Nat, fn(Nat) -> Nat) }
+struct Node { next: Node }
+struct First { second: Second }
+struct Second { first: First }
+
+fn keep_a(value: A::Token(Nat)) -> A::Token(Nat) { value }
+fn keep_b(value: B::Token(Nat)) -> B::Token(Nat) { value }
+fn keep_choice(value: Choice(Nat)) -> Choice(Nat) { value }
+fn keep_holder(value: Holder) -> Holder { value }
+fn keep_node(value: Node) -> Node { value }
+fn keep_first(value: First) -> First { value }
+fn main() {}
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let (mut ir, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
+                typed.lower_to_ir(db, ir, uri)
+            });
+        let mut source_tuple = None;
+        for after_cps in [false, true] {
+            if after_cps {
+                tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
+                    &mut ir,
+                    logical.module,
+                    &logical.operation_declarations,
+                    &logical.compiler_intrinsics,
+                )
+                .expect("CPS converts published layout fields");
+            }
+            for (function, nominal, kind) in [
+                ("keep_a", "A::Token$Nat", "struct"),
+                ("keep_b", "B::Token$Nat", "struct"),
+                ("keep_choice", "Choice$Nat", "enum"),
+            ] {
+                let parameter = logical
+                    .module
+                    .ops(&ir)
+                    .into_iter()
+                    .find_map(|op| {
+                        if after_cps {
+                            let f = func_dialect::Func::from_op(&ir, op).ok()?;
+                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                                func_dialect::FuncSig::from_type_ref(&ir, f.r#type(&ir))
+                                    .unwrap()
+                                    .inputs(&ir)[0]
+                            })
+                        } else {
+                            let f = tribute_control::Func::from_op(&ir, op).ok()?;
+                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                                tribute_control::FuncSig::from_type_ref(&ir, f.r#type(&ir))
+                                    .unwrap()
+                                    .inputs(&ir)[0]
+                            })
+                        }
+                    })
+                    .expect("signature-only specialization");
+                let name = reference_name(&ir, parameter);
+                assert_eq!(name, Symbol::from_dynamic(nominal));
+                layout(&ir, name, kind);
+            }
+            assert_ne!(
+                layout(&ir, Symbol::new("A::Token$Nat"), "struct"),
+                layout(&ir, Symbol::new("B::Token$Nat"), "struct")
+            );
+            for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
+                let owner = layout(&ir, Symbol::from_dynamic(owner), "struct");
+                let field = get_struct_fields(&ir, owner).unwrap()[0].1;
+                let name = reference_name(&ir, field);
+                assert_eq!(name, Symbol::from_dynamic(target));
+                layout(&ir, name, "struct");
+            }
+            let holder = layout(&ir, Symbol::new("Holder"), "struct");
+            let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
+            let tuple = layout(&ir, reference_name(&ir, pair), "struct");
+            let fields = get_struct_fields(&ir, tuple).unwrap();
+            let callback = ir.types.get(fields[1].1);
+            if after_cps {
+                assert_ne!(Some(tuple), source_tuple);
+                assert_eq!(callback.dialect, Symbol::new("closure"));
+                assert_eq!(callback.name, Symbol::new("closure"));
+            } else {
+                source_tuple = Some(tuple);
+                assert_eq!(callback.dialect, Symbol::new("tribute_control"));
+                assert_eq!(callback.name, Symbol::new("func_sig"));
+            }
+        }
     }
 
     #[salsa_test]

@@ -193,6 +193,7 @@ pub struct TypedModule<'db> {
     pub span_map: SpanMap,
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
+    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,

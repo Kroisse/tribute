@@ -1,0 +1,22 @@
+use std::io::{Io, print_line}
+
+enum Boxed(a) { Box(a), Empty }
+
+fn int_value(value: Boxed(Int)) -> Nat {
+    case value {
+        Box(x) -> case x + +1 { +43 -> 43, _ -> 0 }
+        Empty -> 0
+    }
+}
+
+fn bool_value(value: Boxed(Bool)) -> Nat {
+    case value {
+        Box(x) -> case x { True -> 1, False -> 0 }
+        Empty -> 0
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(case int_value(Box(+42)) { 43 -> "43", _ -> "bad" })
+    print_line(case bool_value(Box(True)) { 1 -> "1", _ -> "bad" })
+}

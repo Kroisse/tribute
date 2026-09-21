@@ -6,12 +6,12 @@
 
 ### 결정 사항 요약
 
-| 항목        | 선택                                        | 대안 (채택하지 않음)             |
-| ----------- | ------------------------------------------- | -------------------------------- |
-| 기본 전략   | Monomorphization                            | Type erasure, Dictionary passing |
-| 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
-| 제네릭 타입 | 완전 monomorphization                       | Uniform representation           |
-| 효과 다형성 | Evidence passing + call-site specialization | 전면 monomorphization            |
+| 항목               | 선택                                        | 대안 (채택하지 않음)             |
+| ------------------ | ------------------------------------------- | -------------------------------- |
+| 기본 전략          | Monomorphization                            | Type erasure, Dictionary passing |
+| 함수의 다형적 재귀 | Uniform representation (anyref)             | 에러로 거부                      |
+| 제네릭 타입        | 완전 monomorphization                       | Uniform representation           |
+| 효과 다형성        | Evidence passing + call-site specialization | 전면 monomorphization            |
 
 ---
 
@@ -74,7 +74,7 @@ fn map_effect(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
 ### 전략
 
 ```text
-제네릭 함수/타입
+제네릭 함수
        │
        ▼
   다형적 재귀 감지?
@@ -94,6 +94,10 @@ Monomorph  Uniform Rep
 | 제네릭 함수            | 일반            | Monomorphization       |
 | 제네릭 함수            | **다형적 재귀** | Uniform representation |
 | Effect만 다형적인 함수 | -               | Evidence passing       |
+
+이 도식의 uniform representation 선택은 함수의 다형적 재귀에 적용한다.
+Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
+[Nominal 타입 수집과 재작성](#nominal-타입-수집과-재작성) 계약을 따른다.
 
 ---
 
@@ -294,10 +298,33 @@ Nominal 타입의 수집 시작점은 AST 안의 typed reference와 재작성 �
 타입·row 인자, node 타입, lambda 시그니처, handler·perform의 인자·결과를 포함한다.
 메타데이터에만 등장하는 concrete 타입도 특수화 선언을 생성해야 한다.
 
-각 시작점 내부의 함수·continuation effect와 중첩 nominal 타입 인자를 재귀적으로
-수집한다. 정확한 `TypeDefId`와 concrete 인자 조합으로 struct/enum 선언 및 생성자
-스킴을 만들고, 같은 rewrite map을 AST와 메타데이터에 적용한다. 선언의 기준
-스킴을 보관하는 provenance 기록은 인스턴스의 치환 결과와 구분한다.
+함수 특수화가 끝난 뒤 원본 nominal 선언과 canonical constructor identity를
+한 번 수집하여 준비 단계 안에서 공유한다. 이 선언 인덱스는 seed 수집, 의존성
+확장, struct·enum 생성이 함께 사용하는 임시 자료이며 별도 공개 registry가 아니다.
+Generic 여부는 인덱스에 보관된 원본 선언의 타입 매개변수 유무로 판별한다.
+
+각 시작점 내부의 callable·tuple·continuation effect와 중첩 nominal 타입 인자를
+재귀적으로 수집한다. 발견한 struct·enum 인스턴스의 checked constructor 스킴을
+검증·치환하고, 그 본문과 보존된 row 제약이 드러내는 의존 인스턴스를 고정점까지
+수집한다. 중복 판별은 원본 `TypeDefId`와 concrete 타입 인자 목록을 사용한다.
+생성 연산 없이 signature나 필드에서만 참조되는 인스턴스도 이 계약을 따른다.
+
+의존성 수집에서 치환한 스킴은 최종 constructor 메타데이터로 재사용한다.
+원본 스킴을 다시 읽어 동일 인스턴스를 재치환하지 않는다. 고정점 도달에 성공한
+뒤 맹글링한 이름으로 선언과 스킴을 게시하고, 같은 nominal rewrite map을 AST와
+메타데이터에 적용한다. 선언의 기준 스킴을 보관하는 provenance 기록은 인스턴스의
+치환 결과와 구분한다. AST annotation 치환과 semantic 스킴 치환은 각 표현에
+필요한 별도 작업이다.
+
+Enum의 치환된 스킴은 복제된 variant의 `NodeId`에 연결한다. 원본 constructor
+identity와 runtime variant tag는 유지하며, 다른 모듈이나 다른 타입 인자의 스킴을
+덮어쓰지 않는다. Lowering은 이 연결을 필수 입력으로 소비하고, 누락된 스킴을
+원본 generic 스킴으로 대체하지 않는다.
+
+동일 인스턴스의 재귀·상호 재귀는 중복 생성하지 않는다. 계속 새로운 타입 인자를
+만드는 확장은 최대 64회 의존성 확장과 4,096개 고유 nominal 인스턴스 한도에서
+진단한다. 한도 초과나 잘못된 constructor 스킴으로 준비가 실패하면 부분 결과를
+IR 생성에 전달하지 않는다. 이 한도는 함수의 다형적 재귀 처리 정책을 바꾸지 않는다.
 
 ### 이름과 identity
 

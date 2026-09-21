@@ -18,6 +18,13 @@ same identity. Type display remains source-oriented and may use the same short
 spelling for different declarations; equality, unification, method receiver
 selection, and specialization must still compare declaration identity.
 
+특수화된 nominal 타입은 해석된 선언의 qualified name을 기준으로 타입 인자를
+맹글링한 normalized symbol을 사용한다. 예를 들어 서로 다른 선언
+`A::Token(Nat)`과 `B::Token(Nat)`은 각각 `A::Token$Nat`, `B::Token$Nat`이다.
+중첩 타입 인자는 기존 `$0`/`$1` 맹글링 규칙을 따른다. 이 symbol은 IR의
+`adt.typeref`와 대응하는 struct/enum layout의 `name`에 동일하게 사용하며,
+선언 identity나 타입 인자를 이름에서 역으로 복원하는 근거로 쓰지 않는다.
+
 ## Primitive Numeric Types
 
 `Float`는 IEEE 754 부동소수점 값을 표현한다. 현재 산술/비교 연산은
@@ -218,6 +225,8 @@ List patterns use sequence views:
 Exact patterns require the stated length. Prefix-rest patterns require at least
 the prefix length and bind the remaining sequence without copying or mutation.
 Element subpatterns are matched left to right.
+
+`List(a)` 원소 패턴이 관찰하고 바인딩하는 값의 타입은 `a`다.
 
 Every backend represents `List(a)` as an RRB tree. The branching factor, node
 packing, and allocation layout are target-private, while persistence, logarithmic

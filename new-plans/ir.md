@@ -711,6 +711,15 @@ not semantic type equivalence. Closures lower differently per backend: Wasm
 uses function references plus GC structures, while native uses function
 pointers plus heap environments.
 
+Storage finalization 이후 erased `tribute_rt.anyref`에서 정확한 canonical closure
+storage로 복원하는 `core.unrealized_conversion_cast`는 generic cleanup에서
+no-op으로 소거하지 않는다. Compiler가 구성한 canonical storage의 전체 type
+identity로 이 경계를 선택하며, 이름이나 비슷한 필드 모양으로 추론하지 않는다.
+Target은 정확한 cast 결과 타입으로 transfer를 검증한 뒤 emission 전에 복원을
+물리화한다. Wasm은 concrete `ref.cast`를 생성하고 native는 pointer 표현으로
+변환한다. 이 규칙은 다른 struct나 nominal reference의 일반 변환 정책을 바꾸지
+않으며, semantic callable 검증을 대체하지 않는다.
+
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
 
@@ -745,11 +754,38 @@ List patterns lower to sequence observations. Exact-length patterns require an
 empty remainder; prefix-rest patterns return the remainder as the same canonical
 List type. A backend must eliminate `list.*` before its backend-ready boundary.
 
+Source-logical List 패턴의 `list.head` 결과 타입은 `element_type`과 같아야 한다.
+둘 다 전체 패턴의 검증된 `List(a)`에서 논리 타입으로 변환한 `a`를 사용한다.
+이 계약은 매칭 검사와 성공한 arm의 바인딩에 동일하게 적용한다.
+생성자 패턴 노드의 callable 메타데이터는 생성자 해석용으로 보존하며,
+원소 값의 타입으로 사용하지 않는다.
+
 List의 logical representation은 compiler-owned nominal identity로 선택한다.
 동명 source ADT의 등록은 이 선택을 바꾸지 않는다. 현재 lowering이 사용하는
 `tribute_rt.anyref`는 표현상의 선택이며 List의 semantic identity를 대신하지
 않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
 specialization에 대응해야 한다.
+
+Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
+`adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
+`adt.typeref`의 `name`, layout의 `name`, 게시된 alias의 이름은 일치해야 한다.
+생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
+참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
+type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
+
+특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
+스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
+추정하지 않는다. `adt.variant_new`의 operand materialization과
+`adt.variant_get`의 결과 타입은 같은 게시된 layout을 따른다. 특수화하지 않은
+generic layout의 erased 필드는 기존 boxing과 payload recovery를 유지한다.
+Signature나 필드에서만 참조하는 nominal 인스턴스도 의존 layout을 준비하고
+게시해야 한다. 재귀 참조는 같은 선언 및 타입 인자의 인스턴스를 공유한다.
+
+CPS와 closure 변환은 게시된 alias와 layout 내부 타입을 함께 변환한다.
+Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 사용하며,
+각 reachable typeref가 같은 이름의 유일한 layout으로 해석되어야 한다.
+누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
+맞추는 방식으로 layout을 추정하지 않는다.
 
 The root `core.module` carries Tribute-specific well-known type identities as
 `TypeRef` attributes. In particular, `tribute.type.string` is the exact

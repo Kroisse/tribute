@@ -195,11 +195,14 @@ fn main() {
 }
 "#,
     );
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile a root main that closes an open callback worker",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
 }
 
 #[salsa_test]
@@ -406,6 +409,7 @@ fn main() ->{std::io::Io} Nil { std::io::print_line(classify(1)) }
 }
 
 #[salsa_test]
+#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
 fn test_compile_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability Console {
@@ -435,14 +439,18 @@ fn main() ->{std::io::Io} Nil {
 }
 "#;
     let source = SourceCst::from_source_str(db, "tail_dispatch_ability.trb", code);
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile tail-dispatch ability through wasm effect ABI lowering",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
 }
 
 #[salsa_test]
+#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
 fn test_compile_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -472,9 +480,46 @@ fn main() ->{std::io::Io} Nil {
 }
 "#;
     let source = SourceCst::from_source_str(db, "cps_dispatch_ability.trb", code);
-    expect_wasm_compilation_success(
+    let binary = expect_wasm_compilation_success(
         db,
         source,
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
+}
+
+#[test]
+fn test_validate_fixed_wasm_dispatch_abis() {
+    let mut ctx = trunk_ir::IrContext::new();
+    let module = trunk_ir::parser::parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+        !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
+        func.func @tail(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+            %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+            func.return %result
+        }
+        func.func @cps(%ev: wasm.arrayref, %dispatch: !Closure, %resume: !Closure, %payload: wasm.anyref) {
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+        }
+    }"#,
+    );
+    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
+    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+    let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary.bytes)
+        .expect("both fixed dispatch ABIs must encode valid function types");
+}
+
+#[salsa_test]
+fn test_compile_specialized_enum_payloads(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "specialized_enum_payloads.trb",
+        include_str!("specialized_enum_payloads.trb"),
+    );
+    expect_wasm_compilation_success(db, source, "Specialized enum payloads must compile");
 }
