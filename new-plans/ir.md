@@ -758,6 +758,14 @@ Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` �
 참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
 type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
 
+특수화된 enum의 variant 필드 타입은 해당 인스턴스에 함께 치환된 constructor
+스킴에서 가져온다. 원본 generic 스킴이나 생성·패턴 표현식으로 필드 표현을
+추정하지 않는다. `adt.variant_new`의 operand materialization과
+`adt.variant_get`의 결과 타입은 같은 게시된 layout을 따른다. 특수화하지 않은
+generic layout의 erased 필드는 기존 boxing과 payload recovery를 유지한다.
+Signature나 필드에서만 참조하는 nominal 인스턴스도 의존 layout을 준비하고
+게시해야 한다. 재귀 참조는 같은 선언 및 타입 인자의 인스턴스를 공유한다.
+
 CPS와 closure 변환은 게시된 alias와 layout 내부 타입을 함께 변환한다.
 Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 사용하며,
 각 reachable typeref가 같은 이름의 유일한 layout으로 해석되어야 한다.

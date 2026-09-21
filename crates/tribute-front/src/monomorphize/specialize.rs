@@ -1,3 +1,4 @@
+use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
@@ -249,11 +250,23 @@ pub fn generate_struct_specializations<'db>(
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<StructDecl> {
-    let struct_decls = collect_struct_decls(db, module);
+    let index = NominalIndex::new(db, module);
+    generate_struct_specializations_with_index(db, &index, instantiations)
+}
+
+pub(super) fn generate_struct_specializations_with_index<'db>(
+    db: &'db dyn salsa::Database,
+    index: &NominalIndex<'_, 'db>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+) -> Vec<StructDecl> {
     let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
-        let Some(decl) = struct_decls.get(id) else {
+        let Some(Declaration {
+            source: NominalDeclaration::Struct(decl),
+            ..
+        }) = index.declarations.get(id)
+        else {
             continue;
         };
         if decl.type_params.is_empty() {
@@ -277,11 +290,23 @@ pub fn generate_enum_specializations<'db>(
     module: &Module<TypedRef<'db>>,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<EnumDecl> {
-    let enum_decls = collect_enum_decls(db, module);
+    let index = NominalIndex::new(db, module);
+    generate_enum_specializations_with_index(db, &index, instantiations)
+}
+
+pub(super) fn generate_enum_specializations_with_index<'db>(
+    db: &'db dyn salsa::Database,
+    index: &NominalIndex<'_, 'db>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+) -> Vec<EnumDecl> {
     let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
 
     for (id, type_arg_sets) in instantiations {
-        let Some(decl) = enum_decls.get(id) else {
+        let Some(Declaration {
+            source: NominalDeclaration::Enum(decl),
+            ..
+        }) = index.declarations.get(id)
+        else {
             continue;
         };
         if decl.type_params.is_empty() {
@@ -502,74 +527,6 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
         _ => TypeAnnotationKind::Infer,
     };
     TypeAnnotation { id, kind }
-}
-
-pub(super) fn collect_struct_decls<'a, 'db>(
-    db: &'db dyn salsa::Database,
-    module: &'a Module<TypedRef<'db>>,
-) -> HashMap<TypeDefId<'db>, &'a StructDecl> {
-    let mut map = HashMap::new();
-    let mut prefix = String::new();
-    collect_struct_decls_inner(db, &module.decls, &mut prefix, &mut map);
-    map
-}
-
-fn collect_struct_decls_inner<'a, 'db>(
-    db: &'db dyn salsa::Database,
-    decls: &'a [Decl<TypedRef<'db>>],
-    prefix: &mut String,
-    map: &mut HashMap<TypeDefId<'db>, &'a StructDecl>,
-) {
-    for decl in decls {
-        match decl {
-            Decl::Struct(s) => {
-                let qualified = crate::qualified_symbol(prefix, s.name);
-                map.insert(TypeDefId::source(db, qualified, s.id), s);
-            }
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    let len = crate::push_prefix(prefix, m.name);
-                    collect_struct_decls_inner(db, body, prefix, map);
-                    prefix.truncate(len);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn collect_enum_decls<'a, 'db>(
-    db: &'db dyn salsa::Database,
-    module: &'a Module<TypedRef<'db>>,
-) -> HashMap<TypeDefId<'db>, &'a EnumDecl> {
-    let mut map = HashMap::new();
-    let mut prefix = String::new();
-    collect_enum_decls_inner(db, &module.decls, &mut prefix, &mut map);
-    map
-}
-
-fn collect_enum_decls_inner<'a, 'db>(
-    db: &'db dyn salsa::Database,
-    decls: &'a [Decl<TypedRef<'db>>],
-    prefix: &mut String,
-    map: &mut HashMap<TypeDefId<'db>, &'a EnumDecl>,
-) {
-    for decl in decls {
-        match decl {
-            Decl::Enum(e) => {
-                let qualified = crate::qualified_symbol(prefix, e.name);
-                map.insert(TypeDefId::source(db, qualified, e.id), e);
-            }
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    let len = crate::push_prefix(prefix, m.name);
-                    collect_enum_decls_inner(db, body, prefix, map);
-                    prefix.truncate(len);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 // ============================================================================

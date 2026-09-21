@@ -100,6 +100,7 @@ fn prepare_root<'db>(
         }
         Root::ConstructorUnion => {
             let (_, constructor) = constructors
+                .schemes
                 .iter_mut()
                 .find(|(id, _)| id.qualified(db) == Symbol::new("Packet"))
                 .unwrap();
@@ -174,6 +175,7 @@ fn main() { marker() }
         Root::ConstructorUnion => {
             prepared
                 .constructor_types(db)
+                .schemes
                 .iter()
                 .find(|(id, _)| id.qualified(db) == Symbol::new("Packet"))
                 .unwrap()

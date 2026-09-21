@@ -1,5 +1,7 @@
 pub mod collect;
 pub mod mangle;
+mod nominal;
+mod nominal_index;
 mod rewrite;
 mod validate;
 pub(crate) use collect::is_concrete_type;
@@ -11,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeDefId, TypeScheme, TypedRef};
+use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
 use crate::typeck::subst::substitute_bound_vars;
 use crate::typeck::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
 
@@ -20,6 +22,7 @@ const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 /// Exact typechecking metadata keyed by source NodeId.
 pub struct MonomorphizeMetadata<'db> {
     pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
+    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
@@ -142,6 +145,7 @@ pub fn monomorphize_functions<'db>(
         .iter()
         .map(|(_, scheme)| *scheme)
         .chain(metadata.constructor_types.values().copied())
+        .chain(metadata.specialized_enum_variants.values().copied())
     {
         scheme.for_each_type(db, |ty| extra_types.push(ty));
     }
@@ -182,20 +186,47 @@ pub fn monomorphize_functions<'db>(
         extra_types.extend(op.params.iter().copied());
         extra_types.push(op.result);
     }
-    let type_instantiations = collect::collect_type_instantiations(db, &module, extra_types);
+    let nominal_index = nominal_index::NominalIndex::new(db, &module);
+    let seeds =
+        collect::collect_type_instantiations_with_index(db, &module, extra_types, &nominal_index);
+    let nominal = nominal::collect(db, &nominal_index, &metadata.constructor_types, seeds)?;
+    let type_instantiations = nominal.instances;
+    for (node, scheme) in nominal.enum_variants {
+        assert!(
+            metadata
+                .specialized_enum_variants
+                .insert(node, scheme)
+                .is_none(),
+            "specialized enum variant schema already exists"
+        );
+    }
 
     let module = if !type_instantiations.is_empty() {
         // Generate specialized struct/enum declarations
-        let specialized_structs =
-            specialize::generate_struct_specializations(db, &module, &type_instantiations);
-        specialize_struct_constructor_metadata(
+        let specialized_structs = specialize::generate_struct_specializations_with_index(
             db,
-            &module,
+            &nominal_index,
             &type_instantiations,
-            &mut metadata.constructor_types,
         );
-        let specialized_enums =
-            specialize::generate_enum_specializations(db, &module, &type_instantiations);
+        // Dependency closure already validated and substituted each scheme. Only
+        // assign its emitted key now, after expansion has successfully terminated.
+        let mut struct_constructors: Vec<_> = nominal
+            .struct_constructors
+            .into_iter()
+            .map(|(owner, arguments, scheme)| {
+                let name = mangle::mangle_type_name(db, owner, owner.qualified(db), &arguments);
+                (CtorId::new(db, name), scheme)
+            })
+            .collect();
+        struct_constructors.sort_by_key(|(id, _)| id.qualified(db));
+        for (ctor, scheme) in struct_constructors {
+            metadata.constructor_types.entry(ctor).or_insert(scheme);
+        }
+        let specialized_enums = specialize::generate_enum_specializations_with_index(
+            db,
+            &nominal_index,
+            &type_instantiations,
+        );
 
         // Build type rewrite map and rewrite Named types throughout the module
         let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
@@ -206,6 +237,9 @@ pub fn monomorphize_functions<'db>(
             *scheme = rewrite_scheme(*scheme);
         }
         for scheme in metadata.constructor_types.values_mut() {
+            *scheme = rewrite_scheme(*scheme);
+        }
+        for scheme in metadata.specialized_enum_variants.values_mut() {
             *scheme = rewrite_scheme(*scheme);
         }
         for ty in metadata.node_types.values_mut() {
@@ -259,63 +293,6 @@ pub fn monomorphize_functions<'db>(
         function_types: fn_types_vec,
         metadata,
     })
-}
-
-/// Generate exact constructor schemes for specialized struct declarations.
-///
-/// A struct constructor shares its canonical qualified identity with its type,
-/// so source-logical lowering looks up the generated mangled name directly.
-fn specialize_struct_constructor_metadata<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-    constructor_types: &mut HashMap<CtorId<'db>, TypeScheme<'db>>,
-) {
-    let struct_decls = specialize::collect_struct_decls(db, module);
-    let mut entries = Vec::new();
-
-    for (id, type_arg_sets) in instantiations {
-        let Some(structure) = struct_decls.get(id) else {
-            continue;
-        };
-        if structure.type_params.is_empty() {
-            continue;
-        }
-        let Some(source_scheme) = constructor_types
-            .get(&CtorId::new(db, id.qualified(db)))
-            .copied()
-        else {
-            continue;
-        };
-        for type_args in type_arg_sets {
-            entries.push(specialize_struct_constructor_scheme(
-                db,
-                *id,
-                type_args,
-                source_scheme,
-            ));
-        }
-    }
-
-    entries.sort_by_key(|(id, _)| id.qualified(db));
-    for (ctor, scheme) in entries {
-        constructor_types.entry(ctor).or_insert(scheme);
-    }
-}
-
-fn specialize_struct_constructor_scheme<'db>(
-    db: &'db dyn salsa::Database,
-    type_id: TypeDefId<'db>,
-    type_args: &[Type<'db>],
-    source_scheme: TypeScheme<'db>,
-) -> (CtorId<'db>, TypeScheme<'db>) {
-    let name = mangle::mangle_type_name(db, type_id, type_id.qualified(db), type_args);
-    let scheme = source_scheme
-        .to_builder(db)
-        .map_types(db, |ty| substitute_type(db, ty, type_args))
-        .type_params(Vec::new())
-        .build(db);
-    (CtorId::new(db, name), scheme)
 }
 
 fn specialize_metadata<'db>(
@@ -520,10 +497,7 @@ fn build_rewrite_map<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{
-        AbilityId, CallingConvention, EffectRow, OpDeclKind, StructDecl, TypeKind, TypeParam,
-        TypeParamDecl,
-    };
+    use crate::ast::{AbilityId, CallingConvention, EffectRow, OpDeclKind, TypeKind};
 
     #[salsa::db]
     #[derive(Default)]
@@ -533,72 +507,6 @@ mod tests {
 
     #[salsa::db]
     impl salsa::Database for TestDb {}
-
-    #[test]
-    fn specialized_struct_constructor_scheme_uses_mangled_key_and_concrete_fields() {
-        let db = TestDb::default();
-        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let int = Type::new(&db, TypeKind::Int);
-        let structure = StructDecl {
-            id: NodeId::from_raw(1),
-            is_pub: false,
-            name: Symbol::new("nested::Holder"),
-            type_params: vec![TypeParamDecl {
-                id: NodeId::from_raw(2),
-                name: Symbol::new("a"),
-                bounds: vec![],
-            }],
-            fields: vec![],
-        };
-        let type_id = TypeDefId::source(&db, structure.name, structure.id);
-        let holder = Type::new(
-            &db,
-            TypeKind::Named {
-                id: type_id,
-                name: structure.name,
-                args: vec![bound],
-            },
-        );
-        let source_scheme = TypeScheme::new(
-            &db,
-            vec![TypeParam::anonymous()],
-            Vec::new(),
-            Type::new(
-                &db,
-                TypeKind::Func {
-                    params: vec![bound],
-                    result: holder,
-                    effect: EffectRow::pure(&db),
-                    minimum_convention: CallingConvention::Direct,
-                },
-            ),
-        );
-        let module = Module::new(NodeId::from_raw(0), None, vec![Decl::Struct(structure)]);
-        let instantiations = HashMap::from([(type_id, HashSet::from([vec![int]]))]);
-        let source_ctor = CtorId::new(&db, Symbol::new("nested::Holder"));
-        let mut constructor_types = HashMap::from([(source_ctor, source_scheme)]);
-        specialize_struct_constructor_metadata(
-            &db,
-            &module,
-            &instantiations,
-            &mut constructor_types,
-        );
-
-        let ctor = CtorId::new(&db, Symbol::new("nested::Holder$Int"));
-        assert_eq!(constructor_types.get(&source_ctor), Some(&source_scheme));
-        let specialized = constructor_types
-            .get(&ctor)
-            .expect("one generic struct instantiation must produce one constructor scheme");
-        assert!(specialized.is_mono(&db));
-        let TypeKind::Func { params, result, .. } = specialized.body(&db).kind(&db) else {
-            panic!("specialized constructor must retain a callable schema")
-        };
-        assert!(matches!(params.as_slice(), [param] if *param == int));
-        assert!(matches!(
-            result.kind(&db),
-            TypeKind::Named { args, .. } if args.as_slice() == [int]
-        ));
-    }
 
     #[test]
     fn specialization_metadata_rekeys_and_substitutes_sparse_tables() {
@@ -634,6 +542,7 @@ mod tests {
         };
         let mut metadata = MonomorphizeMetadata {
             constructor_types: HashMap::new(),
+            specialized_enum_variants: HashMap::new(),
             node_types: HashMap::from([(origin, bound)]),
             function_instances: HashMap::new(),
             local_instances: HashMap::from([(

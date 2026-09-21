@@ -513,3 +513,13 @@ fn test_validate_fixed_wasm_dispatch_abis() {
         .validate_all(&binary.bytes)
         .expect("both fixed dispatch ABIs must encode valid function types");
 }
+
+#[salsa_test]
+fn test_compile_specialized_enum_payloads(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "specialized_enum_payloads.trb",
+        include_str!("specialized_enum_payloads.trb"),
+    );
+    expect_wasm_compilation_success(db, source, "Specialized enum payloads must compile");
+}

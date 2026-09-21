@@ -215,7 +215,18 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         typed,
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+            constructor_types: checked
+                .constructor_types(db)
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: checked
+                .constructor_types(db)
+                .specialized_enum_variants
+                .iter()
+                .cloned()
+                .collect(),
             local_instances: checked
                 .expression_types(db)
                 .local_instances
@@ -247,6 +258,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         span_map: checked.span_map(db).clone(),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
+        specialized_enum_variants: mono.metadata.specialized_enum_variants,
         node_types: mono.metadata.node_types,
         local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
@@ -292,7 +304,18 @@ fn lower_specialized_source(
         typed,
         checked.function_types(db).iter().cloned().collect(),
         tribute_front::monomorphize::MonomorphizeMetadata {
-            constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+            constructor_types: checked
+                .constructor_types(db)
+                .schemes
+                .iter()
+                .cloned()
+                .collect(),
+            specialized_enum_variants: checked
+                .constructor_types(db)
+                .specialized_enum_variants
+                .iter()
+                .cloned()
+                .collect(),
             local_instances: checked
                 .expression_types(db)
                 .local_instances
@@ -324,6 +347,7 @@ fn lower_specialized_source(
         span_map: checked.span_map(db).clone(),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
+        specialized_enum_variants: mono.metadata.specialized_enum_variants,
         node_types: mono.metadata.node_types,
         local_instances: mono.metadata.local_instances,
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
@@ -384,7 +408,18 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .collect(),
         span_map: checked.span_map(db).clone(),
         function_types: checked.function_types(db).iter().cloned().collect(),
-        constructor_types: checked.constructor_types(db).iter().cloned().collect(),
+        constructor_types: checked
+            .constructor_types(db)
+            .schemes
+            .iter()
+            .cloned()
+            .collect(),
+        specialized_enum_variants: checked
+            .constructor_types(db)
+            .specialized_enum_variants
+            .iter()
+            .cloned()
+            .collect(),
         node_types: checked
             .expression_types(db)
             .node_types
