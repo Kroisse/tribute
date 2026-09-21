@@ -1122,19 +1122,10 @@ keep the origin recorded at their shared annotation-to-row conversion point.
 nominal identity와 intrinsic provenance가 누락되지 않게 한다. 이 계약은
 동일한 정보를 여러 결과 객체에 중복 저장하도록 요구하지 않는다.
 
-Enum 특수화는 복제된 variant의 `NodeId`에 치환된 constructor 스킴을 연결한다.
-원본 constructor identity와 runtime variant tag는 유지하며, 다른 모듈이나
-다른 타입 인자의 스킴을 덮어쓰지 않는다. Lowering은 이 연결을 필수 입력으로
-소비하며 누락된 스킴을 원본 generic 스킴으로 대체하지 않는다.
-
-Nominal 특수화는 AST와 의미 메타데이터의 구체 타입을 시작점으로 삼고,
-발견한 struct·enum 인스턴스의 constructor 스킴을 치환하여 의존 인스턴스를
-고정점까지 수집한다. 스킴의 callable, tuple, effect와 row 제약 안의 타입도
-순회한다. 중복 판별은 원본 `TypeDefId`와 타입 인자 목록을 사용하며, 전체
-의존 집합을 확보한 뒤 선언과 메타데이터를 생성하고 nominal 타입을 재작성한다.
-같은 인스턴스의 재귀·상호 재귀는 중복 생성하지 않는다. 끝없이 새로운 타입
-인자를 만드는 확장은 유한한 컴파일러 자원 한도에서 진단하고, 부분 준비
-결과를 IR 생성에 전달하지 않는다.
+Nominal 선언 인덱스와 치환된 constructor 스킴은 frontend 준비 단계가 소유한다.
+Lowering은 준비에 성공한 AST와 대응 스킴을 함께 소비한다. 인스턴스 수집,
+스킴 재사용, variant 연결과 확장 한도의 상세 계약은
+[Generics — Nominal 타입 수집과 재작성](generics.md#nominal-타입-수집과-재작성)을 따른다.
 
 Method 후보 선택과 scheme instantiation은 타입 체커가 소유한다. Receiver
 타입이 미해결인 호출은 제약 해결 과정에서 선택을 확정한다. TDNR 재작성은

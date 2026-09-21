@@ -1,3 +1,4 @@
+use super::nominal_index::NominalIndex;
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
@@ -356,75 +357,45 @@ fn is_concrete_effect_row_cached<'db>(
 ///
 /// Walks all types in the AST (recursively through Func, Tuple, Named, etc.)
 /// and records which concrete type argument combinations each generic type
-/// is used with. Only collects types whose names match generic struct/enum
-/// declarations (those with non-empty `type_params`).
+/// is used with. Only collects instances of indexed generic struct/enum
+/// declarations (those with non-empty `type_params`), matched by TypeDefId.
 pub fn collect_type_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let generic_types = collect_generic_type_ids(db, module);
+    let index = NominalIndex::new(db, module);
+    collect_type_instantiations_with_index(db, module, extra_types, &index)
+}
+
+pub(super) fn collect_type_instantiations_with_index<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    extra_types: impl IntoIterator<Item = Type<'db>>,
+    index: &NominalIndex<'_, 'db>,
+) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
 
     let mut visitor = TypeInstantiationVisitor {
         db,
-        generic_types: &generic_types,
+        index,
         instantiations: &mut result,
     };
     visitor.visit_module(module);
     for ty in extra_types {
-        collect_from_type(db, ty, &generic_types, &mut result);
+        collect_from_type(db, ty, index, &mut result);
     }
     result
-}
-
-/// Collect declaration identities of all generic struct/enum declarations.
-fn collect_generic_type_ids<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
-) -> HashSet<TypeDefId<'db>> {
-    let mut ids = HashSet::new();
-    let mut prefix = String::new();
-    collect_generic_type_ids_inner(db, &module.decls, &mut prefix, &mut ids);
-    ids
-}
-
-fn collect_generic_type_ids_inner<'db>(
-    db: &'db dyn salsa::Database,
-    decls: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
-    ids: &mut HashSet<TypeDefId<'db>>,
-) {
-    for decl in decls {
-        match decl {
-            Decl::Struct(s) if !s.type_params.is_empty() => {
-                let qualified = crate::qualified_symbol(prefix, s.name);
-                ids.insert(TypeDefId::source(db, qualified, s.id));
-            }
-            Decl::Enum(e) if !e.type_params.is_empty() => {
-                let qualified = crate::qualified_symbol(prefix, e.name);
-                ids.insert(TypeDefId::source(db, qualified, e.id));
-            }
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    let saved = crate::push_prefix(prefix, m.name);
-                    collect_generic_type_ids_inner(db, body, prefix, ids);
-                    prefix.truncate(saved);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Recursively walk a Type and collect all declaration-backed generic types.
 pub(super) fn collect_from_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    generic_types: &HashSet<TypeDefId<'db>>,
+    index: &NominalIndex<'_, 'db>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
-    collect_from_type_inner(db, ty, generic_types, result, &mut HashSet::new());
+    collect_from_type_inner(db, ty, index, result, &mut HashSet::new());
 }
 
 // Interned types form a DAG. Visit shared arguments once, including during
@@ -432,7 +403,7 @@ pub(super) fn collect_from_type<'db>(
 fn collect_from_type_inner<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    generic_types: &HashSet<TypeDefId<'db>>,
+    index: &NominalIndex<'_, 'db>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
     seen: &mut HashSet<Type<'db>>,
 ) {
@@ -442,14 +413,14 @@ fn collect_from_type_inner<'db>(
     match ty.kind(db) {
         TypeKind::Named { id, args, .. } => {
             if !args.is_empty()
-                && generic_types.contains(id)
+                && index.is_generic(*id)
                 && args.iter().all(|arg| is_concrete_type(db, *arg))
             {
                 result.entry(*id).or_default().insert(args.clone());
             }
             // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
             for arg in args {
-                collect_from_type_inner(db, *arg, generic_types, result, seen);
+                collect_from_type_inner(db, *arg, index, result, seen);
             }
         }
         TypeKind::Func {
@@ -459,24 +430,24 @@ fn collect_from_type_inner<'db>(
             ..
         } => {
             for p in params {
-                collect_from_type_inner(db, *p, generic_types, result, seen);
+                collect_from_type_inner(db, *p, index, result, seen);
             }
-            collect_from_type_inner(db, *ret, generic_types, result, seen);
+            collect_from_type_inner(db, *ret, index, result, seen);
             for effect in effect.effects(db) {
                 for arg in &effect.args {
-                    collect_from_type_inner(db, *arg, generic_types, result, seen);
+                    collect_from_type_inner(db, *arg, index, result, seen);
                 }
             }
         }
         TypeKind::Tuple(elems) => {
             for e in elems {
-                collect_from_type_inner(db, *e, generic_types, result, seen);
+                collect_from_type_inner(db, *e, index, result, seen);
             }
         }
         TypeKind::App { ctor, args } => {
-            collect_from_type_inner(db, *ctor, generic_types, result, seen);
+            collect_from_type_inner(db, *ctor, index, result, seen);
             for a in args {
-                collect_from_type_inner(db, *a, generic_types, result, seen);
+                collect_from_type_inner(db, *a, index, result, seen);
             }
         }
         TypeKind::Continuation {
@@ -484,11 +455,11 @@ fn collect_from_type_inner<'db>(
             result: ret,
             effect,
         } => {
-            collect_from_type_inner(db, *arg, generic_types, result, seen);
-            collect_from_type_inner(db, *ret, generic_types, result, seen);
+            collect_from_type_inner(db, *arg, index, result, seen);
+            collect_from_type_inner(db, *ret, index, result, seen);
             for effect in effect.effects(db) {
                 for arg in &effect.args {
-                    collect_from_type_inner(db, *arg, generic_types, result, seen);
+                    collect_from_type_inner(db, *arg, index, result, seen);
                 }
             }
         }
@@ -497,15 +468,15 @@ fn collect_from_type_inner<'db>(
     }
 }
 
-struct TypeInstantiationVisitor<'a, 'db> {
+struct TypeInstantiationVisitor<'a, 'ast, 'db> {
     db: &'db dyn salsa::Database,
-    generic_types: &'a HashSet<TypeDefId<'db>>,
+    index: &'a NominalIndex<'ast, 'db>,
     instantiations: &'a mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 }
 
-impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
+impl<'a, 'ast, 'db> TypeInstantiationVisitor<'a, 'ast, 'db> {
     fn collect_type(&mut self, ty: Type<'db>) {
-        collect_from_type(self.db, ty, self.generic_types, self.instantiations);
+        collect_from_type(self.db, ty, self.index, self.instantiations);
     }
 
     fn visit_typed_ref(&mut self, tr: &TypedRef<'db>) {
@@ -920,11 +891,57 @@ mod tests {
     // collect_type_instantiations tests
     // ========================================================================
 
+    fn nominal_module<'db>() -> Module<TypedRef<'db>> {
+        Module {
+            id: NodeId::from_raw(0),
+            name: None,
+            decls: [
+                ("Option", 1),
+                ("Result", 2),
+                ("List", 1),
+                ("Pair", 2),
+                ("Plain", 0),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, arity))| {
+                Decl::Struct(crate::ast::StructDecl {
+                    id: NodeId::from_raw(i + 1),
+                    is_pub: false,
+                    name: Symbol::new(name),
+                    type_params: (0..arity)
+                        .map(|p| crate::ast::TypeParamDecl {
+                            id: NodeId::from_raw(100 + i * 2 + p),
+                            name: Symbol::from_dynamic(&format!("t{p}")),
+                            bounds: vec![],
+                        })
+                        .collect(),
+                    fields: vec![],
+                })
+            })
+            .collect(),
+        }
+    }
+
+    fn nominal_id<'db>(
+        index: &NominalIndex<'_, 'db>,
+        db: &'db dyn salsa::Database,
+        name: &str,
+    ) -> TypeDefId<'db> {
+        *index
+            .declarations
+            .keys()
+            .find(|id| id.qualified(db).with_str(|s| s == name))
+            .unwrap()
+    }
+
     #[test]
     fn test_collect_type_retains_concrete_specialization() {
         let db = TestDb::default();
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let option_id = nominal_id(&index, &db, "Option");
         let option_int = Type::new(
             &db,
             TypeKind::Named {
@@ -934,11 +951,8 @@ mod tests {
             },
         );
 
-        let mut generic_types = HashSet::new();
-        generic_types.insert(option_id);
-
         let mut result = HashMap::new();
-        collect_from_type(&db, option_int, &generic_types, &mut result);
+        collect_from_type(&db, option_int, &index, &mut result);
 
         assert_eq!(result.len(), 1);
         let option_insts = result.get(&option_id).unwrap();
@@ -948,7 +962,9 @@ mod tests {
     #[test]
     fn test_collect_type_skips_bound_var_specialization() {
         let db = TestDb::default();
-        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
+        let option_id = nominal_id(&index, &db, "Option");
         let option_bound = Type::new(
             &db,
             TypeKind::Named {
@@ -958,11 +974,8 @@ mod tests {
             },
         );
 
-        let mut generic_types = HashSet::new();
-        generic_types.insert(option_id);
-
         let mut result = HashMap::new();
-        collect_from_type(&db, option_bound, &generic_types, &mut result);
+        collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
     }
@@ -970,7 +983,9 @@ mod tests {
     #[test]
     fn test_collect_type_skips_local_bound_var_specialization() {
         let db = TestDb::default();
-        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
+        let option_id = nominal_id(&index, &db, "Option");
         let option_bound = Type::new(
             &db,
             TypeKind::Named {
@@ -986,11 +1001,8 @@ mod tests {
             },
         );
 
-        let mut generic_types = HashSet::new();
-        generic_types.insert(option_id);
-
         let mut result = HashMap::new();
-        collect_from_type(&db, option_bound, &generic_types, &mut result);
+        collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
     }
@@ -998,8 +1010,10 @@ mod tests {
     #[test]
     fn test_collect_type_retains_concrete_child_below_skipped_parent() {
         let db = TestDb::default();
-        let result_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Result"));
-        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
+        let result_id = nominal_id(&index, &db, "Result");
+        let option_id = nominal_id(&index, &db, "Option");
         let int = Type::new(&db, TypeKind::Int);
         let option_int = Type::new(
             &db,
@@ -1018,9 +1032,8 @@ mod tests {
             },
         );
 
-        let generic_types = HashSet::from([result_id, option_id]);
         let mut result = HashMap::new();
-        collect_from_type(&db, result_bound_option_int, &generic_types, &mut result);
+        collect_from_type(&db, result_bound_option_int, &index, &mut result);
 
         assert!(!result.contains_key(&result_id));
         assert_eq!(result[&option_id], HashSet::from([vec![int]]));
@@ -1029,9 +1042,11 @@ mod tests {
     #[test]
     fn test_collect_type_nested() {
         let db = TestDb::default();
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        let option_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option"));
-        let list_id = crate::ast::TypeDefId::builtin_list(&db);
+        let option_id = nominal_id(&index, &db, "Option");
+        let list_id = nominal_id(&index, &db, "List");
         let option_int = Type::new(
             &db,
             TypeKind::Named {
@@ -1049,12 +1064,8 @@ mod tests {
             },
         );
 
-        let mut generic_types = HashSet::new();
-        generic_types.insert(option_id);
-        generic_types.insert(list_id);
-
         let mut result = HashMap::new();
-        collect_from_type(&db, list_option_int, &generic_types, &mut result);
+        collect_from_type(&db, list_option_int, &index, &mut result);
 
         assert_eq!(result.len(), 2);
         assert!(result[&option_id].contains(&vec![int]));
@@ -1064,8 +1075,10 @@ mod tests {
     #[test]
     fn test_collect_type_in_func_params() {
         let db = TestDb::default();
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        let pair_id = crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Pair"));
+        let pair_id = nominal_id(&index, &db, "Pair");
         let pair_int_int = Type::new(
             &db,
             TypeKind::Named {
@@ -1084,11 +1097,8 @@ mod tests {
             },
         );
 
-        let mut generic_types = HashSet::new();
-        generic_types.insert(pair_id);
-
         let mut result = HashMap::new();
-        collect_from_type(&db, func_ty, &generic_types, &mut result);
+        collect_from_type(&db, func_ty, &index, &mut result);
 
         assert_eq!(result.len(), 1);
         assert!(result[&pair_id].contains(&vec![int, int]));
@@ -1097,20 +1107,27 @@ mod tests {
     #[test]
     fn test_collect_type_ignores_non_generic() {
         let db = TestDb::default();
+        let module = nominal_module();
+        let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        // Named type with args but NOT in generic_types set
-        let unknown = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Unknown")),
-                name: trunk_ir::Symbol::new("Unknown"),
-                args: vec![int],
-            },
-        );
-
-        let generic_types = HashSet::new(); // empty — nothing is generic
         let mut result = HashMap::new();
-        collect_from_type(&db, unknown, &generic_types, &mut result);
+        // Neither an unknown type nor an indexed non-generic declaration qualifies,
+        // even if the type carries arguments.
+        for id in [
+            TypeDefId::synthetic(&db, Symbol::new("Unknown")),
+            nominal_id(&index, &db, "Plain"),
+        ] {
+            assert!(!index.is_generic(id));
+            let ty = Type::new(
+                &db,
+                TypeKind::Named {
+                    id,
+                    name: id.qualified(&db),
+                    args: vec![int],
+                },
+            );
+            collect_from_type(&db, ty, &index, &mut result);
+        }
 
         assert!(result.is_empty());
     }

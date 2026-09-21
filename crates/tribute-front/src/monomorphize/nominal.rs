@@ -1,9 +1,10 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{CtorId, Decl, Module, NodeId, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
+use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::{SubstResult, substitute_bound_vars};
 
+use super::nominal_index::{Constructor, Declaration, NominalIndex};
 use super::{InstanceError, InstanceErrorKind, collect, specialize};
 
 const MAX_NOMINAL_ROUNDS: usize = 64;
@@ -13,81 +14,14 @@ type Instances<'db> = HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>;
 
 pub(super) struct NominalInstances<'db> {
     pub instances: Instances<'db>,
+    pub struct_constructors: Vec<(TypeDefId<'db>, Vec<Type<'db>>, TypeScheme<'db>)>,
     pub enum_variants: HashMap<NodeId, TypeScheme<'db>>,
-}
-
-struct Constructor<'db> {
-    node: NodeId,
-    id: CtorId<'db>,
-    fields: usize,
-}
-
-struct Declaration<'db> {
-    node: NodeId,
-    params: usize,
-    is_enum: bool,
-    constructors: Vec<Constructor<'db>>,
-}
-
-fn declarations<'db>(
-    db: &'db dyn salsa::Database,
-    decls: &[Decl<TypedRef<'db>>],
-    prefix: &mut String,
-    result: &mut HashMap<TypeDefId<'db>, Declaration<'db>>,
-) {
-    for decl in decls {
-        let (name, declaration) = match decl {
-            Decl::Struct(s) if !s.type_params.is_empty() => (
-                s.name,
-                Declaration {
-                    node: s.id,
-                    params: s.type_params.len(),
-                    is_enum: false,
-                    constructors: vec![Constructor {
-                        node: s.id,
-                        id: CtorId::new(db, crate::qualified_symbol(prefix, s.name)),
-                        fields: s.fields.len(),
-                    }],
-                },
-            ),
-            Decl::Enum(e) if !e.type_params.is_empty() => (
-                e.name,
-                Declaration {
-                    node: e.id,
-                    params: e.type_params.len(),
-                    is_enum: true,
-                    constructors: e
-                        .variants
-                        .iter()
-                        .map(|v| Constructor {
-                            node: v.id,
-                            id: CtorId::new(db, crate::qualified_symbol(prefix, v.name)),
-                            fields: v.fields.len(),
-                        })
-                        .collect(),
-                },
-            ),
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    let saved = crate::push_prefix(prefix, m.name);
-                    declarations(db, body, prefix, result);
-                    prefix.truncate(saved);
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        result.insert(
-            TypeDefId::source(db, crate::qualified_symbol(prefix, name), declaration.node),
-            declaration,
-        );
-    }
 }
 
 fn instantiate<'db>(
     db: &'db dyn salsa::Database,
     owner: TypeDefId<'db>,
-    declaration: &Declaration<'db>,
+    declaration: &Declaration<'_, 'db>,
     constructor: &Constructor<'db>,
     schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     arguments: &[Type<'db>],
@@ -100,15 +34,15 @@ fn instantiate<'db>(
         .get(&constructor.id)
         .copied()
         .ok_or_else(|| fail(InstanceErrorKind::MissingInstance))?;
-    if scheme.type_params(db).len() != declaration.params {
+    if scheme.type_params(db).len() != declaration.params() {
         return Err(fail(InstanceErrorKind::TypeArgumentArity {
-            expected: declaration.params,
+            expected: declaration.params(),
             found: scheme.type_params(db).len(),
         }));
     }
-    if arguments.len() != declaration.params {
+    if arguments.len() != declaration.params() {
         return Err(fail(InstanceErrorKind::TypeArgumentArity {
-            expected: declaration.params,
+            expected: declaration.params(),
             found: arguments.len(),
         }));
     }
@@ -142,13 +76,13 @@ fn instantiate<'db>(
 
 pub(super) fn collect<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    index: &NominalIndex<'_, 'db>,
     schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     seeds: Instances<'db>,
 ) -> Result<NominalInstances<'db>, Vec<InstanceError>> {
     close_dependencies(
         db,
-        module,
+        index,
         schemes,
         seeds,
         MAX_NOMINAL_ROUNDS,
@@ -159,26 +93,26 @@ pub(super) fn collect<'db>(
 
 fn close_dependencies<'db>(
     db: &'db dyn salsa::Database,
-    module: &Module<TypedRef<'db>>,
+    index: &NominalIndex<'_, 'db>,
     schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
     mut pending: Instances<'db>,
     max_rounds: usize,
     max_instances: usize,
 ) -> Result<NominalInstances<'db>, InstanceError> {
-    let mut definitions = HashMap::new();
-    declarations(db, &module.decls, &mut String::new(), &mut definitions);
-    let generic_ids = definitions.keys().copied().collect();
+    let definitions = &index.declarations;
     let mut instances = Instances::new();
     let mut enum_variants = HashMap::new();
+    let mut struct_constructors = Vec::new();
     let mut count = 0;
     let limit = || InstanceError {
-        node: module.id,
+        node: index.module,
         kind: InstanceErrorKind::ExpansionLimit,
     };
     for _ in 0..max_rounds {
         if pending.is_empty() {
             return Ok(NominalInstances {
                 instances,
+                struct_constructors,
                 enum_variants,
             });
         }
@@ -201,9 +135,9 @@ fn close_dependencies<'db>(
                     let scheme =
                         instantiate(db, owner, declaration, constructor, schemes, &arguments)?;
                     scheme.for_each_type(db, |ty| {
-                        collect::collect_from_type(db, ty, &generic_ids, &mut discovered)
+                        collect::collect_from_type(db, ty, index, &mut discovered)
                     });
-                    if declaration.is_enum {
+                    if declaration.is_enum() {
                         let node = constructor
                             .node
                             .with_variant(specialize::type_args_variant(&arguments));
@@ -213,6 +147,8 @@ fn close_dependencies<'db>(
                                 kind: InstanceErrorKind::InconsistentCallable,
                             });
                         }
+                    } else {
+                        struct_constructors.push((owner, arguments.clone(), scheme));
                     }
                 }
             }
@@ -228,6 +164,7 @@ fn close_dependencies<'db>(
     if pending.is_empty() {
         Ok(NominalInstances {
             instances,
+            struct_constructors,
             enum_variants,
         })
     } else {
@@ -238,6 +175,7 @@ fn close_dependencies<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Decl;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
@@ -255,6 +193,154 @@ mod tests {
             parsed.span_map(db).clone(),
         );
         crate::typeck::typecheck_module(db, resolved, parsed.span_map(db).clone())
+    }
+
+    #[salsa_test]
+    fn nominal_index_preserves_nested_identities_and_public_helpers(db: &salsa::DatabaseImpl) {
+        use super::super::nominal_index::NominalDeclaration;
+        let input = checked(
+            db,
+            crate::SourceCst::from_source_str(
+                db,
+                "nominal_index.trb",
+                r#"
+pub mod A {
+    pub struct Token(a) { value: a }
+    pub mod Nested { pub enum Choice(a) { Item(a), Empty } pub struct Plain {} }
+}
+pub mod B {
+    pub struct Token(a) { value: a }
+    pub mod Nested { pub enum Choice(a) { Item(a), Empty } pub struct Plain {} }
+}
+extern "C" fn a(value: A::Token(Int)) -> A::Nested::Choice(Int)
+extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
+"#,
+            ),
+        );
+        let index = NominalIndex::new(db, input.module(db));
+        assert_eq!(index.declarations.len(), 6);
+        for prefix in ["A", "B"] {
+            for (suffix, generic) in [
+                ("Token", true),
+                ("Nested::Choice", true),
+                ("Nested::Plain", false),
+            ] {
+                let name = Symbol::from_dynamic(&format!("{prefix}::{suffix}"));
+                let (id, entry) = index
+                    .declarations
+                    .iter()
+                    .find(|(id, _)| id.qualified(db) == name)
+                    .unwrap();
+                assert_eq!(index.is_generic(*id), generic);
+                match entry.source {
+                    NominalDeclaration::Struct(s) => {
+                        assert_eq!(*id, TypeDefId::source(db, name, s.id));
+                        assert_eq!(entry.constructors.len(), 1);
+                        assert_eq!(entry.constructors[0].id.qualified(db), name);
+                        assert_eq!(entry.constructors[0].node, s.id);
+                        assert_eq!(entry.constructors[0].fields, s.fields.len());
+                    }
+                    NominalDeclaration::Enum(e) => {
+                        assert_eq!(*id, TypeDefId::source(db, name, e.id));
+                        assert_eq!(entry.constructors.len(), 2);
+                        for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
+                            assert_eq!(
+                                constructor.id.qualified(db),
+                                Symbol::from_dynamic(&format!(
+                                    "{prefix}::Nested::{}",
+                                    variant.name
+                                ))
+                            );
+                            assert_eq!(constructor.node, variant.id);
+                            assert_eq!(constructor.fields, variant.fields.len());
+                        }
+                    }
+                }
+            }
+        }
+        let roots: Vec<_> = input
+            .function_types(db)
+            .iter()
+            .map(|(_, s)| s.body(db))
+            .collect();
+        let seeds = collect::collect_type_instantiations_with_index(
+            db,
+            input.module(db),
+            roots.clone(),
+            &index,
+        );
+        assert_eq!(
+            seeds,
+            collect::collect_type_instantiations(db, input.module(db), roots)
+        );
+        assert_eq!(seeds.len(), 4);
+        let structs = specialize::generate_struct_specializations_with_index(db, &index, &seeds);
+        let enums = specialize::generate_enum_specializations_with_index(db, &index, &seeds);
+        assert_eq!(structs.len(), 2);
+        assert_eq!(enums.len(), 2);
+        assert_eq!(
+            structs,
+            specialize::generate_struct_specializations(db, input.module(db), &seeds)
+        );
+        assert_eq!(
+            enums,
+            specialize::generate_enum_specializations(db, input.module(db), &seeds)
+        );
+    }
+
+    #[salsa_test]
+    fn collected_struct_schema_preserves_fields_and_source(db: &salsa::DatabaseImpl) {
+        let input = checked(
+            db,
+            crate::SourceCst::from_source_str(
+                db,
+                "struct_schema.trb",
+                "pub mod nested { pub struct Holder(a) { value: a } }\nextern \"C\" fn hold(value: nested::Holder(Int)) -> Nil",
+            ),
+        );
+        let index = NominalIndex::new(db, input.module(db));
+        let schemas: HashMap<_, _> = input
+            .constructor_types(db)
+            .schemes
+            .iter()
+            .copied()
+            .collect();
+        let source_ctor = CtorId::new(db, Symbol::new("nested::Holder"));
+        let source_scheme = schemas[&source_ctor];
+        let seeds = collect::collect_type_instantiations_with_index(
+            db,
+            input.module(db),
+            input.function_types(db).iter().map(|(_, s)| s.body(db)),
+            &index,
+        );
+        let collected = collect(db, &index, &schemas, seeds).unwrap();
+        assert!(collected.enum_variants.is_empty());
+        let [(owner, arguments, scheme)] = collected.struct_constructors.as_slice() else {
+            panic!("one retained struct scheme")
+        };
+        let int = Type::new(db, TypeKind::Int);
+        assert_eq!(arguments, &[int]);
+        assert!(scheme.is_mono(db));
+        assert_eq!(index.declarations[owner].constructors[0].fields, 1);
+        let TypeKind::Func { params, result, .. } = scheme.body(db).kind(db) else {
+            panic!("callable constructor")
+        };
+        assert_eq!(params, &[int]);
+        assert!(
+            matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
+        );
+        let name =
+            super::super::mangle::mangle_type_name(db, *owner, owner.qualified(db), arguments);
+        assert_eq!(name, Symbol::new("nested::Holder$Int"));
+        let declarations = specialize::generate_struct_specializations_with_index(
+            db,
+            &index,
+            &collected.instances,
+        );
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(declarations[0].name, name);
+        assert_eq!(schemas[&source_ctor], source_scheme);
+        assert_eq!(source_scheme.type_params(db).len(), 1);
     }
 
     #[salsa_test]
@@ -325,7 +411,13 @@ mod tests {
                 input.function_types(db).iter().map(|(_, s)| s.body(db)),
             );
             assert!(!seeds.contains_key(&hidden_id));
-            let result = collect(db, input.module(db), &schemas, seeds).unwrap();
+            let result = collect(
+                db,
+                &NominalIndex::new(db, input.module(db)),
+                &schemas,
+                seeds,
+            )
+            .unwrap();
             assert_eq!(
                 result.instances[&hidden_id],
                 HashSet::from([vec![Type::new(db, TypeKind::Int)]])
@@ -394,7 +486,14 @@ mod tests {
                 .iter()
                 .copied()
                 .collect();
-            let result = close_dependencies(db, input.module(db), &schemas, seeds, rounds, count);
+            let result = close_dependencies(
+                db,
+                &NominalIndex::new(db, input.module(db)),
+                &schemas,
+                seeds,
+                rounds,
+                count,
+            );
             if succeeds {
                 let result = result.unwrap();
                 assert_eq!(
@@ -434,7 +533,12 @@ mod tests {
             .iter()
             .copied()
             .collect();
-        let result = collect(db, input.module(db), &schemes, seeds);
+        let result = collect(
+            db,
+            &NominalIndex::new(db, input.module(db)),
+            &schemes,
+            seeds,
+        );
         assert!(
             matches!(result, Err(errors) if errors[0].kind == InstanceErrorKind::ExpansionLimit)
         );
@@ -442,91 +546,101 @@ mod tests {
 
     #[salsa_test]
     fn nominal_dependencies_reject_missing_wrong_owner_and_arity_schemas(db: &salsa::DatabaseImpl) {
-        let source = crate::SourceCst::from_source_str(
-            db,
-            "invalid_nominal_schema.trb",
-            "enum Cell(a) { Value(a), Empty }\nextern \"C\" fn hold(value: Cell(Int)) -> Nil",
-        );
-        let input = checked(db, source);
-        let original: HashMap<_, _> = input
-            .constructor_types(db)
-            .schemes
-            .iter()
-            .copied()
-            .collect();
-        let ctor = CtorId::new(db, Symbol::new("Value"));
-        for kind in [
-            InstanceErrorKind::MissingInstance,
-            InstanceErrorKind::WrongDeclaration,
-            InstanceErrorKind::InconsistentCallable,
-            InstanceErrorKind::TypeArgumentArity {
-                expected: 1,
-                found: 0,
-            },
-            InstanceErrorKind::IncompleteTypeArgument,
+        for (declaration, constructor) in [
+            ("enum Cell(a) { Value(a), Empty }", "Value"),
+            ("struct Cell(a) { value: a }", "Cell"),
         ] {
-            let mut schemas = original.clone();
-            let scheme = original[&ctor];
-            if kind == InstanceErrorKind::MissingInstance {
-                schemas.remove(&ctor);
-            } else if matches!(kind, InstanceErrorKind::TypeArgumentArity { .. }) {
-                schemas.insert(ctor, scheme.to_builder(db).type_params(vec![]).build(db));
-            } else {
-                let TypeKind::Func {
-                    params,
-                    result,
-                    effect,
-                    minimum_convention,
-                } = scheme.body(db).kind(db)
-                else {
-                    panic!("constructor signature")
-                };
-                let body = Type::new(
+            let source = crate::SourceCst::from_source_str(
+                db,
+                "invalid_nominal_schema.trb",
+                &format!("{declaration}\nextern \"C\" fn hold(value: Cell(Int)) -> Nil"),
+            );
+            let input = checked(db, source);
+            let original: HashMap<_, _> = input
+                .constructor_types(db)
+                .schemes
+                .iter()
+                .copied()
+                .collect();
+            let ctor = CtorId::new(db, Symbol::from_dynamic(constructor));
+            for kind in [
+                InstanceErrorKind::MissingInstance,
+                InstanceErrorKind::WrongDeclaration,
+                InstanceErrorKind::InconsistentCallable,
+                InstanceErrorKind::TypeArgumentArity {
+                    expected: 1,
+                    found: 0,
+                },
+                InstanceErrorKind::IncompleteTypeArgument,
+            ] {
+                let mut schemas = original.clone();
+                let scheme = original[&ctor];
+                if kind == InstanceErrorKind::MissingInstance {
+                    schemas.remove(&ctor);
+                } else if matches!(kind, InstanceErrorKind::TypeArgumentArity { .. }) {
+                    schemas.insert(ctor, scheme.to_builder(db).type_params(vec![]).build(db));
+                } else {
+                    let TypeKind::Func {
+                        params,
+                        result,
+                        effect,
+                        minimum_convention,
+                    } = scheme.body(db).kind(db)
+                    else {
+                        panic!("constructor signature")
+                    };
+                    let body = Type::new(
+                        db,
+                        TypeKind::Func {
+                            params: if kind == InstanceErrorKind::InconsistentCallable {
+                                vec![]
+                            } else if kind == InstanceErrorKind::IncompleteTypeArgument {
+                                vec![Type::new(db, TypeKind::BoundVar { index: 1 })]
+                            } else {
+                                params.clone()
+                            },
+                            result: if kind == InstanceErrorKind::WrongDeclaration {
+                                Type::new(db, TypeKind::Int)
+                            } else {
+                                *result
+                            },
+                            effect: *effect,
+                            minimum_convention: *minimum_convention,
+                        },
+                    );
+                    schemas.insert(
+                        ctor,
+                        scheme
+                            .to_builder(db)
+                            .map_types(db, |ty| if ty == scheme.body(db) { body } else { ty })
+                            .build(db),
+                    );
+                }
+                let seeds = collect::collect_type_instantiations(
                     db,
-                    TypeKind::Func {
-                        params: if kind == InstanceErrorKind::InconsistentCallable {
-                            vec![]
-                        } else if kind == InstanceErrorKind::IncompleteTypeArgument {
-                            vec![Type::new(db, TypeKind::BoundVar { index: 1 })]
-                        } else {
-                            params.clone()
-                        },
-                        result: if kind == InstanceErrorKind::WrongDeclaration {
-                            Type::new(db, TypeKind::Int)
-                        } else {
-                            *result
-                        },
-                        effect: *effect,
-                        minimum_convention: *minimum_convention,
-                    },
+                    input.module(db),
+                    input.function_types(db).iter().map(|(_, s)| s.body(db)),
                 );
-                schemas.insert(
-                    ctor,
-                    scheme
-                        .to_builder(db)
-                        .map_types(db, |ty| if ty == scheme.body(db) { body } else { ty })
-                        .build(db),
+                let result = collect(
+                    db,
+                    &NominalIndex::new(db, input.module(db)),
+                    &schemas,
+                    seeds,
+                );
+                let Err(errors) = result else {
+                    panic!("invalid schema accepted")
+                };
+                assert_eq!(errors[0].kind, kind);
+                assert_eq!(
+                    input
+                        .constructor_types(db)
+                        .schemes
+                        .iter()
+                        .copied()
+                        .collect::<HashMap<_, _>>(),
+                    original
                 );
             }
-            let seeds = collect::collect_type_instantiations(
-                db,
-                input.module(db),
-                input.function_types(db).iter().map(|(_, s)| s.body(db)),
-            );
-            let result = collect(db, input.module(db), &schemas, seeds);
-            let Err(errors) = result else {
-                panic!("invalid schema accepted")
-            };
-            assert_eq!(errors[0].kind, kind);
-            assert_eq!(
-                input
-                    .constructor_types(db)
-                    .schemes
-                    .iter()
-                    .copied()
-                    .collect::<HashMap<_, _>>(),
-                original
-            );
         }
     }
 }
