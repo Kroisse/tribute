@@ -180,8 +180,15 @@ fn main() { }
 
     let ir = run_ast_pipeline_with_ir(db, source);
     let run = checked_logical_function(&ir, "run");
+    let string_ref = ir
+        .lines()
+        .find_map(|line| {
+            let (alias, definition) = line.trim().split_once(" = ")?;
+            (definition == "adt.typeref() {name = @String}").then_some(alias)
+        })
+        .expect("nominal String reference");
     assert!(
-        run.contains("resume_token(!String, core.i32)"),
+        run.contains(&format!("resume_token({string_ref}, core.i32)")),
         "handler token must retain its exact input and answer types:\n{run}"
     );
     assert_in_order(
@@ -196,7 +203,7 @@ fn main() { }
         .lines()
         .find(|line| line.contains("core.unrealized_conversion_cast"))
         .expect("resume input materialization");
-    assert!(cast.contains(": !String"), "{run}");
+    assert!(cast.ends_with(&format!(": {string_ref}")), "{run}");
     let resume = run
         .lines()
         .find(|line| line.contains("= tribute_control.resume "))
@@ -1862,9 +1869,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node_1 = adt.struct() {fields = [[@next, !Node]], name = @Node}",
-        "!First_1 = adt.struct() {fields = [[@second, !Second]], name = @First}",
-        "!Second_1 = adt.struct() {fields = [[@first, !First]], name = @Second}",
+        "!Node = adt.struct() {fields = [[@next, adt.typeref() {name = @Node}]], name = @Node}",
+        "!First = adt.struct() {fields = [[@second, adt.typeref() {name = @Second}]], name = @First}",
+        "!Second = adt.struct() {fields = [[@first, adt.typeref() {name = @First}]], name = @Second}",
     ] {
         assert!(
             ir.contains(field),

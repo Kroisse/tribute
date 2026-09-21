@@ -751,6 +751,19 @@ List의 logical representation은 compiler-owned nominal identity로 선택한�
 않는다. Source nominal의 `adt.typeref`와 layout은 동일한 해석된 선언 및
 specialization에 대응해야 한다.
 
+Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
+`adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
+`adt.typeref`의 `name`, layout의 `name`, 게시된 alias의 이름은 일치해야 한다.
+생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
+참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
+type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
+
+CPS와 closure 변환은 게시된 alias와 layout 내부 타입을 함께 변환한다.
+Native ownership 검사는 게시된 정의와 IR에서 도달하는 layout만 사용하며,
+각 reachable typeref가 같은 이름의 유일한 layout으로 해석되어야 한다.
+누락되거나 모호한 layout은 거부하고, interner 전체 검색이나 이름의 일부를
+맞추는 방식으로 layout을 추정하지 않는다.
+
 The root `core.module` carries Tribute-specific well-known type identities as
 `TypeRef` attributes. In particular, `tribute.type.string` is the exact
 `adt.enum` type produced from the prelude `String` declaration. String-literal
