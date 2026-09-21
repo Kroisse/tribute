@@ -1042,6 +1042,18 @@ mod tests {
                 vec!["if", "if"],
             ),
             (
+                "%outer = scf.if %cond : core.never { scf.if %cond { func.return } { func.unreachable } } { func.return }",
+                vec!["if", "if"],
+            ),
+            (
+                "%outer = scf.if %cond : core.never { scf.loop { func.return } } { func.return }",
+                vec!["if", "block", "loop"],
+            ),
+            (
+                "%outer = scf.if %cond : core.never { %inner = scf.loop : core.never { func.return } } { func.return }",
+                vec!["if", "block", "loop"],
+            ),
+            (
                 "scf.switch %choice { scf.case {value = 0} { %n = scf.if %cond : core.never { func.return } { func.unreachable } } scf.default { func.return } }",
                 vec!["if", "if"],
             ),
@@ -1113,6 +1125,9 @@ mod tests {
             "%n = scf.loop : core.never { scf.continue }",
             "%n = scf.loop : core.never { scf.break %unit }",
             "%n = scf.loop : core.never { }",
+            "%n = scf.if %cond : core.never { scf.if %cond { func.return } { scf.yield } } { func.return }",
+            "%n = scf.if %cond : core.never { scf.loop { scf.break } } { func.return }",
+            "%n = scf.if %cond : core.never { scf.loop { scf.continue } } { func.return }",
             "%n = scf.loop : core.never { ^a: func.return ^b: func.return }",
         ] {
             let input = control_fixture(&format!(

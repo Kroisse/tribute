@@ -137,6 +137,10 @@ region과 SCF operation의 증명 결과를 저장한다. 부모 판정은 저�
 조회하므로 중첩 subtree를 다시 탐색하지 않는다. 증명되지 않은 terminal 성질은
 정상적인 분석 결과이며, interface 오류도 terminal 증거로 사용하지 않는다.
 Wasm switch의 지원 타입이나 target conversion 진단은 분석의 책임이 아니다.
+중첩 `scf.if`와 `scf.loop`는 결과가 없거나 미사용 `core.never` 결과 하나만
+가지고, 모든 진입 successor region이 terminal이면 enclosing region의 종료를
+증명한다. Loop 본문 자체가 종료되는 경우만 포함하며 `continue` 순환은 증명하지
+않는다.
 
 Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조회하고,
 각 target의 검증과 변환 결정을 도출한다. Mutation 전에 캐시를 무효화하며,

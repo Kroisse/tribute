@@ -106,7 +106,7 @@ Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여�
 `scf_to_wasm`은 결과가 정확히 하나의 `core.never`이고 사용되지 않으며 블록의
 마지막 operation인 `scf.if`와 `scf.loop`를 zero-result Wasm 제어 연산으로
 낮춘다. 모든 진입 successor의 region은 단일 블록이고, 마지막 operation이
-검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/switch여야
+검증된 `CallableExit` 또는 같은 terminal 판정을 만족하는 중첩 if/loop/switch여야
 한다. Native structured-to-CFG lowering과 같은 `RegionBranch`/`CallableExit`
 판정을 사용하며, parent 복귀, 불완전한 interface 응답, 오류는 terminal 증거가
 아니다. Loop의 continue 순환이나 임의의 다중 블록 CFG는 분석하지 않는다.

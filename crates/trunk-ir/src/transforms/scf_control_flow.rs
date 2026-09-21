@@ -117,12 +117,14 @@ impl StructuredControlAnalysis {
         let Some(&last) = ctx.block(*block).ops.last() else {
             return false;
         };
-        if scf::If::matches(ctx, last) {
+        if scf::If::matches(ctx, last) || scf::Loop::matches(ctx, last) {
             self.has_terminal_unused_never_result(last)
+                || (ctx.op_results(last).is_empty()
+                    && self.has_only_terminal_region_successors(last))
         } else if scf::Switch::matches(ctx, last) {
             self.is_terminal_resultless_switch(last)
         } else {
-            !scf::Loop::matches(ctx, last) && CallableExitOps::exits_callable(ctx, last).is_ok()
+            CallableExitOps::exits_callable(ctx, last).is_ok()
         }
     }
 }
