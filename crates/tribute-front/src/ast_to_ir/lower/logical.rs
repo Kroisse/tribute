@@ -494,6 +494,7 @@ fn prescan_logical_nominal_layouts<'db>(
                 let name = super::qualified_type_name(ctx.db, &ctor);
                 let layout = ctx.adt_struct_type(ir, name, &fields);
                 ctx.register_type(name, layout);
+                ir.register_type_alias(name, layout);
             }
             Decl::Enum(enumeration) => {
                 let qualified = crate::qualified_symbol(prefix, enumeration.name);
@@ -527,6 +528,7 @@ fn prescan_logical_nominal_layouts<'db>(
                     ctx.adt_enum_type(ir, name, &variants)
                 };
                 ctx.register_type(name, layout);
+                ir.register_type_alias(name, layout);
                 if well_known_types.is_string(definition) {
                     well_known_types.record_string(layout);
                 }

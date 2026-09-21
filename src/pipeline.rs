@@ -2848,6 +2848,136 @@ fn main() {
     }
 
     #[salsa_test]
+    fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::tribute_control;
+        use trunk_ir::adt_layout::get_struct_fields;
+        use trunk_ir::{Symbol, TypeRef};
+
+        fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {
+            let ty = ir
+                .type_alias_by_name(name)
+                .expect("published nominal layout");
+            let data = ir.types.get(ty);
+            assert_eq!(data.dialect, Symbol::new("adt"));
+            assert_eq!(data.name, Symbol::from_dynamic(kind));
+            assert_eq!(data.attrs.get_symbol("name"), Some(name));
+            assert_eq!(
+                ir.type_aliases()
+                    .iter()
+                    .filter(|(_, ty)| ir.types.get(*ty).attrs.get_symbol("name") == Some(name))
+                    .count(),
+                1,
+                "one published layout for {name}"
+            );
+            ty
+        }
+
+        fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
+            let data = ir.types.get(ty);
+            assert_eq!(data.dialect, Symbol::new("adt"));
+            assert_eq!(data.name, Symbol::new("typeref"));
+            data.attrs.get_symbol("name").expect("nominal identity")
+        }
+
+        // These specializations occur only in signatures, never in allocations.
+        let source = source_from_str(
+            "published_nominal_layouts.trb",
+            r#"
+pub mod A { pub struct Token(a) {} }
+pub mod B { pub struct Token(a) {} }
+enum Choice(a) { Item(a), Empty }
+struct Holder { pair: #(Nat, fn(Nat) -> Nat) }
+struct Node { next: Node }
+struct First { second: Second }
+struct Second { first: First }
+
+fn keep_a(value: A::Token(Nat)) -> A::Token(Nat) { value }
+fn keep_b(value: B::Token(Nat)) -> B::Token(Nat) { value }
+fn keep_choice(value: Choice(Nat)) -> Choice(Nat) { value }
+fn keep_holder(value: Holder) -> Holder { value }
+fn keep_node(value: Node) -> Node { value }
+fn keep_first(value: First) -> First { value }
+fn main() {}
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let diagnostics = parse_and_lower_ast::accumulated::<Diagnostic>(db, source);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let (mut ir, logical) =
+            merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
+                typed.lower_to_ir(db, ir, uri)
+            });
+        let mut source_tuple = None;
+        for after_cps in [false, true] {
+            if after_cps {
+                tribute_passes::tribute_control_to_cps::tribute_control_to_cps(
+                    &mut ir,
+                    logical.module,
+                    &logical.operation_declarations,
+                    &logical.compiler_intrinsics,
+                )
+                .expect("CPS converts published layout fields");
+            }
+            for (function, nominal, kind) in [
+                ("keep_a", "A::Token$Nat", "struct"),
+                ("keep_b", "B::Token$Nat", "struct"),
+                ("keep_choice", "Choice$Nat", "enum"),
+            ] {
+                let parameter = logical
+                    .module
+                    .ops(&ir)
+                    .into_iter()
+                    .find_map(|op| {
+                        if after_cps {
+                            let f = func_dialect::Func::from_op(&ir, op).ok()?;
+                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                                func_dialect::FuncSig::from_type_ref(&ir, f.r#type(&ir))
+                                    .unwrap()
+                                    .inputs(&ir)[0]
+                            })
+                        } else {
+                            let f = tribute_control::Func::from_op(&ir, op).ok()?;
+                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                                tribute_control::FuncSig::from_type_ref(&ir, f.r#type(&ir))
+                                    .unwrap()
+                                    .inputs(&ir)[0]
+                            })
+                        }
+                    })
+                    .expect("signature-only specialization");
+                let name = reference_name(&ir, parameter);
+                assert_eq!(name, Symbol::from_dynamic(nominal));
+                layout(&ir, name, kind);
+            }
+            assert_ne!(
+                layout(&ir, Symbol::new("A::Token$Nat"), "struct"),
+                layout(&ir, Symbol::new("B::Token$Nat"), "struct")
+            );
+            for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
+                let owner = layout(&ir, Symbol::from_dynamic(owner), "struct");
+                let field = get_struct_fields(&ir, owner).unwrap()[0].1;
+                let name = reference_name(&ir, field);
+                assert_eq!(name, Symbol::from_dynamic(target));
+                layout(&ir, name, "struct");
+            }
+            let holder = layout(&ir, Symbol::new("Holder"), "struct");
+            let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
+            let tuple = layout(&ir, reference_name(&ir, pair), "struct");
+            let fields = get_struct_fields(&ir, tuple).unwrap();
+            let callback = ir.types.get(fields[1].1);
+            if after_cps {
+                assert_ne!(Some(tuple), source_tuple);
+                assert_eq!(callback.dialect, Symbol::new("closure"));
+                assert_eq!(callback.name, Symbol::new("closure"));
+            } else {
+                source_tuple = Some(tuple);
+                assert_eq!(callback.dialect, Symbol::new("tribute_control"));
+                assert_eq!(callback.name, Symbol::new("func_sig"));
+            }
+        }
+    }
+
+    #[salsa_test]
     fn source_list_does_not_change_logical_prelude_signatures(db: &salsa::DatabaseImpl) {
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, ops::DialectOp};

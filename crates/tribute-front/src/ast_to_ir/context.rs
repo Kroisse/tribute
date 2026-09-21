@@ -761,7 +761,8 @@ impl<'db> IrLoweringCtx<'db> {
                     })
                     .collect::<Vec<_>>();
                 let name = self.logical_tuple_name(ty);
-                self.adt_struct_type(ir, name, &fields);
+                let layout = self.adt_struct_type(ir, name, &fields);
+                ir.register_type_alias(name, layout);
                 self.adt_typeref(ir, name)
             }
             TypeKind::App { ctor, .. } => self.convert_logical_type(ir, *ctor),
