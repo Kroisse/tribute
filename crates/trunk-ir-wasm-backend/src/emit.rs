@@ -1125,7 +1125,13 @@ fn set_result_local(
     // Wasm leaves the final declared result at the top of the stack.
     // Consume every result in reverse order so SSA result i keeps its slot.
     for index in (0..results.len()).rev() {
-        if is_nil_type(ctx, results[index]) {
+        // Calls omit Nil result slots in their physical signature. Value
+        // producers (including nop/ref.null) do leave a nullref on the stack
+        // and must store it even when the SSA result has type core.nil.
+        if is_nil_type(ctx, results[index])
+            && (wasm_dialect::Call::matches(ctx, op)
+                || wasm_dialect::CallIndirect::matches(ctx, op))
+        {
             continue;
         }
         let local = emit_ctx
@@ -1516,6 +1522,30 @@ mod tests {
         Validator::new()
             .validate_all(&bytes)
             .expect("encoded ordinary indirect call must validate");
+    }
+
+    #[test]
+    fn nil_value_producers_consume_their_stack_result_before_control_flow() {
+        for producer in ["wasm.nop", "wasm.ref_null {heap_type = @none}"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+                wasm.func @consume(%unit: core.nil) {{ wasm.return }}
+                wasm.func @main() {{
+                    %unit = {producer} : core.nil
+                    %condition = wasm.i32_const {{value = 1}} : core.i32
+                    wasm.if %condition {{
+                        wasm.return_call %unit {{callee = @consume}}
+                    }} {{ wasm.unreachable }}
+                }}
+            }}"#
+                ),
+            );
+            let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
+            Validator::new().validate_all(&bytes).unwrap();
+        }
     }
 
     #[test]

@@ -39,11 +39,15 @@ use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_I
 pub enum EvidenceValidationError {
     InvalidDispatchMetadata,
     DispatchOperandMismatch,
+    InvalidTailDispatch,
 }
 
 impl std::fmt::Display for EvidenceValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidTailDispatch => {
+                f.write_str("Wasm tail dispatch differs from its fixed evidence/payload/result ABI")
+            }
             Self::InvalidDispatchMetadata => f.write_str(
                 "Wasm CPS dispatch requires four operands, no results and typed metadata",
             ),
@@ -432,6 +436,9 @@ impl RewritePattern for EffectDispatchTailPattern {
             return false;
         };
 
+        let Ok(signature) = tail_dispatch_signature(ctx, op) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
@@ -461,7 +468,7 @@ impl RewritePattern for EffectDispatchTailPattern {
             [result_ty],
             0,
             0,
-            None,
+            Some(signature),
         );
         let call_result = call.results(ctx)[0];
         rewriter.insert_op(call.op_ref());
@@ -484,15 +491,51 @@ fn validate_final_dispatches(
 ) -> Result<(), EvidenceValidationError> {
     let mut dispatches = Vec::new();
     let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
-        if effect::DispatchCps::matches(ctx, op) {
+        if effect::DispatchCps::matches(ctx, op) || effect::DispatchTail::matches(ctx, op) {
             dispatches.push(op);
         }
         std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
     });
     for op in dispatches {
-        final_dispatch_signature(ctx, op)?;
+        if effect::DispatchTail::matches(ctx, op) {
+            tail_dispatch_signature(ctx, op)?;
+        } else {
+            final_dispatch_signature(ctx, op)?;
+        }
     }
     Ok(())
+}
+
+fn tail_dispatch_signature(
+    ctx: &mut IrContext,
+    op: OpRef,
+) -> Result<TypeRef, EvidenceValidationError> {
+    let evidence = evidence_ref_type(ctx);
+    let anyref = wasm_dialect::anyref(ctx).as_type_ref();
+    let i32_ty = intern_i32(ctx);
+    // Extension results can still carry the exact shared Evidence type before
+    // the pattern applicator converts their uses to the Wasm array ABI.
+    let shared_evidence = ability::evidence_adt_type_ref(ctx);
+    let [ev, payload] = ctx.op_operands(op) else {
+        return Err(EvidenceValidationError::InvalidTailDispatch);
+    };
+    if (ctx.value_ty(*ev) != evidence && ctx.value_ty(*ev) != shared_evidence)
+        || ctx.op_result_types(op) != [anyref]
+        || ctx.op(op).attributes.get_type("ability_ref").is_none()
+        || ctx.op(op).attributes.get_symbol("op_name").is_none()
+        || !trunk_ir_wasm_backend::is_wasm_physical_argument_assignable(
+            ctx,
+            ctx.value_ty(*payload),
+            anyref,
+        )
+    {
+        return Err(EvidenceValidationError::InvalidTailDispatch);
+    }
+    Ok(intern_func_type(
+        ctx,
+        &[evidence, anyref, i32_ty, anyref],
+        anyref,
+    ))
 }
 
 fn final_dispatch_signature(
@@ -1548,6 +1591,44 @@ mod tests {
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
         assert!(output.contains("wasm.struct_get"), "{output}");
         assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn tail_dispatch_preserves_fixed_signature_and_rejects_malformed_contracts() {
+        let template = r#"core.module @test {
+            func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
+                %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+                func.return %result
+            }
+        }"#;
+        let output = lower_text(template);
+        assert!(output.contains("signature = wasm.func_sig<(wasm.arrayref, wasm.anyref, core.i32, wasm.anyref) -> wasm.anyref>"), "{output}");
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, template);
+        let function = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+        let shared_evidence = ability::evidence_adt_type_ref(&mut ctx);
+        ctx.set_block_arg_type(block, 0, shared_evidence);
+        lower_evidence_to_wasm(&mut ctx, module)
+            .expect("exact shared Evidence is accepted before target conversion");
+
+        for source in [
+            template.replace("%ev: wasm.arrayref", "%ev: core.array(core.i32)"),
+            template.replace("%ev: wasm.arrayref", "%ev: wasm.anyref"),
+            template.replace("%payload: wasm.anyref", "%payload: core.i32"),
+            template
+                .replace("} : wasm.anyref", "} : core.i32")
+                .replace("-> wasm.anyref", "-> core.i32"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &source);
+            let before = print_module(&ctx, module.op());
+            assert_eq!(
+                lower_evidence_to_wasm(&mut ctx, module),
+                Err(EvidenceValidationError::InvalidTailDispatch)
+            );
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
     }
 
     #[test]

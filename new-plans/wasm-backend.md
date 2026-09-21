@@ -115,6 +115,10 @@ Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.blo
 `wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
 포함한 모든 arm이 terminal이면 결과 없는 Wasm 비교 분기들을 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
+Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
+전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
+명시적인 `wasm.unreachable`을 둔다. 결과가 처음부터 없는 terminal 제어 연산에도
+같은 규칙을 적용하며, 정상 successor가 있는 제어 연산에는 적용하지 않는다.
 
 중첩 pattern이 source operation을 바꾸기 전에 공통 `StructuredControlAnalysis`를
 조회한다. Wasm 소비자는 switch 지원 조건과 `Never` 결과의 적법성을 검사하고,
@@ -169,6 +173,23 @@ Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계�
 `done_k`가 typed cell을 쓴 뒤 call이 돌아오면 이를 읽는다. Shared `func.call`은
 zero-result 형상을 지원하며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
+
+### Tail-resumptive dispatch의 함수 시그니처
+
+`effect.dispatch_tail`의 Wasm lowering은 `(Evidence, env: anyref, op_idx: i32,
+payload: anyref) -> anyref` 시그니처를 명시한다. Evidence와 반환 표현은 정확히
+일치해야 하며 packed payload는 검증된 GC widening만 허용한다. Lowering은
+operand로 ABI를 재추론하지 않고 이 고정 시그니처를 `wasm.call_indirect`에
+보존한다. Emitter는 최종 모듈 등록 결과에서 함수 타입 인덱스를 얻으며,
+lowering의 placeholder `type_idx`가 그 결과를 덮어쓰지 않는다.
+
+### Nil 값과 callable result의 구분
+
+`Nil`을 값으로 생성하는 Wasm 연산은 `ref.null none`을 포함한 실제 stack 값을
+만들며, emitter는 그 값을 해당 SSA local에 저장한다. 사용되지 않은 Nil 값도
+stack에 남겨 두지 않는다. 반면 callable의 Nil result slot은 기존 ABI에서
+생략하므로 call 결과를 저장할 때만 그 slot을 건너뛴다. 이 구분은 Nil을 인자나
+필드로 전달하는 것과 zero-result call을 모두 보존한다.
 
 ### 올바른 꼬리 호출 계약
 
@@ -291,6 +312,24 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
   (type $Node (struct (field i32) (field (ref null $Node)))))
 (type $Point (struct (field f64) (field f64)))
 ```
+
+### GC 인덱스 등록의 소유권
+
+GC 연산의 concrete `type_idx`는 해당 연산이 접근하는 레이아웃을 지정한다.
+수집기는 이를 근거로 입력·결과의 추상 Wasm 참조 타입을 concrete 타입으로
+전역 등록하지 않는다. `structref`·`anyref` 인자와 필드는 다른 함수의
+projection, 생성 또는 참조 연산의 등장 순서와 무관하게 추상 타입을 유지한다.
+Concrete nominal 타입의 등록과 연산별 narrowing cast는 그대로 유지한다.
+현재 Evidence 배열 ABI에서 명시적으로 부여하는 `arrayref` 매핑은 별도 계약이며,
+일반 GC 연산에서 이를 새로 유추하거나 덮어쓰지 않는다.
+
+### GC struct 필드의 scalar 표현
+
+GC struct 필드 수집은 타입 비교와 저장 전에 Wasm의 물리적 scalar 표현을
+정규화한다. `core.i1`과 `core.i32`는 모두 Wasm `i32` 필드로 표현하므로,
+생성·읽기·쓰기에서 두 타입이 섞이더라도 수집 순서와 무관하게 `i32`를 사용한다.
+이 동등성은 Bool의 target 표현에 한정한다. `i64`, 부동소수점, 참조 타입의
+불일치를 같은 크기나 비슷한 레이아웃으로 허용하지 않는다.
 
 ### 물리적 참조 할당 가능성
 

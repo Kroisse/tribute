@@ -702,6 +702,15 @@ not semantic type equivalence. Closures lower differently per backend: Wasm
 uses function references plus GC structures, while native uses function
 pointers plus heap environments.
 
+Storage finalization 이후 erased `tribute_rt.anyref`에서 정확한 canonical closure
+storage로 복원하는 `core.unrealized_conversion_cast`는 generic cleanup에서
+no-op으로 소거하지 않는다. Compiler가 구성한 canonical storage의 전체 type
+identity로 이 경계를 선택하며, 이름이나 비슷한 필드 모양으로 추론하지 않는다.
+Target은 정확한 cast 결과 타입으로 transfer를 검증한 뒤 emission 전에 복원을
+물리화한다. Wasm은 concrete `ref.cast`를 생성하고 native는 pointer 표현으로
+변환한다. 이 규칙은 다른 struct나 nominal reference의 일반 변환 정책을 바꾸지
+않으며, semantic callable 검증을 대체하지 않는다.
+
 `adt.*` represents target-independent product, sum, array, reference, and
 literal operations.
 
