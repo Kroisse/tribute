@@ -100,7 +100,7 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 
 /// Run the full WASM lowering pipeline on arena IR.
 pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
-    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_switches(ctx, module)?;
+    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(ctx, module)?;
     super::type_converter::convert_canonical_closure_storage(ctx, module);
 
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
@@ -722,7 +722,7 @@ impl<'a> WasmLowerer<'a> {
             parent_op: None,
         });
 
-        let if_op = wasm_dialect::r#if(ctx, location, is_done, nil_ty, then_region, else_region);
+        let if_op = wasm_dialect::r#if(ctx, location, is_done, [nil_ty], then_region, else_region);
         ctx.push_op(body_block, if_op.op_ref());
 
         let trap_end = wasm_dialect::unreachable(ctx, location);
@@ -1286,6 +1286,34 @@ mod tests {
                 .contains("adt.string_const must produce wasm.anyref"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn lower_to_wasm_rejects_used_never_before_io_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%bytes: core.bytes, %cond: core.i1) -> core.nil {
+    %write = tribute_io.write %bytes, %cond : core.nil
+    %never = scf.if %cond : core.never {
+      func.unreachable
+    } {
+      func.unreachable
+    }
+    func.return %never
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+        let error = lower_to_wasm(&mut ctx, module).expect_err("used Never must reject");
+        assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
+        assert!(error.to_string().contains("scf-to-wasm"), "{error}");
+        assert!(
+            error.to_string().contains("Never control requires"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

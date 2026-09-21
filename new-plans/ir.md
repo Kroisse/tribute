@@ -127,8 +127,15 @@ own structural rules: the region must have one block, the exit must be that
 block's final operation, and a nested structured operation must expose every
 possible entry successor through `RegionBranch`. A `Parent` successor, a
 missing mapping, or an incomplete query leaves a reachable continuation and
-must retain the merge path. This does not imply arbitrary multi-block or loop
-CFG termination analysis.
+must retain the merge path. The same conservative query is shared with Wasm
+structured lowering; it does not imply arbitrary multi-block or loop CFG
+termination analysis.
+
+`wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
+받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
+SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.
+미사용 결과를 제거하는 rewrite는 새 결과가 비어 있고 기존 결과에 use가 없음을
+검사하는 명시적 경로를 사용한다. 일반 operation 교체는 결과를 1:1로 대응시킨다.
 
 These interfaces are queried through TrunkIR's operation registry and remain
 object-safe. Their dyn-facing methods return named concrete small collections;

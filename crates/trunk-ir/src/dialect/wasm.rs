@@ -18,17 +18,20 @@ mod wasm {
     struct Externref;
 
     // Control flow
-    fn block() -> result {
+    #[rest_results]
+    fn block() -> results {
         #[region(body)]
         {}
     }
 
-    fn r#loop(#[rest] init: ()) -> result {
+    #[rest_results]
+    fn r#loop(#[rest] init: ()) -> results {
         #[region(body)]
         {}
     }
 
-    fn r#if(cond: ()) -> result {
+    #[rest_results]
+    fn r#if(cond: ()) -> results {
         #[region(then_region)]
         {}
         #[region(else_region)]

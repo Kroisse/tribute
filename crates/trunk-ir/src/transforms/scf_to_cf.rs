@@ -31,9 +31,13 @@
 
 use smallvec::SmallVec;
 
+#[cfg(test)]
+use super::scf_control_flow::is_terminal_region;
+use super::scf_control_flow::{
+    has_only_terminal_region_successors, has_terminal_unused_never_result,
+};
 use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
-use crate::op_interface::{CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
@@ -130,60 +134,6 @@ fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
-/// Whether a one-block region has only terminal structured control or a
-/// registered callable exit, so lowering it cannot need a continuation block.
-fn is_terminal_region(ctx: &IrContext, region: RegionRef) -> bool {
-    let [branch] = ctx.region(region).blocks.as_slice() else {
-        return false;
-    };
-    let Some(&terminator) = ctx.block(*branch).ops.last() else {
-        return false;
-    };
-    if scf::If::matches(ctx, terminator) {
-        is_terminal_never_if(ctx, *branch, terminator)
-    } else if scf::Switch::matches(ctx, terminator) {
-        ctx.op_results(terminator).is_empty()
-            && has_only_terminal_region_successors(ctx, terminator)
-    } else {
-        !is_scf_control_flow(ctx, terminator)
-            && CallableExitOps::exits_callable(ctx, terminator).is_ok()
-    }
-}
-
-/// Whether every semantic entry successor of a structured operation is a
-/// terminal region. Missing, incomplete, or parent-returning mappings are
-/// nonterminal by construction.
-fn has_only_terminal_region_successors(ctx: &IrContext, op: OpRef) -> bool {
-    let Some(interface) = RegionBranchOps::get(ctx, op) else {
-        return false;
-    };
-    let Ok(successors) = interface.successors(ctx, op, RegionBranchPoint::Parent) else {
-        return false;
-    };
-    !successors.as_slice().is_empty()
-        && successors.as_slice().iter().all(|successor| {
-            matches!(successor, RegionSuccessor::Region(region) if is_terminal_region(ctx, *region))
-        })
-}
-
-/// Whether this is a terminal `scf.if : core.never` whose branches each
-/// already transfer control. Such an if has no continuation to merge into.
-fn is_terminal_never_if(ctx: &IrContext, block: BlockRef, scf_op: OpRef) -> bool {
-    let [result] = ctx.op_results(scf_op) else {
-        return false;
-    };
-    let result_ty = ctx.types.get(ctx.value_ty(*result));
-    if result_ty.dialect != Symbol::new("core")
-        || result_ty.name != Symbol::new("never")
-        || ctx.has_uses(*result)
-        || ctx.block(block).ops.last() != Some(&scf_op)
-    {
-        return false;
-    }
-
-    has_only_terminal_region_successors(ctx, scf_op)
-}
-
 /// Lower a terminal `scf.if : core.never` without creating a merge block.
 fn lower_terminal_never_if(
     ctx: &mut IrContext,
@@ -221,7 +171,7 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
     let then_region = if_op.then_region(ctx);
     let else_region = if_op.else_region(ctx);
 
-    if is_terminal_never_if(ctx, block, scf_op) {
+    if has_terminal_unused_never_result(ctx, scf_op) {
         lower_terminal_never_if(ctx, block, scf_op, loc, cond, then_region, else_region);
         return;
     }

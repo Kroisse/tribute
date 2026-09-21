@@ -7,6 +7,9 @@
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
@@ -18,6 +21,9 @@ use trunk_ir::rewrite::{
     PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::transforms::scf_control_flow::{
+    has_only_terminal_region_successors, has_terminal_unused_never_result,
+};
 use trunk_ir::types::Attribute;
 
 const SCF_TO_WASM_BOUNDARY: &str = "scf-to-wasm";
@@ -36,17 +42,80 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    validate_lowerable_switches(ctx, module)?;
+    let terminal = Arc::new(analyze_structured_control(ctx, module)?);
     PatternApplicator::new(type_converter)
-        .add_pattern(ScfIfPattern)
-        .add_pattern(ScfSwitchPattern)
-        .add_pattern(ScfLoopPattern)
+        .add_pattern(ScfIfPattern(terminal.clone()))
+        .add_pattern(ScfSwitchPattern(terminal.clone()))
+        .add_pattern(ScfLoopPattern(terminal))
         .add_pattern(ScfYieldPattern)
         .add_pattern(ScfContinuePattern)
         .add_pattern(ScfBreakPattern)
         .with_target(scf_to_wasm_target())
         .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
     Ok(())
+}
+
+/// Validate structured control before any target pipeline mutation.
+pub fn validate_lowerable_structured_control(
+    ctx: &IrContext,
+    module: Module,
+) -> Result<(), ConversionError> {
+    analyze_structured_control(ctx, module).map(|_| ())
+}
+
+/// Snapshot source terminal proofs before the bottom-up pattern walk rewrites
+/// nested SCF operations. Target operations do not carry the source interfaces.
+fn analyze_structured_control(
+    ctx: &IrContext,
+    module: Module,
+) -> Result<HashSet<OpRef>, ConversionError> {
+    validate_lowerable_switches(ctx, module)?;
+    fn visit(
+        ctx: &IrContext,
+        op: OpRef,
+        terminal: &mut HashSet<OpRef>,
+    ) -> Result<(), ConversionError> {
+        let is_value_control = scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op);
+        let results = ctx.op_results(op);
+        let has_never = is_value_control
+            && results.iter().any(|&value| {
+                let ty = ctx.types.get(ctx.value_ty(value));
+                ty.dialect == "core" && ty.name == "never"
+            });
+        if has_never || scf::Switch::matches(ctx, op) {
+            let is_terminal = if has_never {
+                has_terminal_unused_never_result(ctx, op)
+            } else {
+                ctx.op(op)
+                    .parent_block
+                    .is_some_and(|block| ctx.block(block).ops.last() == Some(&op))
+                    && has_only_terminal_region_successors(ctx, op)
+            };
+            if is_terminal {
+                terminal.insert(op);
+            } else if has_never {
+                let data = ctx.op(op);
+                return Err(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
+                    op,
+                    dialect: data.dialect,
+                    name: data.name,
+                    legality: LegalityCheck::Illegal,
+                    reason: Some("Never control requires one unused result, final block position, and terminal region successors".into()),
+                }]));
+            }
+        }
+        for &region in &ctx.op(op).regions {
+            for &block in &ctx.region(region).blocks {
+                for &nested in &ctx.block(block).ops {
+                    visit(ctx, nested, terminal)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut terminal = HashSet::new();
+    visit(ctx, module.op(), &mut terminal)?;
+    Ok(terminal)
 }
 
 /// Reject switches this target cannot lower without mutating the module.
@@ -254,7 +323,7 @@ fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> Vec<OpRef> {
 }
 
 /// Pattern for a resultless `scf.switch` -> nested `wasm.if` comparisons.
-struct ScfSwitchPattern;
+struct ScfSwitchPattern(Arc<HashSet<OpRef>>);
 
 impl RewritePattern for ScfSwitchPattern {
     fn match_and_rewrite(
@@ -271,6 +340,11 @@ impl RewritePattern for ScfSwitchPattern {
         };
         let loc = ctx.op(op).location;
         let nil_ty = core::nil(ctx).as_type_ref();
+        let result_types = if self.0.contains(&op) {
+            vec![]
+        } else {
+            vec![nil_ty]
+        };
 
         for &(_, body) in &arms.cases {
             ctx.detach_region(body);
@@ -304,7 +378,14 @@ impl RewritePattern for ScfSwitchPattern {
                 case.result(ctx),
                 ctx.value_ty(discriminant),
             );
-            let branch = wasm_dialect::r#if(ctx, loc, matches.result(ctx), nil_ty, body, next);
+            let branch = wasm_dialect::r#if(
+                ctx,
+                loc,
+                matches.result(ctx),
+                result_types.clone(),
+                body,
+                next,
+            );
             let ops = vec![case.op_ref(), matches.op_ref(), branch.op_ref()];
             if index + 1 == case_count {
                 outer_ops = Some(ops);
@@ -322,7 +403,7 @@ impl RewritePattern for ScfSwitchPattern {
 }
 
 /// Pattern for `scf.if` -> `wasm.if`
-struct ScfIfPattern;
+struct ScfIfPattern(Arc<HashSet<OpRef>>);
 
 impl RewritePattern for ScfIfPattern {
     fn match_and_rewrite(
@@ -337,17 +418,17 @@ impl RewritePattern for ScfIfPattern {
 
         let loc = ctx.op(op).location;
 
-        // Get result type (default to nil if none); reject multi-result. The
+        // Preserve the result list; reject multi-result. The
         // created `wasm.if` must declare target types, so read them through the
         // converter instead of copying the shared IR spelling.
-        let result_types = rewriter.result_types(ctx, op);
+        let mut result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
             return false;
         }
-        let result_ty = result_types
-            .first()
-            .copied()
-            .unwrap_or_else(|| core::nil(ctx).as_type_ref());
+        let drop_result = self.0.contains(&op);
+        if drop_result {
+            result_types.clear();
+        }
 
         // Get the condition operand
         let cond = scf_if_op.cond(ctx);
@@ -358,8 +439,12 @@ impl RewritePattern for ScfIfPattern {
         ctx.detach_region(then_region);
         ctx.detach_region(else_region);
 
-        let new_op = wasm_dialect::r#if(ctx, loc, cond, result_ty, then_region, else_region);
-        rewriter.replace_op(new_op.op_ref());
+        let new_op = wasm_dialect::r#if(ctx, loc, cond, result_types, then_region, else_region);
+        if drop_result {
+            assert!(rewriter.replace_op_dropping_unused_results(ctx, op, new_op.op_ref()));
+        } else {
+            rewriter.replace_op(new_op.op_ref());
+        }
         true
     }
 }
@@ -370,7 +455,7 @@ impl RewritePattern for ScfIfPattern {
 /// From inside a `wasm.if` within the loop body:
 /// - `wasm.br(target=1)` branches to the loop (continue)
 /// - `wasm.br(target=2)` branches to the block (break)
-struct ScfLoopPattern;
+struct ScfLoopPattern(Arc<HashSet<OpRef>>);
 
 impl RewritePattern for ScfLoopPattern {
     fn match_and_rewrite(
@@ -387,14 +472,14 @@ impl RewritePattern for ScfLoopPattern {
 
         // Get result type; reject multi-result loops. The created
         // `wasm.block`/`wasm.loop` must declare target types.
-        let result_types = rewriter.result_types(ctx, op);
+        let mut result_types = rewriter.result_types(ctx, op);
         if result_types.len() > 1 {
             return false;
         }
-        let result_ty = result_types
-            .first()
-            .copied()
-            .unwrap_or_else(|| core::nil(ctx).as_type_ref());
+        let drop_result = self.0.contains(&op);
+        if drop_result {
+            result_types.clear();
+        }
 
         // Get init operands
         let init: Vec<_> = loop_op.init(ctx).to_vec();
@@ -419,7 +504,7 @@ impl RewritePattern for ScfLoopPattern {
         }
 
         // Create wasm.loop with init operands and the body region
-        let wasm_loop = wasm_dialect::r#loop(ctx, loc, init, result_ty, body);
+        let wasm_loop = wasm_dialect::r#loop(ctx, loc, init, result_types.clone(), body);
 
         // Create a block containing just the wasm.loop, to serve as the break target
         let block_body_block = ctx.create_block(BlockData {
@@ -436,8 +521,12 @@ impl RewritePattern for ScfLoopPattern {
             parent_op: None,
         });
 
-        let wasm_block = wasm_dialect::block(ctx, loc, result_ty, block_body);
-        rewriter.replace_op(wasm_block.op_ref());
+        let wasm_block = wasm_dialect::block(ctx, loc, result_types, block_body);
+        if drop_result {
+            assert!(rewriter.replace_op_dropping_unused_results(ctx, op, wasm_block.op_ref()));
+        } else {
+            rewriter.replace_op(wasm_block.op_ref());
+        }
         true
     }
 }
@@ -718,6 +807,12 @@ mod tests {
         assert_no_scf_switch_wrappers(&output);
         assert!(output.contains("wasm.i32_eq"), "{output}");
         assert_eq!(output.matches("wasm.if").count(), 2, "{output}");
+        for line in output.lines().filter(|line| line.contains("wasm.if")) {
+            assert!(
+                !line.contains(" = ") && !line.contains(" : "),
+                "both the switch dispatch and nested tail-transfer if must be resultless: {line}"
+            );
+        }
         assert_eq!(
             output.matches("func.tail_call_indirect").count(),
             2,
@@ -889,6 +984,187 @@ mod tests {
             output.contains("core.array(core.i32)"),
             "operand types must keep their producer spelling: {output}"
         );
+    }
+
+    fn control_fixture(body: &str) -> String {
+        format!(
+            "core.module @test {{ func.func @main(%cond: core.i1, %choice: core.i32, %unit: core.nil) -> core.nil {{ {body} }} }}"
+        )
+    }
+
+    #[test]
+    fn terminal_never_controls_have_no_target_results() {
+        let cases = [
+            (
+                "scf.if %cond { func.return } { func.unreachable }",
+                vec!["if"],
+            ),
+            ("scf.loop { func.return }", vec!["block", "loop"]),
+            (
+                "%n = scf.if %cond : core.never { func.tail_call %cond, %choice, %unit {callee = @main} } { func.unreachable }",
+                vec!["if"],
+            ),
+            (
+                "%n = scf.if %cond : core.never { func.return } { func.unreachable }",
+                vec!["if"],
+            ),
+            (
+                "%n = scf.loop : core.never { func.return }",
+                vec!["block", "loop"],
+            ),
+            (
+                "%n = scf.loop %choice : core.never { ^body(%carried: core.i32): func.return }",
+                vec!["block", "loop"],
+            ),
+            (
+                "scf.switch %choice { scf.case {value = 0} { func.return } scf.default { func.unreachable } }",
+                vec!["if"],
+            ),
+            (
+                "%outer = scf.if %cond : core.never { %inner = scf.if %cond : core.never { func.return } { func.unreachable } } { func.return }",
+                vec!["if", "if"],
+            ),
+            (
+                "scf.switch %choice { scf.case {value = 0} { %n = scf.if %cond : core.never { func.return } { func.unreachable } } scf.default { func.return } }",
+                vec!["if", "if"],
+            ),
+            (
+                "%n = scf.loop : core.never { %inner = scf.if %cond : core.never { func.return } { func.unreachable } }",
+                vec!["block", "loop", "if"],
+            ),
+            (
+                "%n = scf.if %cond : core.never { scf.switch %choice { scf.case {value = 0} { func.return } scf.default { func.unreachable } } } { func.return }",
+                vec!["if", "if"],
+            ),
+        ];
+        for (body, expected) in cases {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &control_fixture(body));
+            lower(&mut ctx, module, TypeConverter::new()).unwrap();
+            let mut controls = Vec::new();
+            let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+                let data = ctx.op(op);
+                assert_ne!(data.dialect, "scf");
+                if data.dialect == "wasm"
+                    && (data.name == "if" || data.name == "block" || data.name == "loop")
+                {
+                    assert!(ctx.op_results(op).is_empty(), "{body}");
+                    controls.push(data.name.to_string());
+                }
+                for &ty in ctx.op_result_types(op) {
+                    assert!(
+                        !(ctx.types.get(ty).dialect == "core" && ctx.types.get(ty).name == "never")
+                    );
+                }
+                for &region in &data.regions {
+                    for &block in &ctx.region(region).blocks {
+                        for &arg in ctx.block_args(block) {
+                            let ty = ctx.types.get(ctx.value_ty(arg));
+                            assert!(!(ty.dialect == "core" && ty.name == "never"));
+                        }
+                    }
+                }
+                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+            });
+            assert_eq!(controls, expected, "{body}");
+            assert!(trunk_ir::validation::validate_use_chains(&ctx, module).is_ok());
+            assert!(trunk_ir::validation::validate_operation_verifiers(&ctx, module).is_ok());
+            crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
+            let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+                .expect(body)
+                .bytes;
+            wasmparser::Validator::new()
+                .validate_all(&bytes)
+                .expect(body);
+        }
+    }
+
+    #[test]
+    fn invalid_never_controls_reject_before_any_mutation() {
+        for body in [
+            "%n = scf.if %cond : core.never { func.return } { func.return } func.return %n",
+            "%n = scf.if %cond : core.never { func.return } { func.return } func.unreachable",
+            "%n = scf.if %cond : core.never { scf.yield } { func.return }",
+            "%n, %v = scf.if %cond : core.never, core.i32 { func.return } { func.return }",
+            "%n, %v = scf.loop : core.never, core.i32 { func.return }",
+            "%n = scf.if %cond : core.never { } { func.return }",
+            "%n = scf.if %cond : core.never { ^a: func.return ^b: func.return } { func.return }",
+            "%n = scf.if %cond : core.never { func.unreachable %unit } { func.return }",
+            "%n = scf.if %cond : core.never { scf.switch %choice { scf.case {value = 0} { func.return } } } { func.return }",
+            "%n = scf.loop : core.never { func.return } func.return %n",
+            "%n = scf.loop : core.never { func.return } func.unreachable",
+            "%n = scf.loop : core.never { scf.continue }",
+            "%n = scf.loop : core.never { scf.break %unit }",
+            "%n = scf.loop : core.never { }",
+            "%n = scf.loop : core.never { ^a: func.return ^b: func.return }",
+        ] {
+            let input = control_fixture(&format!(
+                "scf.if %cond : core.nil {{ scf.yield %unit }} {{ scf.yield %unit }} {body}"
+            ));
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &input);
+            let before = print_module(&ctx, module.op());
+            let error = lower(&mut ctx, module, TypeConverter::new()).expect_err(body);
+            assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY);
+            assert!(
+                error.to_string().contains("Never control requires"),
+                "{error}"
+            );
+            assert_eq!(print_module(&ctx, module.op()), before, "{body}");
+        }
+    }
+
+    #[test]
+    fn multiple_value_results_are_rejected_without_truncation() {
+        for control in ["scf.if %cond", "scf.loop"] {
+            let body = if control.starts_with("scf.if") {
+                "{ scf.yield %choice, %unit } { scf.yield %choice, %unit }"
+            } else {
+                "{ scf.continue }"
+            };
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &control_fixture(&format!(
+                    "%a, %b = {control} : core.i32, core.nil {body} func.return"
+                )),
+            );
+            let function = module.ops(&ctx)[0];
+            let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+            let original = ctx.block(block).ops[0];
+            let result_types = ctx.op_result_types(original).to_vec();
+            assert!(lower(&mut ctx, module, TypeConverter::new()).is_err());
+            assert_eq!(ctx.op_result_types(original), result_types);
+        }
+    }
+
+    #[test]
+    fn preserves_used_nil_and_numeric_control_results() {
+        for (ty, value) in [("core.nil", "%unit"), ("core.i32", "%choice")] {
+            for body in [
+                format!(
+                    "%v = scf.if %cond : {ty} {{ scf.yield {value} }} {{ scf.yield {value} }} func.return %v"
+                ),
+                format!("%v = scf.loop : {ty} {{ scf.break {value} }} func.return %v"),
+            ] {
+                let mut ctx = IrContext::new();
+                let input = control_fixture(&body).replace("-> core.nil", &format!("-> {ty}"));
+                let module = parse_test_module(&mut ctx, &input);
+                lower(&mut ctx, module, TypeConverter::new()).unwrap();
+                let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+                    let data = ctx.op(op);
+                    if data.dialect == "wasm"
+                        && (data.name == "if" || data.name == "block" || data.name == "loop")
+                    {
+                        assert_eq!(ctx.op_result_types(op).len(), 1);
+                        let result = ctx.types.get(ctx.op_result_types(op)[0]);
+                        assert_eq!(format!("{}.{}", result.dialect, result.name), ty);
+                    }
+                    std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+                });
+                assert!(trunk_ir::validation::validate_use_chains(&ctx, module).is_ok());
+            }
+        }
     }
 
     /// Convert `core.array` to the abstract `wasm.arrayref` type.

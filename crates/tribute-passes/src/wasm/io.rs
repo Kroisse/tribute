@@ -193,7 +193,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
     });
     let empty_region = region(ctx, loc, |_, _| {});
     let append_newline =
-        wasm_dialect::r#if(ctx, loc, newline, nil_ty, newline_region, empty_region);
+        wasm_dialect::r#if(ctx, loc, newline, [nil_ty], newline_region, empty_region);
     ctx.push_op(body, append_newline.op_ref());
 
     let writes = write_loop(ctx, loc, zero, total.result(ctx), analysis, i32_ty, nil_ty);
@@ -250,7 +250,7 @@ fn ensure_memory(
         ctx,
         loc,
         needs_grow.result(ctx),
-        nil_ty,
+        [nil_ty],
         grow_region,
         no_grow,
     );
@@ -387,7 +387,7 @@ fn write_loop(
         ctx.push_op(block, stop.op_ref());
     });
     let handle_result =
-        wasm_dialect::r#if(ctx, loc, succeeded.result(ctx), nil_ty, success, failure);
+        wasm_dialect::r#if(ctx, loc, succeeded.result(ctx), [nil_ty], success, failure);
     ctx.push_op(loop_block, handle_result.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
@@ -404,7 +404,7 @@ fn loop_in_block(
         blocks: smallvec![loop_block],
         parent_op: None,
     });
-    let loop_op = wasm_dialect::r#loop(ctx, loc, [init], nil_ty, loop_region);
+    let loop_op = wasm_dialect::r#loop(ctx, loc, [init], [nil_ty], loop_region);
     let block = ctx.create_block(BlockData {
         location: loc,
         args: vec![],
@@ -417,7 +417,7 @@ fn loop_in_block(
         blocks: smallvec![block],
         parent_op: None,
     });
-    wasm_dialect::block(ctx, loc, nil_ty, region).op_ref()
+    wasm_dialect::block(ctx, loc, [nil_ty], region).op_ref()
 }
 
 fn trap_if_less(
@@ -446,7 +446,7 @@ fn trap_if(
         ctx.push_op(block, unreachable.op_ref());
     });
     let ok = region(ctx, loc, |_, _| {});
-    let if_op = wasm_dialect::r#if(ctx, loc, condition, nil_ty, trap, ok);
+    let if_op = wasm_dialect::r#if(ctx, loc, condition, [nil_ty], trap, ok);
     ctx.push_op(body, if_op.op_ref());
 }
 
