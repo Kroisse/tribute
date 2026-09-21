@@ -115,6 +115,10 @@ Terminal if는 결과 없는 `wasm.if`, terminal loop는 결과 없는 `wasm.blo
 `wasm.loop`가 된다. Resultless switch도 블록 마지막에 있고 explicit default를
 포함한 모든 arm이 terminal이면 결과 없는 Wasm 비교 분기들을 만든다. Source
 switch에 결과를 추가하지 않으며 일반 fallthrough switch의 계약은 유지한다.
+Wasm 검증기는 각 structured block의 `end` 뒤에 branch 내부의 도달 불가능성을
+전파하지 않는다. 따라서 terminal로 증명된 zero-result if/loop/switch 뒤에는
+명시적인 `wasm.unreachable`을 둔다. 결과가 처음부터 없는 terminal 제어 연산에도
+같은 규칙을 적용하며, 정상 successor가 있는 제어 연산에는 적용하지 않는다.
 
 중첩 pattern이 source operation을 바꾸기 전에 공통 `StructuredControlAnalysis`를
 조회한다. Wasm 소비자는 switch 지원 조건과 `Never` 결과의 적법성을 검사하고,
