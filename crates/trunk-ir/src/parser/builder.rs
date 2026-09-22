@@ -78,19 +78,10 @@ impl<'a> ArenaIrBuilder<'a> {
                 attrs,
             } => {
                 if *dialect == "core" && *name == "func" {
-                    let Some((result, inputs)) = params.split_first() else {
-                        return Err(ParseError {
-                            message: "legacy core.func requires a result type".to_string(),
-                            offset: 0,
-                        });
-                    };
-                    return self.build_function_type(
-                        "func",
-                        "func_sig",
-                        inputs,
-                        std::slice::from_ref(result),
-                        attrs,
-                    );
+                    return Err(ParseError {
+                        message: "unsupported core.func type; use func.func_sig".to_string(),
+                        offset: 0,
+                    });
                 }
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
@@ -130,7 +121,7 @@ impl<'a> ArenaIrBuilder<'a> {
         results: &[RawType<'_>],
         attrs: &[(&str, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
-        if (dialect == "func" && name == "func_sig") || (dialect == "core" && name == "func") {
+        if dialect == "func" && name == "func_sig" {
             return self.build_shared_function_type(inputs, results, attrs);
         }
         if dialect == "wasm" && name == "func_sig" {
@@ -1528,39 +1519,15 @@ core.module @test {
     }
 
     #[test]
-    fn test_legacy_func_type_normalizes_to_canonical_storage_and_text() {
-        let input = r#"core.module @test {
-  !legacy = core.func(core.i64, core.i32)
-  !legacy_canonical = core.func<(core.i32) -> core.i64>
-  !canonical = func.func_sig<(core.i32) -> core.i64>
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_module(&mut ctx, input).expect("legacy function type should parse");
-        let printed = print_module(&ctx, module);
-        assert!(
-            printed.contains("!legacy = func.func_sig<(core.i32) -> core.i64>"),
-            "{printed}"
-        );
-        assert!(!printed.contains("core.func(core.i64"), "{printed}");
-
-        let ty = ctx
-            .type_alias_by_name(Symbol::new("legacy"))
-            .expect("legacy alias");
-        assert_eq!(
-            Some(ty),
-            ctx.type_alias_by_name(Symbol::new("legacy_canonical")),
-            "legacy core.func canonical syntax must intern as func.func_sig"
-        );
-        assert_eq!(
-            Some(ty),
-            ctx.type_alias_by_name(Symbol::new("canonical")),
-            "all accepted legacy spellings must normalize to one identity"
-        );
-        let data = ctx.types.get(ty);
-        assert_eq!(data.params.len(), 2);
-        assert_eq!(data.attrs.get_u32(func::NUM_INPUTS_ATTR), Ok(Some(1)));
-        assert_eq!(data.attrs.get_u32(func::NUM_RESULTS_ATTR), Ok(Some(1)));
-        assert_roundtrip(&ctx, module);
+    fn unsupported_core_func_spellings_are_rejected() {
+        for spelling in [
+            "core.func(core.i64, core.i32)",
+            "core.func<(core.i32) -> core.i64>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            parse_module(&mut ctx, &input).expect_err("only func.func_sig is supported");
+        }
     }
 
     #[test]
@@ -1584,20 +1551,15 @@ core.module @test {
     #[test]
     fn test_func_type_rejects_reserved_textual_attributes() {
         for reserved in [func::NUM_INPUTS_ATTR, func::NUM_RESULTS_ATTR] {
-            for form in [
-                "core.func(core.nil)",
-                "core.func<() -> core.nil>",
-                "func.func_sig<() -> core.nil>",
-            ] {
-                let input = format!("core.module @test {{ !bad = {form} {{{reserved} = 0}} }}");
-                let mut ctx = IrContext::new();
-                let error =
-                    parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
-                assert!(
-                    error.message.contains("reserved by func.func_sig"),
-                    "{error}"
-                );
-            }
+            let input = format!(
+                "core.module @test {{ !bad = func.func_sig<() -> core.nil> {{{reserved} = 0}} }}"
+            );
+            let mut ctx = IrContext::new();
+            let error = parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
+            assert!(
+                error.message.contains("reserved by func.func_sig"),
+                "{error}"
+            );
         }
     }
 

@@ -280,7 +280,7 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 
     let (dialect, name) = qualified_name.parse_next(input)?;
 
-    if (name == "func_sig" || (dialect == "core" && name == "func")) && input.starts_with('<') {
+    if name == "func_sig" && input.starts_with('<') {
         '<'.parse_next(input)?;
         ws.parse_next(input)?;
         let inputs = delimited(
@@ -859,11 +859,11 @@ mod tests {
 
     #[test]
     fn test_parse_parameterized_type() {
-        let mut input = "core.func(core.nil, core.i32, core.i32)";
+        let mut input = "core.tuple(core.nil, core.i32, core.i32)";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
         let (dialect, name, params) = unwrap_concrete(&raw);
         assert_eq!(dialect, "core");
-        assert_eq!(name, "func");
+        assert_eq!(name, "tuple");
         assert_eq!(params.len(), 3);
     }
 
@@ -1051,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_parse_type_with_attrs() {
-        let mut input = "core.func(core.nil, core.i32) {effect = core.nil}";
+        let mut input = "core.tuple(core.nil, core.i32) {tag = core.nil}";
         let result = raw_type.parse_next(&mut input).expect("should parse");
         match &result {
             RawType::Concrete {
@@ -1061,12 +1061,12 @@ mod tests {
                 attrs,
             } => {
                 assert_eq!(*dialect, "core");
-                assert_eq!(*name, "func");
+                assert_eq!(*name, "tuple");
                 assert_eq!(params.len(), 2);
                 assert_eq!(attrs.len(), 1);
-                assert_eq!(attrs[0].0, "effect");
+                assert_eq!(attrs[0].0, "tag");
             }
-            RawType::Function { .. } => panic!("expected legacy Concrete, got Function"),
+            RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
     }
