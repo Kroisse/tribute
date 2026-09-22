@@ -744,6 +744,12 @@ allocator result, code address, Evidence, borrowed buffer와 이를 통과하는
 `adt.typeref`가 될 수 없다. 이 규칙은 typed frontend 경계에서 reachable IR을 바꾸기
 전에 검사한다.
 
+Dynamic `tribute_rt.anyref`에서 `adt.typeref`로 복원하는 명시적인
+`core.unrealized_conversion_cast`는 generic cleanup에서 no-op으로 소거하지
+않는다. Nominal reference의 정확한 결과 타입은 target 변환까지 보존하며,
+native는 pointer 표현으로 물리화하고 Wasm은 concrete `ref.cast`를 생성한다.
+이 규칙은 일반 `adt.struct` 복원이나 nominal provenance 검증을 바꾸지 않는다.
+
 `list.*` represents the opaque canonical `List(a)` sequence contract. It uses
 `list.empty`, `list.prepend`, `list.is_empty`, `list.head`, and `list.tail`.
 These operations carry element/result types but no variant tags, node field
