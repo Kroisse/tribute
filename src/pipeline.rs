@@ -418,10 +418,8 @@ fn prepare_frontend_details<'db>(
         merged_node_types,
         merged_ability_conventions,
         merged_span_map,
-        compiler_intrinsics,
     ) = if let Some(prelude) = prelude_module(db) {
         let prelude_module_ast = prelude.module(db);
-        let compiler_intrinsics = ast_to_ir::registered_compiler_intrinsics(prelude_module_ast);
         let prelude_fn_types = prelude.function_types(db);
         let prelude_node_types = &prelude.expression_types(db).node_types;
         let prelude_ability_conventions = prelude.ability_conventions(db);
@@ -460,7 +458,6 @@ fn prepare_frontend_details<'db>(
             node_types,
             ability_conventions,
             merged_span_map,
-            compiler_intrinsics,
         )
     } else {
         let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
@@ -473,8 +470,26 @@ fn prepare_frontend_details<'db>(
             node_types,
             ability_conventions,
             user_span_map.clone(),
-            std::collections::HashMap::new(),
         )
+    };
+
+    let compiler_intrinsics = match ast_to_ir::registered_compiler_intrinsics(&merged_module) {
+        Ok(registered) => registered,
+        Err(unsupported) => {
+            for directive in unsupported {
+                Diagnostic::new(
+                    format!(
+                        "unsupported compiler intrinsic directive `{}`",
+                        directive.identity
+                    ),
+                    merged_span_map.get_or_default(directive.node),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::Lowering,
+                )
+                .accumulate(db);
+            }
+            return None;
+        }
     };
 
     let mut function_instances: std::collections::HashMap<_, _> = prelude_module(db)
@@ -3443,29 +3458,57 @@ fn main() {
         });
     }
 
-    /// A declared `abi = "intrinsic"` declaration is trusted as written. Only a
-    /// declaration that claims an explicit compiler-intrinsic identity has to
-    /// match the registered declaration exactly.
     #[salsa_test]
-    fn declared_intrinsic_directive_is_trusted_before_cps(db: &salsa::DatabaseImpl) {
+    fn unknown_intrinsic_directives_are_rejected_before_specialization(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
-            "declared_intrinsic.trb",
-            r#"extern "intrinsic" fn user_intrinsic(value: Int) -> Int"#,
+            "unknown_intrinsics.trb",
+            r#"extern "intrinsic" fn user_intrinsic(value: Int) -> Int
+mod Nested {
+    extern "intrinsic" fn unused_generic(value: a) -> a
+}"#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
-        let frontend = merge_and_lower_to_ir(db, &typed, source);
-        let validation = tribute_ir::dialect::tribute_control::validate(
-            &frontend.context,
-            frontend.module,
-            &frontend.operation_declarations,
-            &frontend.compiler_intrinsics,
+        assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+        assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
+        let diagnostics =
+            prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        for (diagnostic, identity) in diagnostics
+            .iter()
+            .zip(["user_intrinsic", "Nested::unused_generic"])
+        {
+            assert_eq!(
+                diagnostic.inner.message,
+                format!("unsupported compiler intrinsic directive `{identity}`")
+            );
+            assert_eq!(diagnostic.inner.severity, DiagnosticSeverity::Error);
+            assert_eq!(diagnostic.phase, CompilationPhase::Lowering);
+            assert_ne!(diagnostic.inner.span, trunk_ir::Span::default());
+        }
+    }
+
+    #[salsa_test]
+    fn supported_user_intrinsic_directive_is_registered_before_lowering(db: &salsa::DatabaseImpl) {
+        use tribute_front::ast::Decl;
+        use trunk_ir::Symbol;
+
+        let source = source_from_str(
+            "supported_intrinsic.trb",
+            r#"extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat"#,
         );
-        assert!(validation.is_ok(), "{validation}");
-        let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
-        assert!(
-            logical.contains(r#"abi = "intrinsic""#),
-            "the declared intrinsic ABI must survive lowering:\n{logical}"
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
+        let Decl::ExternFunction(user_declaration) = &typed.module(db).decls[0] else {
+            panic!("expected the user intrinsic declaration");
+        };
+        let prepared = prepare_frontend_details(db, typed, source).expect("supported directive");
+        assert_eq!(
+            prepared.compiler_intrinsics.get(&user_declaration.id),
+            Some(&Symbol::new("__bytes_get_or_panic"))
         );
+        assert!(prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source).is_empty());
+        // This checks registration of the user's declaration ID. The later
+        // symbol-uniqueness boundary independently rejects prelude redeclarations.
     }
 
     #[salsa_test]

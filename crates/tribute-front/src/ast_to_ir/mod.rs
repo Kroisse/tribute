@@ -106,12 +106,21 @@ fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
     SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
 }
 
+/// An unsupported directive and its source declaration for diagnostics.
+#[derive(Debug)]
+pub struct UnsupportedCompilerIntrinsic {
+    pub node: NodeId,
+    pub identity: Symbol,
+}
+
 /// Register supported compiler intrinsic directives by canonical source name.
 ///
 /// `extern "intrinsic"` is compiler-reserved: any source declaration using it
 /// requests lowering under its qualified name. The fixed supported set remains
-/// the validation boundary; unknown directives are rejected before lowering.
-pub fn registered_compiler_intrinsics<V>(module: &AstModule<V>) -> HashMap<NodeId, Symbol>
+/// the validation boundary; return every unknown directive for source diagnostics.
+pub fn registered_compiler_intrinsics<V>(
+    module: &AstModule<V>,
+) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>>
 where
     V: salsa::Update,
 {
@@ -119,6 +128,7 @@ where
         declarations: &[crate::ast::Decl<V>],
         prefix: &mut String,
         result: &mut HashMap<NodeId, Symbol>,
+        unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) where
         V: salsa::Update,
     {
@@ -130,12 +140,17 @@ where
                     let symbol = crate::qualified_symbol(prefix, function.name);
                     if is_supported_compiler_intrinsic(symbol) {
                         result.insert(function.id, symbol);
+                    } else {
+                        unsupported.push(UnsupportedCompilerIntrinsic {
+                            node: function.id,
+                            identity: symbol,
+                        });
                     }
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
                         let saved = crate::push_prefix(prefix, module.name);
-                        collect(body, prefix, result);
+                        collect(body, prefix, result, unsupported);
                         prefix.truncate(saved);
                     }
                 }
@@ -145,8 +160,18 @@ where
     }
 
     let mut result = HashMap::new();
-    collect(&module.decls, &mut String::new(), &mut result);
-    result
+    let mut unsupported = Vec::new();
+    collect(
+        &module.decls,
+        &mut String::new(),
+        &mut result,
+        &mut unsupported,
+    );
+    if unsupported.is_empty() {
+        Ok(result)
+    } else {
+        Err(unsupported)
+    }
 }
 
 /// Policy for compiler-generated identity done continuations.

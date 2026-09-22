@@ -112,6 +112,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         .as_ref()
         .map(|prelude| {
             tribute_front::ast_to_ir::registered_compiler_intrinsics(&prelude.typed_module)
+                .expect("prelude intrinsic directives must be supported")
         })
         .unwrap_or_default();
     let mut ir = IrContext::new();
