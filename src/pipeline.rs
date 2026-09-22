@@ -3465,43 +3465,46 @@ fn main() {
     }
 
     #[salsa_test]
-    fn wasm_managed_c_ffi_requires_a_binding_only_when_referenced(db: &salsa::DatabaseImpl) {
-        for (name, body, referenced) in [
-            ("unused_c_ffi.trb", "Nil", false),
-            ("used_c_ffi.trb", r#"user_bridge("hello")"#, true),
-        ] {
-            let code = format!(
-                r#"extern "C" fn user_bridge(value: String) -> String
-fn main() {{ let _ = {body}
-Nil }}"#
-            );
-            let source = SourceCst::from_source_str(db, name, &code);
-            let shared = compile_with_diagnostics(db, source);
-            assert!(shared.diagnostics.is_empty(), "{:?}", shared.diagnostics);
-            assert!(
-                shared.module.is_some(),
-                "shared C FFI contract must accept managed values"
-            );
-            let binary = compile_to_wasm_binary(db, source);
-            if referenced {
-                let error = binary.expect_err("C ABI alone must not create a Wasm import");
-                assert!(
-                    error.iter().any(|diagnostic| {
-                        diagnostic.inner.message.contains("user_bridge")
-                            && diagnostic
-                                .inner
-                                .message
-                                .contains("no import binding and no body")
-                    }),
-                    "{error:?}"
-                );
-            } else {
-                let binary = binary.expect("unused managed C declaration may be omitted");
-                wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-                    .validate_all(&binary)
-                    .expect("unused C declaration must not leave an invalid Wasm definition");
-            }
-        }
+    fn wasm_managed_c_ffi_omits_unreferenced_declaration(db: &salsa::DatabaseImpl) {
+        let source = SourceCst::from_source_str(
+            db,
+            "unused_c_ffi.trb",
+            r#"extern "C" fn user_bridge(value: String) -> String
+fn main() { Nil }"#,
+        );
+        let binary = compile_to_wasm_binary(db, source)
+            .expect("unused managed C declaration may be omitted");
+        wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+            .validate_all(&binary)
+            .expect("unused C declaration must not leave an invalid Wasm definition");
+    }
+
+    #[salsa_test]
+    fn wasm_managed_c_ffi_requires_a_binding_when_referenced(db: &salsa::DatabaseImpl) {
+        let source = SourceCst::from_source_str(
+            db,
+            "used_c_ffi.trb",
+            r#"extern "C" fn user_bridge(value: String) -> String
+fn main() {
+    let _ = user_bridge("hello")
+    Nil
+}"#,
+        );
+        let errors = compile_to_wasm_binary(db, source)
+            .expect_err("C ABI alone must not create a Wasm import");
+        // Reaching emission proves shared lowering accepted the managed FFI
+        // signature, without running the shared pipeline again just to check it.
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(errors[0].phase, CompilationPhase::Lowering);
+        let message = &errors[0].inner.message;
+        assert!(
+            message.starts_with("WebAssembly compilation failed:"),
+            "{message}"
+        );
+        assert!(
+            message.contains("bodyless declaration @user_bridge has no import binding and no body"),
+            "{message}"
+        );
     }
 
     #[salsa_test]
