@@ -847,25 +847,12 @@ pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some(FrontendCompilation {
-        context,
-        module: m,
-        operation_declarations,
-        compiler_intrinsics,
-    }) = compile_frontend_for_shared_route(db, source)
-    else {
+    let Some((mut ctx, m)) = run_through_evidence_params(db, source)? else {
         return Ok(None);
     };
-    let mut ctx = context;
     let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+        core_dialect::Module::from_op(&ctx, m.op()).expect("shared output must be a core.module");
     let mut pm = PassManager::new();
-    pm.add_pass(
-        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
-            .with_compiler_intrinsics(compiler_intrinsics),
-    )
-    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
     pm.nest::<func_dialect::Func>()
         .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     pm.run(&mut ctx, core_module)?;

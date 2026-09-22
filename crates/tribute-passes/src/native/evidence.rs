@@ -1,22 +1,9 @@
 //! Evidence runtime lowering for the native backend.
 //!
-//! This pass adapts evidence-related IR from `resolve_evidence` for native
-//! (Cranelift) code generation.  The WASM backend (`evidence_to_wasm.rs`)
-//! replaces the stubs with inline binary-search IR; the native backend instead
-//! delegates to `extern "C"` functions in `tribute-runtime`.
-//!
-//! ## Transformations
-//!
-//! 1. **Stub replacement** — `func.func @__tribute_evidence_lookup` /
-//!    `@__tribute_evidence_extend` stubs (with `unreachable` body) are replaced
-//!    by extern declarations with native signatures.
-//!
-//! 2. **Empty evidence** — `adt.array_new(0, evidence_ty)` →
-//!    `func.call @__tribute_evidence_empty()`.
-//!
-//! 3. **Effect ABI lowering** — `effect.extend`, `effect.dispatch_tail`, and
-//!    `effect.dispatch_cps` are lowered to the native evidence runtime ABI and
-//!    closure indirect calls.
+//! Target evidence lowering declares the native runtime ABI and lowers
+//! `effect.extend`, `effect.dispatch_tail`, and `effect.dispatch_cps` to runtime
+//! calls and closure transfers. Empty evidence arrays become calls to
+//! `__tribute_evidence_empty`.
 //!
 use std::ops::ControlFlow;
 
@@ -62,7 +49,7 @@ pub fn lower_evidence_to_native(ctx: &mut IrContext, module: Module) {
 
 /// Prepare native evidence runtime declarations at module scope.
 pub fn prepare_native_evidence_runtime(ctx: &mut IrContext, module: Module) {
-    replace_stubs_and_add_empty(ctx, module);
+    declare_evidence_runtime(ctx, module);
 }
 
 /// Lower evidence operations inside one function for the native backend.
@@ -98,159 +85,44 @@ impl Pass for LowerEvidenceToNative {
 }
 
 // =============================================================================
-// Phase 1: Replace stubs + add __tribute_evidence_empty declaration
+// Native runtime declarations
 // =============================================================================
 
-fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
-    let first_block = match module.first_block(ctx) {
-        Some(b) => b,
-        None => return,
+fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    let Some(block) = module.first_block(ctx) else {
+        return;
     };
-
     let loc = ctx.op(module.op()).location;
-    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
-
-    let mut has_evidence_empty = false;
-    let mut has_lookup_tr = false;
-    let mut has_lookup_handler = false;
-    let mut stubs_to_replace: Vec<(OpRef, &'static str)> = Vec::new();
-
-    let lookup_sym = Symbol::new(evidence_abi::LOOKUP);
-    let extend_sym = Symbol::new(evidence_abi::EXTEND);
-    let empty_sym = Symbol::new(evidence_abi::EMPTY);
-    let lookup_tr_sym = Symbol::new(evidence_abi::LOOKUP_TR);
-    let lookup_handler_sym = Symbol::new(evidence_abi::LOOKUP_HANDLER);
-
-    for &op in &ops {
-        if let Ok(func_op) = func::Func::from_op(ctx, op) {
-            let name = func_op.sym_name(ctx);
-            if name == lookup_sym {
-                stubs_to_replace.push((op, evidence_abi::LOOKUP));
-            } else if name == extend_sym {
-                stubs_to_replace.push((op, evidence_abi::EXTEND));
-            } else if name == empty_sym {
-                has_evidence_empty = true;
-            } else if name == lookup_tr_sym {
-                has_lookup_tr = true;
-            } else if name == lookup_handler_sym {
-                has_lookup_handler = true;
-            }
-        }
-    }
-
     let ptr_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-
-    // Replace stubs with extern declarations
-    for (old_op, name) in stubs_to_replace {
-        let new_op = match name {
-            evidence_abi::LOOKUP => make_evidence_lookup_extern(ctx, loc, ptr_ty, i32_ty),
-            evidence_abi::EXTEND => make_evidence_extend_extern(ctx, loc, ptr_ty, i32_ty),
-            _ => unreachable!(),
-        };
-        // Insert new before old, then remove old
-        ctx.insert_op_before(first_block, old_op, new_op);
-        ctx.remove_op_from_block(first_block, old_op);
-        ctx.remove_op(old_op);
-    }
-
-    // Add __tribute_evidence_empty if missing
-    if !has_evidence_empty {
-        let empty_op = make_evidence_empty_extern(ctx, loc, ptr_ty);
-        // Insert at front of module block
-        let block_ops = &ctx.block(first_block).ops;
-        if block_ops.is_empty() {
-            ctx.push_op(first_block, empty_op);
+    for (name, params, result) in [
+        (evidence_abi::EMPTY, &[][..], ptr_ty),
+        (evidence_abi::LOOKUP, &[ptr_ty, i32_ty][..], i32_ty),
+        (
+            evidence_abi::EXTEND,
+            &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty][..],
+            ptr_ty,
+        ),
+        (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::LOOKUP_HANDLER, &[ptr_ty, i32_ty][..], ptr_ty),
+    ] {
+        if module.ops(ctx).into_iter().any(|op| {
+            func::Func::from_op(ctx, op)
+                .is_ok_and(|function| function.sym_name(ctx) == Symbol::new(name))
+        }) {
+            continue;
+        }
+        let declaration = super::build_extern_func(ctx, loc, name, params, result);
+        if let Some(&first) = ctx.block(block).ops.first() {
+            ctx.insert_op_before(block, first, declaration);
         } else {
-            let first_op = block_ops[0];
-            ctx.insert_op_before(first_block, first_op, empty_op);
+            ctx.push_op(block, declaration);
         }
     }
-
-    // Add __tribute_evidence_lookup_tr if missing
-    if !has_lookup_tr {
-        let lookup_tr_op = make_evidence_lookup_tr_extern(ctx, loc, ptr_ty, i32_ty);
-        let block_ops = &ctx.block(first_block).ops;
-        if block_ops.is_empty() {
-            ctx.push_op(first_block, lookup_tr_op);
-        } else {
-            let first_op = block_ops[0];
-            ctx.insert_op_before(first_block, first_op, lookup_tr_op);
-        }
-    }
-
-    // Add __tribute_evidence_lookup_handler if missing
-    if !has_lookup_handler {
-        let lookup_handler_op = make_evidence_lookup_handler_extern(ctx, loc, ptr_ty, i32_ty);
-        let block_ops = &ctx.block(first_block).ops;
-        if block_ops.is_empty() {
-            ctx.push_op(first_block, lookup_handler_op);
-        } else {
-            let first_op = block_ops[0];
-            ctx.insert_op_before(first_block, first_op, lookup_handler_op);
-        }
-    }
-}
-
-/// Build extern `fn __tribute_evidence_empty() -> ptr`
-fn make_evidence_empty_extern(ctx: &mut IrContext, loc: Location, ptr_ty: TypeRef) -> OpRef {
-    super::build_extern_func(ctx, loc, evidence_abi::EMPTY, &[], ptr_ty)
-}
-
-/// Build extern `fn __tribute_evidence_lookup(ev: ptr, ability_id: i32) -> i32`
-fn make_evidence_lookup_extern(
-    ctx: &mut IrContext,
-    loc: Location,
-    ptr_ty: TypeRef,
-    i32_ty: TypeRef,
-) -> OpRef {
-    super::build_extern_func(ctx, loc, evidence_abi::LOOKUP, &[ptr_ty, i32_ty], i32_ty)
-}
-
-/// Build extern `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr) -> ptr`
-fn make_evidence_extend_extern(
-    ctx: &mut IrContext,
-    loc: Location,
-    ptr_ty: TypeRef,
-    i32_ty: TypeRef,
-) -> OpRef {
-    super::build_extern_func(
-        ctx,
-        loc,
-        evidence_abi::EXTEND,
-        &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty],
-        ptr_ty,
-    )
-}
-
-/// Build extern `fn __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr`
-fn make_evidence_lookup_tr_extern(
-    ctx: &mut IrContext,
-    loc: Location,
-    ptr_ty: TypeRef,
-    i32_ty: TypeRef,
-) -> OpRef {
-    super::build_extern_func(ctx, loc, evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty], ptr_ty)
-}
-
-/// Build extern `fn __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr`
-fn make_evidence_lookup_handler_extern(
-    ctx: &mut IrContext,
-    loc: Location,
-    ptr_ty: TypeRef,
-    i32_ty: TypeRef,
-) -> OpRef {
-    super::build_extern_func(
-        ctx,
-        loc,
-        evidence_abi::LOOKUP_HANDLER,
-        &[ptr_ty, i32_ty],
-        ptr_ty,
-    )
 }
 
 // =============================================================================
@@ -734,6 +606,64 @@ mod tests {
     fn entry_arg(ctx: &IrContext, func_op: func::Func, index: usize) -> ValueRef {
         let entry = ctx.region(func_op.body(ctx)).blocks[0];
         ctx.block_args(entry)[index]
+    }
+
+    #[test]
+    fn runtime_declarations_are_created_without_shared_stubs_and_are_idempotent() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test { func.func @user() -> core.i32 }",
+        );
+        prepare_native_evidence_runtime(&mut ctx, module);
+        assert_eq!(module.ops(&ctx).len(), 6);
+        for (name, params, result) in [
+            (evidence_abi::EMPTY, &[][..], "core.ptr"),
+            (
+                evidence_abi::LOOKUP,
+                &["core.ptr", "core.i32"][..],
+                "core.i32",
+            ),
+            (
+                evidence_abi::EXTEND,
+                &["core.ptr", "core.i32", "core.i32", "core.ptr", "core.ptr"][..],
+                "core.ptr",
+            ),
+            (
+                evidence_abi::LOOKUP_TR,
+                &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
+            (
+                evidence_abi::LOOKUP_HANDLER,
+                &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
+        ] {
+            let function = func_by_name_recursive(&ctx, module, name);
+            assert!(ctx.op(function.op_ref()).regions.is_empty());
+            assert_eq!(
+                ctx.op(function.op_ref()).attributes.get_str("abi"),
+                Some("C")
+            );
+            let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
+            let parameter_types: Vec<_> = signature
+                .inputs(&ctx)
+                .iter()
+                .map(|&ty| trunk_ir::printer::print_type(&ctx, ty))
+                .collect();
+            assert_eq!(parameter_types, params, "{name}");
+            assert_eq!(
+                trunk_ir::printer::print_type(&ctx, signature.single_result(&ctx).unwrap()),
+                result,
+                "{name}"
+            );
+        }
+        let before = print_module(&ctx, module.op());
+        let ops = module.ops(&ctx);
+        prepare_native_evidence_runtime(&mut ctx, module);
+        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(module.ops(&ctx), ops);
     }
 
     #[test]

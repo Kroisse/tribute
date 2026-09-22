@@ -14,7 +14,6 @@ pub mod diagnostic;
 // === TrunkIR passes ===
 pub mod boxing;
 pub mod closure_lower;
-pub mod evidence;
 pub mod intrinsic_to_arith;
 pub mod io_lowering;
 pub mod list_intrinsics;

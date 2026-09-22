@@ -1,6 +1,6 @@
 //! Evidence runtime functions to WASM lowering (arena-based).
 //!
-//! This pass replaces evidence runtime function stubs with real implementations:
+//! This pass generates the evidence helpers required by target effect operations:
 //!
 //! - `__tribute_evidence_lookup(ev, ability_id)` -> binary search for marker
 //! - `__tribute_evidence_extend(ev, marker)` -> sorted insertion with binary search
@@ -16,9 +16,9 @@
 //!
 //! ## Implementation Strategy
 //!
-//! The pass replaces stub function declarations with real implementations that use
-//! binary search (O(log n)) since the evidence array is maintained in sorted order
-//! by ability_id.
+//! The pass generates helpers on demand and binds existing runtime declarations
+//! to implementations that use binary search (O(log n)). The evidence array is
+//! maintained in sorted order by ability_id.
 
 use tribute_core::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
@@ -80,7 +80,7 @@ pub fn prepare_wasm_evidence_runtime(
     module: Module,
 ) -> Result<(), EvidenceValidationError> {
     validate_final_dispatches(ctx, module.op())?;
-    replace_evidence_function_stubs(ctx, module);
+    materialize_evidence_runtime(ctx, module);
     Ok(())
 }
 
@@ -88,7 +88,7 @@ pub fn prepare_wasm_evidence_runtime(
 ///
 /// Precondition: [`prepare_wasm_evidence_runtime`] must already have run for
 /// the containing module so the `__tribute_evidence_lookup` and
-/// `__tribute_evidence_extend` stubs exist as WASM runtime helpers.
+/// `__tribute_evidence_extend` implementations exist as WASM runtime helpers.
 pub fn lower_evidence_to_wasm_func(
     ctx: &mut IrContext,
     func_op: wasm_dialect::Func,
@@ -129,8 +129,8 @@ fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S)
     applicator.apply_partial(ctx, scope);
 }
 
-/// Replace evidence runtime function stubs with real implementations.
-fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
+/// Generate required helpers and bind existing evidence runtime declarations.
+fn materialize_evidence_runtime(ctx: &mut IrContext, module: Module) {
     let (needs_lookup, needs_extend) = evidence_helper_requirements(ctx, module);
     let ops = module.ops(ctx);
     let mut has_lookup = false;

@@ -7,7 +7,7 @@
 use std::error::Error;
 use std::fmt;
 
-use tribute_ir::dialect::ability::{self, evidence_abi};
+use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -192,115 +192,16 @@ pub(crate) fn validate_final_handle_dispatches(
 // Analysis helpers
 // ============================================================================
 
-/// Ensure runtime helper functions exist in the module.
-fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
-    let ops = module.ops(ctx);
-
-    let mut has_lookup = false;
-    let mut has_extend = false;
-    let mut has_next_tag = false;
-
-    for op in &ops {
-        if let Ok(func_op) = func::Func::from_op(ctx, *op) {
-            let name = func_op.sym_name(ctx);
-            if name == Symbol::new(evidence_abi::LOOKUP) {
-                has_lookup = true;
-            } else if name == Symbol::new(evidence_abi::EXTEND) {
-                has_extend = true;
-            } else if name == Symbol::new("__tribute_next_tag") {
-                has_next_tag = true;
-            }
-        }
-    }
-
-    if has_lookup && has_extend && has_next_tag {
-        return;
-    }
-
+/// Ensure the runtime prompt allocator is declared.
+fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
+    let has_next_tag = module.ops(ctx).into_iter().any(|op| {
+        func::Func::from_op(ctx, op)
+            .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("__tribute_next_tag"))
+    });
     let Some(module_block) = module.first_block(ctx) else {
         return;
     };
     let loc = ctx.op(module.op()).location;
-
-    let first_existing_op = ctx.block(module_block).ops.first().copied();
-
-    if !has_lookup {
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let i32_ty = i32_type_ref(ctx);
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-
-        // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = func::func_sig(ctx, [evidence_ty, i32_ty], [marker_ty]).as_type_ref();
-
-        // Body with unreachable
-        let body_block = ctx.create_block(trunk_ir::context::BlockData {
-            location: loc,
-            args: vec![
-                trunk_ir::context::BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                trunk_ir::context::BlockArgData {
-                    ty: i32_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let unreachable_op = func::unreachable(ctx, loc);
-        ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::context::RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![body_block],
-            parent_op: None,
-        });
-        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::LOOKUP), func_ty, body);
-        if let Some(first) = first_existing_op {
-            ctx.insert_op_before(module_block, first, func_op.op_ref());
-        } else {
-            ctx.push_op(module_block, func_op.op_ref());
-        }
-    }
-
-    if !has_extend {
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-
-        // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = func::func_sig(ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
-
-        let body_block = ctx.create_block(trunk_ir::context::BlockData {
-            location: loc,
-            args: vec![
-                trunk_ir::context::BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                trunk_ir::context::BlockArgData {
-                    ty: marker_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let unreachable_op = func::unreachable(ctx, loc);
-        ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::context::RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![body_block],
-            parent_op: None,
-        });
-        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::EXTEND), func_ty, body);
-        // Insert at the beginning of the module
-        let first_op = ctx.block(module_block).ops.first().copied();
-        if let Some(first) = first_op {
-            ctx.insert_op_before(module_block, first, func_op.op_ref());
-        } else {
-            ctx.push_op(module_block, func_op.op_ref());
-        }
-    }
 
     if !has_next_tag {
         let i32_ty = i32_type_ref(ctx);
@@ -388,7 +289,7 @@ pub(crate) fn resolve_evidence_dispatch(
     module: Module,
 ) -> Result<(), ResolveEvidenceError> {
     validate_final_handle_dispatches(ctx, module)?;
-    ensure_runtime_functions(ctx, module);
+    ensure_prompt_tag_runtime(ctx, module);
     if let Some(body) = module.body(ctx) {
         resolve_delimiters(ctx, body)?;
     }
@@ -507,6 +408,14 @@ mod tests {
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
+        for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
+            assert!(
+                module.ops(&ctx).into_iter().all(|op| {
+                    ctx.op(op).attributes.get_symbol("sym_name") != Some(Symbol::new(name))
+                }),
+                "shared resolution must not fabricate target helper {name}"
+            );
+        }
         assert_eq!(resolved.matches("func.call").count(), 0);
         let next_tag = module
             .ops(&ctx)

@@ -89,7 +89,7 @@ module export와 virtual `Io` binding은 resolver의 동일한 `std::io` namespa
 | ---------- | ---------- | ------ | ----------- |
 | `Direct` | source parameters | source result | closed empty effect row or pure named worker |
 | `EvidenceDirect` | evidence + source parameters | source result | `Io` or tail-resumptive `fn` effect |
-| `Cps` | evidence + `done_k` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
+| `Cps` | evidence + `ContinuationFrame<R>` + source parameters | source result를 직접 반환하지 않음 | general `op`, `Throw`, or another CPS effect |
 
 규약을 합성할 때 `Direct < EvidenceDirect < Cps` 순서로 더 강한 규약이
 우선한다.
@@ -114,12 +114,14 @@ print_line(ev, message) -> Nil
 main(ev) -> Nil
 ```
 
-`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 논리적
-ABI에서 `done_k`와 함수의 control result는 `Never`다. Physical lowering은 이를
-empty-result callable과 proper tail transfer로 바꾸며 control carrier를 만들지 않는다.
+`read_line`은 실패 시 `Throw(Error)`를 수행하므로 CPS 규약을 사용한다. 두 번째
+인자는 `Done<R>`과 `Dispatch<R>`를 함께 담은 `ContinuationFrame<R>`다. 논리적
+ABI에서 함수와 frame의 transfer target의 control result는 `Never`다. Physical
+lowering은 이를 empty-result callable과 proper tail transfer로 바꾸며 control carrier를
+만들지 않는다.
 
 ```text
-read_line(ev, done_k: fn(String) -> Never) -> Never
+read_line(ev, frame: ContinuationFrame<String>) -> Never
 ```
 
 ## Entrypoint

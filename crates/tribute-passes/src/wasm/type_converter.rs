@@ -22,6 +22,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
+use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -100,9 +101,6 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
         ],
     )
 }
-
-// Re-export marker_adt_type_ref from ability module for backward compatibility
-pub use tribute_ir::dialect::ability::marker_adt_type_ref as marker_adt_type;
 
 /// Get the canonical Evidence ADT type for WASM representation (arena version).
 ///
@@ -269,7 +267,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
-    let marker_ty = marker_adt_type(ctx);
+    let marker_ty = marker_adt_type_ref(ctx);
 
     let mut tc = TypeConverter::new();
 
@@ -383,7 +381,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     });
 
     // Convert marker ADT type -> pass through (already standard ADT struct)
-    // This conversion is a no-op since marker_adt_type() returns a standard adt.struct
+    // This conversion is a no-op since marker_adt_type_ref() returns a standard adt.struct
     tc.add_conversion(move |ctx, ty| {
         if is_marker_type_ref(ctx, ty) {
             Some(marker_ty)

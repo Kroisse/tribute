@@ -250,6 +250,8 @@ target ABI validation까지 유지한다. `lower_ability_perform`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
 backend ABI로 제거한다.
+Shared evidence resolution은 lookup/extend용 가짜 함수 정의를 만들지 않는다.
+Native extern 선언과 Wasm helper 구현은 각 target evidence pass가 생성한다.
 Backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
 `effect.*`를 각각 독립적으로 거부한다.
 
@@ -366,10 +368,9 @@ CPS entry와 `done_k`의 result는 `core.never`이며,
 `func.tail_call`과 `func.tail_call_indirect` verifier도 caller/callee의
 `core.never` 일치를 검사한다.
 
-최종 계약에서는 atomic physical CPS switch 이후 target signature lowering이
-이 CPS signature를 native/Wasm empty-result signature로 바꾼 뒤 실제 wrapper와
-결과 없는 ordinary call을 합성한다. Root `done_k`는 source result를
-cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
+Target signature lowering이 CPS signature를 native/Wasm empty-result signature로
+바꾼 뒤 실제 wrapper와 결과 없는 ordinary call을 합성한다. Root `done_k`는 source
+result를 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
 전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다.
 공통 `func.func_sig`와 `func.call`은 0개 또는 1개 결과를 지원한다. 논리 CPS

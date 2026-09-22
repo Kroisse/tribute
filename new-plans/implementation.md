@@ -506,10 +506,9 @@ Root `main`은 CPS delimiter이지만 `Cps` backend entry ABI가 아니다. Vali
 residual contract는 pure 또는 `Io`이며 residual general effect는 backend
 entrypoint 전에 거부한다. Frontend는 root body도 direct-style control로 emit하고
 shared conversion은 typed completion cell과 `core.never` root `done_k`의 추상
-계약을 만든다. 최종 계약에서는 atomic physical CPS switch 이후 target signature
-lowering이 CPS entry를 empty result로 바꾼 뒤에만 Direct/EvidenceDirect export
-wrapper의 결과 없는 ordinary call을 합성한다. Wrapper는
-completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
+계약을 만든다. Target signature lowering이 CPS entry를 empty result로 바꾼
+뒤에만 Direct/EvidenceDirect export wrapper의 결과 없는 ordinary call을 합성한다.
+Wrapper는 completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
 `Dispatch<R>`를 exact nominal `ContinuationFrame<R>`에 materialize해 worker에
 전달한다. `done_k`가 cell을 쓴 뒤 target call이 돌아오면 wrapper가 cell을 읽는다.
 worker frame 계약은 명시적 frame result/layout provenance로 검사하며 closure 이름,
