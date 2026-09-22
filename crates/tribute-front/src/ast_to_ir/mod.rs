@@ -1,14 +1,14 @@
 //! AST to TrunkIR lowering.
 //!
 //! This module transforms a type-checked AST (`Module<TypedRef<'db>>`) into TrunkIR.
-//! Unlike tirgen which works directly from CST, this pass has access to:
+//! Lowering consumes:
 //! - Resolved names (all references point to their definitions)
 //! - Type information (every expression has a known type)
 //!
 //! ## Pipeline Position
 //!
 //! ```text
-//! CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR (arena)
+//! CST → AST → resolve → typecheck → tdnr → ast_to_ir → source-logical TrunkIR
 //! ```
 //!
 //! ## Output Format
@@ -22,8 +22,7 @@
 //!
 //! ## Arena IR
 //!
-//! This module emits arena-based IR (`IrContext` + `Module`) directly,
-//! bypassing the Salsa-interned IR layer.
+//! This module emits arena-based IR (`IrContext` + `Module`) directly.
 
 mod context;
 mod lower;

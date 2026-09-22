@@ -1,7 +1,7 @@
 //! Structural tests for the active ability lowering pipeline.
 //!
-//! The source-logical CPS route intentionally changes generated IR shape, so
-//! these tests assert its stable contracts instead of legacy textual snapshots.
+//! These tests assert source-logical CPS signatures, transfer structure, and
+//! target-owned root and closure-storage contracts.
 
 use itertools::Itertools;
 use salsa_test_macros::salsa_test;

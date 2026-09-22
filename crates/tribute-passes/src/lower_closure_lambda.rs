@@ -642,8 +642,8 @@ mod tests {
             let anyref_ty = make_anyref_ty(&mut ctx);
             let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
 
-            // Incomplete or conflicting provenance must not trigger the retired
-            // implicit evidence and environment inference path.
+            // Incomplete or conflicting provenance cannot determine hidden
+            // evidence operands or the environment slot.
             let outer_entry = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![BlockArgData {

@@ -9,8 +9,8 @@ use crate::refs::OpRef;
 
 /// A pattern that can match and transform arena IR operations.
 ///
-/// This is the arena equivalent of `RewritePattern<'db>`. Since arena IR
-/// uses `OpRef` (Copy, no lifetime), the trait itself has no lifetime parameter.
+/// Arena IR uses `OpRef` (Copy, no lifetime), so patterns access operations
+/// through the supplied context.
 ///
 /// # Arguments
 ///

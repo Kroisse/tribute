@@ -1,9 +1,7 @@
 //! Dead Code Elimination (DCE) pass for arena IR.
 //!
 //! Removes operations whose results are never used and which have no side effects.
-//! Uses the arena's built-in use-chains for O(1) dead-op detection, making this
-//! significantly simpler than the Salsa-based version which requires backward
-//! liveness analysis.
+//! Uses the arena's built-in use-chains to detect unused results.
 
 use crate::context::IrContext;
 use crate::dialect::func;

@@ -173,7 +173,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
     debug_func_params(ctx, module, "after adt_to_wasm");
 
-    // Lower evidence runtime function stubs (prepare for inline WASM operations)
+    // Materialize required evidence helpers and lower effect operations.
     {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
         if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {

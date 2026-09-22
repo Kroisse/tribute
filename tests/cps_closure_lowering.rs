@@ -1,4 +1,4 @@
-//! Downstream closure-lowering compatibility for CPS frontend output.
+//! Downstream closure lowering for shared CPS output.
 
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
