@@ -798,6 +798,7 @@ fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::dialect::wasm_gc;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::refs::PathRef;
@@ -808,6 +809,59 @@ mod tests {
         let module = parse_test_module(&mut ctx, ir);
         lower_to_wasm(&mut ctx, module).expect("test module should lower to wasm");
         print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn adt_struct_get_converts_evidence_result_consistently() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
+  !Frame = adt.struct() {name = @Frame, fields = []}
+  !Env = adt.struct() {name = @Env, fields = [[@closure, !Closure], [@evidence, !Evidence], [@frame, !Frame]]}
+  wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
+    %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
+    %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
+    wasm.return
+  }
+}"#,
+        );
+
+        let tc = wasm_type_converter(&mut ctx);
+        PatternApplicator::new(tc)
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(&mut ctx, module);
+        let tc = wasm_type_converter(&mut ctx);
+        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(&mut ctx, module, tc);
+
+        let func = module.ops(&ctx)[0];
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let operations = ctx.block(block).ops.clone();
+        let struct_new = operations
+            .iter()
+            .find_map(|&op| wasm_gc::StructNew::from_op(&ctx, op).ok())
+            .expect("environment construction should lower to wasm_gc.struct_new");
+        let struct_get = operations
+            .iter()
+            .find_map(|&op| wasm_gc::StructGet::from_op(&ctx, op).ok())
+            .expect("environment read should lower to wasm_gc.struct_get");
+        let arrayref = intern_type(&mut ctx, "wasm", "arrayref");
+
+        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), arrayref);
+        assert_eq!(struct_get.result_ty(&ctx), arrayref);
+        assert_eq!(
+            ctx.types
+                .get(struct_get.r#type(&ctx))
+                .attrs
+                .get_symbol("name"),
+            Some(Symbol::new("Env"))
+        );
+
+        finalize_wasm_gc_types(&mut ctx, module)
+            .expect("the converted environment field should have one GC representation");
     }
 
     fn empty_module_with_block(ctx: &mut IrContext) -> Module {
