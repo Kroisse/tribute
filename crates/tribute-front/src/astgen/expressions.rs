@@ -69,29 +69,12 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
         // Operator as function: (+), (<>), (Int::+), etc.
         "operator_fn" => match node.child_by_field_name("operator") {
-            Some(op_node) => match op_node.kind() {
-                "qualified_operator" => {
-                    // Int::+ → module_path: ["Int"], name: "+"
-                    if let (Some(type_node), Some(operator_node)) = (
-                        op_node.child_by_field_name("type"),
-                        op_node.child_by_field_name("operator"),
-                    ) {
-                        let type_name = ctx.node_symbol(&type_node);
-                        let operator = ctx.node_symbol(&operator_node);
-                        let name_id = ctx.fresh_id_with_span(&op_node);
-                        let qualified = type_name.join_path(operator);
-                        ExprKind::Var(UnresolvedName::new(qualified, name_id))
-                    } else {
-                        ExprKind::Error
-                    }
-                }
-                _ => {
-                    // Simple operator: +, -, <>, ==, etc.
-                    let name = ctx.node_symbol(&op_node);
-                    let name_id = ctx.fresh_id_with_span(&op_node);
-                    ExprKind::Var(UnresolvedName::new(name, name_id))
-                }
-            },
+            Some(op_node) => {
+                // Qualified operators such as Int::+ are single tokens, too.
+                let name = ctx.node_symbol(&op_node);
+                let name_id = ctx.fresh_id_with_span(&op_node);
+                ExprKind::Var(UnresolvedName::new(name, name_id))
+            }
             None => ExprKind::Error,
         },
 

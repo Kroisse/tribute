@@ -5,6 +5,67 @@ use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 
 #[salsa_test]
+fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::DatabaseImpl) {
+    use std::ops::ControlFlow;
+    use tribute_ir::dialect::tribute_control::{self, CallingConvention};
+    use trunk_ir::Symbol;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::refs::ValueDef;
+    use trunk_ir::walk::{WalkAction, walk_op};
+
+    for argument in ["(Int::+)", "alias"] {
+        let code = format!(
+            r#"
+fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
+fn open(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
+fn main() {{
+    let add = (Int::+)
+    let alias = add
+    let first = pure({argument})
+    open({argument}, first, +2)
+    Nil
+}}
+"#
+        );
+        let source = SourceCst::from_source_str(db, "named_operator.trb", &code);
+        let errors = common::ast_pipeline_error_messages(db, source);
+        assert!(errors.is_empty(), "{argument}: {errors:?}");
+        let text = common::run_ast_pipeline_with_ir(db, source);
+        assert!(!text.contains("unrealized_conversion_cast"), "{text}");
+        let mut ir = IrContext::new();
+        let module = parse_test_module(&mut ir, &text);
+        let mut conventions = Vec::new();
+        let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
+            if let Ok(call) = tribute_control::Call::from_op(&ir, op)
+                && [Symbol::new("pure"), Symbol::new("open")].contains(&call.callee(&ir))
+            {
+                let callback = ir.op_operands(op)[0];
+                let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {
+                    panic!("expected named callback: {text}");
+                };
+                let reference = tribute_control::FuncRef::from_op(&ir, producer).unwrap();
+                assert_eq!(reference.func_ref(&ir), Symbol::new("Int::+"));
+                conventions.push(tribute_control::func_sig_convention(
+                    &ir,
+                    ir.value_ty(callback),
+                ));
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert_eq!(
+            conventions,
+            [
+                Some(CallingConvention::Direct),
+                Some(CallingConvention::Cps)
+            ],
+            "{argument}: {text}"
+        );
+    }
+}
+
+#[salsa_test]
 fn fixed_local_identity_reaches_pure_consumer(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
