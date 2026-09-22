@@ -192,13 +192,23 @@ fn main() { }
         let mut specializations = Vec::new();
         for (name, scalar) in [("compute_int", "i32"), ("compute_float", "f64")] {
             let caller = named_function(&ctx, module, name);
-            let calls = function_ops::<func::TailCall>(&ctx, caller);
+            let calls = function_ops::<func::Call>(&ctx, caller);
             let call = calls.into_iter().find(|call| call.args(&ctx).iter().any(|&arg| {
                 matches!(ctx.value_def(arg), ValueDef::OpResult(op, _) if closure::New::matches(&ctx, op))
             })).expect("source call must pass a closure to its specialization");
+            assert_eq!(
+                tribute_core::get_calling_convention(&ctx, call.op_ref()),
+                Some(tribute_core::CallingConvention::Direct)
+            );
+            assert!(function_ops::<func::TailCall>(&ctx, caller).is_empty());
             let target = named_function(&ctx, module, &call.callee(&ctx).to_string());
             let indirect = only_indirect_call(&ctx, target);
+            assert!(func::CallIndirect::matches(&ctx, indirect));
             assert_indirect_signature(&ctx, target, indirect);
+            assert_eq!(
+                tribute_core::get_calling_convention(&ctx, indirect),
+                Some(tribute_core::CallingConvention::Direct)
+            );
             let args = &ctx.op_operands(indirect)[1..];
             assert_eq!(ctx.types.get(ctx.value_ty(*args.last().unwrap())).name, scalar);
             specializations.push(target.op_ref());
@@ -425,6 +435,29 @@ fn only_indirect_call(ctx: &IrContext, function: func::Func) -> OpRef {
     calls[0]
 }
 
+fn only_return_value(ctx: &IrContext, function: func::Func) -> ValueRef {
+    let returns = function_ops::<func::Return>(ctx, function);
+    assert_eq!(returns.len(), 1, "expected one direct return");
+    let operands = ctx.op_operands(returns[0].op_ref());
+    assert_eq!(operands.len(), 1, "expected one direct return value");
+    operands[0]
+}
+
+fn assert_direct_lifted_return(ctx: &IrContext, function: func::Func, expected: ValueRef) {
+    assert_eq!(
+        tribute_core::get_calling_convention(ctx, function.op_ref()),
+        Some(tribute_core::CallingConvention::Direct),
+        "lifted lambda must use the Direct convention"
+    );
+    assert_eq!(
+        only_return_value(ctx, function),
+        expected,
+        "lifted lambda must return the expected value"
+    );
+    assert!(function_ops::<func::CallIndirect>(ctx, function).is_empty());
+    assert!(function_ops::<func::TailCallIndirect>(ctx, function).is_empty());
+}
+
 /// Check the complete physical transfer contract, including resultless CPS tails.
 fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
     let signature = ctx
@@ -534,18 +567,12 @@ fn test_lambda_identity() {
         assert_eq!(argument.value(&ctx), Attribute::Int(42));
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         let value = *ctx.block_args(entry).last().unwrap();
-        let transfer = only_indirect_call(&ctx, lifted);
-        assert_indirect_signature(&ctx, lifted, transfer);
-        assert_eq!(
-            ctx.op_operands(transfer).last(),
-            Some(&value),
-            "identity lambda must forward its parameter"
-        );
+        assert_direct_lifted_return(&ctx, lifted, value);
         assert!(function_ops::<closure::Lambda>(&ctx, lifted).is_empty());
     });
 }
 
-/// The capture value must be stored, recovered, added, and delivered to done.
+/// The capture value must be stored, recovered, added, and returned directly.
 #[test]
 fn test_lambda_with_capture() {
     TributeDatabaseImpl::default().attach(|db| {
@@ -571,9 +598,7 @@ fn test_lambda_with_capture() {
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];
         assert_eq!(recovery.r#ref(&ctx), ctx.block_args(entry)[env_index]);
         assert_eq!(addition.lhs(&ctx), *ctx.block_args(entry).last().unwrap());
-        let transfer = only_indirect_call(&ctx, lifted);
-        assert_indirect_signature(&ctx, lifted, transfer);
-        assert_eq!(ctx.op_operands(transfer).last(), Some(&addition.result(&ctx)));
+        assert_direct_lifted_return(&ctx, lifted, addition.result(&ctx));
     });
 }
 
