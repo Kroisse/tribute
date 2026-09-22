@@ -409,7 +409,7 @@ fn main() ->{std::io::Io} Nil { std::io::print_line(classify(1)) }
 }
 
 #[salsa_test]
-#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
+#[ignore = "source-level Wasm handler path has no __tribute_next_tag body or import binding"]
 fn test_compile_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability Console {
@@ -450,7 +450,7 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[salsa_test]
-#[ignore = "requires source-logical pipeline (#854); legacy dispatch is not maintained"]
+#[ignore = "source-level Wasm handler path has no __tribute_next_tag body or import binding"]
 fn test_compile_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
