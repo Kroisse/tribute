@@ -241,7 +241,6 @@ struct ModuleInfo {
 struct CommonTypes {
     anyref: Option<TypeRef>,
     funcref: Option<TypeRef>,
-    step: Option<TypeRef>,
 }
 
 /// Context for emitting a single function's code.
@@ -342,23 +341,8 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
             .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
 
-        let mut effective_results = declared_results.to_vec();
-        // The legacy handler workaround remains deliberately confined to a
-        // one-result function; it must not rewrite arbitrary result vectors.
-        if let [declared_result] = declared_results
-            && let CallableBody::Definition {
-                region: body_region,
-                ..
-            } = references::function_body(ctx, func_def)?
-            && (is_type(ctx, *declared_result, "func", "func_sig")
-                || is_type(ctx, *declared_result, "wasm", "funcref"))
-            && should_adjust_handler_return_to_i32(ctx, body_region)
-        {
-            effective_results[0] = intern_simple_type(ctx, "core", "i32");
-        }
-
         let results =
-            match signature_result_types(ctx, &effective_results, &module_info.type_idx_by_type) {
+            match signature_result_types(ctx, declared_results, &module_info.type_idx_by_type) {
                 Ok(r) => {
                     debug!("  results: {:?}", r);
                     r
@@ -703,7 +687,6 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
     info.common_types = CommonTypes {
         anyref: Some(intern_simple_type(ctx, "wasm", "anyref")),
         funcref: Some(intern_simple_type(ctx, "wasm", "funcref")),
-        step: Some(intern_named_adt_struct(ctx, "_Step")),
     };
 
     Ok(info)
@@ -1154,51 +1137,6 @@ fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
 
-fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bool {
-    for &block_ref in &ctx.region(region).blocks {
-        for &op in &ctx.block(block_ref).ops {
-            if wasm_dialect::If::matches(ctx, op) {
-                let regions = &ctx.op(op).regions;
-                if let Some(&else_region) = regions.get(1) {
-                    let has_call_indirect = region_contains_call_indirect(ctx, else_region);
-                    debug!(
-                        "should_adjust_handler_return_to_i32: wasm.if else branch has_call_indirect={}",
-                        has_call_indirect
-                    );
-                    if !has_call_indirect {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            for &nested_region in &ctx.op(op).regions {
-                if should_adjust_handler_return_to_i32(ctx, nested_region) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
-    for &block_ref in &ctx.region(region).blocks {
-        for &op in &ctx.block(block_ref).ops {
-            if wasm_dialect::CallIndirect::matches(ctx, op)
-                || wasm_dialect::ReturnCallIndirect::matches(ctx, op)
-            {
-                return true;
-            }
-            for &nested_region in &ctx.op(op).regions {
-                if region_contains_call_indirect(ctx, nested_region) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     let mut compressed = Vec::new();
     let mut iter = locals.iter();
@@ -1597,35 +1535,6 @@ mod tests {
         Validator::new()
             .validate_all(&bytes)
             .expect("exact anyref call result must remain a valid local");
-    }
-
-    #[test]
-    fn region_contains_call_indirect_recognizes_return_call_indirect() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  wasm.func @tail_indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
-    wasm.block {
-      wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
-    }
-  }
-  wasm.func @tail_direct(%value: core.i32) -> core.nil {
-    wasm.return_call %value {callee = @target}
-  }
-}"#,
-        );
-
-        let tail_indirect = module.ops(&ctx)[0];
-        let tail_direct = module.ops(&ctx)[1];
-        assert!(region_contains_call_indirect(
-            &ctx,
-            ctx.op(tail_indirect).regions[0]
-        ));
-        assert!(!region_contains_call_indirect(
-            &ctx,
-            ctx.op(tail_direct).regions[0]
-        ));
     }
 
     #[test]

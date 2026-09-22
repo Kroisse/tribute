@@ -176,9 +176,6 @@ pub(crate) fn handle_call_indirect(
     // and the call_indirect has anyref result. This is needed because
     // WebAssembly GC has separate type hierarchies for anyref and funcref,
     // so we can't cast between them.
-    // If result type is anyref but enclosing function returns funcref or Step,
-    // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
-    // type hierarchies, and effectful functions return Step for yield bubbling.
     // Note: type variables are resolved at AST level before IR generation.
     let funcref_ty = module_info
         .common_types
@@ -188,17 +185,9 @@ pub(crate) fn handle_call_indirect(
         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
         let func_returns_funcref = helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
             || helpers::is_type(ctx, func_ret_ty, "wasm", "func_sig");
-        // Check for Step type (trampoline-based effect system)
-        let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
         if is_anyref_result && func_returns_funcref {
             debug!("call_indirect emit: upgrading anyref result to funcref for enclosing function");
             result_ty = funcref_ty;
-        } else if is_anyref_result && func_returns_step {
-            debug!("call_indirect emit: upgrading anyref result to Step for enclosing function");
-            result_ty = module_info
-                .common_types
-                .step
-                .ok_or_else(|| CompilationError::invalid_module("step type not pre-interned"))?;
         }
     }
 

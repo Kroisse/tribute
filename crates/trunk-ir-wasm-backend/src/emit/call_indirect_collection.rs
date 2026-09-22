@@ -19,7 +19,7 @@ use trunk_ir::types::TypeData;
 
 use crate::errors::{CompilationError, CompilationResult};
 
-use super::helpers::{self, intern_named_adt_struct};
+use super::helpers;
 
 /// Intern a target-owned `wasm.func_sig` type from params and result type.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
@@ -47,7 +47,7 @@ fn fmt_type(ctx: &IrContext, ty: TypeRef) -> String {
 /// This function walks the IR to find all call_indirect operations and registers
 /// their function types in the type section. It handles:
 /// - Polymorphic function types (anyref params/results)
-/// - Result type upgrade (anyref -> funcref/Step based on enclosing function)
+/// - Scalar function-reference result inference from the enclosing function
 ///
 /// Returns a vector of (type_idx, func_type) pairs sorted by type index.
 pub(crate) fn collect_call_indirect_types(
@@ -228,27 +228,12 @@ pub(crate) fn collect_call_indirect_types(
                         let func_returns_funcref =
                             helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
                                 || helpers::is_type(ctx, func_ret_ty, "wasm", "func_sig");
-                        // Check for Step type (trampoline-based effect system)
-                        let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
-                        debug!(
-                            "collect_call_indirect_types: is_anyref={}, func_returns_funcref={}, func_returns_step={}",
-                            is_anyref_result, func_returns_funcref, func_returns_step
-                        );
                         if is_anyref_result && func_returns_funcref {
                             debug!(
                                 "collect_call_indirect_types: upgrading polymorphic result to funcref \
                                  for enclosing function that returns funcref"
                             );
                             result_ty = funcref_ty;
-                        } else if is_anyref_result && func_returns_step {
-                            // When enclosing function returns Step (for trampoline effect system),
-                            // upgrade polymorphic call_indirect results to Step too.
-                            // This ensures closure/continuation calls return the right type.
-                            debug!(
-                                "collect_call_indirect_types: upgrading polymorphic result to Step \
-                                 for enclosing function that returns Step"
-                            );
-                            result_ty = intern_named_adt_struct(ctx, "_Step");
                         }
                     }
 

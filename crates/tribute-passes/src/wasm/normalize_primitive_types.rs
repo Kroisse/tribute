@@ -39,7 +39,7 @@ use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConver
 
 /// Normalize tribute_rt primitive types to core types.
 ///
-/// This pass should run early in the WASM pipeline, before `trampoline_to_wasm`.
+/// This pass should run early in the WASM pipeline, before target operation lowering.
 pub fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
 

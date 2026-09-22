@@ -15,7 +15,7 @@ use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
+use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX};
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -79,11 +79,6 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
         .is_some_and(|name| name == expected_name)
 }
 
-/// Check if a type is the Step type (for trampoline-based effect system).
-pub(crate) fn is_step_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_named_adt_struct(ctx, ty, "_Step")
-}
-
 /// Check if a type should be normalized to anyref in polymorphic contexts.
 pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, "wasm", "anyref")
@@ -104,7 +99,7 @@ pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef
 /// without a runtime cast.
 ///
 /// Registration follows the same structure the rest of the backend uses: builtin
-/// layouts at their reserved indices (`core.bytes`, `_closure`, `_Step`,
+/// layouts at their reserved indices (`core.bytes`, `_closure`,
 /// `_Marker`, ...) and the ADT types that
 /// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
 /// abstract struct supertype (`adt.typeref` and concrete variant instances
@@ -494,9 +489,6 @@ pub(crate) fn attr_heap_type(
             let data = ctx.types.get(*ty);
             if data.dialect == Symbol::new("wasm") {
                 let name = data.name;
-                if name == Symbol::new("step") {
-                    return Ok(HeapType::Concrete(STEP_IDX));
-                }
                 name.with_str(symbol_to_abstract_heap_type)
             } else {
                 Err(CompilationError::from(

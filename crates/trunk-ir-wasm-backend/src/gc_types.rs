@@ -9,13 +9,10 @@
 //! Index 0: BoxedF64 - Float wrapper for polymorphic contexts
 //! Index 1: BytesArray - array i8 backing storage for Bytes
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
-//! Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 } (trampoline)
-//! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
-//! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref } (evidence)
-//! Index 6: Evidence - array (ref Marker) (evidence array)
-//! Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref } (continuation)
-//! Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref } (resume wrapper)
-//! Index 9+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 3: ClosureStruct - struct { i32, anyref } (table index + env)
+//! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref } (evidence)
+//! Index 5: Evidence - array (ref Marker) (evidence array)
+//! Index 6+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 
 use wasm_encoder::{FieldType, HeapType, RefType, StorageType, ValType};
@@ -32,52 +29,27 @@ pub const BYTES_ARRAY_IDX: u32 = 1;
 /// This is always index 2 in the GC type section.
 pub const BYTES_STRUCT_IDX: u32 = 2;
 
-/// Type index for Step (struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 }).
-/// This is always index 3 in the GC type section.
-/// Used for trampoline-based effect system in WasmGC backend (without stack switching).
-pub const STEP_IDX: u32 = 3;
-
 /// Type index for ClosureStruct (struct { i32, anyref }).
-/// This is always index 4 in the GC type section.
+/// This is always index 3 in the GC type section.
 /// All closures share this uniform representation: (table_idx: i32, env: anyref).
-pub const CLOSURE_STRUCT_IDX: u32 = 4;
+pub const CLOSURE_STRUCT_IDX: u32 = 3;
 
 /// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }).
-/// This is always index 5 in the GC type section.
+/// This is always index 4 in the GC type section.
 /// Used for evidence-based handler dispatch in the ability system.
-pub const MARKER_IDX: u32 = 5;
+pub const MARKER_IDX: u32 = 4;
 
 /// Type index for Evidence (array (ref Marker)).
-/// This is always index 6 in the GC type section.
+/// This is always index 5 in the GC type section.
 /// Evidence is a sorted array of markers for ability handler lookup.
-pub const EVIDENCE_IDX: u32 = 6;
-
-/// Type index for Continuation (struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref }).
-/// This is always index 7 in the GC type section.
-/// Used for one-shot continuations in the trampoline effect system.
-pub const CONTINUATION_IDX: u32 = 7;
-
-/// Type index for ResumeWrapper (struct { state: anyref, resume_value: anyref }).
-/// This is always index 8 in the GC type section.
-/// Packages captured state and resume value for continuation resume functions.
-pub const RESUME_WRAPPER_IDX: u32 = 8;
+pub const EVIDENCE_IDX: u32 = 5;
 
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 9;
+pub const FIRST_USER_TYPE_IDX: u32 = 6;
 
 /// Closure struct field count.
 /// Closure structs always have 2 fields: (table_idx: i32, env: anyref)
 pub const CLOSURE_FIELD_COUNT: usize = 2;
-
-/// Step struct field count.
-/// Step structs have 4 fields: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
-pub const STEP_FIELD_COUNT: usize = 4;
-
-/// Tag value for Done (successful completion with result value).
-pub const STEP_TAG_DONE: i32 = 0;
-
-/// Tag value for Shift (suspended with continuation, needs handler dispatch).
-pub const STEP_TAG_SHIFT: i32 = 1;
 
 /// Definition of a GC type (struct or array).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,8 +83,8 @@ impl GcTypeDef {
 /// Returns the builtin type definitions.
 ///
 /// These must be prepended to the user-defined types when emitting.
-/// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), Step(3), ClosureStruct(4),
-///          Marker(5), Evidence(6), Continuation(7), ResumeWrapper(8)
+/// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), ClosureStruct(3),
+///          Marker(4), Evidence(5).
 pub fn builtin_types() -> Vec<GcTypeDef> {
     vec![
         // Index 0: BoxedF64 - struct { value: f64 }
@@ -143,26 +115,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 }
-        GcTypeDef::Struct(vec![
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-        ]),
-        // Index 4: ClosureStruct - struct { func_idx: i32, env: anyref }
+        // Index 3: ClosureStruct - struct { func_idx: i32, env: anyref }
         GcTypeDef::Struct(vec![
             FieldType {
                 element_type: StorageType::Val(ValType::I32),
@@ -173,7 +126,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
+        // Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
         GcTypeDef::Struct(vec![
             FieldType {
                 element_type: StorageType::Val(ValType::I32),
@@ -192,7 +145,7 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 6: Evidence - array (ref null Marker)
+        // Index 5: Evidence - array (ref null Marker)
         GcTypeDef::Array(FieldType {
             element_type: StorageType::Val(ValType::Ref(RefType {
                 nullable: true,
@@ -200,36 +153,6 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
             })),
             mutable: true,
         }),
-        // Index 7: Continuation - struct { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
-        GcTypeDef::Struct(vec![
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::I32),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-        ]),
-        // Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref }
-        GcTypeDef::Struct(vec![
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-            FieldType {
-                element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
-                mutable: false,
-            },
-        ]),
     ]
 }
 
@@ -250,6 +173,18 @@ mod tests {
 
     #[test]
     fn builtin_struct_indices_match_the_layout() {
+        assert_eq!(
+            [
+                BOXED_F64_IDX,
+                BYTES_ARRAY_IDX,
+                BYTES_STRUCT_IDX,
+                CLOSURE_STRUCT_IDX,
+                MARKER_IDX,
+                EVIDENCE_IDX,
+                FIRST_USER_TYPE_IDX
+            ],
+            [0, 1, 2, 3, 4, 5, 6],
+        );
         for (index, definition) in builtin_types().iter().enumerate() {
             let index = index as u32;
             assert_eq!(
@@ -264,7 +199,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = builtin_types();
-        assert_eq!(builtins.len(), 9);
+        assert_eq!(builtins.len(), 6);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -272,18 +207,12 @@ mod tests {
         assert!(matches!(&builtins[1], GcTypeDef::Array(_)));
         // BytesStruct
         assert!(matches!(&builtins[2], GcTypeDef::Struct(fields) if fields.len() == 3));
-        // Step (4 fields: tag, value, prompt, op_idx)
-        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 4));
         // ClosureStruct
-        assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 2));
+        assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 2));
         // Marker (4 fields: ability_id, prompt_tag, tr_dispatch_fn, handler_dispatch)
-        assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 4));
+        assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 4));
         // Evidence (array of Marker refs)
-        assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
-        // Continuation (4 fields: resume_fn, state, tag, shift_value)
-        assert!(matches!(&builtins[7], GcTypeDef::Struct(fields) if fields.len() == 4));
-        // ResumeWrapper (2 fields: state, resume_value)
-        assert!(matches!(&builtins[8], GcTypeDef::Struct(fields) if fields.len() == 2));
+        assert!(matches!(&builtins[5], GcTypeDef::Array(_)));
     }
 
     #[test]
@@ -309,48 +238,7 @@ mod tests {
                     _ => panic!("Evidence array element should be a reference type"),
                 }
             }
-            _ => panic!("Evidence (index 6) should be an array type"),
-        }
-    }
-
-    #[test]
-    fn test_continuation_struct_field_layout() {
-        // Verify the Continuation GC type (index 7) matches the canonical layout:
-        // { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
-        let builtins = builtin_types();
-        let cont_def = &builtins[CONTINUATION_IDX as usize];
-
-        match cont_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 4, "Continuation should have 4 fields");
-                // Field 0: resume_fn (i32)
-                assert!(
-                    matches!(fields[0].element_type, StorageType::Val(ValType::I32)),
-                    "Field 0 (resume_fn) should be i32"
-                );
-                // Field 1: state (anyref)
-                assert!(
-                    matches!(
-                        fields[1].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 1 (state) should be anyref"
-                );
-                // Field 2: tag (i32)
-                assert!(
-                    matches!(fields[2].element_type, StorageType::Val(ValType::I32)),
-                    "Field 2 (tag) should be i32"
-                );
-                // Field 3: shift_value (anyref)
-                assert!(
-                    matches!(
-                        fields[3].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 3 (shift_value) should be anyref"
-                );
-            }
-            _ => panic!("Continuation (index 7) should be a struct type"),
+            _ => panic!("Evidence (index 5) should be an array type"),
         }
     }
 
@@ -386,7 +274,7 @@ mod tests {
                     "Field 3 (handler_dispatch) should be anyref"
                 );
             }
-            _ => panic!("Marker (index 5) should be a struct type"),
+            _ => panic!("Marker (index 4) should be a struct type"),
         }
     }
 
@@ -412,71 +300,6 @@ mod tests {
             }
             _ => panic!("Expected struct type for closure"),
         }
-    }
-
-    #[test]
-    fn test_step_struct_layout() {
-        // Step: { tag: i32, value: anyref, prompt: i32, op_idx: i32 }
-        let builtins = builtin_types();
-        let step_def = &builtins[STEP_IDX as usize];
-
-        match step_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), STEP_FIELD_COUNT);
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                assert!(matches!(
-                    fields[1].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-                assert!(matches!(
-                    fields[2].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                assert!(matches!(
-                    fields[3].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-            }
-            _ => panic!("Expected struct type for step"),
-        }
-    }
-
-    #[test]
-    fn test_resume_wrapper_struct_layout() {
-        // ResumeWrapper: { state: anyref, resume_value: anyref }
-        let builtins = builtin_types();
-        let rw_def = &builtins[RESUME_WRAPPER_IDX as usize];
-
-        match rw_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 2, "ResumeWrapper should have 2 fields");
-                assert!(
-                    matches!(
-                        fields[0].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 0 (state) should be anyref"
-                );
-                assert!(
-                    matches!(
-                        fields[1].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 1 (resume_value) should be anyref"
-                );
-            }
-            _ => panic!("Expected struct type for ResumeWrapper"),
-        }
-    }
-
-    #[test]
-    fn test_step_and_closure_different_indices() {
-        // Step (builtin at STEP_IDX=3) and Closure (builtin at CLOSURE_STRUCT_IDX=4)
-        // must have different indices.
-        assert_ne!(STEP_IDX, CLOSURE_STRUCT_IDX);
     }
 
     #[test]

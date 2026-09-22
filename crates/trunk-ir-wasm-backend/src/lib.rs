@@ -29,6 +29,6 @@ mod validation;
 pub use data_registry::{DataEntry, DataRegistry};
 pub use emit::helpers::is_wasm_physical_argument_assignable;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
-pub use plan::{MainExports, MemoryPlan};
+pub use plan::MemoryPlan;
 pub use translate::{WasmBinary, emit_module_to_wasm};
 pub use validation::{ValidationError, validate_wasm_ir};

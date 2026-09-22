@@ -10,7 +10,7 @@ use trunk_ir::refs::OpRef;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
 use crate::CompilationResult;
-use crate::gc_types::{GcTypeDef, STEP_IDX};
+use crate::gc_types::GcTypeDef;
 
 use super::super::helpers::{self, value_type};
 use super::super::value_emission::emit_operands;
@@ -101,8 +101,7 @@ pub(crate) fn handle_struct_get(
         function.instruction(&Instruction::RefI31);
     } else {
         // Check if struct field type is anyref but IR result type is more specific.
-        // This happens when reading from Step.value (anyref field) where the IR
-        // expects a concrete type. Insert ref.cast to narrow the type.
+        // Insert ref.cast when a generic payload field recovers a concrete type.
         let field_is_anyref = module_info
             .gc_types
             .get(type_idx as usize)
@@ -124,13 +123,7 @@ pub(crate) fn handle_struct_get(
             })
             .unwrap_or(false);
 
-        // Skip concrete ref.cast for Step.value (field_idx=1): it stores
-        // heterogeneous anyref values (i31ref, struct ref, null) by design.
-        // The correct narrowing casts are inserted at the IR level.
-        let is_step_value_field = type_idx == STEP_IDX && field_idx == 1;
-
         if field_is_anyref
-            && !is_step_value_field
             && let Some(&result_ty) = ctx.op_result_types(op).first()
             && let Ok(result_valtype) =
                 helpers::type_to_valtype(ctx, result_ty, &module_info.type_idx_by_type)

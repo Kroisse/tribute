@@ -2096,9 +2096,9 @@ mod tests {
                             assert_eq!(
                                 signature.params(),
                                 [
-                                    concrete(6),
+                                    concrete(trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX),
                                     ValType::Ref(RefType::ANYREF),
-                                    concrete(4),
+                                    concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     ValType::I32,
                                     ValType::I32,
                                     ValType::I32,
