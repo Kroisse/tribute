@@ -28,6 +28,7 @@ use trunk_ir::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
 
+use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
@@ -172,13 +173,9 @@ impl RewritePattern for LowerCallPattern {
 
         let t = &self.types;
 
-        // Find evidence parameter from enclosing func's entry block.
-        let evidence_val = find_evidence_from_op(ctx, op);
-
-        // === 1. Find evidence ===
-        let Some(evidence_val) = evidence_val else {
-            // Missing evidence means the frontend detected unhandled effects
-            // and emitted a diagnostic. Skip this op gracefully.
+        // Consume the enclosing callable's exact hidden-parameter contract.
+        let Some(evidence_val) = enclosing_callable_evidence(ctx, op) else {
+            // Leave malformed input for the final ability boundary to reject.
             return false;
         };
 
@@ -254,24 +251,34 @@ fn pack_payload(
     erased.result(ctx)
 }
 
-/// Find the evidence parameter by walking up from the op to its enclosing func.
-fn find_evidence_from_op(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
-    let mut current_op = op;
+/// Read the canonical evidence slot of the nearest callable with a declared ABI.
+///
+/// A lifted closure whose type records environment index 0 stores that
+/// environment ahead of the hidden evidence parameter, so evidence then
+/// occupies the following slot.
+fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+    let mut current = op;
     loop {
-        let block = ctx.op(current_op).parent_block?;
+        let block = ctx.op(current).parent_block?;
         let region = ctx.block(block).parent_region?;
         let parent = ctx.region(region).parent_op?;
         if func::Func::matches(ctx, parent) {
-            // Found the enclosing func — check entry block args.
-            let func_body = func::Func::from_op(ctx, parent).ok()?.body(ctx);
-            let entry = ctx.region(func_body).blocks[0];
-            return ctx
-                .block_args(entry)
-                .iter()
-                .find(|&&arg| ability::is_evidence_type_ref(ctx, ctx.value_ty(arg)))
-                .copied();
+            if !tribute_core::get_calling_convention(ctx, parent)?.needs_evidence() {
+                return None;
+            }
+            let environment_index = ctx
+                .op(parent)
+                .attributes
+                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+                .ok()
+                .flatten();
+            let evidence_index = usize::from(environment_index == Some(0));
+            let body = *ctx.op(parent).regions.first()?;
+            let entry = *ctx.region(body).blocks.first()?;
+            let &evidence = ctx.block_args(entry).get(evidence_index)?;
+            return ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)).then_some(evidence);
         }
-        current_op = parent;
+        current = parent;
     }
 }
 
@@ -410,7 +417,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
     %result = ability.call %msg {{ability_ref = core.ability_ref() {{name = @Console}}, op_name = @print}} : tribute_rt.anyref
     func.return %result
@@ -429,6 +436,44 @@ mod tests {
     }
 
     #[test]
+    fn call_requires_declared_convention_and_canonical_evidence_slot() {
+        for (attributes, params) in [
+            ("", "%ev: !Evidence"),
+            (
+                "attributes {tribute.calling_convention = 0}",
+                "%ev: !Evidence",
+            ),
+            (
+                "attributes {tribute.calling_convention = 1}",
+                "%value: core.i32, %ev: !Evidence",
+            ),
+            (
+                "attributes {tribute.calling_convention = 2}",
+                "%value: core.i32, %ev: !Evidence",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let evidence = evidence_type_str();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  !Evidence = {evidence}
+  func.func @test_fn({params}) -> core.i32 {attributes} {{
+    %result = ability.call {{ability_ref = core.ability_ref() {{name = @Counter}}, op_name = @next}} : core.i32
+    func.return %result
+  }}
+}}"#
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+            lower_ability_perform(&mut ctx, module);
+            assert_eq!(print_module(&ctx, module.op()), before);
+            assert!(crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).is_err());
+        }
+    }
+
+    #[test]
     fn lower_call_restores_the_exact_typed_result() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
@@ -437,7 +482,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> core.i32 {{
+  func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
     %result = ability.call {{ability_ref = core.ability_ref() {{name = @Counter}}, op_name = @next}} : core.i32
     func.return %result
   }}
@@ -489,7 +534,7 @@ mod tests {
         let ev_ty = evidence_type_str();
         let source = format!(
             r#"core.module @test {{
-  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %k = arith.const {{value = 0}} : tribute_rt.anyref
     %result = ability.perform %ev, %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
     func.return %result

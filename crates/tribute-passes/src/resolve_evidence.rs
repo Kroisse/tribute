@@ -229,7 +229,11 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
 }
 
 /// Resolve each explicit delimiter without changing callable signatures or calls.
-fn resolve_delimiters(ctx: &mut IrContext, region: RegionRef) -> Result<(), ResolveEvidenceError> {
+fn resolve_delimiters(
+    ctx: &mut IrContext,
+    module: Module,
+    region: RegionRef,
+) -> Result<(), ResolveEvidenceError> {
     let blocks = ctx.region(region).blocks.to_vec();
     for block in blocks {
         let ops = ctx.block(block).ops.to_vec();
@@ -242,6 +246,7 @@ fn resolve_delimiters(ctx: &mut IrContext, region: RegionRef) -> Result<(), Reso
                 if let ValueDef::OpResult(prompt_op, _) = ctx.value_def(prompt_tag)
                     && effect::FreshPromptTag::from_op(ctx, prompt_op).is_ok()
                 {
+                    ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
                     let prompt = func::call(
                         ctx,
@@ -276,7 +281,7 @@ fn resolve_delimiters(ctx: &mut IrContext, region: RegionRef) -> Result<(), Reso
             }
             let regions = ctx.op(op).regions.to_vec();
             for region in regions {
-                resolve_delimiters(ctx, region)?;
+                resolve_delimiters(ctx, module, region)?;
             }
         }
     }
@@ -289,9 +294,8 @@ pub(crate) fn resolve_evidence_dispatch(
     module: Module,
 ) -> Result<(), ResolveEvidenceError> {
     validate_final_handle_dispatches(ctx, module)?;
-    ensure_prompt_tag_runtime(ctx, module);
     if let Some(body) = module.body(ctx) {
-        resolve_delimiters(ctx, body)?;
+        resolve_delimiters(ctx, module, body)?;
     }
     Ok(())
 }
@@ -417,20 +421,7 @@ mod tests {
             );
         }
         assert_eq!(resolved.matches("func.call").count(), 0);
-        let next_tag = module
-            .ops(&ctx)
-            .iter()
-            .copied()
-            .find(|&op| {
-                ctx.op(op).attributes.get_symbol("sym_name")
-                    == Some(Symbol::new("__tribute_next_tag"))
-            })
-            .expect("runtime tag declaration");
-        assert_eq!(
-            trunk_ir::callable::classify_callable_body(&ctx, next_tag),
-            Ok(trunk_ir::callable::CallableBody::Declaration)
-        );
-        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
+        assert!(!resolved.contains("__tribute_next_tag"));
         assert!(resolved.contains("ability.handle_dispatch"));
         let mut extensions = Vec::new();
         let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
@@ -478,6 +469,20 @@ mod tests {
             1,
             "{resolved}"
         );
+        let next_tag = module
+            .ops(&ctx)
+            .iter()
+            .copied()
+            .find(|&op| {
+                ctx.op(op).attributes.get_symbol("sym_name")
+                    == Some(Symbol::new("__tribute_next_tag"))
+            })
+            .expect("runtime tag declaration");
+        assert_eq!(
+            trunk_ir::callable::classify_callable_body(&ctx, next_tag),
+            Ok(trunk_ir::callable::CallableBody::Declaration)
+        );
+        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
         assert_eq!(resolved.matches("func.call").count(), 1, "{resolved}");
     }
 
