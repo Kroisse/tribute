@@ -18,5 +18,7 @@ tracing.workspace = true
 trunk-ir.workspace = true
 
 [dev-dependencies]
+# Match cranelift-object; only enable object reading for emission assertions.
+object = { version = "0.39", default-features = false, features = ["read"] }
 insta.workspace = true
 tempfile.workspace = true

@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
+use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef};
@@ -152,8 +153,8 @@ fn collect_op(
 
 /// Apply the read-only emission disposition for bodyless declarations.
 ///
-/// A definition is emitted iff it owns a body region. Bodyless declarations are
-/// removed from the emitted definition/index/code lists without touching the
+/// A definition is emitted iff it owns one body region with an entry block.
+/// Bodyless declarations are removed from the emitted definition/index/code lists without touching the
 /// IR. Every surviving reference must then resolve to an explicit import (which
 /// keeps its import-first index) or to a body-bearing definition; an
 /// unsatisfied one is reported precisely instead of failing later as a missing
@@ -165,19 +166,21 @@ pub(crate) fn dispose_bodyless_declarations(
     references: &[ResolvedReference],
 ) -> CompilationResult<()> {
     let mut bound: HashSet<Symbol> = imports.iter().map(|import| import.sym).collect();
-    bound.extend(
-        funcs
-            .iter()
-            .filter(|func| has_body(ctx, func))
-            .map(|func| func.name),
-    );
-    let declarations: HashSet<Symbol> = funcs
-        .iter()
-        .filter(|func| !has_body(ctx, func))
-        .map(|func| func.name)
-        .collect();
-
-    funcs.retain(|func| has_body(ctx, func));
+    let mut definitions = HashSet::new();
+    let mut declarations = HashSet::new();
+    // Validate every shape before removing anything from the emission list.
+    for func in funcs.iter() {
+        match function_body(ctx, func)? {
+            CallableBody::Declaration => {
+                declarations.insert(func.name);
+            }
+            CallableBody::Definition { .. } => {
+                definitions.insert(func.op);
+                bound.insert(func.name);
+            }
+        }
+    }
+    funcs.retain(|func| definitions.contains(&func.op));
 
     for reference in references {
         if bound.contains(&reference.symbol) {
@@ -199,10 +202,13 @@ pub(crate) fn dispose_bodyless_declarations(
     Ok(())
 }
 
-/// A bodyless `wasm.func` declaration owns no region at all. A present region is
-/// a definition and must carry an entry block.
-fn has_body(ctx: &IrContext, func: &FunctionDef) -> bool {
-    !ctx.op(func.op).regions.is_empty()
+pub(super) fn function_body(
+    ctx: &IrContext,
+    func: &FunctionDef,
+) -> CompilationResult<CallableBody> {
+    classify_callable_body(ctx, func.op).map_err(|error| {
+        CompilationError::invalid_module(format!("wasm.func @{}: {error}", func.name))
+    })
 }
 
 #[cfg(test)]
@@ -463,6 +469,33 @@ mod tests {
                 .contains("requires valid wasm.func_sig type"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn multiple_body_regions_are_rejected_before_disposition() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test { wasm.func {sym_name = @helper, type = wasm.func_sig<() -> ()>} { wasm.return } }",
+        );
+        let op = module.ops(&ctx)[0];
+        let extra = ctx.create_region(trunk_ir::RegionData {
+            location: ctx.op(op).location,
+            blocks: Default::default(),
+            parent_op: Some(op),
+        });
+        ctx.op_mut(op).regions.push(extra);
+        let before = print_module(&ctx, module.op());
+        let error = crate::emit_module_to_wasm(&mut ctx, module)
+            .err()
+            .expect("multiple bodies");
+        assert!(
+            error
+                .to_string()
+                .contains("wasm.func @helper: has more than one body region"),
+            "{error}"
+        );
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

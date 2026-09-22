@@ -112,6 +112,99 @@ fn assert_plan_error_unchanged(ir: &str, expected: &str) {
 }
 
 #[test]
+fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
+    let (ctx, module, plan) = build(
+        r#"core.module @test {
+        func.func @external(%value: core.i32) -> core.i32
+        func.func @caller(%value: core.i32) -> core.i32 {
+            %result = func.call %value {callee = @external} : core.i32
+            func.return %result
+        }
+    }"#,
+    );
+    assert!(plan.function(Symbol::new("external")).is_none());
+    assert!(
+        plan.function(Symbol::new("caller"))
+            .unwrap()
+            .actions()
+            .is_empty()
+    );
+    plan.validate_against(&ctx, module).unwrap();
+    assert_plan_error_unchanged(
+        r#"core.module @test {
+            func.func @external(%value: core.i32) -> core.i32
+            func.func @caller() -> core.i32 {
+                %result = func.call {callee = @external} : core.i32
+                func.return %result
+            }
+        }"#,
+        "call arguments differ from the exact callable signature",
+    );
+    assert_plan_error_unchanged(
+        "core.module @test { func.func {sym_name = @bad, type = core.i32} }",
+        "bodyless function lacks exact signature",
+    );
+    assert_plan_error_unchanged(
+        "core.module @test { func.func @managed(%value: tribute_rt.anyref) -> tribute_rt.anyref }",
+        "bodyless native declaration exposes a managed reference",
+    );
+}
+
+#[test]
+fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
+    assert_plan_error_unchanged(
+        "core.module @test { func.func {sym_name = @empty, type = func.func_sig<() -> ()>} {} }",
+        "func.func @empty: body has no entry block",
+    );
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        "core.module @test { func.func {sym_name = @extra, type = func.func_sig<() -> ()>} { func.return } }",
+    );
+    let op = module.ops(&ctx)[0];
+    let extra = ctx.create_region(trunk_ir::RegionData {
+        location: ctx.op(op).location,
+        blocks: Default::default(),
+        parent_op: Some(op),
+    });
+    ctx.op_mut(op).regions.push(extra);
+    let before = ctx.op(op).regions.clone();
+    let error = build_native_ownership_plan(&ctx, module).expect_err("multiple bodies");
+    assert!(
+        error
+            .to_string()
+            .contains("func.func @extra: has more than one body region"),
+        "{error}"
+    );
+    assert_eq!(ctx.op(op).regions, before);
+}
+
+#[test]
+fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
+    let (mut ctx, module, plan) = build(
+        "core.module @test { func.func {sym_name = @external, type = func.func_sig<() -> ()>} }",
+    );
+    let op = module.ops(&ctx)[0];
+    let body = ctx.create_region(trunk_ir::RegionData {
+        location: ctx.op(op).location,
+        blocks: Default::default(),
+        parent_op: Some(op),
+    });
+    ctx.op_mut(op).regions.push(body);
+    let before = print_module(&ctx, module.op());
+    let error = plan
+        .validate_against(&ctx, module)
+        .expect_err("malformed declaration must not be omitted");
+    assert!(
+        error
+            .to_string()
+            .contains("func.func @external: body has no entry block"),
+        "{error}"
+    );
+    assert_eq!(print_module(&ctx, module.op()), before);
+}
+
+#[test]
 fn ordinary_result_contract_requires_one_value_and_preserves_zero_width_results() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(

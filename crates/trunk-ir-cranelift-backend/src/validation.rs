@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
+use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -259,22 +260,31 @@ fn validate_clif_function(
         ));
         return None;
     };
-    if ctx.op(op).regions.len() > 1 {
-        errors.push(format!("clif.func @{name} has more than one body region"));
-    }
-    if let Some(&body) = ctx.op(op).regions.first() {
-        let Some(&entry) = ctx.region(body).blocks.first() else {
-            errors.push(format!("clif.func @{name} body requires an entry block"));
-            return Some(signature);
-        };
-        check_value_types(
-            ctx,
-            op,
-            ctx.block_args(entry),
-            signature.inputs(ctx),
-            "entry argument",
-            errors,
-        );
+    let has_abi = ctx.op(op).attributes.contains_key("abi");
+    match classify_callable_body(ctx, op) {
+        Err(error) => errors.push(format!("clif.func @{name}: {error}")),
+        Ok(CallableBody::Declaration) => {
+            if !has_abi {
+                errors.push(format!(
+                    "bodyless clif.func @{name} has no external binding (`abi`)"
+                ));
+            }
+        }
+        Ok(CallableBody::Definition { entry, .. }) => {
+            if has_abi {
+                errors.push(format!(
+                    "clif.func @{name} has both a body and an external binding (`abi`)"
+                ));
+            }
+            check_value_types(
+                ctx,
+                op,
+                ctx.block_args(entry),
+                signature.inputs(ctx),
+                "entry argument",
+                errors,
+            );
+        }
     }
     Some(signature)
 }

@@ -52,6 +52,43 @@ fn test_native_simple_literal() {
 }
 
 #[test]
+#[ignore = "requires source-logical production route (#825); legacy named-alias adaptation is unsupported"]
+fn named_local_operator_prints_three() {
+    let source = format!(
+        r#"{}
+fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
+fn main() {{
+    let add = (Int::+)
+    let alias = add
+    __tribute_print_int(apply(alias, +1, +2))
+}}
+"#,
+        common::PRINT_EXTERNS,
+    );
+    let output = compile_and_run_native("named_local_operator.trb", &source);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"3\n");
+}
+
+#[test]
+fn named_direct_both_reaches_native_execution() {
+    let source = format!(
+        r#"{}
+fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
+fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
+fn main() {{
+    __tribute_print_int(pure((Int::+)))
+    __tribute_print_int(apply((Int::+), +1, +2))
+}}
+"#,
+        common::PRINT_EXTERNS,
+    );
+    let output = compile_and_run_native("named_direct_operator.trb", &source);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"7\n3\n");
+}
+
+#[test]
 fn test_native_arithmetic() {
     assert_native_output(
         "arithmetic.trb",
