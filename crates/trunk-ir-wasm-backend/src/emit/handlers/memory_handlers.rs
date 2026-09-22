@@ -593,7 +593,6 @@ mod tests {
                 (load.result(&ctx), 2),
             ]),
             effective_types: HashMap::new(),
-            func_return_type: None,
         };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(3, ValType::I32)]);

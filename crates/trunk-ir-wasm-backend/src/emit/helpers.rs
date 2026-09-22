@@ -79,11 +79,6 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
         .is_some_and(|name| name == expected_name)
 }
 
-/// Check if a type should be normalized to anyref in polymorphic contexts.
-pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "wasm", "anyref")
-}
-
 // ============================================================================
 // Type conversion
 // ============================================================================
@@ -197,9 +192,8 @@ pub fn is_wasm_physical_argument_assignable(
     argument_is_wasm_gc_ref && parameter_is_anyref
 }
 
-/// Read and validate an optional exact function type retained by an ordinary
-/// indirect call. When present, the attribute remains authoritative rather
-/// than being reconstructed from erased operands.
+/// Read and validate the exact physical function type required by an ordinary
+/// indirect call. Erased operands cannot reconstruct the callable contract.
 pub(crate) fn exact_call_indirect_signature(
     ctx: &IrContext,
     op: OpRef,
@@ -245,9 +239,8 @@ pub(crate) fn exact_call_indirect_signature_with_results(
             "wasm.call_indirect has malformed operands",
         ));
     };
-    // The established omitted-result-slot compatibility allows a `[nil]`
-    // target signature for a resultless transfer. Ordinary empty signatures
-    // match only an empty result list; nil operands remain nullable refs.
+    // Unit result slots produce no Wasm stack result. A `[nil]` signature
+    // therefore permits a resultless call; nil operands remain nullable refs.
     let results_match = results == signature_results
         || (results.is_empty()
             && matches!(signature_results, [result] if is_nil_type(ctx, *result)));

@@ -232,25 +232,15 @@ struct ModuleInfo {
     /// Additional target function types from call_indirect that need to be added to the type section.
     /// Stored as (type_idx, wasm.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
-    /// Pre-interned common types for use in handlers.
-    common_types: CommonTypes,
 }
 
 /// Pre-interned common types to avoid needing `&mut IrContext` during emission.
-#[derive(Default)]
-struct CommonTypes {
-    anyref: Option<TypeRef>,
-    funcref: Option<TypeRef>,
-}
-
 /// Context for emitting a single function's code.
 struct FunctionEmitContext {
     /// Maps values to their local indices.
     value_locals: HashMap<ValueRef, u32>,
     /// Effective types for values (after unification).
     effective_types: HashMap<ValueRef, TypeRef>,
-    /// The function's expected return type (from function signature).
-    func_return_type: Option<TypeRef>,
 }
 
 pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
@@ -683,12 +673,6 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
         });
     }
 
-    // Pre-intern common types so handlers don't need &mut IrContext
-    info.common_types = CommonTypes {
-        anyref: Some(intern_simple_type(ctx, "wasm", "anyref")),
-        funcref: Some(intern_simple_type(ctx, "wasm", "funcref")),
-    };
-
     Ok(info)
 }
 
@@ -708,7 +692,7 @@ fn emit_function(
             func_def.name
         )));
     };
-    let (params_refs, signature_results) = func_type_parts(ctx, func_def.func_type)
+    let (params_refs, _) = func_type_parts(ctx, func_def.func_type)
         .ok_or_else(|| CompilationError::type_error("func type is not wasm.func_sig"))?;
     let block_args = ctx.block_args(block);
     if params_refs.len() != block_args.len() {
@@ -717,16 +701,9 @@ fn emit_function(
         ));
     }
 
-    // Legacy indirect-call inference is scalar-only. A multi-result caller
-    // must not make its first result look like an authoritative context.
-    let func_return_type = match signature_results {
-        [result] => Some(*result),
-        _ => None,
-    };
     let mut emit_ctx = FunctionEmitContext {
         value_locals: HashMap::new(),
         effective_types: HashMap::new(),
-        func_return_type,
     };
     let mut locals: Vec<ValType> = Vec::new();
 
@@ -1157,16 +1134,6 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     compressed
 }
 
-/// Intern a simple type with no params or attrs.
-fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.types.intern(trunk_ir::types::TypeData {
-        dialect: Symbol::new(dialect),
-        name: Symbol::new(name),
-        params: Default::default(),
-        attrs: Default::default(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1343,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_indirect_call_in_a_multi_result_caller_does_not_inherit_its_first_result() {
+    fn indirect_call_signature_is_independent_of_a_multi_result_caller() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1351,7 +1318,7 @@ mod tests {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
     ^entry(%index: core.i32):
-      %ignored = wasm.call_indirect %index : wasm.anyref
+      %ignored = wasm.call_indirect %index {signature = wasm.func_sig<() -> wasm.anyref>} : wasm.anyref
       %function = wasm.nop : wasm.funcref
       %integer = wasm.i32_const {value = 0} : core.i32
       wasm.return %function, %integer
@@ -1359,11 +1326,11 @@ mod tests {
 }"#,
         );
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
-            .expect("multi-result caller must not change a legacy call signature")
+            .expect("multi-result caller must not change the exact call signature")
             .bytes;
         Validator::new()
             .validate_all(&bytes)
-            .expect("legacy indirect type section must match its emitted instruction");
+            .expect("indirect type section must match its emitted instruction");
     }
 
     #[test]
@@ -1384,11 +1351,11 @@ mod tests {
 }"#,
         );
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
-            .expect("nil result slot compatibility must emit")
+            .expect("omitted unit result slots must emit")
             .bytes;
         Validator::new()
             .validate_all(&bytes)
-            .expect("nil result slot compatibility must validate");
+            .expect("omitted unit result slots must validate");
     }
 
     #[test]
@@ -1490,14 +1457,37 @@ mod tests {
     }
 
     #[test]
-    fn signature_valued_enclosing_result_upgrades_indirect_anyref_result() {
+    fn indirect_call_without_exact_signature_is_rejected_before_emission() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @caller(%table_index: core.i32) -> core.i32 {
+    %result = wasm.call_indirect %table_index {type_idx = 0} : core.i32
+    wasm.return %result
+  }
+}"#,
+        );
+        let error = crate::emit_module_to_wasm(&mut ctx, module)
+            .err()
+            .expect("an encoded type index cannot replace an exact signature");
+        assert!(
+            error
+                .to_string()
+                .contains("wasm.call_indirect lacks signature"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn indirect_funcref_result_uses_its_explicit_signature() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = @funcref, min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32) -> wasm.func_sig<() -> core.nil> {
-    %result = wasm.call_indirect %table_index : wasm.anyref
+    %result = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.funcref>} : wasm.funcref
     wasm.return %result
   }
 }"#,

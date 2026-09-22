@@ -55,19 +55,19 @@ impl GcTypeBuilder {
 // Helper functions
 // ============================================================================
 
-/// Returns true if this is a built-in type (0-8) that shouldn't use a builder
+/// Returns true if this is a built-in type (0-5) that shouldn't use a builder
 fn is_builtin_type(idx: u32) -> bool {
     idx < FIRST_USER_TYPE_IDX
 }
 
 /// Get or create a builder for a user-defined type.
-/// Returns None for built-in types (0-8) which are predefined.
+/// Returns None for built-in types (0-5) which are predefined.
 fn try_get_builder(builders: &mut Vec<GcTypeBuilder>, idx: u32) -> Option<&mut GcTypeBuilder> {
-    // Skip built-in types (0-8) as they are predefined
+    // Skip built-in types (0-5) as they are predefined
     if is_builtin_type(idx) {
         return None;
     }
-    // Subtract FIRST_USER_TYPE_IDX because indices 0-8 are reserved for built-in types
+    // Subtract FIRST_USER_TYPE_IDX because indices 0-5 are reserved for built-in types
     // User type indices start at FIRST_USER_TYPE_IDX
     let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
     if builders.len() <= adjusted_idx {
