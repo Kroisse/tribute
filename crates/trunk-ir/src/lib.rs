@@ -28,6 +28,7 @@ pub mod op_interface;
 pub mod ops;
 
 // === IR core structures ===
+pub mod callable;
 pub mod context;
 pub mod dominance;
 pub mod refs;

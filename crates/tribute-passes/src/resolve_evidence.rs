@@ -332,29 +332,21 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         // fn __tribute_next_tag() -> i32
         let func_ty = func::func_sig(ctx, std::iter::empty(), [i32_ty]).as_type_ref();
 
-        let body_block = ctx.create_block(trunk_ir::context::BlockData {
-            location: loc,
-            args: vec![],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let unreachable_op = func::unreachable(ctx, loc);
-        ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::context::RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![body_block],
-            parent_op: None,
-        });
-        let func_op = func::func(ctx, loc, Symbol::new("__tribute_next_tag"), func_ty, body);
-        // Mark as C ABI extern function
-        ctx.op_mut(func_op.op_ref())
-            .attributes
-            .insert(Symbol::new("abi"), Attribute::String("C".to_string()));
+        let data =
+            trunk_ir::OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+                .attr(
+                    "sym_name",
+                    Attribute::Symbol(Symbol::new("__tribute_next_tag")),
+                )
+                .attr("type", Attribute::Type(func_ty))
+                .attr("abi", Attribute::String("C".to_owned()))
+                .build(ctx);
+        let func_op = ctx.create_op(data);
         let first_op = ctx.block(module_block).ops.first().copied();
         if let Some(first) = first_op {
-            ctx.insert_op_before(module_block, first, func_op.op_ref());
+            ctx.insert_op_before(module_block, first, func_op);
         } else {
-            ctx.push_op(module_block, func_op.op_ref());
+            ctx.push_op(module_block, func_op);
         }
     }
 }
@@ -1243,7 +1235,20 @@ mod tests {
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
         assert_eq!(resolved.matches("func.call").count(), 0);
-        assert!(resolved.contains("__tribute_next_tag"));
+        let next_tag = module
+            .ops(&ctx)
+            .iter()
+            .copied()
+            .find(|&op| {
+                ctx.op(op).attributes.get_symbol("sym_name")
+                    == Some(Symbol::new("__tribute_next_tag"))
+            })
+            .expect("runtime tag declaration");
+        assert_eq!(
+            trunk_ir::callable::classify_callable_body(&ctx, next_tag),
+            Ok(trunk_ir::callable::CallableBody::Declaration)
+        );
+        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
         assert!(resolved.contains("ability.handle_dispatch"));
         let mut extensions = Vec::new();
         let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {

@@ -15,29 +15,17 @@ core.module @resumptive_op_native {
   !t3 = closure.closure(!t2)
   !t4 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref, core.i32, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>
 
-  func.func @__tribute_evidence_lookup_handler(%0: core.ptr, %1: core.i32) -> core.ptr attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_evidence_lookup_handler(%arg0: core.ptr, %arg1: core.i32) -> core.ptr attributes {abi = "C"}
 
-  func.func @__tribute_evidence_lookup_tr(%0: core.ptr, %1: core.i32) -> core.ptr attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_evidence_lookup_tr(%arg0: core.ptr, %arg1: core.i32) -> core.ptr attributes {abi = "C"}
 
-  func.func @__tribute_evidence_empty() -> core.ptr attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_evidence_empty() -> core.ptr attributes {abi = "C"}
 
-  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
 
-  func.func @__tribute_evidence_extend(%0: core.ptr, %1: core.i32, %2: core.i32, %3: core.ptr, %4: core.ptr) -> core.ptr attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_evidence_extend(%arg0: core.ptr, %arg1: core.i32, %arg2: core.i32, %arg3: core.ptr, %arg4: core.ptr) -> core.ptr attributes {abi = "C"}
 
-  func.func @__tribute_evidence_lookup(%0: core.ptr, %1: core.i32) -> core.i32 attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_evidence_lookup(%arg0: core.ptr, %arg1: core.i32) -> core.i32 attributes {abi = "C"}
 
   func.func @"resumptive_op_native::__lambda_0"(%0: !t0, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2

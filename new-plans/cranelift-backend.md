@@ -159,6 +159,22 @@ lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 
 `core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
 호환성 규칙을 만들지 않는다.
 
+### Bodyless 선언의 바인딩
+
+Callable의 선언·정의·malformed 분류는 [공통 본문 구조](ir.md#callable-본문-구조)를
+따른다. Native 최종 경계에서 bodyless `clif.func`는 외부 바인딩을 나타내는 `abi`가
+필수이며, 없으면 함수 identity와 바인딩 누락을 진단한다. 본문과 `abi`가 함께 있는
+`clif.func`도 모순된 입력으로 거부한다. 이 규칙은 target emission의 계약이며,
+target 이전 ownership planner의 bodyless signature 검증에 바인딩 조건을 추가하지
+않는다. Runtime helper의 외부 선언을 생성하는 producer도 region 없이 생성하며,
+`unreachable` 가짜 본문을 외부 바인딩 표기로 사용하지 않는다.
+
+Emitter는 바인딩된 선언을 import로 등록하고, 참조가 없어도 보존한다. 정의는
+`main`이면 export, 그 밖에는 local linkage로 등록한다. Define pass는 공통 구조
+판정으로 선언을 건너뛰고 정의의 본문만 생성한다. `abi` 유무로 본문을 추정하거나
+없는 본문에 접근하지 않는다. 이 처분은 IR이나 `global_dce`의 reachability root를
+변경하지 않는다.
+
 ### Zero-width `core.nil`
 
 `core.nil`은 논리 TrunkIR `Unit` SSA 값이지만 Cranelift runtime representation은 없다.

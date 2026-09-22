@@ -1617,6 +1617,7 @@ dependencies = [
  "cranelift-object",
  "derive_more",
  "insta",
+ "object",
  "rustc-hash",
  "target-lexicon",
  "tempfile",
