@@ -28,9 +28,7 @@ core.module @direct_fn {
   !t7 = func.func_sig<(!t0, tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref) -> tribute_rt.anyref>
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
 
-  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
 
   func.func @__tribute_evidence_extend(%0: !t0, %1: !_Marker) -> !t0 {
       func.unreachable

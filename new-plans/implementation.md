@@ -852,12 +852,10 @@ Wasm lowering은 `effect.extend`, `effect.dispatch_tail`,
 direct `wasm.return_call` 또는 indirect `wasm.return_call_indirect`로 낮춘다.
 일반 source data call은 계속 `wasm.call_indirect`를 사용할 수 있다.
 
-`lower_to_wasm` 이후 backend-ready 경계에는 본문 없는 외부 선언이 남을 수 있다.
-`emit_wasm`은 IR을 변경하지 않고 최종 IR에서 함수 심볼 참조를 새로 수집한 뒤,
-무참조 bodyless 선언을 emitted definition/type-index/code 목록에서 제외하고 명시적
-import와 본문 보유 함수를 유지한다. 살아남은 참조를 만족하지 못하는 선언과 미해결
-참조는 각각 정확한 진단으로 거부한다. 이 처분은 `global_dce`의 reachability 삭제나
-인증된 intrinsic 삭제와 같은 pass 작업이 아니며, target emitter가 소유한다.
+Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#callable-본문-구조)를
+사용한다. Backend-ready 경계에 남는 bodyless 선언의 바인딩과 처분은
+[Wasm 계약](wasm-backend.md#bodyless-선언의-처분)과
+[native 계약](cranelift-backend.md#bodyless-선언의-바인딩)을 따른다.
 
 ### WASM / Native 공통: CPS Tail-Call Effect Handling
 

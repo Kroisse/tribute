@@ -11,6 +11,7 @@ use std::ops::ControlFlow;
 use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
+use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -289,16 +290,21 @@ impl NativeOwnershipPlan {
         if self.module != module.op() {
             return Err(OwnershipPlanError::new("module identity is stale"));
         }
-        let mut current_functions = HashSet::new();
+        let mut function_ops = Vec::new();
         walk_module(ctx, module, |op| {
-            if let Ok(function) = func::Func::from_op(ctx, op)
-                && function
-                    .body_if_present(ctx)
-                    .is_some_and(|body| !ctx.region(body).blocks.is_empty())
-            {
-                current_functions.insert(op);
+            if func::Func::matches(ctx, op) {
+                function_ops.push(op);
             }
         });
+        let mut current_functions = HashSet::new();
+        for op in function_ops {
+            if matches!(
+                ownership_callable_body(ctx, op)?,
+                CallableBody::Definition { .. }
+            ) {
+                current_functions.insert(op);
+            }
+        }
         let planned_functions = self
             .functions
             .iter()
@@ -370,6 +376,10 @@ pub fn build_native_ownership_plan_with_options(
             function_ops.push(op);
         }
     });
+    // Reject malformed topology before entry-contract or call-graph analysis.
+    for &op in &function_ops {
+        ownership_callable_body(ctx, op)?;
+    }
     let definitions = collect_function_definitions(ctx, &function_ops)?;
     let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
     let closure_layout = collect_closure_layout(ctx, module, &managed_layouts)?;
@@ -388,14 +398,13 @@ pub fn build_native_ownership_plan_with_options(
             continue;
         };
         let symbol = function.sym_name(ctx);
-        let Some(body) = function.body_if_present(ctx) else {
-            validate_bodyless_signature(ctx, op, &managed_layouts)?;
-            continue;
+        let body = match ownership_callable_body(ctx, op)? {
+            CallableBody::Declaration => {
+                validate_bodyless_signature(ctx, op, &managed_layouts)?;
+                continue;
+            }
+            CallableBody::Definition { region, .. } => region,
         };
-        if ctx.region(body).blocks.is_empty() {
-            validate_bodyless_signature(ctx, op, &managed_layouts)?;
-            continue;
-        }
         let cfg = ValidatedFlatCfg::build(ctx, body)?;
         validate_function_contract(ctx, op, &cfg, &managed_layouts)?;
         let entries = entry_contracts
@@ -428,6 +437,18 @@ pub fn build_native_ownership_plan_with_options(
     };
     validate_plan(ctx, &plan)?;
     Ok(plan)
+}
+
+fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, OwnershipPlanError> {
+    classify_callable_body(ctx, op).map_err(|error| {
+        let symbol = ctx
+            .op(op)
+            .attributes
+            .get_symbol("sym_name")
+            .map(|name| format!("@{name}"))
+            .unwrap_or_else(|| "<unnamed>".into());
+        OwnershipPlanError::new(format!("func.func {symbol}: {error}"))
+    })
 }
 
 fn collect_closure_layout(
@@ -817,11 +838,18 @@ fn compute_entry_contracts(
     let recursive = recursive_functions(&build_call_graph(ctx, module));
     let mut summaries = HashMap::new();
     for (&symbol, &op) in definitions {
-        let Some(body) = ctx.op(op).regions.first().copied() else {
-            continue;
-        };
-        let Some(&entry) = ctx.region(body).blocks.first() else {
-            continue;
+        let entry = match ownership_callable_body(ctx, op)? {
+            CallableBody::Declaration => {
+                let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
+                // Declarations have no block arguments. Their validated unmanaged
+                // signature still supplies the ownership contract for direct calls.
+                summaries.insert(
+                    symbol,
+                    vec![EntryOwnership::Plain; signature.inputs(ctx).len()],
+                );
+                continue;
+            }
+            CallableBody::Definition { entry, .. } => entry,
         };
         let ineligible = recursive.contains(&symbol) || ctx.op(op).attributes.contains_key("abi");
         summaries.insert(
@@ -844,10 +872,11 @@ fn compute_entry_contracts(
     loop {
         let mut changed = false;
         for (&symbol, &op) in definitions {
-            let Some(body) = ctx.op(op).regions.first().copied() else {
-                continue;
-            };
-            let Some(&entry) = ctx.region(body).blocks.first() else {
+            let CallableBody::Definition {
+                region: body,
+                entry,
+            } = ownership_callable_body(ctx, op)?
+            else {
                 continue;
             };
             for (index, &parameter) in ctx.block_args(entry).iter().enumerate() {
@@ -947,7 +976,7 @@ fn validate_bodyless_signature(
     ctx: &IrContext,
     op: OpRef,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<(), OwnershipPlanError> {
+) -> Result<func::FuncSig, OwnershipPlanError> {
     let signature = ctx
         .op(op)
         .attributes
@@ -964,7 +993,7 @@ fn validate_bodyless_signature(
             "bodyless native declaration exposes a managed reference",
         ));
     }
-    Ok(())
+    Ok(signature)
 }
 
 fn validate_function_contract(
@@ -1018,20 +1047,18 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
                 "plan has duplicate function identity",
             ));
         }
-        let Ok(function_op) = func::Func::from_op(ctx, function.operation) else {
+        let Ok(_) = func::Func::from_op(ctx, function.operation) else {
             return Err(OwnershipPlanError::new(
                 "planned function identity is stale",
             ));
         };
-        let body = function_op
-            .body_if_present(ctx)
-            .ok_or_else(|| OwnershipPlanError::new("planned function body is stale"))?;
-        let entry = ctx
-            .region(body)
-            .blocks
-            .first()
-            .copied()
-            .ok_or_else(|| OwnershipPlanError::new("planned function entry is stale"))?;
+        let CallableBody::Definition {
+            region: body,
+            entry,
+        } = ownership_callable_body(ctx, function.operation)?
+        else {
+            return Err(OwnershipPlanError::new("planned function body is stale"));
+        };
         if function.entries.len() != ctx.block_args(entry).len()
             || function
                 .entries

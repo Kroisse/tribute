@@ -29,9 +29,7 @@ core.module @float_comparisons {
   !"std::io::SystemError" = adt.struct() {fields = [[@code, core.i32], [@message, tribute_rt.anyref]], name = @"std::io::SystemError"}
   !__tuple_i1_i1_i1_i1_i1_i1_1 = adt.typeref() {name = @__tuple_i1_i1_i1_i1_i1_i1}
 
-  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"} {
-      func.unreachable
-  }
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
 
   func.func @__tribute_evidence_extend(%0: !t0, %1: !_Marker) -> !t0 {
       func.unreachable

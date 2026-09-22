@@ -41,6 +41,7 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module as IrModule;
 use trunk_ir::Symbol;
+use trunk_ir::callable::CallableBody;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -344,15 +345,16 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
         let mut effective_results = declared_results.to_vec();
         // The legacy handler workaround remains deliberately confined to a
         // one-result function; it must not rewrite arbitrary result vectors.
-        if let [declared_result] = declared_results {
-            let regions = &ctx.op(func_def.op).regions;
-            if let Some(&body_region) = regions.first()
-                && (is_type(ctx, *declared_result, "func", "func_sig")
-                    || is_type(ctx, *declared_result, "wasm", "funcref"))
-                && should_adjust_handler_return_to_i32(ctx, body_region)
-            {
-                effective_results[0] = intern_simple_type(ctx, "core", "i32");
-            }
+        if let [declared_result] = declared_results
+            && let CallableBody::Definition {
+                region: body_region,
+                ..
+            } = references::function_body(ctx, func_def)?
+            && (is_type(ctx, *declared_result, "func", "func_sig")
+                || is_type(ctx, *declared_result, "wasm", "funcref"))
+            && should_adjust_handler_return_to_i32(ctx, body_region)
+        {
+            effective_results[0] = intern_simple_type(ctx, "core", "i32");
         }
 
         let results =
@@ -713,15 +715,16 @@ fn emit_function(
     module_info: &ModuleInfo,
 ) -> CompilationResult<Function> {
     debug!("=== emit_function: {:?} ===", func_def.name);
-    let regions = &ctx.op(func_def.op).regions;
-    let &region = regions
-        .first()
-        .ok_or_else(|| CompilationError::invalid_module("wasm.func missing body region"))?;
-    let blocks = &ctx.region(region).blocks;
-    let &block = blocks
-        .first()
-        .ok_or_else(|| CompilationError::invalid_module("wasm.func has no entry block"))?;
-
+    let CallableBody::Definition {
+        region,
+        entry: block,
+    } = references::function_body(ctx, func_def)?
+    else {
+        return Err(CompilationError::invalid_module(format!(
+            "bodyless wasm.func @{} reached definition emission",
+            func_def.name
+        )));
+    };
     let (params_refs, signature_results) = func_type_parts(ctx, func_def.func_type)
         .ok_or_else(|| CompilationError::type_error("func type is not wasm.func_sig"))?;
     let block_args = ctx.block_args(block);

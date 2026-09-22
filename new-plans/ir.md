@@ -180,11 +180,23 @@ implicit unmatched path when no default exists). The wrappers also expose
 their own parent/body boundary, so generic nested-region walkers never need to
 decode the switch's container shape themselves.
 
-최종 코드 생성 경계의 bodyless 선언은 malformed가 아니다. `wasm.func`처럼 body
-region이 optional인 정의 operation은 zero-region 선언을 정상 입력으로 받으며, 그
-선언을 코드 목록에 포함할지 여부는 IR legality가 아니라 target emitter의 read-only
-처분이 결정한다. 이 처분은 대상 symbol 삭제 pass나 generic DCE reachability와
-구분되며 IR을 변경하지 않는다.
+### Callable 본문 구조
+
+선택적 본문을 소유하는 callable operation은 region이 없으면 선언이고, region이
+하나이며 entry block이 있으면 정의다. Region은 있지만 entry block이 없거나 region이
+둘 이상이면 malformed이며, 무참조 여부와 관계없이 거부한다. Entry 이후의 block
+수와 내용은 별도 CFG 및 operation 검증이 담당한다.
+
+이 분류는 dialect 등록이나 시그니처, symbol, 바인딩에 의존하지 않는 공통 구조
+질의가 담당한다. 각 consumer는 자신이 처리하는 callable을 선택하고, 구조 오류에
+dialect와 함수 identity를 붙여 진단한다. Ownership planning과 target emission은
+같은 구조 판정을 사용한다.
+
+Bodyless 선언 자체는 malformed가 아니다. 시그니처와 외부 바인딩 검증 및 emission
+처분은 각 target이 소유한다. 이 처분은 대상 symbol 삭제 pass나 generic DCE
+reachability와 구분되며 IR을 변경하지 않는다. 구체적인 바인딩 규칙은
+[native 계약](cranelift-backend.md#bodyless-선언의-바인딩)과
+[Wasm 계약](wasm-backend.md#bodyless-선언의-처분)을 따른다.
 
 Symbol 사용 질의는 operation-local이다. Container operation이 직접 symbol 속성을
 갖지 않는다는 사실은 자식 region의 사용을 부정하지 않는다. Symbol 사용을 수집하는

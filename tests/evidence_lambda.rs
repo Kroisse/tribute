@@ -11,6 +11,7 @@ use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
 use tribute_passes::evidence::has_evidence_first_param;
+use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -403,27 +404,62 @@ fn main() { }
         for op in module.ops(&ctx) {
             if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
-                let body = func_op.body(&ctx);
-                let blocks = &ctx.region(body).blocks;
-                if let Some(&entry) = blocks.first() {
-                    let args = ctx.block_args(entry);
-                    let evidence_count = args
-                        .iter()
-                        .filter(|&&arg| {
-                            tribute_ir::dialect::ability::is_evidence_type_ref(
-                                &ctx,
-                                ctx.value_ty(arg),
-                            )
-                        })
-                        .count();
-                    assert!(
-                        evidence_count <= 1,
-                        "Function '{}' has {} evidence parameters, expected at most 1",
-                        name,
-                        evidence_count
-                    );
-                }
+                let CallableBody::Definition { entry, .. } =
+                    classify_callable_body(&ctx, op).expect("well-formed frontend callable")
+                else {
+                    continue;
+                };
+                let args = ctx.block_args(entry);
+                let evidence_count = args
+                    .iter()
+                    .filter(|&&arg| {
+                        tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, ctx.value_ty(arg))
+                    })
+                    .count();
+                assert!(
+                    evidence_count <= 1,
+                    "Function '{}' has {} evidence parameters, expected at most 1",
+                    name,
+                    evidence_count
+                );
             }
         }
+    });
+}
+
+#[test]
+fn c_extern_declarations_preserve_signature_without_a_body() {
+    TributeDatabaseImpl::default().attach(|db| {
+        let (ctx, module) = compile_to_ir(
+            db,
+            r#"
+extern "C" fn foreign(value: Nat) -> Nat
+fn main() { }
+"#,
+            "extern_declaration.trb",
+        );
+        let function = module
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| {
+                let function = func::Func::from_op(&ctx, op).ok()?;
+                (function.sym_name(&ctx) == "foreign").then_some(function)
+            })
+            .expect("external declaration");
+        assert_eq!(
+            classify_callable_body(&ctx, function.op_ref()),
+            Ok(CallableBody::Declaration)
+        );
+        assert_eq!(
+            ctx.op(function.op_ref()).attributes.get_str("abi"),
+            Some("C")
+        );
+        let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();
+        assert_eq!(signature.inputs(&ctx).len(), 1);
+        assert_eq!(signature.results(&ctx), signature.inputs(&ctx));
+        assert_eq!(
+            trunk_ir::printer::print_type(&ctx, signature.inputs(&ctx)[0]),
+            "core.i32"
+        );
     });
 }

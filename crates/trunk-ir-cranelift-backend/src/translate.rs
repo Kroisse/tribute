@@ -16,6 +16,7 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::{OperatingSystem, Triple};
 use trunk_ir::Symbol;
+use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
@@ -435,23 +436,19 @@ fn emit_module_impl(
         let func_type_ref = func_wrapped.r#type(ctx);
         let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
-        let op_data = ctx.op(func_op);
-        let has_abi = op_data.attributes.contains_key("abi");
-        let linkage = if name_sym == "main" {
-            Linkage::Export
-        } else if has_abi {
-            Linkage::Import
-        } else {
-            Linkage::Local
+        let shape = classify_callable_body(ctx, func_op).map_err(|error| {
+            CompilationError::ir_validation(format!("clif.func @{name_sym}: {error}"))
+        })?;
+        let linkage = match shape {
+            CallableBody::Declaration => Linkage::Import,
+            CallableBody::Definition { .. } if name_sym == "main" => Linkage::Export,
+            CallableBody::Definition { .. } => Linkage::Local,
         };
 
-        // Skip imported functions whose types can't be translated to Cranelift
-        // (e.g., prelude extern functions using core.bytes that are never called).
-        let sig = match translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty) {
-            Ok(sig) => sig,
-            Err(_) if has_abi => continue,
-            Err(e) => return Err(e),
-        };
+        let sig =
+            translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty).map_err(|error| {
+                CompilationError::type_error(format!("clif.func @{name_sym}: {error}"))
+            })?;
 
         let linker_name = if linkage == Linkage::Local {
             name_sym.with_str(mangle_native_name)
@@ -497,15 +494,17 @@ fn emit_module_impl(
     let mut fb_ctx = FunctionBuilderContext::new();
 
     for &func_op in &all_func_ops {
-        let op_data = ctx.op(func_op);
-        let has_abi = op_data.attributes.contains_key("abi");
-        if has_abi {
-            continue;
-        }
-
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
+        let CallableBody::Definition {
+            region: func_body, ..
+        } = classify_callable_body(ctx, func_op).map_err(|error| {
+            CompilationError::ir_validation(format!("clif.func @{name_sym}: {error}"))
+        })?
+        else {
+            continue;
+        };
         let func_type_ref = func_wrapped.r#type(ctx);
         let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
@@ -535,7 +534,6 @@ fn emit_module_impl(
             let mut translator =
                 FunctionTranslator::new(ctx, builder, &func_refs, &data_refs, call_conv, ptr_ty);
 
-            let func_body = func_wrapped.body(ctx);
             let body_region = ctx.region(func_body);
             let ir_blocks: &[BlockRef] = &body_region.blocks;
 
@@ -809,6 +807,112 @@ mod tests {
     clif.return %sum
   }
 }"#;
+
+    #[test]
+    fn invalid_callable_shapes_and_bindings_return_diagnostics_without_mutation() {
+        for (attributes, body, expected) in [
+            ("", "", "no external binding (`abi`)"),
+            ("", "{}", "no entry block"),
+            (", abi = \"C\"", "{}", "no entry block"),
+            (
+                ", abi = \"C\"",
+                "{ clif.return }",
+                "both a body and an external binding",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ clif.func {{sym_name = @helper, type = clif.func_sig<() -> ()>{attributes}}} {body} }}"
+                ),
+            );
+            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let error = emit_module_to_native(&ctx, module, &[]).expect_err("invalid callable");
+            assert!(error.to_string().contains("clif.func @helper"), "{error}");
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn native_emission_rejects_multiple_body_regions() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test { clif.func {sym_name = @helper, type = clif.func_sig<() -> ()>} { clif.return } }",
+        );
+        let op = module.ops(&ctx)[0];
+        let extra = ctx.create_region(trunk_ir::RegionData {
+            location: ctx.op(op).location,
+            blocks: Default::default(),
+            parent_op: Some(op),
+        });
+        ctx.op_mut(op).regions.push(extra);
+        let error = emit_module_to_native(&ctx, module, &[]).expect_err("multiple bodies");
+        assert!(
+            error
+                .to_string()
+                .contains("clif.func @helper: has more than one body region"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_bound_declaration_signatures_are_rejected_even_when_unreferenced() {
+        for signature in ["(core.bytes) -> ()", "() -> core.bytes"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ clif.func {{sym_name = @helper, type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
+                ),
+            );
+            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let error = emit_module_to_native(&ctx, module, &[])
+                .expect_err("unsupported declarations must not be silently omitted");
+            assert!(error.to_string().contains("clif.func @helper"), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported type for Cranelift: core.bytes"),
+                "{error}"
+            );
+            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        }
+    }
+
+    #[test]
+    fn bound_declarations_remain_external_even_when_unreferenced() {
+        use object::{Object, ObjectSymbol};
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            clif.func {sym_name = @used, type = clif.func_sig<() -> ()>, abi = "C"}
+            clif.func {sym_name = @unused, type = clif.func_sig<() -> ()>, abi = "C"}
+            clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
+                clif.call {callee = @used}
+                clif.return
+            }
+        }"#,
+        );
+        let bytes = emit_module_to_native(&ctx, module, &[]).expect("native object");
+        let object = object::File::parse(bytes.as_slice()).expect("parse native object");
+        for name in ["used", "unused", "main"] {
+            let linker_name = if object.format() == object::BinaryFormat::MachO {
+                format!("_{name}")
+            } else {
+                name.to_owned()
+            };
+            let symbol = object
+                .symbols()
+                .find(|symbol| symbol.name().ok() == Some(&linker_name))
+                .unwrap_or_else(|| panic!("missing symbol {linker_name}"));
+            assert!(symbol.is_global(), "{linker_name}");
+            assert_eq!(symbol.is_undefined(), name != "main", "{linker_name}");
+        }
+    }
 
     #[test]
     fn test_mangle_native_name() {

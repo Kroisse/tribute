@@ -243,7 +243,8 @@ rewriting 이후에도 유지되는 ordinary C helper 선언과, 호출이 제�
 intrinsic 선언이다. Wasm module은 import가 아닌 모든 function에 code entry와 body를
 요구하므로 bodyless 선언은 explicit import로만 emit될 수 있다.
 
-Emitter는 IR을 수정하지 않는 read-only 처분으로 이 상황을 해결한다.
+선언·정의·malformed 분류는 [공통 본문 구조](ir.md#callable-본문-구조)를 따른다.
+Emitter는 malformed를 먼저 거부한 뒤 IR을 수정하지 않는 read-only 처분을 수행한다.
 
 - 함수 심볼 참조는 마지막 helper rewrite 이후의 최종 IR에서 새로 수집한다. 이전
   단계의 resolved-reference 사실이나 cached 분석을 재사용하지 않으므로, 오래된
@@ -261,8 +262,8 @@ Emitter는 IR을 수정하지 않는 read-only 처분으로 이 상황을 해결
 - 살아남은 참조의 목적지는 import-first 인덱싱을 유지한 명시적 `wasm.import_func`의
   `sym_name` 또는 본문 보유 `wasm.func`여야 한다. 그렇지 않으면 bodyless 선언과
   미해결 참조를 각각 정확한 진단으로 구분해 보고한다.
-- 본문이 있는 C 함수와 명시적 import는 그대로 emit된다. body region은 있으나 entry
-  block이 없는 malformed `wasm.func`는 bodyless 선언이 아니므로 계속 거부한다.
+- 본문이 있는 C 함수와 명시적 import는 그대로 emit된다. `wasm.func`의 `abi`는
+  `wasm.import_func` 바인딩을 대신하지 않으며, 본문 구조 판정에도 참여하지 않는다.
 
 이 처분은 공통 DCE reachability나 인증된 intrinsic 삭제와 별개다. IR을 변경하지
 않고 emission 목록만 좁히며, 대상 심볼 삭제를 다른 pass에 위임하지 않는다.

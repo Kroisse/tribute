@@ -555,6 +555,27 @@ fn lower_extern_function<'db>(
         )
     });
 
+    // External bindings are declarations. Intrinsic stubs still need bodies
+    // until their dedicated lowering materializes callable implementations.
+    if func_decl.abi != Symbol::new("intrinsic") {
+        let func_type = ctx.func_type(ir, &param_ir_types, return_ty);
+        let mut data =
+            trunk_ir::OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
+                .attr("sym_name", Attribute::Symbol(qualified_name))
+                .attr("type", Attribute::Type(func_type))
+                .attr("abi", Attribute::String(func_decl.abi.to_string()));
+        if let Some(identity) = ctx.compiler_intrinsic(func_decl.id) {
+            data = data.attr(
+                tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR,
+                Attribute::Symbol(identity),
+            );
+        }
+        let data = data.build(ir);
+        let declaration = ir.create_op(data);
+        ir.push_op(top, declaration);
+        return;
+    }
+
     // Create entry block with parameter args
     let block_args: Vec<BlockArgData> = param_ir_types
         .iter()
@@ -577,7 +598,7 @@ fn lower_extern_function<'db>(
         parent_region: None,
     });
 
-    // Extern functions have no body — emit unreachable
+    // Intrinsic placeholders are replaced by dedicated lowering.
     let unreachable_op = func::unreachable(ir, location);
     ir.push_op(entry_block, unreachable_op.op_ref());
 
