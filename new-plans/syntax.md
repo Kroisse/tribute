@@ -803,6 +803,19 @@ xs.fold("", (Text::<>))         // 문자열 연결
 numbers.reduce((Int::*))        // 곱셈
 ```
 
+`(Int::+)`는 `Int`의 `+` 선언을 가리키는 함수 값이다. 지역 변수에 바인딩하고
+별칭을 통해 고차 함수에 전달할 수도 있다.
+
+```rust
+fn apply(f: fn(Int, Int) ->{} Int, x: Int, y: Int) ->{} Int { f(x, y) }
+
+fn main() {
+    let add = (Int::+)
+    let alias = add
+    let sum = apply(alias, +1, +2)    // +3
+}
+```
+
 **단항 연산 (UFCS로 처리):**
 
 단항 연산자 없음. 모든 단항 연산은 UFCS 메서드로 처리:
