@@ -7,7 +7,6 @@ use std::fmt::Write as _;
 use common::{
     compile_and_run_native, compile_and_run_native_asan,
     compile_and_run_native_with_borrowed_parameters,
-    compile_and_run_native_with_done_continuation_dedup,
     compile_and_run_native_with_paired_rc_elimination,
     compile_and_run_native_with_temporary_borrows,
 };
@@ -19,7 +18,6 @@ use tribute::pipeline::{
     dump_shared_ir_at_stage,
 };
 use tribute_front::SourceCst;
-use tribute_front::ast_to_ir::DoneContinuationPolicy;
 
 const DONE_CONTINUATION_DEDUP_STATE: &str =
     include_str!("fixtures/optimizations/done_continuation_dedup_state.trb");
@@ -52,7 +50,6 @@ fn native_optimization_options(
             borrowed_parameters,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
         },
-        ..OptimizationOptions::production()
     }
 }
 
@@ -63,7 +60,6 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows,
         },
-        ..OptimizationOptions::production()
     }
 }
 
@@ -191,33 +187,6 @@ fn lambda_function_count(ir: &str) -> usize {
             line.starts_with("func.func ") && line.contains("::__lambda_")
         })
         .count()
-}
-
-#[test]
-fn done_continuation_dedup_preserves_native_execution() {
-    let disabled = compile_and_run_native_with_done_continuation_dedup(
-        "done_continuation_dedup_disabled.trb",
-        DONE_CONTINUATION_DEDUP_STATE,
-        DoneContinuationPolicy::PerUse,
-    );
-    let enabled = compile_and_run_native_with_done_continuation_dedup(
-        "done_continuation_dedup_enabled.trb",
-        DONE_CONTINUATION_DEDUP_STATE,
-        DoneContinuationPolicy::PerCompilationUnit,
-    );
-
-    assert!(
-        disabled.status.success(),
-        "disabled pipeline failed: {}",
-        String::from_utf8_lossy(&disabled.stderr)
-    );
-    assert!(
-        enabled.status.success(),
-        "enabled pipeline failed: {}",
-        String::from_utf8_lossy(&enabled.stderr)
-    );
-    assert_eq!(disabled.stdout, enabled.stdout);
-    assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
 }
 
 #[test]
@@ -744,4 +713,15 @@ fn done_continuation_dedup_has_focused_before_after_ir(db: &salsa::DatabaseImpl)
         "done_continuation_dedup_after",
         focused_identity_done_ir(&after)
     );
+}
+
+#[test]
+fn state_handlers_preserve_native_execution() {
+    let output = compile_and_run_native("state_handlers.trb", DONE_CONTINUATION_DEDUP_STATE);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
 }

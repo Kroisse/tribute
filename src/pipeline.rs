@@ -115,21 +115,14 @@ pub struct CompilationConfig {
 
 /// Optimization policies for the source-logical production pipeline.
 ///
-/// Only `native` policies affect this route. `ast_to_ir` is retained for legacy
-/// API compatibility and is ignored by both `production()` and `baseline()`
-/// compilation; it cannot enable legacy Done-continuation deduplication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OptimizationOptions {
-    /// Compatibility-only legacy frontend settings. The source-logical
-    /// production route does not consult these; #826 owns their removal.
-    pub ast_to_ir: ast_to_ir::AstToIrOptions,
     pub native: NativeOptimizationOptions,
 }
 
 impl OptimizationOptions {
     pub const fn production() -> Self {
         Self {
-            ast_to_ir: ast_to_ir::AstToIrOptions::production(),
             native: NativeOptimizationOptions::production(),
         }
     }
@@ -138,7 +131,6 @@ impl OptimizationOptions {
     /// unchanged; this does not select the legacy frontend or disable CPS.
     pub const fn baseline() -> Self {
         Self {
-            ast_to_ir: ast_to_ir::AstToIrOptions::baseline(),
             native: NativeOptimizationOptions::baseline(),
         }
     }

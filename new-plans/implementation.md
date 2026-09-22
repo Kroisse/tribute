@@ -162,6 +162,11 @@ logical parameter/result를 사용할 수 없다.
 전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
 
 논리 CPS 결과는 `core.never`이고, 최종 물리적 CPS ABI의 결과 목록은 비어 있다.
+Frontend 진입점은 source-logical IR만 생성하며 physical CPS 생성 옵션이나
+별도의 호환 lowering 경로를 제공하지 않는다. 프론트엔드의 worker convention
+계산은 typechecked callable/effect metadata를 소비하며 continuation을 생성하거나
+ability operation kind를 재분류하지 않는다. Continuation 생성과 제어 이전의
+적법화는 shared CPS conversion만 소유한다.
 모든 CPS 제어 이전은 직접 또는 간접 꼬리 호출로 이루어진다. 최종 backend-ready
 IR의 계약은 CPS 제어 결과로 쓰이는 `anyref`, 비공개 제어 열거형, `Step`,
 트램펄린을 거부한다. 박싱된 소스 값, 이펙트 페이로드, 클로저 환경의

@@ -43,9 +43,9 @@ Lowering-time choices are represented by immutable, stage-specific option
 objects rather than individual boolean fields on the lowering context. When a
 choice controls reuse of compiler-generated helpers, the context keeps that
 mutable reuse state in a dedicated generated-function cache. Policies with
-meaningful modes use named enums—for example, identity done continuations are
-either generated `PerUse` or shared `PerCompilationUnit`—so production and
-conformance profiles remain explicit as more optimizations are added.
+meaningful modes use named enums, such as native paired-RC elimination being
+`Disabled` or `Enabled`, so production and conformance profiles remain explicit.
+Only policies consumed by the active pipeline are exposed.
 
 ---
 

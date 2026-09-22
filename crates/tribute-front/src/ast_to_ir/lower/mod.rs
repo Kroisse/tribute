@@ -3,11 +3,8 @@
 //! Transforms AST declarations and expressions to arena TrunkIR operations.
 
 mod case;
-mod control;
 mod decl;
 mod expr;
-mod handle;
-mod lambda;
 mod logical;
 
 use salsa::Accumulator;
@@ -20,10 +17,7 @@ use trunk_ir::types::{Attribute, Location};
 
 use super::context::IrLoweringCtx;
 
-use crate::ast::{
-    CallingConvention, CtorId, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation,
-    TypeAnnotationKind, TypeKind,
-};
+use crate::ast::{CallingConvention, CtorId, NodeId, ResolvedRef, TypeKind};
 
 /// IR-level function signature extracted from a TypeScheme.
 #[derive(Clone)]
@@ -34,22 +28,6 @@ pub(super) struct FuncSignature {
 }
 
 impl FuncSignature {
-    /// Look up a function's TypeScheme by name and extract its IR-level signature.
-    ///
-    /// Returns `None` if the function has no TypeScheme or non-Func body type.
-    pub fn lookup<'db>(ctx: &IrLoweringCtx<'db>, ir: &mut IrContext, name: Symbol) -> Option<Self> {
-        let scheme = *ctx.lookup_function_type(name)?;
-        let body = scheme.body(ctx.db);
-        match body.kind(ctx.db) {
-            TypeKind::Func { params, result, .. } => Some(Self {
-                param_types: params.iter().map(|t| ctx.convert_type(ir, *t)).collect(),
-                return_type: ctx.convert_type(ir, *result),
-                convention: ctx.calling_convention_for_type(body)?,
-            }),
-            _ => None,
-        }
-    }
-
     pub fn lookup_logical<'db>(
         ctx: &IrLoweringCtx<'db>,
         ir: &mut IrContext,
@@ -113,32 +91,6 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         op.result(self.ir)
     }
 
-    /// Emit diagnostic for unimplemented expression and return nil placeholder.
-    pub fn emit_unsupported(&mut self, location: Location, feature: &str) -> Option<ValueRef> {
-        Diagnostic::new(
-            format!("{feature} not yet supported in IR lowering"),
-            location.span,
-            DiagnosticSeverity::Warning,
-            CompilationPhase::Lowering,
-        )
-        .accumulate(self.db());
-        Some(self.emit_nil(location))
-    }
-
-    /// Get the result type from a function type, or use the type directly.
-    pub fn call_result_type(&mut self, ty: &crate::ast::Type<'db>) -> TypeRef {
-        match ty.kind(self.db()) {
-            TypeKind::Func { result, .. } => {
-                let result = *result;
-                self.ctx.convert_type(self.ir, result)
-            }
-            _ => {
-                let ty = *ty;
-                self.ctx.convert_type(self.ir, ty)
-            }
-        }
-    }
-
     /// Insert an unrealized_conversion_cast if the value's type differs from target_ty.
     pub fn cast_if_needed(
         &mut self,
@@ -149,21 +101,6 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let value_ty = self.ir.value_ty(value);
 
         if value_ty == target_ty {
-            return value;
-        }
-
-        // Skip cast for closure → func conversions
-        if self.ctx.is_closure_type(self.ir, value_ty) && self.ctx.is_func_type(self.ir, target_ty)
-        {
-            return value;
-        }
-
-        // Skip cast for func → func conversions with compatible signatures
-        if self.ctx.is_func_type(self.ir, value_ty)
-            && self.ctx.is_func_type(self.ir, target_ty)
-            && self.ctx.func_type_param_count(self.ir, value_ty)
-                == self.ctx.func_type_param_count(self.ir, target_ty)
-        {
             return value;
         }
 
@@ -181,38 +118,6 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 /// Derive a qualified type name from a CtorId for use as a type_map key.
 pub(super) fn qualified_type_name(db: &dyn salsa::Database, ctor_id: &CtorId<'_>) -> Symbol {
     ctor_id.qualified(db)
-}
-
-/// Resolve the ADT (enum/struct) type attribute for a constructor.
-pub(super) fn resolve_enum_type_attr<'db>(
-    ctx: &IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    ctor_ty: crate::ast::Type<'db>,
-) -> TypeRef {
-    let result_ty = match ctor_ty.kind(ctx.db) {
-        TypeKind::Func { result, .. } => *result,
-        _ => ctor_ty,
-    };
-    ctx.resolve_adt_type(result_ty)
-        .unwrap_or_else(|| ctx.anyref_type(ir))
-}
-
-/// Resolve an enum type attribute from a constructor identity.
-///
-/// Monomorphization rewrites constructor IDs to their specialized enum name,
-/// while a constructor's function type can remain polymorphic. The ID is the
-/// authoritative layout identity for construction and pattern matching.
-pub(super) fn resolve_enum_type_attr_for_constructor<'db>(
-    ctx: &IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    resolved: &ResolvedRef<'db>,
-    fallback_ctor_ty: crate::ast::Type<'db>,
-) -> TypeRef {
-    match resolved {
-        ResolvedRef::Constructor { id, .. } => ctx.get_type(id.qualified(ctx.db)),
-        _ => None,
-    }
-    .unwrap_or_else(|| resolve_enum_type_attr(ctx, ir, fallback_ctor_ty))
 }
 
 /// Extract the type name from a ResolvedRef.
@@ -234,48 +139,7 @@ pub(super) fn extract_ctor_id<'db>(resolved: &ResolvedRef<'db>) -> CtorId<'db> {
     }
 }
 
-/// Create (or reuse) an `adt.struct` type for a tuple and register it in the type map.
-pub(super) fn get_or_create_tuple_type<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    node_id: NodeId,
-) -> Option<(Symbol, TypeRef)> {
-    let ast_ty = ctx.get_node_type(node_id)?;
-    let TypeKind::Tuple(elem_tys) = ast_ty.kind(ctx.db) else {
-        return None;
-    };
-    let ir_fields: Vec<(Symbol, TypeRef)> = elem_tys
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| {
-            let name = Symbol::from_dynamic(&i.to_string());
-            let ir_ty = ctx.convert_type(ir, *ty);
-            (name, ir_ty)
-        })
-        .collect();
-    let type_names: Vec<String> = ir_fields
-        .iter()
-        .map(|(_, ty)| {
-            let td = ir.types.get(*ty);
-            td.name.to_string()
-        })
-        .collect();
-    let tuple_name = Symbol::from_dynamic(&format!("__tuple_{}", type_names.join("_")));
-
-    if let Some(struct_ty) = ctx.get_type(tuple_name) {
-        return Some((tuple_name, struct_ty));
-    }
-
-    let struct_ty = ctx.adt_struct_type(ir, tuple_name, &ir_fields);
-    ctx.register_type(tuple_name, struct_ty);
-    Some((tuple_name, struct_ty))
-}
-
-/// Logical counterpart to [`get_or_create_tuple_type`].
-///
-/// The legacy helper above deliberately retains its physical recursive type
-/// representation.  Source-logical lowering must never share that conversion:
-/// a tuple can contain callable or resume-token values.
+/// Create or reuse a source-logical tuple layout, preserving nested callable types.
 pub(super) fn get_or_create_logical_tuple_type<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -303,40 +167,6 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
     let struct_ty = ctx.adt_struct_type(ir, tuple_name, &ir_fields);
     ctx.register_type(tuple_name, struct_ty);
     Some((tuple_name, struct_ty))
-}
-
-/// Convert a type annotation to an arena TypeRef.
-pub(super) fn convert_annotation_to_ir_type<'db>(
-    ctx: &IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    annotation: Option<&TypeAnnotation>,
-) -> TypeRef {
-    let Some(ann) = annotation else {
-        return ctx.i32_type(ir);
-    };
-
-    match &ann.kind {
-        TypeAnnotationKind::Named(name) => {
-            if *name == "Int" || *name == "Nat" {
-                ctx.i32_type(ir)
-            } else if *name == "Float" {
-                ctx.f64_type(ir)
-            } else if *name == "Bool" {
-                ctx.bool_type(ir)
-            } else if *name == "Bytes" {
-                ctx.bytes_type(ir)
-            } else if *name == "Rune" {
-                ctx.i32_type(ir)
-            } else if *name == "Nil" {
-                ctx.nil_type(ir)
-            } else {
-                ctx.anyref_type(ir)
-            }
-        }
-        TypeAnnotationKind::Path(_) => ctx.anyref_type(ir),
-        TypeAnnotationKind::App { ctor, .. } => convert_annotation_to_ir_type(ctx, ir, Some(ctor)),
-        _ => ctx.anyref_type(ir),
-    }
 }
 
 /// Validate that a natural number literal fits in the i31 range.
@@ -390,278 +220,34 @@ pub(super) fn validate_int_i31(
     Some(n as i32)
 }
 
-/// Check if a pattern is unconditional (always matches without runtime checks).
-pub(super) fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> bool {
-    matches!(
-        &*pattern.kind,
-        PatternKind::Wildcard | PatternKind::Bind { .. }
-    )
-}
-
-/// Create an identity `done_k` closure: `fn(result: anyref) -> anyref { return result }`.
-///
-/// The direct `func.func` definition may be shared by the compilation unit.
-/// Each call still creates a region-local `closure.new`, so SSA values do not
-/// cross region boundaries. This bypasses `lower_closure_lambda` and has a
-/// fixed, known signature:
-/// `(evidence, env, result) -> anyref`.
-///
-/// This is an internal mechanism closure, not a user lambda.
-pub(super) fn create_identity_done_k(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-) -> ValueRef {
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
-    use trunk_ir::dialect::{adt, func};
-
-    use tribute_ir::dialect::{ability, closure};
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
-    let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
-    let dk_func_ty = builder
-        .ctx
-        .func_type(builder.ir, &all_param_types, anyref_ty);
-    let module_block = builder
-        .ctx
-        .module_block()
-        .expect("module block should be set");
-
-    let dk_name = builder.ctx.identity_done_k_func(|name| {
-        // func.func @identity_dk(%evidence, %env, %result) -> anyref { return %result }
-        let dk_block = builder.ir.create_block(BlockData {
-            location,
-            args: vec![
-                BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                BlockArgData {
-                    ty: anyref_ty,
-                    attrs: Default::default(),
-                },
-                BlockArgData {
-                    ty: anyref_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let result_param = builder.ir.block_arg(dk_block, 2); // result is 3rd arg
-        let ret = func::r#return(builder.ir, location, [result_param]);
-        builder.ir.push_op(dk_block, ret.op_ref());
-
-        let dk_region = builder.ir.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![dk_block],
-            parent_op: None,
-        });
-        let dk_func_op = func::func(builder.ir, location, name, dk_func_ty, dk_region);
-
-        builder.ir.push_op(module_block, dk_func_op.op_ref());
-    });
-
-    // closure.new @identity_dk, null_env
-    let null_op = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);
-    builder.ir.push_op(builder.block, null_op.op_ref());
-    let null_env = null_op.result(builder.ir);
-
-    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let closure_op = closure::new(builder.ir, location, null_env, closure_ty, dk_name);
-    builder.ir.push_op(builder.block, closure_op.op_ref());
-    closure_op.result(builder.ir)
-}
-
-/// Return the compiler-private completion carrier type used only by #815
-/// handle boundaries. Its values remain physically `anyref`.
-pub(super) fn cps_control_type(builder: &mut IrBuilder<'_, '_>) -> TypeRef {
-    tribute_ir::dialect::ability::cps_control_type_ref(builder.ir)
-}
-
-/// Create a done continuation which constructs a private `Normal` completion.
-/// The resulting closure is only passed where the
-/// recipient is known to return `__tribute_cps_control`.
-pub(super) fn create_cps_control_done_k(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-) -> ValueRef {
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
-    use trunk_ir::dialect::{adt, func};
-
-    use tribute_ir::dialect::{ability, closure};
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-    let control_ty = cps_control_type(builder);
-    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
-    let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
-    let done_ty = builder
-        .ctx
-        .func_type(builder.ir, &all_param_types, anyref_ty);
-    let module_block = builder
-        .ctx
-        .module_block()
-        .expect("module block should be set");
-    let tag = Symbol::new(tribute_ir::dialect::ability::CPS_CONTROL_NORMAL_VARIANT);
-
-    let create = |name| {
-        let done_block = builder.ir.create_block(BlockData {
-            location,
-            args: vec![
-                BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                BlockArgData {
-                    ty: anyref_ty,
-                    attrs: Default::default(),
-                },
-                BlockArgData {
-                    ty: anyref_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let value = builder.ir.block_arg(done_block, 2);
-        let carrier = adt::variant_new(
-            builder.ir,
-            location,
-            vec![value],
-            anyref_ty,
-            control_ty,
-            tag,
-        );
-        builder.ir.push_op(done_block, carrier.op_ref());
-        let ret = func::r#return(builder.ir, location, [carrier.result(builder.ir)]);
-        builder.ir.push_op(done_block, ret.op_ref());
-        let done_region = builder.ir.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![done_block],
-            parent_op: None,
-        });
-        let done_func = func::func(builder.ir, location, name, done_ty, done_region);
-        builder.ir.push_op(module_block, done_func.op_ref());
+/// Resolve the ADT (enum/struct) type attribute for a constructor.
+pub(super) fn resolve_enum_type_attr<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    ctor_ty: crate::ast::Type<'db>,
+) -> TypeRef {
+    let result_ty = match ctor_ty.kind(ctx.db) {
+        TypeKind::Func { result, .. } => *result,
+        _ => ctor_ty,
     };
-    let done_name = builder.ctx.normal_done_k_func(create);
-
-    let null = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);
-    builder.ir.push_op(builder.block, null.op_ref());
-    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let closure = closure::new(
-        builder.ir,
-        location,
-        null.result(builder.ir),
-        closure_ty,
-        done_name,
-    );
-    builder.ir.push_op(builder.block, closure.op_ref());
-    closure.result(builder.ir)
+    ctx.resolve_adt_type(result_ty)
+        .unwrap_or_else(|| ctx.anyref_type(ir))
 }
 
-/// Create an invocation-local completion continuation for a general handler
-/// arm. Its captured i32 owner is the selected runtime evidence Marker tag;
-/// the owner itself is never boxed or allocated as a source value.
-pub(super) fn create_cps_escape_done_k(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-    owner_tag: ValueRef,
-) -> ValueRef {
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
-    use trunk_ir::dialect::{adt, func};
-
-    use tribute_ir::dialect::closure;
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-    let control_ty = cps_control_type(builder);
-    let block = builder.ir.create_block(BlockData {
-        location,
-        args: vec![BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        }],
-        ops: Default::default(),
-        parent_region: None,
-    });
-    let value = builder.ir.block_arg(block, 0);
-    let escape = adt::variant_new(
-        builder.ir,
-        location,
-        [owner_tag, value],
-        anyref_ty,
-        control_ty,
-        Symbol::new(tribute_ir::dialect::ability::CPS_CONTROL_ESCAPE_VARIANT),
-    );
-    builder.ir.push_op(block, escape.op_ref());
-    let ret = func::r#return(builder.ir, location, [escape.result(builder.ir)]);
-    builder.ir.push_op(block, ret.op_ref());
-    let body = builder.ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![block],
-        parent_op: None,
-    });
-    let func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-    let closure_ty = builder.ctx.closure_type(builder.ir, func_ty);
-    let closure = closure::lambda(builder.ir, location, [owner_tag], closure_ty, body);
-    builder.ir.push_op(builder.block, closure.op_ref());
-    closure.result(builder.ir)
-}
-
-/// Emit a call to the `done_k` continuation closure with a result value,
-/// followed by `func.return` with the call's result.
+/// Resolve an enum type attribute from a constructor identity.
 ///
-/// Get the evidence value from the current scope, or create an empty evidence
-/// placeholder (`adt.ref_null`) if not in an effectful context.
-///
-/// The placeholder is later resolved by `resolve_evidence` pass into a
-/// `func.call @__tribute_evidence_empty()`.
-pub(super) fn get_or_create_evidence(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-) -> ValueRef {
-    if let Some(ev) = builder.ctx.evidence {
-        return ev;
+/// Monomorphization rewrites constructor IDs to their specialized enum name,
+/// while a constructor's function type can remain polymorphic. The ID is the
+/// authoritative layout identity for construction and pattern matching.
+pub(super) fn resolve_enum_type_attr_for_constructor<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    resolved: &ResolvedRef<'db>,
+    fallback_ctor_ty: crate::ast::Type<'db>,
+) -> TypeRef {
+    match resolved {
+        ResolvedRef::Constructor { id, .. } => ctx.get_type(id.qualified(ctx.db)),
+        _ => None,
     }
-    let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(builder.ir);
-    let null_op = trunk_ir::dialect::adt::ref_null(builder.ir, location, evidence_ty, evidence_ty);
-    builder.ir.push_op(builder.block, null_op.op_ref());
-    null_op.result(builder.ir)
-}
-
-/// Used by effectful functions in CPS mode: instead of `func.return result`,
-/// they call `done_k(result)` and return the call's result.
-///
-/// Done_k closures use their own calling convention: `fn(result) -> anyref`.
-/// They are internal mechanism closures, not user-visible lambdas.
-pub(super) fn emit_done_k_call(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-    done_k: ValueRef,
-    result: ValueRef,
-) {
-    use trunk_ir::dialect::func;
-
-    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-
-    // Cast done_k to closure type so closure_lower can decompose the call.
-    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
-    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let done_k_closure = builder.cast_if_needed(location, done_k, closure_ty);
-    let result_anyref = builder.cast_if_needed(location, result, anyref_ty);
-
-    let call = func::call_indirect(
-        builder.ir,
-        location,
-        done_k_closure,
-        vec![result_anyref],
-        [anyref_ty],
-        None,
-    );
-    builder.ir.push_op(builder.block, call.op_ref());
-
-    let ret = func::r#return(builder.ir, location, [call.result(builder.ir)]);
-    builder.ir.push_op(builder.block, ret.op_ref());
+    .unwrap_or_else(|| resolve_enum_type_attr(ctx, ir, fallback_ctor_ty))
 }
