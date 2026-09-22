@@ -244,9 +244,9 @@ named pre-CPS boundary가 아니다.
 `tribute_control` operation 또는 `callable`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph와 logical `ability.*` dispatch 표면만
-남는다. `lower_closure_lambda`와 `prepare_closure_lowering`은 이 shared graph를
-준비하지만 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure
-type은 target ABI validation까지 유지한다. `lower_ability_perform`,
+남는다. `lower_closure_lambda`는 이 shared graph의 lambda를 추출하지만
+`closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
+target ABI validation까지 유지한다. `lower_ability_perform`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
 backend ABI로 제거한다.
@@ -337,7 +337,8 @@ layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-
 lowering은 실제 operand와 독립적으로 고정 signature를 구성하고 operand를 대조한다.
 서로 다른 유효한 `R`도 동일한 물리 ABI를 가지며 resume의 frame은 별도 dispatch
 입력이 아니다. `answer_type`은 일반 재귀 타입 변환에 참여하고 effect operation 제거
-시 소비한다. Raw target call에 복제하지 않으며 legacy dispatch 계약은 유지한다.
+시 소비한다. Raw target call에 복제하지 않으며 결과를 반환하는 별도 dispatch
+호환 경로를 두지 않는다.
 
 정의, lambda, adapter, direct/indirect call, return, suffix, resume, handle은
 ContinuationFrame을 같은 callable provenance로 전달한다. 내부 Dispatch를 effect operation이나
@@ -460,7 +461,9 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 
 `ability.handle_dispatch`는 runtime dispatch loop가 아니다. Effect 발생 시점에서
 이미 handler closure로 tail-call되므로,
-`lower_handle_dispatch`는 body result에 `done` handler를 적용하는 역할만 한다.
+`resolve_evidence`가 body의 evidence 인자를 명시적인 extended evidence로 대체한 뒤,
+`lower_handle_dispatch`는 resultless body를 바깥 block에 옮기고 delimiter를 제거한다.
+Done/escape transfer는 이미 shared CPS legalization이 구성한다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="shared-middle-end-pipeline"></a>
@@ -469,15 +472,13 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 
 Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 
-이 순서는 exact root contract가 있는 source-logical CPS route의 contract다.
-Compatibility route는 그 metadata 없이 기존 closure-lowering 순서를 유지하며,
-이를 이 target ABI boundary에 진입시키지 않는다.
+모든 source 함수는 이 shared route와 target ABI boundary를 통과한다. Root wrapper의
+생성은 exact root contract에 따르며, 별도의 호환 closure-lowering 경로는 두지 않는다.
 
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR)
 → tribute_control_to_cps
 → lower_closure_lambda
-→ prepare_closure_lowering
 → lower_ability_perform
 → resolve_evidence
 → lower_handle_dispatch

@@ -33,11 +33,11 @@
 //! Module (UFCS resolved)
 //!     │
 //!     ├─── Shared Pipeline (single arena session) ────┤
-//!     ▼ evidence_params (Phase 1)
-//! Module (evidence params added to signatures)
+//!     ▼ ast_to_ir
+//! Module (source-logical callable/control IR)
 //!     │
-//!     ▼ prepare_closure_lowering
-//! Module (semantic closure contracts prepared)
+//!     ▼ tribute_control_to_cps → lower_closure_lambda
+//! Module (physical callable contracts and explicit evidence)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
 //! Module (ability.perform/call lowered to effect.dispatch_*)
@@ -865,8 +865,7 @@ pub fn run_through_closure_lower(
             .with_compiler_intrinsics(compiler_intrinsics),
     )
     .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-    .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
     pm.nest::<func_dialect::Func>()
         .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     pm.run(&mut ctx, core_module)?;
@@ -927,16 +926,12 @@ fn run_shared_pipeline_with_options(
         .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
         .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
         .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
-        .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics)
-        // Evidence params are now inserted directly during ast_to_ir lowering.
-        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
+        .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
     install_debug_use_chain_verifier(&mut structural_pm);
     structural_pm.run(&mut ctx, core_module)?;
 
-    lower_legacy_closures_before_target_boundary(&mut ctx, m, core_module)?;
-
     // CPS effect handling, function-local phase: lower_ability_perform produces
-    // ability.evidence_lookup ops that resolve_evidence needs to process.
+    // explicit effect dispatches; evidence resolution then extends handler scopes.
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()
@@ -1113,8 +1108,8 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
-    let closure_boundary = enter_target_closure_storage_boundary(ctx, m)?;
-    finalize_target_closure_storage(ctx, m, closure_boundary);
+    enter_target_closure_storage_boundary(ctx, m)?;
+    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
 
     run_cleanup_passes(ctx, m);
     Ok(())
@@ -1132,7 +1127,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
-    let closure_boundary = enter_target_closure_storage_boundary(ctx, m)?;
+    enter_target_closure_storage_boundary(ctx, m)?;
 
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
@@ -1144,7 +1139,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
-    finalize_target_closure_storage(ctx, m, closure_boundary);
+    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
@@ -1159,39 +1154,13 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     Ok(())
 }
 
-/// Keep legacy closure lowering on its established shared path. Source-logical
-/// CPS modules cross the explicit target boundary below instead.
-fn lower_legacy_closures_before_target_boundary(
-    ctx: &mut IrContext,
-    m: Module,
-    core_module: core_dialect::Module,
-) -> PassResult {
-    if tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
-        return Ok(());
-    }
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
-    install_debug_use_chain_verifier(&mut pm);
-    pm.run(ctx, core_module)
-}
-
-#[derive(Clone, Copy)]
-enum TargetClosureStorageBoundary {
-    Legacy,
-    SourceLogicalCps,
-}
-
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
 /// observes semantic closure types first; `LowerPreparedClosures` then consumes
 /// any remaining closure operations before whole-module storage finalization.
 fn enter_target_closure_storage_boundary(
     ctx: &mut IrContext,
     m: Module,
-) -> Result<TargetClosureStorageBoundary, DumpIrError> {
-    if !tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
-        return Ok(TargetClosureStorageBoundary::Legacy);
-    }
+) -> Result<(), DumpIrError> {
     tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
     tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
     let core_module = core_dialect::Module::from_op(ctx, m.op())
@@ -1200,17 +1169,7 @@ fn enter_target_closure_storage_boundary(
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     install_debug_use_chain_verifier(&mut pm);
     pm.run(ctx, core_module)?;
-    Ok(TargetClosureStorageBoundary::SourceLogicalCps)
-}
-
-fn finalize_target_closure_storage(
-    ctx: &mut IrContext,
-    m: Module,
-    boundary: TargetClosureStorageBoundary,
-) {
-    if matches!(boundary, TargetClosureStorageBoundary::SourceLogicalCps) {
-        tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
-    }
+    Ok(())
 }
 
 /// Dump IR text after running the pipeline up to the target-specific passes.
@@ -1983,22 +1942,11 @@ mod tests {
     #[test]
     fn source_logical_root_defers_closure_storage_until_target_finalization() {
         let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
-        let core_module = core_dialect::Module::from_op(&ctx, module.op())
-            .expect("test module must be a core.module");
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
-
-        lower_legacy_closures_before_target_boundary(&mut ctx, module, core_module).unwrap();
-
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
-        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
-        assert!(matches!(
-            boundary,
-            TargetClosureStorageBoundary::SourceLogicalCps
-        ));
+        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
         let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
-        finalize_target_closure_storage(&mut ctx, module, boundary);
+        tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
 
         let physical = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(!physical.contains("closure.closure"), "{physical}");
@@ -2093,8 +2041,8 @@ mod tests {
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
         "#,
         );
-        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
-        finalize_target_closure_storage(&mut ctx, module, boundary);
+        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
             panic!(
                 "{error}\n{}",

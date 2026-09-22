@@ -36,14 +36,6 @@ mod effect {
     /// transfer.
     #[attr(ability_ref: Type, op_name: Symbol, answer_type: Type)]
     fn dispatch_cps(evidence: (), dispatch: (), resume: (), payload: ()) {}
-
-    /// Dispatch the explicitly legacy carrier-based general ability operation.
-    ///
-    /// This is intentionally distinct from [`dispatch_cps`]: the legacy
-    /// production route still has a result-producing continuation and must not
-    /// be inferred from the final resultless operation's shape.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn legacy_dispatch_cps(evidence: (), continuation: (), payload: ()) -> result {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
@@ -184,21 +176,6 @@ mod tests {
         assert_eq!(cps_wrapper.dispatch(&ctx), dispatch);
         assert_eq!(cps_wrapper.resume(&ctx), resume);
         assert_eq!(cps_wrapper.op_name(&ctx), Symbol::new("get"));
-
-        let legacy = super::legacy_dispatch_cps(
-            &mut ctx,
-            loc,
-            evidence,
-            dispatch,
-            payload,
-            anyref_ty,
-            ability,
-            Symbol::new("legacy_get"),
-        );
-        let legacy_wrapper =
-            super::LegacyDispatchCps::from_op(&ctx, legacy.op_ref()).expect("legacy dispatch");
-        assert_eq!(legacy_wrapper.continuation(&ctx), dispatch);
-        assert_eq!(ctx.value_ty(legacy_wrapper.result(&ctx)), anyref_ty);
 
         let tail_printed = print_op(&ctx, tail.op_ref());
         assert!(tail_printed.contains("effect.dispatch_tail"));

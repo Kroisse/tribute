@@ -4272,7 +4272,7 @@ mod tests {
             Some(0)
         );
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-        crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
+        crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let lowered = print_module(&ctx, module.op());
         assert!(
             !lowered.contains("closure.lambda") && !lowered.contains("closure.new"),
@@ -4377,7 +4377,6 @@ mod tests {
         // The converted contract must survive the passes that run before the
         // target ABI boundary, which validates and physicalizes it.
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
-        crate::closure_lower::prepare_closure_lowering(&mut ctx, module);
         crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).expect(
             "exact signatures must let the converted transfers cross the target ABI boundary",
         );
@@ -5574,7 +5573,7 @@ mod tests {
             lifted.contains("tribute.closure_environment_index = 0"),
             "{lifted}"
         );
-        crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
+        crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let lowered = print_module(&ctx, module.op());
         assert!(!lowered.contains("closure.new"), "{lowered}");
         assert!(lowered.contains("signature"), "{lowered}");

@@ -1,7 +1,7 @@
 //! Tests for evidence parameter presence on lifted lambdas.
 //!
 //! These tests verify that effectful lifted lambdas receive evidence as their
-//! first parameter during ast_to_ir lowering, and pure lambdas do not.
+//! first parameter during shared CPS legalization, and pure lambdas do not.
 
 mod common;
 
@@ -10,7 +10,6 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
-use tribute_passes::evidence::has_evidence_first_param;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -34,7 +33,11 @@ fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String,
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx).to_string();
             let func_ty = func_op.r#type(ctx);
-            let has_evidence = has_evidence_first_param(ctx, func_ty);
+            let signature = func::FuncSig::from_type_ref(ctx, func_ty).unwrap();
+            let has_evidence = signature
+                .inputs(ctx)
+                .first()
+                .is_some_and(|&ty| tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty));
             results.push((name, has_evidence));
         }
     }
@@ -251,8 +254,7 @@ fn main() { }
 // ========================================================================
 
 /// Pure top-level functions should not have evidence parameter.
-/// Note: lifted lambdas always get evidence as part of the closure calling
-/// convention (added by lower_closure_lambda), regardless of effectfulness.
+/// Lifted lambdas follow their declared calling convention as well.
 #[test]
 fn test_pure_toplevel_function_no_evidence() {
     let code = r#"
@@ -390,7 +392,7 @@ fn main() { }
 // Evidence Parameter Stability Test
 // ========================================================================
 
-/// Evidence params inserted in ast_to_ir should survive through lower_closure_lambda
+/// Evidence params inserted in shared CPS legalization should survive lambda lifting
 /// without duplication.
 #[test]
 fn test_evidence_param_count_stable_after_lambda_lifting() {

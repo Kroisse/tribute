@@ -1305,7 +1305,7 @@ fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
   }
 }"#,
     );
-    crate::closure_lower::lower_closures(&mut ctx, module).unwrap();
+    crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
 
     let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");

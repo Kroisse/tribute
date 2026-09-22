@@ -66,8 +66,8 @@ Only policies consumed by the active pipeline are exposed.
 │     - row variable: evidence 유지                           │
 │                                                             │
 │  3. Tail-Resumptive Optimization                            │
-│     - 즉시 resume하는 handler 감지                            │
-│     - shift/reset 제거                                      │
+│     - 선언된 fn operation의 direct dispatch                  │
+│     - operation kind 재분류 금지                              │
 │                                                             │
 │  4. Handler Inlining                                        │
 │     - 정적으로 알려진 handler 인라인                           │
@@ -191,68 +191,16 @@ fn map$Int$Int$State_Int(
 
 ## Tail-Resumptive Optimization
 
-### 정의
+### 선언 기반 dispatch
 
-Handler가 **항상 즉시 `k(value)`로 끝나면** (tail-resumptive), continuation 캡처가 불필요:
+`fn` operation은 typechecking이 확정한 tail-resumptive 계약으로 direct dispatch하고,
+`op` operation은 proper-tail CPS dispatch를 사용한다. Handler 본문의 마지막 호출이나
+resume 사용 횟수로 `op`을 `fn`으로 바꾸지 않는다. Shared legalization이 operation
+kind를 소비하는 방식은 [cps-effects.md](cps-effects.md)를 따른다.
 
-```rust
-// Tail-resumptive handler 예시
-{ State::get() -> k } -> k(current_state)
-{ State::put(v) -> k } -> k(())
-{ Logger::log(s) -> k } -> { emit_log(s); k(()) }
-```
-
-### 최적화 전
-
-```rust
-fn state_get(ev: *Evidence) -> s {
-    let marker = (*ev).get(STATE_ID)
-    let handler = marker.handler_dispatch
-    let k = capture_continuation()
-    handler(k, hash(State, get), Nil)
-}
-```
-
-### 최적화 후
-
-```rust
-fn state_get_optimized(ev: *Evidence) -> s {
-    let marker = (*ev).get(STATE_ID)
-    let tr_dispatch = marker.tr_dispatch_fn
-    tr_dispatch(hash(State, get), Nil)  // continuation capture 없음
-}
-```
-
-### 감지 알고리즘
-
-Handler의 각 case arm 분석:
-
-1. `-> k` 패턴인지 확인
-2. 본문이 `k(expr)`로만 끝나는지 확인
-3. `k`가 다른 곳에서 사용되지 않는지 확인
-
-```rust
-// Tail-resumptive
-{ A::op() -> k } -> k(value)           // OK
-{ A::op() -> k } -> { stmt; k(value) } // OK
-
-// Non-tail-resumptive
-{ A::op() -> k } -> { k(v1); k(v2) }   // k 두 번 사용
-{ A::op() -> k } -> { save(k); v }     // k 저장
-{ A::op() -> k } -> other_func(k)      // k 전달
-```
-
-### 대부분의 실용적 Ability는 Tail-Resumptive
-
-| Ability   | Tail-Resumptive? | 이유                     |
-| --------- | ---------------- | ------------------------ |
-| State     | Yes              | get/put 모두 즉시 resume |
-| Reader    | Yes              | ask는 즉시 resume        |
-| Writer    | Yes              | tell은 즉시 resume       |
-| Logger    | Yes              | log는 즉시 resume        |
-| Exception | No               | fail은 resume 안 함      |
-| Async     | 조건부           | await 후 resume          |
-| Choice    | No               | 여러 번 resume 가능      |
+적법화 이후의 일반 인라이닝과 dead-code elimination은 명시적인 IR 계약을 보존해야
+한다. 추가적인 continuation 최적화는 독립적인 호출자, 보존 조건과 검증 사례가 있을
+때만 적용하며 source operation kind를 재분류하는 별도 pass를 두지 않는다.
 
 ---
 
@@ -425,13 +373,10 @@ pub fn compile_optimized(db: &dyn Database, source: SourceCst) -> Module {
     // 2. Effect specialization
     let module = stage_effect_specialize(db, module);
 
-    // 3. Tail-resumptive analysis & optimization
-    let module = stage_tail_resumptive(db, module);
-
-    // 4. Handler inlining
+    // 3. Handler inlining
     let module = stage_handler_inline(db, module);
 
-    // 5. Standard optimizations
+    // 4. Standard optimizations
     let module = stage_dce(db, module);
     let module = stage_const_fold(db, module);
 
@@ -443,7 +388,6 @@ pub fn compile_optimized(db: &dyn Database, source: SourceCst) -> Module {
 
 - `crates/tribute-passes/src/monomorphize/` - 타입 monomorphization
 - `crates/tribute-passes/src/effect_specialize/` - 효과 특수화
-- `crates/tribute-passes/src/tail_resumptive/` - Tail-resumptive 분석
 - `crates/tribute-passes/src/inline/` - 인라이닝
 
 ---

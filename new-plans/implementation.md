@@ -874,8 +874,9 @@ Effect handling은 tail-call CPS로 구현한다.
 `lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
 `effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
-`lower_handle_dispatch`는 runtime dispatch loop가 아니라 body result에 `done`
-handler를 적용하는 정리 pass이다. Backend-specific lowering이 이후 `effect.*`를
+`lower_handle_dispatch`는 evidence 인자의 모든 사용이 치환된 resultless body를
+바깥 block에 옮기고 delimiter를 제거한다. Done/escape transfer는 shared CPS legalization이
+구성한다. Backend-specific lowering이 이후 `effect.*`를
 native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
 
 내부 ContinuationFrame dispatcher와 resultless `effect.dispatch_cps`, target handler
@@ -885,15 +886,14 @@ tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)
 
 **파이프라인 분기:**
 
-아래 target-side closure storage 순서는 exact root contract가 있는 source-logical
-CPS route에 적용한다. Compatibility route는 그 contract를 만들지 않는 동안 기존
-closure-lowering 순서를 유지한다.
+모든 source 함수는 아래 target-side closure storage 순서를 따른다. Root wrapper만
+exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 두지 않는다.
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → tribute_control_to_cps
-      → lower_closure_lambda → prepare_closure_lowering
-      → lower_ability_perform → resolve_evidence → lower_handle_dispatch
+      → lower_closure_lambda → lower_ability_perform
+      → resolve_evidence → lower_handle_dispatch
       → effect ABI verification → target ABI validation
 
 WASM:   → lower_closures_in_func → finalize_closure_storage_layout
@@ -1056,7 +1056,6 @@ flowchart TB
 | **직접형 제어** | `ast_to_ir` | typed AST | 검증된 `tribute_control` callable/control + 일반 value IR | frontend |
 | | `tribute_control_to_cps` | logical callable/control + typechecked metadata | physical func/closure/tail-call + logical `ability.*`; `effect.*` 없음 | shared |
 | **Closure (공유 후속)** | `lower_closure_lambda` | closure.lambda | func.func + closure.new | module-wide |
-| | `prepare_closure_lowering` | func.func_sig params | closure signatures | module-wide |
 | **Closure (target storage)** | `lower_closures_in_func` | closure.new/func/env after target ABI validation | indirect transfer + `_closure` storage ops | function-anchored |
 | | `finalize_closure_storage_layout` | remaining closure type surfaces | canonical `_closure` layout in aliases, signatures, values, and type attributes | module-wide |
 | **Ability/evidence (공유 후속)** | `lower_ability_perform` | ability.perform/call | effect.dispatch_* + evidence lookup | function-anchored |

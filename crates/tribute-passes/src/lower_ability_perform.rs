@@ -5,19 +5,16 @@
 //!
 //! ```text
 //! // Input:
-//! %yr = ability.perform %continuation, [%args...]
+//! ability.perform %evidence, %dispatch, %resume, [%args...]
 //!   { ability_ref: @State, op_name: @get }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
-//! %cont = cast %continuation to anyref
-//! effect.dispatch_cps %evidence, %cont, %payload
+//! effect.dispatch_cps %evidence, %dispatch, %resume, %payload
 //!   { ability_ref: @State, op_name: @get }
 //! ```
 //!
-//! The explicitly named legacy operations retain the old null-or-single-value
-//! carrier payload ABI until the frontend/pipeline migration is complete. Uses
-//! `PatternApplicator` for declarative op-level rewriting. This is an
+//! Uses `PatternApplicator` for declarative op-level rewriting. This is an
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
@@ -57,64 +54,8 @@ pub(crate) fn lower_ability_perform<S: RewriteScope>(ctx: &mut IrContext, scope:
     let types = CommonTypes::new(ctx);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerPerformPattern { types })
-        .add_pattern(LowerLegacyPerformPattern { types })
-        .add_pattern(LowerLegacyCallPattern { types })
         .add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, scope);
-}
-
-/// Pattern: explicit `ability.legacy_perform` → result-producing legacy ABI.
-struct LowerLegacyPerformPattern {
-    types: CommonTypes,
-}
-
-impl RewritePattern for LowerLegacyPerformPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if ability::LegacyPerform::from_op(ctx, op).is_err() {
-            return false;
-        }
-        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-        let Some((&continuation, values)) = operands.split_first() else {
-            return false;
-        };
-        if values.len() > 1 {
-            return false;
-        }
-        let Some(evidence) = find_evidence_from_op(ctx, op) else {
-            return false;
-        };
-        let result_types = ctx.op_result_types(op).to_vec();
-        let [result_ty] = result_types.as_slice() else {
-            return false;
-        };
-        let location = ctx.op(op).location;
-        let ability_ref = ctx.op(op).attributes.get_type("ability_ref").unwrap();
-        let op_name = ctx.op(op).attributes.get_symbol("op_name").unwrap();
-        let payload = pack_legacy_payload(ctx, rewriter, location, values, self.types.anyref);
-        let continuation =
-            core::unrealized_conversion_cast(ctx, location, continuation, self.types.anyref);
-        let continuation_value = continuation.result(ctx);
-        rewriter.insert_op(continuation.op_ref());
-        let dispatch = effect::legacy_dispatch_cps(
-            ctx,
-            location,
-            evidence,
-            continuation_value,
-            payload,
-            *result_ty,
-            ability_ref,
-            op_name,
-        );
-        let result = dispatch.result(ctx);
-        rewriter.insert_op(dispatch.op_ref());
-        rewriter.erase_op(vec![result]);
-        true
-    }
 }
 
 /// PassManager-friendly wrapper for [`lower_ability_perform`].
@@ -146,8 +87,6 @@ impl RewritePattern for LowerPerformPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if ability::Perform::from_op(ctx, op).is_err() {
-            // The explicit legacy carrier route is deliberately not coerced
-            // into the final ABI before #825/#826 own its migration.
             return false;
         }
 
@@ -199,52 +138,6 @@ impl RewritePattern for LowerPerformPattern {
         );
         rewriter.insert_op(dispatch_op.op_ref());
         rewriter.erase_op(vec![]);
-        true
-    }
-}
-
-/// Pattern: `ability.legacy_call` → the pre-CPS carrier dispatch ABI.
-///
-/// Preserve its historical direct result mapping so the compatibility bridge
-/// remains byte-for-byte transparent to later legacy consumers.
-struct LowerLegacyCallPattern {
-    types: CommonTypes,
-}
-
-impl RewritePattern for LowerLegacyCallPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if ability::LegacyCall::from_op(ctx, op).is_err() {
-            return false;
-        }
-
-        let location = ctx.op(op).location;
-        let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
-        let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
-        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-        if operands.len() > 1 {
-            return false;
-        }
-        let Some(evidence_val) = find_evidence_from_op(ctx, op) else {
-            return false;
-        };
-        let payload = pack_legacy_payload(ctx, rewriter, location, &operands, self.types.anyref);
-        let dispatch = effect::dispatch_tail(
-            ctx,
-            location,
-            evidence_val,
-            payload,
-            self.types.anyref,
-            ability_ref_type,
-            op_name_sym,
-        );
-        let result = dispatch.result(ctx);
-        rewriter.insert_op(dispatch.op_ref());
-        rewriter.erase_op(vec![result]);
         true
     }
 }
@@ -359,24 +252,6 @@ fn pack_payload(
     let erased = core::unrealized_conversion_cast(ctx, location, payload.result(ctx), anyref);
     rewriter.insert_op(erased.op_ref());
     erased.result(ctx)
-}
-
-fn pack_legacy_payload(
-    ctx: &mut IrContext,
-    rewriter: &mut PatternRewriter<'_>,
-    location: trunk_ir::types::Location,
-    values: &[ValueRef],
-    anyref: TypeRef,
-) -> ValueRef {
-    if let Some(&value) = values.first() {
-        let erased = core::unrealized_conversion_cast(ctx, location, value, anyref);
-        rewriter.insert_op(erased.op_ref());
-        erased.result(ctx)
-    } else {
-        let null = adt::ref_null(ctx, location, anyref, anyref);
-        rewriter.insert_op(null.op_ref());
-        null.result(ctx)
-    }
 }
 
 /// Find the evidence parameter by walking up from the op to its enclosing func.
@@ -579,101 +454,6 @@ mod tests {
         assert!(ir.contains("core.unrealized_conversion_cast"), "{ir}");
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &ir);
-    }
-
-    #[test]
-    fn legacy_perform_uses_only_the_explicit_legacy_dispatch_abi() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-        let module = parse_test_module(
-            &mut ctx,
-            &format!(
-                r#"core.module @test {{
-  func.func @legacy_perform(%ev: {ev_ty}) -> tribute_rt.anyref {{
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %result = ability.legacy_perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
-    func.return %result
-  }}
-  func.func @legacy_call(%ev: {ev_ty}, %value: core.i32) -> tribute_rt.anyref {{
-    %result = ability.legacy_call %value {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
-    func.return %result
-  }}
-}}"#
-            ),
-        );
-
-        lower_ability_perform(&mut ctx, module);
-
-        let ir = print_module(&ctx, module.op());
-        assert!(!ir.contains("ability.legacy_perform"));
-        assert!(!ir.contains("ability.legacy_call"));
-        assert!(ir.contains("effect.legacy_dispatch_cps"));
-        assert!(ir.contains("effect.dispatch_tail"));
-        assert!(!ir.contains("effect.dispatch_cps"));
-        let mut reparsed = IrContext::new();
-        parse_test_module(&mut reparsed, &ir);
-    }
-
-    #[test]
-    fn malformed_legacy_performs_remain_unlowered() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-        let module = parse_test_module(
-            &mut ctx,
-            &format!(
-                r#"core.module @test {{
-  func.func @missing_evidence() -> tribute_rt.anyref {{
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %result = ability.legacy_perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
-    func.return %result
-  }}
-  func.func @multiple_payloads(%ev: {ev_ty}) -> tribute_rt.anyref {{
-    %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %left = arith.const {{value = 1}} : core.i32
-    %right = arith.const {{value = 2}} : core.i32
-    %result = ability.legacy_perform %k, %left, %right {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
-    func.return %result
-  }}
-}}"#
-            ),
-        );
-
-        lower_ability_perform(&mut ctx, module);
-
-        let output = print_module(&ctx, module.op());
-        assert_eq!(
-            output.matches("ability.legacy_perform").count(),
-            2,
-            "{output}"
-        );
-        assert!(!output.contains("effect.legacy_dispatch_cps"), "{output}");
-    }
-
-    #[test]
-    fn malformed_legacy_call_remains_byte_for_byte_unchanged() {
-        let mut ctx = IrContext::new();
-        init_common_types(&mut ctx);
-        let ev_ty = evidence_type_str();
-        let module = parse_test_module(
-            &mut ctx,
-            &format!(
-                r#"core.module @test {{
-  func.func @legacy_call(%ev: {ev_ty}) -> tribute_rt.anyref {{
-    %left = arith.const {{value = 1}} : core.i32
-    %right = arith.const {{value = 2}} : core.i32
-    %result = ability.legacy_call %left, %right {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
-    func.return %result
-  }}
-}}"#
-            ),
-        );
-        let before = print_module(&ctx, module.op());
-
-        lower_ability_perform(&mut ctx, module);
-
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]

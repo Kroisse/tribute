@@ -11,7 +11,7 @@
 //! }
 //!
 //! // After (inside func.func @foo):
-//! func.func @foo::__clam_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
+//! func.func @foo::__clam_0(%env: anyref, %param: anyref) -> anyref {
 //!   %env_cast = adt.ref_cast %env : env_struct
 //!   %x = adt.struct_get %env_cast, 0
 //!   %y = adt.struct_get %env_cast, 1
@@ -40,8 +40,8 @@ use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 
+use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
-use tribute_ir::dialect::{ability, closure};
 
 /// Lower all `closure.lambda` ops in the module to `func.func` + `closure.new`.
 pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
@@ -155,8 +155,6 @@ fn lower_single_lambda(
     // insertion slot. Do not recover hidden operands from a lambda's shape.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let convention = get_calling_convention(ctx, lambda_ref);
-    let legacy_compatibility =
-        convention.is_none() && get_physical_closure_convention(ctx, result_ty).is_none();
     let environment_index = match (convention, get_physical_closure_convention(ctx, result_ty)) {
         (Some(convention), Some(provenance)) if provenance == convention => {
             let Some(index) = get_physical_closure_environment_index(ctx, result_ty) else {
@@ -164,12 +162,6 @@ fn lower_single_lambda(
             };
             index
         }
-        // Source lambdas predate exact outer-type provenance, but their
-        // operation metadata still fixes the existing environment slot.
-        (Some(convention), None) => convention.closure_environment_index(),
-        // The legacy frontend's untagged continuations have a fixed
-        // `(evidence, environment, source...)` compatibility ABI.
-        (None, None) => 1,
         _ => return false,
     };
     let Some(function_ty) =
@@ -186,14 +178,9 @@ fn lower_single_lambda(
     if callable.inputs(ctx) != orig_param_types.as_slice() {
         return false;
     }
-    if !legacy_compatibility && environment_index > orig_param_count {
+    if environment_index > orig_param_count {
         return false;
     }
-    let evidence_ty = legacy_compatibility.then(|| ability::evidence_adt_type_ref(ctx));
-    let implicit_evidence = evidence_ty
-        .and_then(|evidence_ty| nearest_physical_evidence_arg(ctx, lambda_ref, evidence_ty))
-        .filter(|evidence| !captures.contains(evidence));
-
     // Build env struct type for captures.
     let env_struct_ty = if captures.is_empty() {
         None
@@ -218,20 +205,12 @@ fn lower_single_lambda(
             env_struct_ty,
             orig_param_types: &orig_param_types,
             environment_index,
-            legacy_compatibility,
-            implicit_evidence,
             anyref_ty,
         },
     );
 
     let mut all_param_tys = orig_param_types.clone();
-    all_param_tys.insert(
-        environment_index - usize::from(legacy_compatibility),
-        anyref_ty,
-    );
-    if legacy_compatibility {
-        all_param_tys.insert(0, ability::evidence_adt_type_ref(ctx));
-    }
+    all_param_tys.insert(environment_index, anyref_ty);
     let mut type_attrs = ctx.types.get(function_ty).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
@@ -301,8 +280,6 @@ struct LiftBodyParams<'a> {
     env_struct_ty: Option<TypeRef>,
     orig_param_types: &'a [TypeRef],
     environment_index: usize,
-    legacy_compatibility: bool,
-    implicit_evidence: Option<ValueRef>,
     anyref_ty: TypeRef,
 }
 
@@ -319,8 +296,6 @@ fn build_lifted_body(
     let env_struct_ty = params.env_struct_ty;
     let orig_param_types = params.orig_param_types;
     let environment_index = params.environment_index;
-    let legacy_compatibility = params.legacy_compatibility;
-    let implicit_evidence = params.implicit_evidence;
     let anyref_ty = params.anyref_ty;
     let orig_blocks: Vec<BlockRef> = ctx.region(orig_body).blocks.to_vec();
     let orig_entry = orig_blocks[0];
@@ -337,24 +312,13 @@ fn build_lifted_body(
             attrs: ctx.block(orig_entry).args[index].attrs.clone(),
         })
         .collect();
-    let logical_environment_index = environment_index - usize::from(legacy_compatibility);
     new_entry_args.insert(
-        logical_environment_index,
+        environment_index,
         BlockArgData {
             ty: anyref_ty,
             attrs: make_bind_name_attrs("__env"),
         },
     );
-    if legacy_compatibility {
-        new_entry_args.insert(
-            0,
-            BlockArgData {
-                ty: ability::evidence_adt_type_ref(ctx),
-                attrs: make_bind_name_attrs("__evidence"),
-            },
-        );
-    }
-
     let new_entry = ctx.create_block(BlockData {
         location,
         args: new_entry_args,
@@ -367,14 +331,9 @@ fn build_lifted_body(
     // Map logical closure args around the inserted environment parameter.
     for i in 0..orig_param_count {
         let old_arg = ctx.block_arg(orig_entry, i as u32);
-        let new_index =
-            usize::from(legacy_compatibility) + i + usize::from(i >= logical_environment_index);
+        let new_index = i + usize::from(i >= environment_index);
         let new_arg = ctx.block_arg(new_entry, new_index as u32);
         mapping.map_value(old_arg, new_arg);
-    }
-
-    if let Some(outer_evidence) = implicit_evidence {
-        mapping.map_value(outer_evidence, ctx.block_arg(new_entry, 0));
     }
 
     // Insert env extraction ops at the start of the new entry block.
@@ -461,27 +420,6 @@ fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
     "<anon>".to_string()
 }
 
-/// Return the nearest physical function's evidence entry argument for the
-/// legacy frontend continuation ABI.
-fn nearest_physical_evidence_arg(
-    ctx: &IrContext,
-    op: OpRef,
-    evidence_ty: TypeRef,
-) -> Option<ValueRef> {
-    let mut current_op = op;
-    while let Some(block) = ctx.op(current_op).parent_block {
-        let region = ctx.block(block).parent_region?;
-        let parent = ctx.region(region).parent_op?;
-        if let Ok(function) = func::Func::from_op(ctx, parent) {
-            let entry = *ctx.region(function.body(ctx)).blocks.first()?;
-            let evidence = ctx.block_args(entry).first().copied()?;
-            return (ctx.value_ty(evidence) == evidence_ty).then_some(evidence);
-        }
-        current_op = parent;
-    }
-    None
-}
-
 /// Generates unique lifted lambda names, scoped by parent function.
 struct LambdaNamer {
     counters: HashMap<String, u32>,
@@ -540,7 +478,6 @@ fn make_bind_name_attrs(name: &str) -> AttributeMap {
 mod tests {
     use super::*;
     use tribute_core::CallingConvention;
-    use tribute_ir::dialect::ability;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::printer::print_module;
@@ -694,74 +631,86 @@ mod tests {
     }
 
     #[test]
-    fn missing_physical_environment_index_leaves_lambda_unchanged() {
-        let (mut ctx, loc) = test_ctx();
-        let (module, module_block) = make_module(&mut ctx, loc);
-        let anyref_ty = make_anyref_ty(&mut ctx);
-        let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
+    fn incomplete_or_mismatched_physical_contract_leaves_lambda_unchanged() {
+        for (provenance, environment_index) in [
+            (Some(CallingConvention::Cps), None),
+            (None, Some(0)),
+            (Some(CallingConvention::Direct), Some(0)),
+        ] {
+            let (mut ctx, loc) = test_ctx();
+            let (module, module_block) = make_module(&mut ctx, loc);
+            let anyref_ty = make_anyref_ty(&mut ctx);
+            let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
 
-        // A physical CPS closure without its exact environment slot must fail
-        // closed before the lambda body is mutated.
-        let outer_entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![BlockArgData {
-                ty: evidence_ty,
-                attrs: make_bind_name_attrs("evidence"),
-            }],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let outer_evidence = ctx.block_arg(outer_entry, 0);
+            // Incomplete or conflicting provenance must not trigger the retired
+            // implicit evidence and environment inference path.
+            let outer_entry = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![BlockArgData {
+                    ty: evidence_ty,
+                    attrs: make_bind_name_attrs("evidence"),
+                }],
+                ops: Default::default(),
+                parent_region: None,
+            });
+            let outer_evidence = ctx.block_arg(outer_entry, 0);
 
-        let lambda_entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let cast = core::unrealized_conversion_cast(&mut ctx, loc, outer_evidence, anyref_ty);
-        ctx.push_op(lambda_entry, cast.op_ref());
-        let cast_result = cast.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [cast_result]);
-        ctx.push_op(lambda_entry, ret.op_ref());
-        let lambda_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![lambda_entry],
-            parent_op: None,
-        });
+            let lambda_entry = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: Default::default(),
+                parent_region: None,
+            });
+            let cast = core::unrealized_conversion_cast(&mut ctx, loc, outer_evidence, anyref_ty);
+            ctx.push_op(lambda_entry, cast.op_ref());
+            let cast_result = cast.result(&ctx);
+            let ret = func::r#return(&mut ctx, loc, [cast_result]);
+            ctx.push_op(lambda_entry, ret.op_ref());
+            let lambda_body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: trunk_ir::smallvec::smallvec![lambda_entry],
+                parent_op: None,
+            });
 
-        let lambda_func_ty = func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
-        let lambda_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-                .param(lambda_func_ty.as_type_ref())
-                .attr(
+            let lambda_func_ty =
+                func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]);
+            let mut closure_type =
+                TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
+                    .param(lambda_func_ty.as_type_ref());
+            if let Some(provenance) = provenance {
+                closure_type = closure_type.attr(
                     tribute_core::CALLING_CONVENTION_ATTR,
-                    Attribute::Int(CallingConvention::Cps as i128),
-                )
-                .build(),
-        );
-        let lambda = closure::lambda(
-            &mut ctx,
-            loc,
-            Vec::<ValueRef>::new(),
-            lambda_ty,
-            lambda_body,
-        );
-        set_calling_convention(&mut ctx, lambda.op_ref(), CallingConvention::Cps);
-        ctx.push_op(outer_entry, lambda.op_ref());
+                    Attribute::Int(provenance as i128),
+                );
+            }
+            if let Some(index) = environment_index {
+                closure_type =
+                    closure_type.attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(index));
+            }
+            let lambda_ty = ctx.types.intern(closure_type.build());
+            let lambda = closure::lambda(
+                &mut ctx,
+                loc,
+                Vec::<ValueRef>::new(),
+                lambda_ty,
+                lambda_body,
+            );
+            set_calling_convention(&mut ctx, lambda.op_ref(), CallingConvention::Cps);
+            ctx.push_op(outer_entry, lambda.op_ref());
 
-        let outer_body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![outer_entry],
-            parent_op: None,
-        });
-        let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
-        let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
-        ctx.push_op(module_block, outer.op_ref());
+            let outer_body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: trunk_ir::smallvec::smallvec![outer_entry],
+                parent_op: None,
+            });
+            let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
+            let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
+            ctx.push_op(module_block, outer.op_ref());
 
-        let before = print_module(&ctx, module.op());
-        lower_closure_lambda(&mut ctx, module);
-        assert_eq!(print_module(&ctx, module.op()), before);
+            let before = print_module(&ctx, module.op());
+            lower_closure_lambda(&mut ctx, module);
+            assert_eq!(print_module(&ctx, module.op()), before);
+        }
     }
 
     #[test]

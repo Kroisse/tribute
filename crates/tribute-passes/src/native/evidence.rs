@@ -18,16 +18,10 @@
 //!    `effect.dispatch_cps` are lowered to the native evidence runtime ABI and
 //!    closure indirect calls.
 //!
-//! 4. **TR dispatch field** — `adt.struct_get(marker, MarkerField::TrDispatchFn)` on evidence_lookup
-//!    results is rewritten to `func.call @__tribute_evidence_lookup_tr(ev, ability_id)`.
-
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 use tribute_core::{get_physical_closure_convention, set_calling_convention};
-use tribute_ir::dialect::ability::{
-    self, MarkerField, compute_op_idx, evidence_abi, evidence_runtime_symbols,
-};
+use tribute_ir::dialect::ability::{self, compute_op_idx, evidence_abi, evidence_runtime_symbols};
 use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -287,7 +281,6 @@ fn native_effect_abi_target() -> ConversionTarget {
         .recursive_legal_op("func", "func")
         .illegal_op("effect", "extend")
         .illegal_op("effect", "dispatch_tail")
-        .illegal_op("effect", "legacy_dispatch_cps")
         .illegal_op("effect", "dispatch_cps")
 }
 
@@ -299,86 +292,9 @@ fn lower_effect_abi_to_native(
         .with_target(native_effect_abi_target())
         .add_pattern(LowerEffectExtendToNative)
         .add_pattern(LowerEffectDispatchTailToNative)
-        .add_pattern(LowerLegacyEffectDispatchCpsToNative)
         .add_pattern(LowerEffectDispatchCpsToNative)
         .apply_partial_conversion(ctx, func_op, "native-evidence-effect-abi")?;
     Ok(())
-}
-
-/// Lower only the explicit carrier ABI to its historical result-producing call.
-struct LowerLegacyEffectDispatchCpsToNative;
-
-impl RewritePattern for LowerLegacyEffectDispatchCpsToNative {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(dispatch_op) = effect::LegacyDispatchCps::from_op(ctx, op) else {
-            return false;
-        };
-        let result_types = ctx.op_result_types(op).to_vec();
-        let [result_ty] = result_types.as_slice() else {
-            return false;
-        };
-        let loc = ctx.op(op).location;
-        let ptr_ty = core_ptr_type(ctx);
-        let i32_ty = core_i32_type(ctx);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let ability_ref = dispatch_op.ability_ref(ctx);
-        let ability_id = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-        let ability_id_value = ability_id.result(ctx);
-        rewriter.insert_op(ability_id.op_ref());
-        let handler = func::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_value],
-            [ptr_ty],
-            Symbol::new(evidence_abi::LOOKUP_HANDLER),
-        );
-        let handler_value = handler.result(ctx);
-        rewriter.insert_op(handler.op_ref());
-        let prompt = func::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_value],
-            [i32_ty],
-            Symbol::new(evidence_abi::LOOKUP),
-        );
-        let prompt_value = prompt.result(ctx);
-        rewriter.insert_op(prompt.op_ref());
-        let op_idx = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-        let op_idx_value = op_idx.result(ctx);
-        rewriter.insert_op(op_idx.op_ref());
-        let fn_ptr = adt::struct_get(ctx, loc, handler_value, i32_ty, closure_ty, 0);
-        let env = adt::struct_get(ctx, loc, handler_value, anyref_ty, closure_ty, 1);
-        let fn_ptr_value = fn_ptr.result(ctx);
-        let env_value = env.result(ctx);
-        rewriter.insert_op(fn_ptr.op_ref());
-        rewriter.insert_op(env.op_ref());
-        let call = func::call_indirect(
-            ctx,
-            loc,
-            fn_ptr_value,
-            [
-                dispatch_op.evidence(ctx),
-                env_value,
-                dispatch_op.continuation(ctx),
-                prompt_value,
-                op_idx_value,
-                dispatch_op.payload(ctx),
-            ],
-            [*result_ty],
-            None,
-        );
-        attach_exact_indirect_signature(ctx, call.op_ref());
-        let result = call.result(ctx);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![result]);
-        true
-    }
 }
 
 #[derive(Debug)]
@@ -423,11 +339,6 @@ fn rewrite_evidence_ops_in_region(ctx: &mut IrContext, region: RegionRef) -> Pas
 /// Check if a type is an evidence type in arena (adt.array<ability.evidence>).
 fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
-}
-
-/// Check if a type is a Marker type in arena.
-fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::dialect::ability::is_marker_type_ref(ctx, ty)
 }
 
 fn op_idx_const(
@@ -697,15 +608,6 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
     let ptr_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-
-    // Track Marker struct_new results → their operands
-    let mut marker_struct_operands: HashMap<ValueRef, Vec<ValueRef>> = HashMap::new();
-    // Track evidence_lookup results for struct_get elimination.
-    // Maps result value → (ev, ability_id) operands for __tribute_evidence_lookup_tr calls.
-    let mut evidence_lookup_results: HashMap<ValueRef, (ValueRef, ValueRef)> = HashMap::new();
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
 
@@ -718,7 +620,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         let loc = op_data.location;
 
         // --- adt.ref_null with evidence type → func.call @__tribute_evidence_empty ---
-        // Closure lowering creates `adt.ref_null {type = evidence}` for null evidence.
+        // The root CPS bridge creates `adt.ref_null {type = evidence}` for empty evidence.
         // Without this, the null ptr gets unboxed via `clif.load` which dereferences null.
         if dialect == Symbol::new("adt") && name == Symbol::new("ref_null") {
             let result_types = ctx.op_result_types(op).to_vec();
@@ -761,173 +663,6 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             }
         }
 
-        // --- Track adt.struct_new that produces a Marker ---
-        if dialect == Symbol::new("adt") && name == Symbol::new("struct_new") {
-            let result_types = ctx.op_result_types(op).to_vec();
-            if !result_types.is_empty() && is_marker_type(ctx, result_types[0]) {
-                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                let result_val = ctx.op_result(op, 0);
-                marker_struct_operands.insert(result_val, operands);
-                ops_to_erase.push(op);
-                continue;
-            }
-        }
-
-        // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 ---
-        if dialect == Symbol::new("func")
-            && name == Symbol::new("call")
-            && let Ok(call_op) = func::Call::from_op(ctx, op)
-        {
-            let callee = call_op.callee(ctx);
-
-            if callee == Symbol::new(evidence_abi::LOOKUP) {
-                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                if operands.len() != 2 {
-                    return Err(native_evidence_rewrite_error(
-                        op,
-                        loc,
-                        format!(
-                            "{} expects 2 operands, got {}",
-                            evidence_abi::LOOKUP,
-                            operands.len()
-                        ),
-                    ));
-                }
-                let ev_val = operands[0];
-                let ability_id_val = operands[1];
-                let old_result = ctx.op_result(op, 0);
-                let new_call = func::call(
-                    ctx,
-                    loc,
-                    operands,
-                    [i32_ty],
-                    Symbol::new(evidence_abi::LOOKUP),
-                );
-                let new_result = new_call.result(ctx);
-                ctx.insert_op_before(block, op, new_call.op_ref());
-                evidence_lookup_results.insert(new_result, (ev_val, ability_id_val));
-                ctx.replace_all_uses(old_result, new_result);
-                ops_to_erase.push(op);
-                continue;
-            }
-
-            // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → native ABI args ---
-            if callee == Symbol::new(evidence_abi::EXTEND) {
-                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                if operands.len() != 2 {
-                    continue;
-                }
-
-                let ev_val = operands[0];
-                let marker_val = operands[1];
-
-                let Some(fields) = marker_struct_operands.get(&marker_val) else {
-                    return Err(native_evidence_rewrite_error(
-                        op,
-                        loc,
-                        format!(
-                            "missing marker decomposition for marker_val={marker_val:?}; \
-                             the adt.struct_new that produced this marker was not recorded"
-                        ),
-                    ));
-                };
-                if fields.len() != tribute_ir::dialect::ability::MARKER_FIELD_COUNT {
-                    return Err(native_evidence_rewrite_error(
-                        op,
-                        loc,
-                        format!(
-                            "marker operand count must match canonical layout; expected {}, got {}",
-                            tribute_ir::dialect::ability::MARKER_FIELD_COUNT,
-                            fields.len()
-                        ),
-                    ));
-                }
-                let mut args = vec![ev_val];
-                args.extend_from_slice(fields);
-                let old_result = ctx.op_result(op, 0);
-                let new_call =
-                    func::call(ctx, loc, args, [ptr_ty], Symbol::new(evidence_abi::EXTEND));
-                let new_result = new_call.result(ctx);
-                ctx.insert_op_before(block, op, new_call.op_ref());
-                ctx.replace_all_uses(old_result, new_result);
-                ops_to_erase.push(op);
-                continue;
-            }
-        }
-
-        // --- Eliminate adt.struct_get on evidence_lookup results ---
-        if dialect == Symbol::new("adt") && name == Symbol::new("struct_get") {
-            let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-            if !operands.is_empty() {
-                let base_val = operands[0];
-                if let Some(&(ev_val, ability_id_val)) = evidence_lookup_results.get(&base_val) {
-                    let field_attr = ctx.op(op).attributes.get("field");
-                    let field_idx = match field_attr {
-                        Some(Attribute::Int(bits)) => *bits,
-                        other => {
-                            return Err(native_evidence_rewrite_error(
-                                op,
-                                loc,
-                                format!(
-                                    "expected Int field attribute on adt.struct_get, got {other:?}"
-                                ),
-                            ));
-                        }
-                    };
-                    match field_idx {
-                        field if field == i128::from(MarkerField::PromptTag.index()) => {
-                            // prompt_tag — __tribute_evidence_lookup already returns this
-                            let old_result = ctx.op_result(op, 0);
-                            ctx.replace_all_uses(old_result, base_val);
-                            evidence_lookup_results.insert(old_result, (ev_val, ability_id_val));
-                            ops_to_erase.push(op);
-                        }
-                        field if field == i128::from(MarkerField::TrDispatchFn.index()) => {
-                            // tr_dispatch_fn — call __tribute_evidence_lookup_tr
-                            let old_result = ctx.op_result(op, 0);
-                            let tr_call = func::call(
-                                ctx,
-                                loc,
-                                [ev_val, ability_id_val],
-                                [ptr_ty],
-                                Symbol::new(evidence_abi::LOOKUP_TR),
-                            );
-                            let new_result = tr_call.result(ctx);
-                            ctx.insert_op_before(block, op, tr_call.op_ref());
-                            ctx.replace_all_uses(old_result, new_result);
-                            ops_to_erase.push(op);
-                        }
-                        field if field == i128::from(MarkerField::HandlerDispatch.index()) => {
-                            // handler_dispatch — call __tribute_evidence_lookup_handler
-                            let old_result = ctx.op_result(op, 0);
-                            let handler_call = func::call(
-                                ctx,
-                                loc,
-                                [ev_val, ability_id_val],
-                                [ptr_ty],
-                                Symbol::new(evidence_abi::LOOKUP_HANDLER),
-                            );
-                            let new_result = handler_call.result(ctx);
-                            ctx.insert_op_before(block, op, handler_call.op_ref());
-                            ctx.replace_all_uses(old_result, new_result);
-                            ops_to_erase.push(op);
-                        }
-                        _ => {
-                            return Err(native_evidence_rewrite_error(
-                                op,
-                                loc,
-                                format!(
-                                    "unexpected struct_get field {field_idx} on evidence_lookup \
-                                     result"
-                                ),
-                            ));
-                        }
-                    }
-                    continue;
-                }
-            }
-        }
-
         // --- Recurse into nested regions, but leave nested functions for their
         // own function-scoped pass invocation.
         if func::Func::from_op(ctx, op).is_ok() {
@@ -950,13 +685,10 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
 mod tests {
     use super::*;
     use std::ops::ControlFlow;
-    use trunk_ir::Span;
-    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::op_interface::IndirectCallLikeModel;
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
-    use trunk_ir::smallvec::smallvec;
     use trunk_ir::walk::{WalkAction, walk_op};
 
     fn dispatch_module() -> &'static str {
@@ -1002,13 +734,6 @@ mod tests {
     fn entry_arg(ctx: &IrContext, func_op: func::Func, index: usize) -> ValueRef {
         let entry = ctx.region(func_op.body(ctx)).blocks[0];
         ctx.block_args(entry)[index]
-    }
-
-    fn test_ctx() -> (IrContext, Location) {
-        let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("file:///test.trb".to_owned());
-        let loc = Location::new(path, Span::new(0, 0));
-        (ctx, loc)
     }
 
     #[test]
@@ -1100,58 +825,6 @@ mod tests {
         let ir_text = print_module(&ctx, module.op());
         assert_eq!(ir_text.matches("effect.dispatch_tail").count(), 1);
         assert!(ir_text.contains("__tribute_evidence_lookup"));
-    }
-
-    #[test]
-    fn pass_adapter_reports_malformed_legacy_extend() {
-        let (mut ctx, loc) = test_ctx();
-        let evidence_ty = ability::evidence_adt_type_ref(&mut ctx);
-        let marker_ty = ability::marker_adt_type_ref(&mut ctx);
-        let func_ty =
-            func::func_sig(&mut ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![
-                BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                BlockArgData {
-                    ty: marker_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let ev = ctx.block_arg(entry, 0);
-        let marker = ctx.block_arg(entry, 1);
-        let extend_call = func::call(
-            &mut ctx,
-            loc,
-            [ev, marker],
-            [evidence_ty],
-            Symbol::new(evidence_abi::EXTEND),
-        );
-        let extend_result = extend_call.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [extend_result]);
-        ctx.push_op(entry, extend_call.op_ref());
-        ctx.push_op(entry, ret.op_ref());
-
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("malformed"), func_ty, body);
-
-        let mut pass = LowerEvidenceToNative;
-        let err = pass
-            .run(&mut ctx, func_op)
-            .expect_err("malformed legacy evidence extend should report a pass error");
-
-        assert!(err.to_string().contains("missing marker decomposition"));
     }
 
     #[test]
@@ -1333,50 +1006,5 @@ mod tests {
             output.contains("tribute.calling_convention = 2"),
             "{output}"
         );
-    }
-
-    #[test]
-    fn legacy_dispatch_lowers_to_an_ordinary_indirect_call() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @run(%ev: core.ptr, %continuation: tribute_rt.anyref, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.legacy_dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-    func.return %result
-  }
-}"#,
-        );
-        let run = func_by_name_recursive(&ctx, module, "run");
-        lower_evidence_to_native_func(&mut ctx, run);
-        let output = print_module(&ctx, module.op());
-        assert!(!output.contains("effect.legacy_dispatch_cps"), "{output}");
-        assert!(output.contains("func.call_indirect"), "{output}");
-        assert!(!output.contains("func.tail_call_indirect"), "{output}");
-    }
-
-    #[test]
-    fn multi_result_legacy_dispatch_fails_before_native_mutation() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @run(%ev: core.ptr, %continuation: tribute_rt.anyref, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %first, %second = effect.legacy_dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref, tribute_rt.anyref
-    func.return %first
-  }
-}"#,
-        );
-        let run = func_by_name_recursive(&ctx, module, "run");
-        let before = print_module(&ctx, module.op());
-
-        let error = try_lower_evidence_to_native_func(&mut ctx, run)
-            .expect_err("legacy dispatch must have exactly one result");
-
-        assert!(
-            error.to_string().contains("effect.legacy_dispatch_cps"),
-            "{error}"
-        );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

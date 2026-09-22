@@ -23,8 +23,8 @@ impl<T: Copy> CallableAbi<T> {
         }
     }
 
-    /// Parameter types for the current compatibility representation.
-    pub fn lowered_params(&self, evidence: T, control_carrier: T) -> Vec<T> {
+    /// Logical CPS parameter order before inserting a closure environment.
+    pub fn lowered_params(&self, evidence: T, continuation_frame: T) -> Vec<T> {
         let mut params = Vec::with_capacity(
             self.source_params.len()
                 + usize::from(self.convention.needs_evidence())
@@ -34,23 +34,10 @@ impl<T: Copy> CallableAbi<T> {
             params.push(evidence);
         }
         if self.convention.needs_done_k() {
-            params.push(control_carrier);
+            params.push(continuation_frame);
         }
         params.extend_from_slice(&self.source_params);
         params
-    }
-
-    /// Result type for the current compatibility representation.
-    ///
-    /// Logical CPS does not directly return a source result. Until true
-    /// tail-call or trampoline lowering is selected, the IR uses the supplied
-    /// control carrier for the continuation chain.
-    pub fn lowered_result(&self, control_carrier: T) -> T {
-        if self.convention.needs_done_k() {
-            control_carrier
-        } else {
-            self.source_result
-        }
     }
 
     pub fn source_param_offset(&self) -> usize {
@@ -89,21 +76,18 @@ mod tests {
     fn lowered_function_layouts_are_centralized() {
         let direct = abi(CallingConvention::Direct);
         assert_eq!(direct.lowered_params("ev", "control"), ["arg"]);
-        assert_eq!(direct.lowered_result("control"), "result");
 
         let evidence_direct = abi(CallingConvention::EvidenceDirect);
         assert_eq!(
             evidence_direct.lowered_params("ev", "control"),
             ["ev", "arg"]
         );
-        assert_eq!(evidence_direct.lowered_result("control"), "result");
 
         let cps = abi(CallingConvention::Cps);
         assert_eq!(
             cps.lowered_params("ev", "control"),
             ["ev", "control", "arg"]
         );
-        assert_eq!(cps.lowered_result("control"), "control");
     }
 
     #[test]

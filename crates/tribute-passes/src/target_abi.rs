@@ -258,26 +258,6 @@ pub fn lower_cps_signatures_to_physical(
     Ok(())
 }
 
-/// Whether this module carries the exact root metadata owned by the logical
-/// CPS route. Until that route is enabled, legacy modules must not enter the
-/// physicalization boundary: their compatibility calling-convention markers
-/// are not whole-program CPS ABI provenance.
-pub fn has_root_entry_contract(ctx: &IrContext, module: Module) -> bool {
-    let Some(block) = module.first_block(ctx) else {
-        return false;
-    };
-    ctx.block(block).ops.iter().copied().any(|op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| {
-            function.sym_name(ctx) == Symbol::new("main")
-                && (ctx
-                    .op(op)
-                    .attributes
-                    .contains_key(ROOT_EXPORT_CONVENTION_ATTR)
-                    || ctx.op(op).attributes.contains_key(ROOT_SOURCE_RESULT_ATTR))
-        })
-    })
-}
-
 struct RootEntryContract {
     worker_op: OpRef,
     export_convention: CallingConvention,
@@ -393,7 +373,7 @@ fn validate_root_entry(
 
 /// Construct the target-independent export delimiter after physicalization.
 /// The worker and exact frame members have empty results; the wrapper retains
-/// the source ABI and performs one ordinary call. Legacy roots are unchanged.
+/// the source ABI and performs one ordinary call. Roots without a CPS bridge contract need no adapter.
 pub fn compose_root_entry_bridge(
     ctx: &mut IrContext,
     module: Module,

@@ -91,7 +91,6 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
             paired_rc_elimination: policy,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
@@ -113,7 +112,6 @@ pub fn compile_and_run_native_with_borrowed_parameters(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: policy,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
@@ -135,7 +133,6 @@ pub fn compile_and_run_native_with_temporary_borrows(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: policy,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
