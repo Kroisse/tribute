@@ -1,14 +1,14 @@
 //! Compilation pipeline for Tribute.
 //!
 //! This module orchestrates the compilation stages with centralized control flow.
-//! Each pass is a pure `Module → Module` transformation, and this module handles
-//! the sequencing and optional caching of expensive stages.
+//! Tracked queries prepare the typed frontend. Shared and target passes then
+//! mutate one arena session under this module's pass ordering.
 //!
 //! ## Architecture Principles
 //!
-//! 1. **Pure Transformations**: Each pass is a pure function `(db, Module) -> Module`
+//! 1. **Explicit Boundaries**: Verify source-logical, shared CPS, and target contracts
 //! 2. **Centralized Orchestration**: Pass sequencing is managed here, not in passes
-//! 3. **Selective Caching**: Only expensive passes use `#[salsa::tracked]` caching
+//! 3. **Scoped Caching**: Salsa caches frontend queries; arena passes own IR analyses
 //! 4. **Separation of Concerns**: Pass implementation vs pipeline composition
 //!
 //! ## Pipeline Stages
@@ -66,8 +66,8 @@ use ropey::Rope;
 use salsa::Accumulator;
 use std::path::Path;
 use tree_sitter::Parser;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::source_file::parse_with_rope;
-use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
@@ -128,7 +128,7 @@ impl OptimizationOptions {
     }
 
     /// Disable optional native optimizations. Source-logical legalization is
-    /// unchanged; this does not select the legacy frontend or disable CPS.
+    /// unchanged. Source-logical CPS legalization always runs.
     pub const fn baseline() -> Self {
         Self {
             native: NativeOptimizationOptions::baseline(),
@@ -187,13 +187,6 @@ impl Default for OptimizationOptions {
     fn default() -> Self {
         Self::production()
     }
-}
-
-/// Stable shared-pipeline boundaries available to optimization tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub enum SharedPipelineStage {
-    /// Immediately after AST-to-IR lowering, before shared middle-end passes.
-    AfterFrontend,
 }
 
 /// Stable native-pipeline boundaries available to optimization tests.
@@ -739,12 +732,11 @@ pub struct CompilationResult {
 }
 
 // =============================================================================
-// Pipeline Stages (Pure Transformations)
+// Target Pipeline Entry Points
 // =============================================================================
 //
-// Each stage is a #[salsa::tracked] function that takes a Module as input
-// and returns a transformed Module. Stages do not call other stages directly;
-// orchestration is handled by the compile() function.
+// Target entry points continue the shared arena session and apply backend
+// transformations in the required order.
 
 /// Compile a TrunkIR module to WebAssembly binary (arena-based).
 ///
@@ -812,7 +804,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 ///
 /// Evidence params are introduced by the physical CPS conversion. Keep frontend
 /// metadata in the same arena so the conversion can authenticate declarations.
-pub fn run_through_evidence_params(
+pub fn run_through_cps_lowering(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
@@ -847,7 +839,7 @@ pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = run_through_evidence_params(db, source)? else {
+    let Some((mut ctx, m)) = run_through_cps_lowering(db, source)? else {
         return Ok(None);
     };
     let core_module =
@@ -874,15 +866,6 @@ fn run_shared_pipeline(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    run_shared_pipeline_with_options(db, source, OptimizationOptions::production(), None)
-}
-
-fn run_shared_pipeline_with_options(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    _options: OptimizationOptions,
-    stop_after: Option<SharedPipelineStage>,
-) -> PassResult<Option<(IrContext, Module)>> {
     let Some(FrontendCompilation {
         context,
         module: m,
@@ -893,10 +876,6 @@ fn run_shared_pipeline_with_options(
         return Ok(None);
     };
     let mut ctx = context;
-
-    if stop_after == Some(SharedPipelineStage::AfterFrontend) {
-        return Ok(Some((ctx, m)));
-    }
 
     // Middle-end passes, sequenced through the PassManager (#268).
     // Registration order == execution order.
@@ -943,28 +922,10 @@ fn run_shared_pipeline_with_options(
     Ok(Some((ctx, m)))
 }
 
-/// Dump shared IR at a named optimization boundary.
-///
-/// This entry point exists for conformance gates. Production compilation still
-/// runs the complete shared pipeline.
-#[salsa::tracked]
-pub fn dump_shared_ir_at_stage(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    stage: SharedPipelineStage,
-    options: OptimizationOptions,
-) -> Result<String, DumpIrError> {
-    let Some((ctx, module)) = run_shared_pipeline_with_options(db, source, options, Some(stage))?
-    else {
-        return Ok(String::new());
-    };
-    Ok(trunk_ir::printer::print_module(&ctx, module.op()))
-}
-
 /// Dump native IR at a named RC optimization boundary.
 ///
-/// The same optimization options are used for the shared and native portions
-/// of the pipeline. Native emission is intentionally skipped.
+/// Optimization options apply to the native portion of the pipeline.
+/// Native emission is intentionally skipped.
 #[salsa::tracked]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
@@ -972,8 +933,7 @@ pub fn dump_native_ir_at_stage(
     stage: NativePipelineStage,
     options: OptimizationOptions,
 ) -> Result<String, DumpIrError> {
-    let Some((mut ctx, module)) = run_shared_pipeline_with_options(db, source, options, None)?
-    else {
+    let Some((mut ctx, module)) = run_shared_pipeline(db, source)? else {
         return Ok(String::new());
     };
     validate_and_report_arity(db, &ctx, module);
@@ -1514,7 +1474,7 @@ pub fn compile_to_native_binary(
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
     let options = config.optimizations(db);
-    let (mut ctx, m) = match run_shared_pipeline_with_options(db, source, options, None) {
+    let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
         Ok(None) => return None,
         Err(error) => {
@@ -1559,7 +1519,6 @@ pub fn compile_to_native_binary(
 // The AST-based pipeline provides better type safety and separation of concerns.
 // It transforms: CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR
 //
-// This replaces the legacy tirgen-based pipeline that worked directly with IR.
 
 /// Parse source and run the frontend pipeline (parse → resolve → typecheck → TDNR).
 ///

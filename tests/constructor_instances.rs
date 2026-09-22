@@ -1,9 +1,6 @@
 //! Constructor evidence agrees with the value and pattern specialization.
 use salsa_test_macros::salsa_test;
-use tribute::pipeline::{
-    OptimizationOptions, SharedPipelineStage, dump_shared_ir_at_stage, parse_and_lower_ast,
-    prepare_frontend_for_lowering,
-};
+use tribute::pipeline::{compile_frontend, parse_and_lower_ast, prepare_frontend_for_lowering};
 use tribute_core::Diagnostic;
 use tribute_front::{
     SourceCst,
@@ -76,13 +73,8 @@ fn main() {
             );
         }
     }
-    let ir = dump_shared_ir_at_stage(
-        db,
-        source,
-        SharedPipelineStage::AfterFrontend,
-        OptimizationOptions::production(),
-    )
-    .unwrap();
+    let (ctx, module) = compile_frontend(db, source).expect("source-logical constructor IR");
+    let ir = trunk_ir::printer::print_module(&ctx, module.op());
     for (name, representation) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
         let layout = format!("type = !\"{name}\"");
         assert!(
