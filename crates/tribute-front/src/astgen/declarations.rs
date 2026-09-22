@@ -687,20 +687,6 @@ fn lower_ability_operations(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<OpD
             continue;
         }
 
-        // Handle ability_operations wrapper (like enum_variants, struct_fields)
-        if child.kind() == "ability_operations" {
-            let mut inner_cursor = child.walk();
-            for op_node in child.named_children(&mut inner_cursor) {
-                if op_node.kind() == "ability_operation"
-                    && let Some(op) = lower_ability_operation(ctx, op_node)
-                {
-                    operations.push(op);
-                }
-            }
-            continue;
-        }
-
-        // Also handle direct ability_operation children (for compatibility)
         if child.kind() == "ability_operation"
             && let Some(op) = lower_ability_operation(ctx, child)
         {

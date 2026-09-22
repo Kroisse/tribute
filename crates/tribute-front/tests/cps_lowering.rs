@@ -1443,7 +1443,7 @@ fn main() { }
 }
 
 /// Closure capture analysis must include a record spread base after a CPS
-/// boundary. Downstream closure-lowering compatibility is covered in the root
+/// boundary. Downstream closure lowering is covered in the root
 /// integration suite.
 #[salsa_test]
 fn test_record_spread_capture_survives_cps_continuation(db: &salsa::DatabaseImpl) {
