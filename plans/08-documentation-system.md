@@ -2,8 +2,9 @@
 
 ## Overview
 
-Create a comprehensive documentation system for Tribute with automatic API
-documentation generation, examples testing, and integrated tutorials.
+This proposes a documentation generator with API extraction, example testing,
+and tutorials. Commands and comment syntax below are proposed tooling, not
+current CLI support. Language examples follow the authoritative syntax.
 
 ## Priority: Medium (8/8)
 
@@ -40,11 +41,10 @@ fn add(a: Int, b: Int) -> Int {
 //! 
 //! ## Quick Start
 //! ```tribute
-//! let mut list = Vec::new()
-//! list.push(42)
+//! let values = [42]
 //! ```
 
-module collections {
+mod collections {
   // module contents
 }
 ```

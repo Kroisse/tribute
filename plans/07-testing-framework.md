@@ -1,75 +1,65 @@
-# Testing Framework Plan
+# Testing Framework Proposal
 
-## Overview
+Source-level test runner는 추가 tooling 설계 대상이다. Repository 자체의 Rust 테스트
+실행법은 [`README.md`](../README.md#development)와 `tribute-testing` skill을 따른다.
 
-Testing framework for Tribute. Design is still evolving, but will be deeply
-integrated with the ability system.
+## Test Failure
 
-## Priority: Medium (7/8)
-
-Essential for language quality and ecosystem confidence.
-
-## Core Concepts
-
-### Using Exception for Tests
-
-Tests can use the `Exception` ability for failures:
+Test assertion 실패는 typed `Throw`로 표현할 수 있다.
 
 ```rust
-fn assert(cond: Bool) ->{Exception} Nil {
-    if cond { Nil } else { Exception::raise("assertion failed") }
+use abilities::Throw
+
+fn assert(condition: Bool) ->{Throw(String)} Nil {
+    if condition { Nil } else { Throw::throw("assertion failed") }
 }
 ```
 
-Test declaration syntax is TBD. Possibilities include:
+Runner는 test body를 handle하여 완료와 실패를 수집한다. Test declaration은 annotation,
+명시적인 등록 또는 file/module convention 중에서 별도로 정해야 한다. Annotation이
+source transformation을 수행하는지는 test runner와 독립적인 언어 설계 결정이다.
 
-- Annotation/decorator style: `@test fn addition_works() { ... }`
-- Explicit registration via module-level list
-- Special file/module naming convention
+## Effect Mocking
 
-Semantics of annotations (metadata vs transformation) need careful design.
-
-### Effect Mocking
-
-The ability system naturally supports mocking - just provide a test handler:
+테스트할 외부 동작을 일반 user ability로 선언하면 handler로 대체할 수 있다.
+Compiler-owned ambient `Io`는 handler로 제거할 수 없으므로 mocking 경계로 사용하지
+않는다.
 
 ```rust
-test "fetch_user calls the API" {
-    let calls = ref([])
+ability Fetch {
+    fn get(url: String) -> String
+}
 
-    handle fetch_user("123") {
-        { value } -> value
-        { IO::http_get(url) -> k } -> {
-            calls := List::push_back(!calls, url)
-            k(mock_response())
-        }
+fn fetch_user() ->{Fetch} String {
+    Fetch::get("/users/123")
+}
+
+fn mocked_user() -> String {
+    handle fetch_user() {
+        do result { result }
+        fn Fetch::get(url) { "mock response" }
     }
-
-    Test::assert(!calls == ["/users/123"])
 }
 ```
 
-### Property-Based Testing
+명시적인 중단과 재개를 검사할 때는 `op`과 affine `resume`을 사용한다. Test runner는
+생성한 continuation을 여러 번 실행해 multi-shot 의미를 만들지 않는다.
 
-Property-based testing requires exploration of multiple values. Since we use
-one-shot continuations (no backtracking), this will likely use a functional
-random generator approach rather than an ability:
+## Property Testing
 
-```rust
-fn forall(gen: Gen(a), prop: fn(a) ->{Test} Nil) -> TestResult
-```
+입력 탐색은 독립적인 test invocation과 명시적인 random generator state로 구현한다.
+Shrinking도 새 test invocation을 실행하며 이미 소비한 continuation을 재개하지 않는다.
 
-Design details TBD.
+## 미결정 사항
 
-## Open Questions
+- Test declaration과 runner CLI
+- Package/build system 통합과 test discovery
+- Random generation·shrinking API
+- Coverage instrumentation과 보고 형식
 
-- Exact syntax for test declarations
-- Integration with build system / test runner
-- Shrinking strategy for property tests
-- Code coverage instrumentation approach
+## 검증 조건
 
-## Success Criteria
-
-- Clean integration with ability system
-- Natural mocking via effect handlers
-- Clear and actionable error messages
+- 성공, typed failure와 abort를 명확하게 구별한다.
+- Native/Wasm 실행 지원을 개별적으로 검증한다.
+- Handler mocking이 source의 operation kind와 effect row를 보존한다.
+- 실패 위치와 원인을 structured diagnostic으로 보고한다.

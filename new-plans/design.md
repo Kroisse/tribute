@@ -31,7 +31,7 @@ ML의 의미론을 갖지만 C 계열 개발자에게 친숙한 문법:
 
 ```rust
 // 타입 선언
-struct User { name: Text, age: Int }
+struct User { name: String, age: Int }
 enum Option(a) { None, Some(a) }
 
 // 함수 정의
@@ -40,7 +40,7 @@ fn add(x: Int, y: Int) -> Int {
 }
 
 // 패턴 매칭
-fn describe(value: Option(Int)) -> Text {
+fn describe(value: Option(Int)) -> String {
     case value {
         Some(n) -> "got: " <> Int::to_string(n)
         None -> "nothing"
@@ -139,11 +139,13 @@ Tribute의 ability 시스템은 **delimited, one-shot continuation**을 기반�
 
 ### One-shot의 의미
 
-Continuation은 **linear 타입**으로 취급한다:
+Resumptive `op` handler의 continuation은 **affine capability**다:
 
-- 반드시 1번 사용하거나 명시적으로 버려야 함
-- 사용: `k(value)` 로 resume
-- 버림: `drop(k)` 또는 와일드카드 바인딩
+- `resume value`로 최대 한 번 재개한다.
+- 재개하지 않고 handler가 반환하면 continuation을 암묵적으로 버린다.
+- `fn` arm과 `op -> Never` arm에는 resume capability가 없다.
+
+상세한 검증과 capture 규칙은 [abilities.md](abilities.md)를 따른다.
 
 ### 지원 가능한 Ability 패턴
 
@@ -225,37 +227,33 @@ MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내
 
 ### Dialect 계층
 
-| 수준           | Dialect                     | 설명                                |
-| -------------- | --------------------------- | ----------------------------------- |
-| Infrastructure | core, type                  | 모듈 구조, 타입 정의                |
-| High-level     | src, ability, adt           | 미해소 호출, ability, ADT           |
-| Mid-level      | cont, func, scf, arith, mem | Continuation, 함수, 제어 흐름, 산술 |
-| Low-level      | wasm._, clif._              | 타겟별 연산                         |
+| 수준 | Dialect | 책임 |
+| ---- | ------- | ---- |
+| Infrastructure | `core` | 모듈, 일반 값 타입과 conversion cast |
+| Source-logical control | `tribute_control` | source callable, handle, perform, resume |
+| Shared value/control | `func`, `closure`, `ability`, `effect`, `scf`, `cf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io` | CPS callable, 명시적 evidence와 dispatch, 일반 값 연산 |
+| Target | `wasm`, `wasm_gc`, `clif` | target ABI, 저장소와 명령어 |
 
 ### Compilation Pipeline
 
 ```text
-Tribute Source
-    │
-    ▼ Parse
-TrunkIR [src, type, adt, ability, func, scf, arith]
-    │
-    ▼ Type Inference + Name Resolution
-TrunkIR [type, adt, ability, func, scf, arith]
-    │
-    ▼ Ability Lowering (Evidence Passing)
-TrunkIR [type, adt, cont, func, scf, arith]
-    │
-    ▼ Optimization Passes
-    │
-    ├─────────────────────────────────────┐
-    │                                     │
-    ▼ Wasm Lowering                       ▼ Cranelift Lowering
-TrunkIR [wasm.*]                     TrunkIR [clif.*]
-    │                                     │
-    ▼                                     ▼
-.wasm                                native binary
+Source → CST → AST
+    → 이름 해석·타입 추론·TDNR
+    → Prelude 병합·intrinsic 검증·monomorphization
+    → source-logical tribute_control IR
+    → pre-CPS 검증·tribute_control_to_cps
+    → lambda lifting·intrinsic lowering
+    → ability dispatch·evidence resolution·handle delimiter 제거
+    → target ABI 검증·물리 CPS signature·root entry bridge
+    → closure storage·target evidence lowering
+    ├→ WasmGC lowering → Wasm binary
+    └→ typed ownership/RTTI 계획 → native lowering → native binary
 ```
+
+Frontend는 source의 결과 타입과 operation kind를 보존한다. Continuation과 hidden
+ABI 인자는 shared CPS legalization이 만들고, target 경계가 callable 결과 목록과
+closure 저장소를 물리화한다. 구체적인 pass 순서와 검증 경계는
+[implementation.md](implementation.md)와 [cps-effects.md](cps-effects.md)를 따른다.
 
 ---
 
@@ -269,30 +267,19 @@ TrunkIR [wasm.*]                     TrunkIR [clif.*]
 
 ### Effect 구현 전략
 
-WasmGC는 현재 주요 구현 경로가 아니다. 다시 활성화할 경우에도
-언어 레벨 effect lowering은 shared middle-end의 tail-call CPS 전략을 따른다.
-따라서 WasmGC backend의 과제는 stack switching을 직접 사용해 effect를
-구현하는 것이 아니라, 이미 lowered된 closure/evidence/call_indirect IR을
-WasmGC 타입과 table 기반 호출로 정확히 emit하는 것이다.
-
-과거의 yield bubbling / `YieldResult` trampoline 설계는 폐기된 대안으로
-보존하되, 새 구현의 기준으로 삼지 않는다.
+WasmGC는 shared middle-end가 만든 tail-call CPS, 명시적 evidence와 closure IR을
+소비한다. Target lowering은 GC layout과 exact callable signature를 정하고,
+직접/간접 proper-tail transfer를 Wasm 명령어로 내린다. 실행 지원 범위는
+[capabilities.md](capabilities.md), target 계약은 [wasm-backend.md](wasm-backend.md)를
+따른다.
 
 ### 코드 생성
 
-Binaryen을 최적화 백엔드로 사용:
-
 ```text
-Core IR
-    │
-    ▼ Lower to WasmGC Dialect
-WasmGC Ops
-    │
-    ▼ Emit (wasm-encoder 또는 Binaryen IR)
-Unoptimized .wasm
-    │
-    ▼ wasm-opt -O3
-Optimized .wasm
+Shared IR
+    → WasmGC 및 Wasm dialect lowering
+    → wasm-encoder emission
+    → .wasm
 ```
 
 ---
@@ -323,14 +310,13 @@ trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
 
 ### Effect 구현 전략: Tail-Call CPS
 
-현재 native 구현은 libmprompt나 `cont.*` dialect 직접 lowering을 사용하지
-않는다. Frontend/shared middle-end에서 continuation을 closure로 명시화하고,
-effect operation은 evidence lookup 후 handler dispatch closure로 tail-call한다.
+Shared CPS legalization이 continuation을 typed closure로 명시화한다. Native backend는
+검증된 callable ABI를 받아 evidence lookup과 dispatch를 lowering한다.
 
-- `fn` ability operation → `ability.call` → `tr_dispatch_fn` 직접 호출
-- `op` ability operation → `ability.perform` → `handler_dispatch` closure 호출
-- `handle` boundary → evidence에 `tr_dispatch_fn`과 `handler_dispatch`를 가진
-  marker 삽입
+- `fn` operation: `tribute_control.perform` → `ability.call` → `effect.dispatch_tail`
+- `op` operation: `tribute_control.perform` → `ability.perform` → `effect.dispatch_cps`
+- `handle` boundary: shared 단계가 prompt tag와 `effect.extend`를 구성하고,
+  target 단계가 handler marker와 evidence 저장소를 구체화한다.
 
 ### 메모리 관리: Reference Counting
 
@@ -339,36 +325,7 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 - **+1 convention**: 생산자가 소유, 소비자가 retain, 마지막 사용에서 release
 - **Object 헤더**: `[-8 bytes] refcount: u32 + type_id: u32 | [0 bytes] first field`
 - Cycle 처리는 당면 과제가 아님 (함수형 언어 특성상 cycle이 드묾)
-- Phase 2에서는 malloc/free 단순 할당으로 시작하고, 이후 RC 삽입
-
----
-
-## Implementation Phases
-
-### Phase 1: 기본 동작
-
-- [ ] 파서 (UFCS, `::` 모듈 구분자)
-- [ ] 단순 타입 체커 (effects 없이)
-- [ ] Core IR
-- [ ] Cranelift 백엔드 (tail calls만)
-- [ ] WasmGC 백엔드 (tail calls만)
-
-### Phase 2: Ability 시스템
-
-- [ ] Ability 타입 추론
-- [ ] Effect Dialect
-- [ ] Handler 문법 파싱
-- [ ] Tail-call CPS effect lowering
-  - [ ] Evidence propagation
-  - [ ] `fn` operation direct dispatch
-  - [ ] `op` operation handler dispatch closure
-  - [ ] Backend별 evidence runtime adaptation
-
-### Phase 3: 최적화
-
-- [ ] Effect 특화 최적화 (handler fusion, tail-resumptive 최적화)
-- [ ] 공통 최적화 패스
-- [ ] 벤치마킹 및 튜닝
+- 타입을 지우기 전에 ownership와 RTTI를 계획하고, 그 계획으로 retain/release를 생성한다.
 
 ---
 
@@ -383,7 +340,6 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 ### 구현
 
-- [Binaryen](https://github.com/WebAssembly/binaryen) - WasmGC 최적화
 - [Cranelift](https://cranelift.dev/) - 네이티브 코드 생성
 
 ### 논문

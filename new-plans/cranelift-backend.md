@@ -5,7 +5,7 @@
 
 ## Overview
 
-Cranelift 백엔드는 WASM 백엔드와 동일한 **2-layer 패턴**을 따른다:
+Cranelift 백엔드는 WASM 백엔드와 동일한 **lowering/emission 분리**을 따른다:
 
 1. **타겟 독립적 IR 유지**: trunk-ir는 특정 타겟에 종속되지 않음
 2. **Backend-specific lowering**: `clif.*` dialect은 Cranelift IR과 1:1 대응
@@ -19,7 +19,7 @@ Cranelift 백엔드는 WASM 백엔드와 동일한 **2-layer 패턴**을 따른�
 ```mermaid
 graph TD
     subgraph "trunk-ir (언어 독립적)"
-        dialects["dialect/\nfunc, arith, scf, cont, ...\nwasm.rs | clif.rs"]
+        dialects["dialect/\nfunc, arith, scf, cf, ...\nwasm.rs | clif.rs"]
     end
 
     subgraph "trunk-ir-cranelift-backend (trunk-ir만 의존)"
@@ -30,10 +30,9 @@ graph TD
     end
 
     subgraph "tribute-passes/src/native/ (tribute-ir 의존)"
-        lower["lower.rs — 오케스트레이션"]
         type_conv["type_converter.rs — 네이티브 타입 변환"]
-        cps["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
-        rc["rc.rs — RC 삽입 (future)"]
+        effects["evidence.rs — effect ABI lowering"]
+        rc["ownership_plan.rs + rc_materialization.rs\ntyped RC planning and insertion"]
     end
 
     subgraph "tribute (main crate)"
@@ -41,13 +40,14 @@ graph TD
     end
 
     dialects --> passes
-    dialects --> cps
+    dialects --> effects
     passes --> translate
     translate --> function
     translate --> validation
-    lower --> passes
-    lower --> cps
-    pipeline --> lower
+    pipeline --> passes
+    pipeline --> effects
+    pipeline --> rc
+    pipeline --> type_conv
     pipeline --> translate
 ```
 
@@ -84,10 +84,12 @@ persistence without exposing this layout.
 
 ```mermaid
 flowchart TB
-    input["TrunkIR Module\n(func.*, arith.*, scf.*, adt.*, evidence runtime calls)"]
+    input["Shared legalized IR\n(func.*, closure.*, arith.*, scf.*, adt.*, effect.*)"]
 
     subgraph native_passes["tribute-passes/src/native/"]
-        cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
+        abi["target ABI validation + physicalization\nroot bridge + closure lowering"]
+        effect["effect ABI lowering\nnative evidence runtime + proper-tail calls"]
+        storage["finalize_closure_storage_layout"]
         list_lower["opaque List lowering\nnative::list::lower\nlist.* → private RC nodes"]
         cfg["structured control normalization\nscf_to_cf"]
         rc_plan["typed ownership/RTTI plan\nsemantic type + CFG"]
@@ -98,9 +100,8 @@ flowchart TB
         arith["arith_to_clif\narith.* → clif.iadd, clif.fadd, ..."]
         cf["cf_to_clif\ncf.* → clif.brif/jump + blocks"]
         adt["adt_to_clif\nadt.* → clif.load/store + malloc"]
-        func["func_to_clif\nfunc.* → clif.func, clif.call, ..."]
-        intrinsic["intrinsic_to_posix\nstd::intrinsics::posix → clif.call"]
-        const_pass["const_to_clif\nfunc.constant → clif.iconst, ..."]
+        func["func_to_clif\nfunc.* → clif.func/call/return_call"]
+        intrinsic["const/intrinsic/runtime lowering\nverified runtime ABI → clif.*"]
     end
 
     subgraph emit["trunk-ir-cranelift-backend/"]
@@ -111,9 +112,9 @@ flowchart TB
 
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
-    input --> cont --> list_lower --> cfg --> rc_plan --> rc_pass
-    rc_pass --> arith --> cf --> adt --> func --> intrinsic --> const_pass
-    const_pass --> validate --> codegen --> obj --> output
+    input --> abi --> effect --> storage --> list_lower --> cfg --> rc_plan --> rc_pass
+    rc_pass --> func --> cf --> adt --> arith --> intrinsic
+    intrinsic --> validate --> codegen --> obj --> output
 ```
 
 ### WASM 타겟과 비교
@@ -190,9 +191,12 @@ callee 포함)를 보존한다. Nil return, constant, return operand에도 같�
 
 ## Effect 구현: CPS Tail-Call
 
-Effect handling은 tail-call CPS 방식으로 처리된다.
-`lower_ability_perform`과 `lower_handle_dispatch` pass가
-ability 연산을 handler_dispatch 클로저 호출로 변환한다.
+Shared `tribute_control_to_cps`가 continuation과 proper tail transfer를 만든다.
+Shared ability/evidence lowering은 그 결과를 `effect.*` ABI로 바꾼다.
+Native target은 exact callable contract를 검증하고 CPS signature를 물리화한 뒤
+`native/evidence`에서 runtime lookup/extension과 handler closure 호출을 생성한다.
+`func_to_clif`는 proper transfer를 `clif.return_call`과
+`clif.return_call_indirect`로 내린다.
 
 물리 CPS 판정은 exact `Cps` convention과 빈 결과 목록의 조합이다. 실제
 Direct/EvidenceDirect Unit 결과와 살아 있는 nil SSA 값의 zero-width 처리는 유지한다.
@@ -243,48 +247,13 @@ Array:  [length: i64] [elements...]
 
 ---
 
-## 구현 단계
+## Native I/O
 
-### Phase 1: 기본 함수 컴파일
-
-- `clif` dialect 정의
-- `trunk-ir-cranelift-backend` 크레이트 스캐폴딩
-- `func_to_clif` + `arith_to_clif` passes
-- Cranelift codegen (function.rs + translate.rs)
-- `fn main() -> Int { 42 }` → object file
-
-### Phase 2: 제어 흐름 + ADT + 클로저
-
-- `scf_to_clif` pass (CFG 변환)
-- `adt_to_clif` pass (malloc/free 기반)
-- 간접 호출 (call_indirect)
-- if/case/loop, struct/enum 지원
-
-### Phase 3: Reference Counting
-
-- RC retain/release 삽입 pass
-- Valgrind / AddressSanitizer 검증
-
-### Phase 4: CPS Tail-Call Effect Handling
-
-- `lower_ability_perform` + `lower_handle_dispatch` passes
-- Evidence 런타임 (native): `new-plans/cps-effects.md`의 Marker layout과
-  `__tribute_evidence_*` C ABI를 따른다.
-
-### Phase 5: E2E 파이프라인
-
-- `tribute compile --target native file.trb` → 실행 파일
-- E2E 테스트 (ability 포함)
-
-### Phase 6: Native Basic I/O
-
-- shared `tribute_io.write`와 `tribute_io.read_line`을
-  [io.md](io.md#native-runtime-abi)의 private runtime ABI로 낮춘다.
-- Runtime descriptor를 high-level `ReadLineResult` ADT로 바꾼 뒤 기존 SCF, ADT,
-  memory lowering을 적용한다.
-- Native runtime은 Tribute enum/RTTI layout에 의존하지 않는다.
-- E2E 테스트는 subprocess stdin에 raw bytes를 주입하여 빈 줄, partial EOF, EOF,
-  invalid UTF-8을 검증한다.
+Shared `tribute_io.write`와 `tribute_io.read_line`은
+[io.md](io.md#native-runtime-abi)의 private runtime ABI로 낮춘다. Runtime descriptor를
+high-level `ReadLineResult` ADT로 바꾼 뒤 SCF, ADT, memory lowering을 적용한다.
+Native runtime은 Tribute enum/RTTI layout에 의존하지 않는다. E2E 검증은 subprocess
+stdin의 raw bytes로 빈 줄, partial EOF, EOF, invalid UTF-8을 확인한다.
 
 ---
 

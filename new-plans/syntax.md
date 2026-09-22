@@ -100,7 +100,7 @@ RawBytesContent   ::= RawChar | BytesInterpolation        // escape 처리 안 �
 RawChar           ::= Any
 
 EscapeSeq    ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
-StringInterpolation ::= '\{' Expression '}'   // Expression은 Text 타입
+StringInterpolation ::= '\{' Expression '}'   // Expression은 String 타입
 BytesInterpolation  ::= '\{' Expression '}'   // Expression은 Bytes 타입
 
 // Rune (Unicode codepoint)
@@ -222,7 +222,7 @@ fn add(x: Nat, y: Nat) -> Nat {
  * age: 사용자 나이
  */
 struct User {
-    name: Text
+    name: String
     age: Nat
 }
 ```
@@ -354,7 +354,7 @@ FieldSep ::= ',' | '\n'
 
 ```rust
 struct User {
-    name: Text
+    name: String
     age: Nat
 }
 
@@ -395,8 +395,8 @@ enum Result(a, e) {
 // 혼합
 enum Expr {
     Lit(Int)
-    Var(Text)
-    BinOp { op: Text, lhs: Expr, rhs: Expr }
+    Var(String)
+    BinOp { op: String, lhs: Expr, rhs: Expr }
 }
 ```
 
@@ -409,7 +409,7 @@ Type ::= TypePath TypeArgs?
        | FunctionType
        | TupleType
 
-TupleType ::= '#(' TypeList? ')'              // #(Int, Text, Float)
+TupleType ::= '#(' TypeList? ')'              // #(Int, String, Float)
 
 TypePath ::= (PathSegment '::')* TypeId
 TypeArgs ::= '(' Type (',' Type)* ','? ')'
@@ -431,18 +431,18 @@ EffectTail ::= ',' LowerIdentifier            // row variable
 Nat                           // 0, 양수
 Int                           // 정수 (부호 있음)
 Float                         // 부동소수점
-Text
+String
 List(Int)
-Option(Text)
-Result(Int, Text)
+Option(String)
+Result(Int, String)
 
-#(Int, Text)                  // 2-tuple (pair)
-#(Int, Text, Float)           // 3-tuple
+#(Int, String)                  // 2-tuple (pair)
+#(Int, String, Float)           // 3-tuple
 Nil                           // unit type (#() 대신 사용)
 
 fn(Int, Int) -> Int           // 암묵적 effect polymorphic
 fn(Int) ->{} Int              // 순수 함수
-fn(Text) ->{Http} Response    // Http effect
+fn(String) ->{Http} Response    // Http effect
 fn() ->{State(Int), e} Int    // State + row variable e
 ```
 
@@ -480,12 +480,12 @@ ability State(s) {
 }
 
 ability Http {
-    fn get(url: Text) -> Response
-    fn post(url: Text, body: Text) -> Response
+    fn get(url: String) -> Response
+    fn post(url: String, body: String) -> Response
 }
 
 ability Fail {
-    op fail(msg: Text) -> Never
+    op fail(msg: String) -> Never
 }
 ```
 
@@ -506,11 +506,11 @@ OpHandlerArm   ::= 'op' ValuePath '(' PatternList? ')' Block   // op Op(args) { 
 Handler arm은 함수 정의와 대칭적인 구조를 가진다. Ability 선언에서 `fn`/`op`으로
 operation을 정의하듯, handler에서도 같은 키워드로 각 operation의 구현을 작성한다:
 
-| arm | 대상 | 의미 |
-| --- | ---- | ---- |
-| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
-| `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume |
+| arm                    | 대상           | 의미                                               |
+| ---------------------- | -------------- | -------------------------------------------------- |
+| `do value { expr }`    | completion     | Computation 완료, 결과값 바인딩 (생략 시 identity) |
+| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값         |
+| `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume           |
 
 **`fn` handler arm:**
 
@@ -590,7 +590,7 @@ fn add(x: Int, y: Int) -> Int {
     x + y
 }
 
-fn fetch(url: Text) ->{Http} Response {
+fn fetch(url: String) ->{Http} Response {
     Http::get(url)
 }
 
@@ -644,7 +644,7 @@ PrimaryExpr ::= Literal
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
-             | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
+             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
 ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine, 생략 시 Nil)
 ```
 
@@ -770,7 +770,7 @@ QualifiedOp ::= Path '::' Operator        // List::<>, Int::+
 
 // 연산자를 함수로 사용
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
-             | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
+             | '(' QualifiedOp ')'        // (Int::+), (String::<>)
 
 // 우선순위 (높은 것부터)
 // 1. * / %
@@ -780,10 +780,10 @@ OperatorFn ::= '(' Operator ')'           // (+), (<>)
 // 5. ||
 ```
 
-**연결 연산자 `<>`**: Text, List 등에 사용 (type-directed resolution)
+**연결 연산자 `<>`**: String, List 등에 사용 (type-directed resolution)
 
 ```rust
-"Hello, " <> name <> "!"        // Text::<>
+"Hello, " <> name <> "!"        // String::<>
 [1, 2] <> [3, 4]                // List::<>
 
 // 명시적으로 연산자 지정
@@ -795,11 +795,11 @@ a Int::+ b                      // Int::+ 명시
 
 ```rust
 (+)(a, b)                       // a + b 와 동일
-(Text::<>)("a", "b")            // "a" <> "b" 와 동일
+(String::<>)("a", "b")            // "a" <> "b" 와 동일
 
 // 고차 함수에 전달
 xs.fold(0, (+))                 // 합계
-xs.fold("", (Text::<>))         // 문자열 연결
+xs.fold("", (String::<>))         // 문자열 연결
 numbers.reduce((Int::*))        // 곱셈
 ```
 
@@ -960,10 +960,10 @@ field offsets in frontend/shared IR.
 
 ```rust
 // struct 필드는 자동으로 getter 생성
-struct User { name: Text, age: Nat }
+struct User { name: String, age: Nat }
 
 // 생성되는 함수:
-// User::name : fn(User) -> Text
+// User::name : fn(User) -> String
 // User::age  : fn(User) -> Nat
 
 user.name    // User::name(user)
@@ -976,8 +976,8 @@ Struct 필드에 대해 자동 생성되는 함수들 (별도 문법 없음, UFC
 
 ```rust
 // 자동 생성되는 함수:
-// User::name::set    : fn(User, Text) -> User
-// User::name::modify : fn(User, fn(Text) -> Text) -> User
+// User::name::set    : fn(User, String) -> User
+// User::name::modify : fn(User, fn(String) -> String) -> User
 
 user.name::set("Jane")              // UFCS: User::name::set(user, "Jane")
 user.age::modify(fn(n) n + 1)       // UFCS: User::age::modify(user, ...)
@@ -1024,12 +1024,12 @@ Visibility ::= 'pub'?
 ```rust
 // 개행으로 구분
 struct User {
-    name: Text
+    name: String
     age: Nat
 }
 
 // 한 줄이면 쉼표 필수
-struct User { name: Text, age: Nat }
+struct User { name: String, age: Nat }
 ```
 
 ### 세미콜론
@@ -1120,41 +1120,41 @@ fn main() ->{Io} Nil {
 
 ### Types
 
-| 구문                               | 의미                           |
-| ---------------------------------- | ------------------------------ |
-| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입                      |
-| `List(a)`, `Option(Int)`           | 제네릭 타입                    |
-| `#(Int, Text)`                     | Tuple 타입                     |
-| `fn(a) -> b`                       | 함수 타입 (암묵적 polymorphic) |
-| `fn(a) ->{} b`                     | 명시적 빈 effect 함수 타입     |
-| `fn(a) ->{E} b`                    | Effect E를 수행하는 함수       |
-| `fn(a) ->{E, e} b`                 | E + row variable e             |
+| 구문                                 | 의미                           |
+| ------------------------------------ | ------------------------------ |
+| `Nat`, `Int`, `Float`, `String`, ... | 기본 타입                      |
+| `List(a)`, `Option(Int)`             | 제네릭 타입                    |
+| `#(Int, String)`                     | Tuple 타입                     |
+| `fn(a) -> b`                         | 함수 타입 (암묵적 polymorphic) |
+| `fn(a) ->{} b`                       | 명시적 빈 effect 함수 타입     |
+| `fn(a) ->{E} b`                      | Effect E를 수행하는 함수       |
+| `fn(a) ->{E, e} b`                   | E + row variable e             |
 
 ### Expressions
 
-| 구문                    | 의미                   |
-| ----------------------- | ---------------------- |
-| `{ stmts; expr }`       | Block / 그룹화         |
-| `fn(x) expr`            | Lambda                 |
-| `case e { pat -> e }`   | Pattern matching       |
-| `handle e { arms }`     | Effect handling        |
-| `x.f`                   | UFCS (괄호 생략)       |
-| `x.f(y)`                | UFCS                   |
-| `T::f(x)`               | Qualified call         |
-| `T { f: v }`            | Record construction    |
-| `T { ..x, f: v }`       | Record update (spread) |
-| `[a, b, c]`             | List literal           |
-| `#(a, b, c)`            | Tuple literal          |
-| `a <> b`                | Concatenation          |
-| `a T::<> b`             | Qualified operator     |
-| `(+)`, `(T::<>)`        | Operator as function   |
-| `resume expr`           | Continuation 재개      |
+| 구문                  | 의미                   |
+| --------------------- | ---------------------- |
+| `{ stmts; expr }`     | Block / 그룹화         |
+| `fn(x) expr`          | Lambda                 |
+| `case e { pat -> e }` | Pattern matching       |
+| `handle e { arms }`   | Effect handling        |
+| `x.f`                 | UFCS (괄호 생략)       |
+| `x.f(y)`              | UFCS                   |
+| `T::f(x)`             | Qualified call         |
+| `T { f: v }`          | Record construction    |
+| `T { ..x, f: v }`     | Record update (spread) |
+| `[a, b, c]`           | List literal           |
+| `#(a, b, c)`          | Tuple literal          |
+| `a <> b`              | Concatenation          |
+| `a T::<> b`           | Qualified operator     |
+| `(+)`, `(T::<>)`      | Operator as function   |
+| `resume expr`         | Continuation 재개      |
 
 ### Patterns
 
 | 패턴               | 의미                           |
 | ------------------ | ------------------------------ |
-| `42`, `"hi"`, `?a` | Literal (Number, Text, Rune)   |
+| `42`, `"hi"`, `?a` | Literal (Number, String, Rune) |
 | `_`                | Wildcard                       |
 | `x`                | Binding                        |
 | `Some(x)`          | Variant (positional)           |
@@ -1167,8 +1167,8 @@ fn main() ->{Io} Nil {
 
 ### Handler Arms (handle 전용)
 
-| arm                       | 의미                                    |
-| ------------------------- | --------------------------------------- |
-| `do result { expr }`      | Completion (생략 시 identity)           |
-| `fn Op(x) { body }`       | `fn` operation (tail-resumptive)        |
-| `op Op(x) { body }`       | `op` operation (explicit `resume`)      |
+| arm                  | 의미                               |
+| -------------------- | ---------------------------------- |
+| `do result { expr }` | Completion (생략 시 identity)      |
+| `fn Op(x) { body }`  | `fn` operation (tail-resumptive)   |
+| `op Op(x) { body }`  | `op` operation (explicit `resume`) |

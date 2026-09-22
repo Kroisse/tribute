@@ -21,9 +21,8 @@ Statuses and evidence must be updated together. A capability not listed here is
 Compilation is not execution. In particular, producing bytes with the Wasm
 magic number is only **compile-only**.
 
-README and example alignment is owned by issue #797. In checkouts where that
-alignment is not yet present, this matrix is authoritative over older README
-or example claims.
+README and example claims must remain within the evidence recorded here.
+Ignored tests do not establish successful compilation or execution.
 
 ## Language and Frontend Matrix
 
@@ -34,7 +33,7 @@ target column is intentionally no stronger than its own evidence.
 | --- | --- | --- | --- | --- |
 | Functions, calls, blocks, and `let` bindings | **compile-only** | **native-run** | **compile-only** | Frontend coverage is in [`block_scope.rs`](../crates/tribute-front/tests/block_scope.rs). Native execution is covered by `test_native_function_call` and `test_native_let_binding` in [`e2e_native.rs`](../tests/e2e_native.rs). Wasm emission is covered by `test_compile_function_with_params` and `test_compile_local_variables` in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
 | `Nat` literals | **compile-only** | **native-run** | **compile-only** | `test_native_arithmetic` compiles and executes `Nat` literals in [`e2e_native.rs`](../tests/e2e_native.rs). `test_compile_simple_literal` emits Wasm for a `Nat` literal but does not execute it in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
-| `Int` literals | **compile-only** | **native-run** | **compile-only** | `test_function_type_parameter` compiles and executes the `+21` literal in [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_tail_dispatch_ability` emits Wasm containing `Int` literals but does not execute it in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
+| `Int` literals | **compile-only** | **native-run** | **compile-only** | `test_function_type_parameter` compiles and executes the `+21` literal in [`e2e_add.rs`](../tests/e2e_add.rs). `test_compile_open_callback_root_main` emits an `Int` callback and call in [`wasm_compilation.rs`](../tests/wasm_compilation.rs) without executing it. |
 | `Float` literals | **compile-only** | **native-run** | **not-yet-verified** | `test_float_literal` covers AST-to-IR lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_float_literal_compiles` executes a literal and asserts its native output in [`e2e_float.rs`](../tests/e2e_float.rs). No focused Wasm evidence was found. |
 | `Bool` literals | **compile-only** | **native-run** | **not-yet-verified** | `test_bool_literal_true` and `test_bool_literal_false` cover AST-to-IR lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_native_bool_case` executes both literals and asserts their native results in [`e2e_native.rs`](../tests/e2e_native.rs). No focused Wasm evidence was found. |
 | `Nil` literal | **compile-only** | **native-run** | **compile-only** | `test_nil_literal` covers AST-to-IR lowering in [`expr_coverage.rs`](../crates/tribute-front/tests/expr_coverage.rs). `test_counter_returns_correct_value` executes `resume Nil` and asserts native output in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). `test_compile_builtin_io_entrypoint` emits Wasm containing `Nil` but does not execute it in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
@@ -53,17 +52,21 @@ target column is intentionally no stronger than its own evidence.
 
 | Capability | Shared/frontend | Native | WasmGC | Evidence and boundary |
 | --- | --- | --- | --- | --- |
-| Ability declarations, operation calls, and effect rows | **compile-only** | **native-run** | **compile-only** | Frontend checks are in [`e2e_ability_core.rs`](../tests/e2e_ability_core.rs) and [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs). Native execution is covered by the handler suites. Wasm only emits artifacts in `test_compile_tail_dispatch_ability` and `test_compile_cps_dispatch_ability` in [`wasm_compilation.rs`](../tests/wasm_compilation.rs). |
+| Ability declarations, operation calls, and effect rows | **compile-only** | **native-run** | **unsupported** | Frontend checks are in [`e2e_ability_core.rs`](../tests/e2e_ability_core.rs) and [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs). Native execution is covered by the handler suites. The source-level Wasm handler path lacks a fresh-prompt allocator; its two ignored fixtures do not emit an artifact successfully. |
 | Row-polymorphic effectful callbacks | **compile-only** | **native-run** | **not-yet-verified** | `test_effect_row_poly_higher_order_function`, `test_effect_row_poly_multiple_abilities`, and `test_effect_row_poly_unification_across_call_sites` execute native callbacks with one or more abilities and independently instantiate the row at different call sites in [`e2e_ability_effect_row.rs`](../tests/e2e_ability_effect_row.rs). No focused Wasm evidence was found. |
-| Tail-resumptive `fn` handlers | **compile-only** | **native-run** | **compile-only** | `test_fn_handler_arm` executes natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The Wasm `fn` test only calls `expect_wasm_compilation_success`. |
-| General `op` handlers and one-shot `resume` | **compile-only** | **native-run** | **compile-only** | `test_state_set_then_get` and the other State tests execute natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The Wasm CPS test only asserts emission. |
+| Tail-resumptive `fn` handlers | **compile-only** | **native-run** | **unsupported** | `test_fn_handler_arm` executes natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The ignored Wasm `fn` fixture fails on the unresolved fresh-prompt helper. |
+| General `op` handlers and one-shot `resume` | **compile-only** | **native-run** | **unsupported** | `test_state_set_then_get` and the other State tests execute natively in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). The ignored Wasm CPS fixture fails on the unresolved fresh-prompt helper. |
 | Dropped continuations and abort/throw handlers | **compile-only** | **native-run** | **not-yet-verified** | Native early-return, `Never`, Abort, and Throw execution tests are in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). |
 | Nested and multiple abilities | **compile-only** | **native-run** | **not-yet-verified** | Native composition, shadowing, and deep nesting execute in [`e2e_ability_nested.rs`](../tests/e2e_ability_nested.rs). No corresponding Wasm execution test was found. |
 | Module-qualified ability paths in inline modules | **compile-only** | **native-run** | **not-yet-verified** | `test_handler_ability_in_module` executes a module-qualified operation call and handler arm in [`e2e_ability_handler.rs`](../tests/e2e_ability_handler.rs). File-module loading remains unsupported, and no focused Wasm evidence was found. |
 
-Wasm ability support must not be described as **wasm-run** until an emitted
-program using that exact handler form is executed and its observable result is
-asserted. The current two Wasm ability tests are **compile-only**.
+The ignored `test_compile_tail_dispatch_ability` and
+`test_compile_cps_dispatch_ability` fixtures in
+[`wasm_compilation.rs`](../tests/wasm_compilation.rs) currently fail because
+`__tribute_next_tag` has neither a Wasm body nor an import binding. Backend
+dispatch unit tests do not establish source-level handler compilation. Wasm
+ability support requires successful emission first, then execution of that exact
+handler form with its observable result asserted.
 
 ## Data, Numerics, and Standard I/O
 
@@ -118,13 +121,13 @@ documentation:
    failure example. Its diagnostic must include
    `` unresolved name `missing_value` ``.
 
-### Retained User-Facing Artifacts
+### Native Effects Example
 
-`lang-examples/native_effects.trb` is a retained **native-run** artifact. Its
+`lang-examples/native_effects.trb` is a **native-run** example. Its
 expected stdout is `Recovered: the failure was handled`.
 
 `lang-examples/README.md` is the companion catalog that records how to run
-the canonical and retained artifacts and their expected results.
+the maintained examples and their expected results.
 
 ### Internal Regression Selection
 

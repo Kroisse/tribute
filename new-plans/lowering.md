@@ -50,9 +50,9 @@ pipeline-boundary conversion checks.
 application for these passes. For example, `canonicalize_pass()` and
 `dce_pass(DceConfig::default())` run cleanup under one `func.func` scope, and
 `scf_to_cf_pass()` lowers structured control flow inside one function.
-Module-wide entry points remain available for compatibility and tests, but
-pipeline scheduling should prefer nested function passes whenever the transform
-does not create functions, delete functions, or rewrite cross-function symbols.
+Module-wide entry points explicitly apply the same transform to all functions.
+Production scheduling uses nested function passes when the transform does not
+create functions, delete functions, or rewrite cross-function symbols.
 
 ## Conversion Modes
 
@@ -80,7 +80,8 @@ operations by inspecting concrete Marker fields or backend closure layouts.
 Native lowering maps the ABI to runtime evidence calls and native closure
 pointers. WasmGC lowering uses the same shared ability IDs and marker field
 order, but stores dispatch closures as `anyref` closure structs and lowers
-dispatch to evidence lookup, closure unpacking, and `wasm.call_indirect`.
+dispatch to evidence lookup and closure unpacking. Ordinary source-result
+calls use `wasm.call_indirect`; CPS transfers use `wasm.return_call_indirect`.
 
 ## Legality Precedence
 
@@ -132,28 +133,36 @@ The Wasm pipeline lowers target-independent dialects into `wasm.*` while using
 analysis plans for type indices, function indices, data segments, imports, and
 memory layout.
 
-Typical pass order:
+Target ABI validation, CPS signature physicalization, root bridge composition,
+closure lowering and storage finalization precede Wasm dialect lowering:
 
 ```text
+validate_lowerable_structured_control
+io_to_wasm
 arith_to_wasm
 scf_to_wasm
+normalize_primitive_types
 func_to_wasm
 wasm_func_signature_conversion
 tribute_rt_to_wasm
-adt_to_wasm
-evidence_to_wasm
 const_to_wasm
+adt_to_wasm
+prepare_wasm_evidence_runtime + evidence_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
-assign_gc_type_indices
+verify_wasm_backend_ready
+resolve_unrealized_casts + cleanup
+finalize_wasm_gc_types
+verify_wasm_emission_ready
 ```
 
-Backend-ready Wasm lowering must eliminate residual `effect.*` operations.
-The current `wasm-backend-ready` partial conversion boundary rejects residual
-`ability.*` and `effect.*` operations while still allowing later-stage
-infrastructure such as unresolved casts. `evidence_to_wasm` generates the
-evidence lookup/extend helpers and lowers effect dispatch to closure unpacking
-plus `wasm.call_indirect`.
+`wasm-backend-ready` is a partial conversion boundary after dialect lowering.
+It rejects residual `ability.*` and `effect.*` while allowing later-stage
+infrastructure such as unresolved casts. The target evidence stage creates its
+own runtime helpers and lowers dispatch to ordinary or proper-tail indirect
+calls with explicit exact signatures. Final GC indices are assigned only after
+cast materialization and cleanup; final emission validation checks the complete
+module before producing a binary.
 
 The lower-level `trunk-ir-wasm-backend` pass group handles target-independent
 dialect conversion:
@@ -174,17 +183,24 @@ The native pipeline lowers Tribute-specific runtime operations and
 target-independent dialects into `clif.*`, then validates the native backend
 boundary before emission.
 
-Typical pass groups:
+The shared route supplies legalized callable/control IR and the effect ABI.
+Native stages consume that result in this order:
 
 ```text
-effect/ability lowering
-effect ABI to native runtime lowering
-native runtime lowering
-arith_to_clif
-scf_to_clif
-adt_to_clif
+target ABI validation + CPS signature physicalization + root bridge composition
+closure lowering
+prepare_native_evidence_runtime + evidence_to_native
+finalize_closure_storage_layout
+native String/Bytes/I/O/List lowering
+scf_to_cf
+typed ownership/RTTI planning + explicit RC materialization
 func_to_clif
-const/intrinsic lowering
+cf_to_clif
+adt_to_clif
+arith_to_clif + mem_to_clif
+runtime/constant/intrinsic lowering
+conversion-cast materialization + RC lowering
+backend-ready verification
 ```
 
 Expected boundary: backend-ready native IR contains `clif.*` plus explicitly
@@ -216,12 +232,6 @@ removes results, dependency metadata, and construction state.
 Planner-style data, such as data segments, WASI imports, memory layout, or
 native layout metadata, should be represented as immutable plans that can be
 computed before the pass that consumes them.
-
-## Open Questions
-
-- Which effect/ability boundary targets should be public reusable APIs?
-- Which Wasm backend boundary should be restored when that backend is revisited?
-- Whether an analysis-only conversion mode is useful enough to add.
 
 ## References
 

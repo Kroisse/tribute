@@ -1,133 +1,43 @@
 # Linking Strategy
 
-## Overview
+## Compilation Unit
 
-Tribute targets WasmGC, which significantly constrains linking options
-compared to traditional linear memory WebAssembly.
+현재 CLI는 하나의 source file과 embedded Prelude를 준비하여 하나의 shared module로
+컴파일한다. Source-logical callable/control IR과 CPS legalization은 같은 module 안에서
+검증한다. Module system의 source 계약은 [modules.md](modules.md), 실제 지원 범위는
+[capabilities.md](capabilities.md)를 따른다.
 
-## Options Considered
+File-module loading과 별도 Tribute library compilation은 제공하지 않는다. `use`
+경로만으로 임의의 파일을 읽거나 dependency graph를 만드는 것으로 가정하지 않는다.
+이 제한은 Salsa의 frontend query caching과 별개다.
 
-### 1. Single Module Compilation (Current)
+## WasmGC
 
-```text
-user.trb + std/*.trb → single .wasm
-```
+Wasm backend는 완성된 shared module을 하나의 `.wasm`으로 emit한다. Module 내부의
+GC type index, recursive type group, function/table index는 emitter가 함께 정한다.
+WASI import는 [wasm-backend.md](wasm-backend.md)의 target ABI 계약을 따른다.
 
-**Pros:**
+현재 compilation unit 사이에서 GC object나 closure를 주고받는 별도 linker ABI는
+정의하지 않는다. Source nominal identity를 backend type index와 동일시하거나,
+서로 다른 module의 같은 정수 index가 같은 타입이라고 가정해서는 안 된다.
 
-- Simplest implementation
-- No linker needed
-- GC type sharing is trivial (same module)
+## Native
 
-**Cons:**
+Native backend는 Cranelift object를 만들고 host linker로 executable을 생성한다.
+Private runtime helper, allocator와 external C symbol은 target에서 정한 physical
+ABI를 사용한다. 이 native link 단계가 별도 Tribute compilation unit 사이의
+source-level ABI를 제공하는 것은 아니다.
 
-- No incremental compilation
-- Full recompile on any change
-- No separate library distribution
+## Separate Compilation의 요구 조건
 
-### 2. Import/Export Based
+별도 compilation unit을 도입하려면 다음 계약을 함께 정의해야 한다.
 
-```wasm
-;; std.wasm
-(func (export "Int::add") ...)
+1. Source graph, module visibility와 canonical declaration identity
+2. Generic specialization의 소유권과 중복 제거
+3. Exact callable convention, parameter/result ABI와 closure storage
+4. WasmGC recursive type group과 nominal layout의 module 간 대응
+5. Native ownership, RTTI 및 runtime helper identity의 link 경계
+6. Effect operation identity와 evidence/handler dispatch 계약
 
-;; user.wasm
-(import "std" "Int::add" (func ...))
-```
-
-**Pros:**
-
-- Standard Wasm mechanism
-- Separate compilation possible
-
-**Cons:**
-
-- GC type sharing across modules is problematic
-- How does runtime know `BigNat` in std.wasm == `BigNat` in user.wasm?
-- Type canonicalization at instantiation time is complex
-
-### 3. Static Linking (wasm-ld style)
-
-```text
-foo.trb → foo.o (relocatable)
-bar.trb → bar.o
-        ↓ wasm-ld
-    output.wasm
-```
-
-**Pros:**
-
-- Incremental compilation (only recompile changed files)
-- Link-time optimization (dead code elimination, cross-module inlining)
-- Standard tooling (LLVM ecosystem)
-- Static library distribution (.a files)
-
-**Cons:**
-
-- **WasmGC is not supported** - wasm-ld designed for linear memory model
-- No standard for WasmGC object file format
-- Type definition merging undefined (recursive type groups, type hierarchies)
-- Additional toolchain dependency (LLVM/wasm-ld)
-
-### 4. Component Model
-
-**Pros:**
-
-- Modern approach with WIT interface definitions
-- Clean component composition
-- wasmtime support available
-
-**Cons:**
-
-- Browser support not yet available
-- WasmGC + Component Model combination is unexplored territory
-- Tooling still maturing
-
-## The WasmGC Problem
-
-wasm-ld handles relocations for linear memory Wasm:
-
-- Data section relocations
-- Function index relocations
-- Table index relocations
-
-WasmGC introduces new challenges:
-
-- **Type definitions** - struct/array types need merging
-- **Type indices** - GC ref types reference type indices
-- **Recursive type groups** - `(rec ...)` must be handled atomically
-- **Type hierarchies** - subtyping relationships must be preserved
-
-There is no standard for WasmGC relocatable object files.
-
-## Current State of WasmGC Languages
-
-| Language | Linking Approach |
-| -------- | ---------------- |
-| Rust → WasmGC | Single module only |
-| OCaml → WasmGC | Single module only |
-| Kotlin/Wasm | Single module only |
-| Dart → WasmGC | Single module only |
-
-All major WasmGC implementations use single-module compilation.
-
-## Decision
-
-**Short term:** Source-level merging → single module compilation
-
-- Compiler finds `use std::Int` and compiles referenced sources together
-- Similar to Go or Zig compilation model
-- No separate linking phase
-
-**Long term:** Revisit when Component Model matures with WasmGC support
-
-## Implementation Notes
-
-For source-level merging, the compiler needs:
-
-1. Module resolution - finding source files from `use` paths
-2. Dependency graph - determining compilation order
-3. Symbol visibility - `pub` vs private declarations
-4. Cycle detection - handling mutual dependencies
-
-These are independent of the linking strategy and needed regardless.
+Wasm import/export나 component boundary는 이 source/ABI 계약을 대신하지 않는다.
+지원되지 않는 조합은 명시적으로 진단하고 다른 compilation 경로로 조용히 바꾸지 않는다.

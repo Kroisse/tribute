@@ -53,7 +53,7 @@ fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b
 참고: `Map`은 생성 시점에 `eq`, `hash`를 받아 내부에 보관한다. 이후 `insert`, `get` 등에서는 전달할 필요 없다:
 
 ```rust
-let users = Map::new(Text::eq, Text::hash)
+let users = Map::new(String::eq, String::hash)
 let users = users.insert("alice", alice).insert("bob", bob)
 users.get("alice")  // eq, hash 불필요
 ```
@@ -61,8 +61,8 @@ users.get("alice")  // eq, hash 불필요
 ### 특정 Ability 명시
 
 ```rust
-fn(Text) ->{Http} Response             // Http만
-fn(Text) ->{Http, Async} Response      // Http와 Async
+fn(String) ->{Http} Response             // Http만
+fn(String) ->{Http, Async} Response      // Http와 Async
 ```
 
 ### Builtin Ambient Ability
@@ -104,12 +104,12 @@ operation effect가 함께 있으면 더 강한 CPS 호출 규약을 사용한�
 
 ```rust
 // 특정 ability
-fn fetch(url: Text) ->{Http} Response {
+fn fetch(url: String) ->{Http} Response {
     Http::get(url)
 }
 
 // 여러 ability
-fn fetch_all(urls: List(Text)) ->{Http, Async} List(Response) {
+fn fetch_all(urls: List(String)) ->{Http, Async} List(Response) {
     urls.map(fn(url) url.get.await)
 }
 
@@ -180,7 +180,7 @@ Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키�
 `Ability::operation(args)` 형태를 사용한다:
 
 ```rust
-fn fetch(url: Text) ->{Http} Response {
+fn fetch(url: String) ->{Http} Response {
     Http::get(url)  // perform 없이 직접 호출
 }
 ```
@@ -222,8 +222,8 @@ Ability operation은 두 종류로 선언한다:
 
 ```rust
 ability Http {
-    fn get(url: Text) -> Response
-    fn post(url: Text, body: Text) -> Response
+    fn get(url: String) -> Response
+    fn post(url: String, body: String) -> Response
 }
 
 ability Async {
@@ -240,7 +240,7 @@ ability Logger {
 }
 
 ability Fail {
-    op fail(msg: Text) -> Never  // never resumes
+    op fail(msg: String) -> Never  // never resumes
 }
 ```
 
@@ -391,7 +391,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
 
 ```rust
 ability Fail {
-    op fail(msg: Text) -> Never
+    op fail(msg: String) -> Never
 }
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
@@ -469,7 +469,7 @@ fn main() ->{Io} Nil {
 | ---- | ------ | ----------------- | ----------- | ---- |
 | `fn log(msg: String) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Reader, Logger |
 | `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
-| `op fail(msg: Text) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
+| `op fail(msg: String) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
 
 ### Operation 규칙
 

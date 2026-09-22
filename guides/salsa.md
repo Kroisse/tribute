@@ -1,506 +1,118 @@
-# Salsa Integration Guide for Tribute
+# Salsa Integration Guide
 
-This document explains how Salsa (an incremental computation framework) is
-integrated and used in the Tribute project.
+Salsa caches source-dependent computations. Tribute's frontend and artifact
+queries use Salsa; shared and target IR passes operate in a mutable arena.
 
-## Table of Contents
-
-1. [What is Salsa?](#what-is-salsa)
-2. [Salsa Architecture in Tribute](#salsa-architecture-in-tribute)
-3. [Core Components](#core-components)
-4. [Implementation Guide](#implementation-guide)
-5. [Practical Examples](#practical-examples)
-6. [Writing Tests](#writing-tests)
-7. [Future Extensions](#future-extensions)
-
-## What is Salsa?
-
-Salsa is an incremental computation framework written in Rust. Key features:
-
-- **Automatic dependency tracking**: Automatically tracks dependencies between queries
-- **Incremental recomputation**: Only recomputes affected parts when inputs change
-- **Memoization**: Automatically caches computation results
-- **Parallel execution**: Can execute independent queries in parallel
-
-## Salsa Architecture in Tribute
+## Computation Boundaries
 
 ```text
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  SourceCst │ ──> │    Parse    │ ──> │   Program   │
-│   (Input)   │     │   (Query)   │     │  (Tracked)  │
-└─────────────┘     └─────────────┘     └─────────────┘
-                            │
-                            ▼
-                    ┌─────────────┐     ┌─────────────┐
-                    │  Lower to   │ ──> │ HirProgram  │
-                    │     HIR     │     │  (Tracked)  │
-                    └─────────────┘     └─────────────┘
+SourceCst (URI + Rope + tree-sitter CST)
+    → tracked parsing, name resolution, typechecking and TDNR
+    → prepared typed AST and semantic metadata
+    → fresh arena IrContext + source-logical Module
+    → shared CPS and target passes
+    → tracked diagnostic/artifact result
 ```
 
-## Core Components
+`SourceCst` is defined in
+[`tribute-front/src/source_file.rs`](../crates/tribute-front/src/source_file.rs).
+[`src/database.rs`](../src/database.rs) owns the CLI/LSP document database.
+[`src/pipeline.rs`](../src/pipeline.rs) composes the queries and arena passes.
 
-### 1. Database Definition
+Arena `OpRef`, `ValueRef` and `TypeRef` belong to their `IrContext`; they are not
+Salsa tracked values. A tracked artifact query may run a fresh compilation
+session internally. Individual rewrite mutations are handled by pass and
+analysis infrastructure, not Salsa dependency tracking.
 
-In modern Salsa, the database is defined directly without a trait:
+## Creating a Source Input
 
-```rust
-// tribute-ast/src/database.rs
-#[derive(Default, Clone)]
-#[salsa::db]
-pub struct TributeDatabaseImpl {
-    storage: salsa::Storage<Self>,
-}
-```
-
-### 2. Input Types
-
-Inputs represent data provided from the outside:
+Use the existing constructor when a test needs parsed source:
 
 ```rust
-#[salsa::input]
-pub struct SourceCst {
-    #[returns(ref)]
-    pub uri: Uri<String>,
-    #[returns(ref)]
-    pub text: Rope,
-    #[returns(ref)]
-    pub tree: Option<Tree>,
-}
-```
+use tribute_front::SourceCst;
 
-### 3. Tracked Types
-
-Tracked types store query results and Salsa manages their lifecycle:
-
-```rust
-#[salsa::tracked]
-pub struct Program<'db> {
-    pub source_cst: SourceCst,
-    #[return_ref]
-    pub expressions: Vec<TrackedExpression<'db>>,
-}
-
-#[salsa::tracked]
-pub struct TrackedExpression<'db> {
-    pub expr: Expression,
-    pub span: Span,
-}
-```
-
-### 4. Accumulators
-
-Accumulators collect side effects (errors, warnings, etc.) during query
-execution. A single `Diagnostic` type can be used across all compilation
-phases:
-
-```rust
-#[salsa::accumulator]
-pub struct Diagnostic {
-    pub message: String,
-    pub span: Span,
-    pub severity: DiagnosticSeverity,
-    pub phase: CompilationPhase, // Optional: track which phase generated this
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompilationPhase {
-    Parsing,
-    HirLowering,
-    TypeChecking,
-    Optimization,
-}
-```
-
-### 5. Query Functions
-
-Queries are defined as standalone functions with the `#[salsa::tracked]` attribute:
-
-```rust
-// AST level queries
-#[salsa::tracked]
-pub fn parse_source_cst(db: &dyn salsa::Database, source: SourceCst) -> Program<'_> {
-    // Implementation
-}
-
-#[salsa::tracked]
-pub fn diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    // Collect accumulated diagnostics
-    parse_source_cst::accumulated::<Diagnostic>(db, source)
-}
-
-// HIR level queries
-#[salsa::tracked]
-pub fn lower_source_to_hir(db: &dyn salsa::Database, source: SourceCst) -> HirProgram<'_> {
-    // Implementation
-}
-```
-
-## Implementation Guide
-
-### 1. Adding New Queries
-
-To add a new query, simply create a tracked function:
-
-```rust
-// Define the query as a tracked function
-#[salsa::tracked]
-pub fn type_check(db: &dyn salsa::Database, program: HirProgram<'_>) -> TypedProgram<'_> {
-    // Type checking logic
-    let mut type_env = TypeEnvironment::new();
-    
-    // Type check functions
-    for (name, func) in program.functions(db) {
-        // Add to accumulator on error
-        if let Err(e) = check_function(&mut type_env, func) {
-            Diagnostic {
-                message: e.to_string(),
-                span: func.span(db),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }.accumulate(db);
-        }
-    }
-    
-    // Return result
-    TypedProgram::new(db, program, type_env)
-}
-```
-
-### 2. Creating Tracked Types
-
-```rust
-// Create tracked types with new method
-let program = Program::new(
+let source = SourceCst::from_source_str(
     db,
-    source_cst,
-    expressions.into_iter().map(|(expr, span)| {
-        TrackedExpression::new(db, expr, span)
-    }).collect(),
+    "example.trb",
+    "fn answer() -> Int { 42 }",
 );
 ```
 
-### 3. Building Dependency Chains
+For real documents, use `TributeDatabaseImpl` and its input/document lifecycle
+methods. Do not invent a second database or parsing path for a pass test.
+
+## Incremental Updates
+
+Source text and its CST must describe the same revision. The LSP updates both
+`SourceCst::text` and `SourceCst::tree` after tree-sitter parsing. Changing only
+the text can leave a stale syntax tree even though Salsa observes the text
+setter. Incremental tree-sitter parsing must also apply the corresponding
+`InputEdit` before reusing an old tree.
+
+Salsa automatically records dependencies read by tracked queries. Inputs must
+be passed or accessed through those queries for invalidation to work. External
+file reads, environment changes and arbitrary arena mutations do not become
+tracked inputs by themselves.
+
+## Diagnostics
+
+Use `tribute_core::diagnostic::Diagnostic` and its `CompilationPhase` for
+source diagnostics. `Diagnostic::new` accepts a message, span, severity and
+phase; the builder also supports secondary labels and notes.
+
+`Diagnostic::accumulate(db)` requires an active `#[salsa::tracked]` query.
+Attaching a database alone does not create a query context. Accumulate in the
+existing frontend query path, then retrieve diagnostics through that query or
+`compile_with_diagnostics`.
 
 ```rust
-// Dependencies are automatically created when queries call other queries
-#[salsa::tracked]
-pub fn compile(db: &dyn salsa::Database, source: SourceCst) -> CompiledProgram {
-    // Depends on parse_source_cst
-    let ast = parse_source_cst(db, source);
-    
-    // Depends on lower_source_to_hir
-    let hir = lower_source_to_hir(db, source);
-    
-    // Depends on type_check
-    let typed = type_check(db, hir);
-    
-    // Generate code
-    generate_code(typed)
-}
+use tribute_core::diagnostic::Diagnostic;
+
+let diagnostics: Vec<Diagnostic> =
+    tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .cloned()
+        .collect();
 ```
 
-### 4. Accessing Accumulated Values
+Pure IR passes return pass/conversion errors. The pipeline attaches source
+context and reports the appropriate compilation phase at the query boundary.
+Avoid continuing into lowering when frontend diagnostics already report an
+error.
+
+## Tests
+
+Use the `tribute-testing` skill for command and snapshot conventions. The
+repository's `#[salsa_test]` macro supplies and attaches a fresh database:
 
 ```rust
-// To collect accumulated values from a specific query
-#[salsa::tracked]
-pub fn all_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<Diagnostic> {
-    // Get diagnostics accumulated during parsing
-    let parse_diags = parse_source_cst::accumulated::<Diagnostic>(db, source);
-    
-    // Get diagnostics accumulated during HIR lowering
-    let hir_diags = lower_source_to_hir::accumulated::<Diagnostic>(db, source);
-    
-    // Combine and return
-    parse_diags.into_iter()
-        .chain(hir_diags.into_iter())
-        .collect()
-}
-```
-
-## Practical Examples
-
-```rust
-use ropey::Rope;
-use std::path::Path;
-use tree_sitter::Parser;
-use tribute_front::path_to_uri;
+use salsa_test_macros::salsa_test;
+use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::SourceCst;
 
-fn make_source(
-    db: &dyn salsa::Database,
-    path: &Path,
-    text: &str,
-) -> SourceCst {
-    let uri = path_to_uri(path);
-    let rope = Rope::from_str(text);
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::LANGUAGE.into())
-        .expect("Failed to set language");
-    let tree = parser.parse(text, None);
-    SourceCst::new(db, uri, rope, tree)
+#[salsa_test]
+fn valid_source_has_no_diagnostics(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "empty.trb", "fn main() {}");
+    let result = compile_with_diagnostics(db, source);
+    assert!(result.diagnostics.is_empty());
 }
 ```
 
-### 1. Basic Usage
+- Pure logic and arena transformations can use ordinary unit tests.
+- Diagnostic tests must invoke a tracked frontend or pipeline query.
+- Incremental tests update the existing source input and assert a meaningful
+  changed result; simply calling a query twice does not prove invalidation.
+- Source-logical frontend tests inspect `tribute_control` operations and
+  logical signatures. CPS and backend tests enter the shared/target route.
 
-```rust
-use tribute_ast::{TributeDatabaseImpl, diagnostics, parse_source_cst};
+Concrete incremental and diagnostic examples are maintained in
+[`tests/salsa_integration.rs`](../tests/salsa_integration.rs), and LSP document
+updates are in [`src/lsp/server.rs`](../src/lsp/server.rs).
 
-// Create database
-let db = TributeDatabaseImpl::default();
+## Analysis Cache Boundary
 
-// Create source file
-let source = make_source(&db, Path::new("example.trb"), "(+ 1 2 3)");
-
-// Parse
-let program = parse_source_cst(&db, source);
-
-// Check diagnostics
-let diagnostics = diagnostics(&db, source);
-for diag in diagnostics {
-    println!("{}: {}", diag.severity, diag.message);
-}
-```
-
-### 2. Incremental Compilation
-
-```rust
-// Initial parsing
-let mut db = TributeDatabaseImpl::default();
-let source = make_source(&db, path, text);
-let program1 = parse_source_cst(&db, source);
-
-// Modify source
-source.set_text(&mut db).to("(+ 1 2 3 4)".to_string());
-
-// Reparse - automatically invalidated and recomputed
-let program2 = parse_source_cst(&db, source);
-
-// program1 and program2 are different results
-```
-
-### 3. Attach Pattern (for testing)
-
-```rust
-TributeDatabaseImpl::default().attach(|db| {
-    // Use db within this block
-    let source = make_source(db, path, text);
-    let program = parse_source_cst(db, source);
-    
-    // Test assertions
-    assert_eq!(program.expressions(db).len(), 1);
-});
-```
-
-## Writing Tests
-
-### 1. Unit Tests
-
-```rust
-#[test]
-fn test_parse_simple_expression() {
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = make_source(db, Path::new("test.trb"), "(+ 1 2)");
-        
-        let program = parse_source_cst(db, source);
-        let exprs = program.expressions(db);
-        
-        assert_eq!(exprs.len(), 1);
-        match &exprs[0].expr(db) {
-            Expression::Call { func, args } => {
-                assert_eq!(func.as_str(), "+");
-                assert_eq!(args.len(), 2);
-            }
-            _ => panic!("Expected Call expression"),
-        }
-    });
-}
-```
-
-### 2. Incremental Computation Tests
-
-```rust
-#[test]
-fn test_incremental_parsing() {
-    use ropey::Rope;
-
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = make_source(db, path, "(+ 1 2)");
-        
-        // First parse
-        let program1 = parse_source_cst(db, source);
-        let revision1 = db.salsa_runtime().current_revision();
-        
-        // Parse again with same content - uses cache
-        let program2 = parse_source_cst(db, source);
-        let revision2 = db.salsa_runtime().current_revision();
-        assert_eq!(revision1, revision2); // No revision change
-        
-        // Modify source
-        source.set_text(db).to(Rope::from_str("(+ 1 2 3)"));
-        
-        // Reparse - new computation
-        let program3 = parse_source_cst(db, source);
-        let revision3 = db.salsa_runtime().current_revision();
-        assert_ne!(revision2, revision3); // Revision changed
-    });
-}
-```
-
-### 3. Diagnostic Tests
-
-```rust
-#[test]
-fn test_parse_error_diagnostics() {
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = make_source(db, Path::new("error.trb"), "(+ 1 2");
-        
-        let _ = parse_source_cst(db, source);
-        let diagnostics = diagnostics(db, source);
-        
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
-        assert!(diagnostics[0].message.contains("closing"));
-    });
-}
-```
-
-## Future Extensions
-
-### 1. Type System
-
-```rust
-// Tracked type for type information
-#[salsa::tracked]
-pub struct TypedExpression<'db> {
-    pub expr: HirExpr<'db>,
-    pub ty: Type,
-}
-
-// Type checking query
-#[salsa::tracked]
-fn type_check_expr(
-    db: &dyn salsa::Database,
-    expr: HirExpr<'_>,
-    env: TypeEnvironment<'_>,
-) -> TypedExpression<'_> {
-    // Implementation
-}
-```
-
-### 2. Optimization Passes
-
-```rust
-// Optimized HIR
-#[salsa::tracked]
-pub struct OptimizedHir<'db> {
-    pub original: HirProgram<'db>,
-    #[return_ref]
-    pub optimized_functions: BTreeMap<Identifier, HirFunction<'db>>,
-}
-
-// Optimization queries
-#[salsa::tracked]
-fn constant_folding(db: &dyn salsa::Database, hir: HirProgram<'_>) -> OptimizedHir<'_> {
-    // Implementation
-}
-
-#[salsa::tracked]
-fn dead_code_elimination(db: &dyn salsa::Database, hir: OptimizedHir<'_>) -> OptimizedHir<'_> {
-    // Implementation
-}
-```
-
-### 3. Language Server Protocol (LSP)
-
-```rust
-// LSP queries
-#[salsa::tracked]
-fn find_definition(
-    db: &dyn salsa::Database,
-    file: SourceCst,
-    position: Position,
-) -> Option<Location> {
-    // Implementation
-}
-
-#[salsa::tracked]
-fn find_references(
-    db: &dyn salsa::Database,
-    definition: Location,
-) -> Vec<Location> {
-    // Implementation
-}
-
-#[salsa::tracked]
-fn hover_info(
-    db: &dyn salsa::Database,
-    file: SourceCst,
-    position: Position,
-) -> Option<HoverInfo> {
-    // Implementation
-}
-```
-
-### 4. Parallel Processing
-
-```rust
-// Process multiple files in parallel
-#[salsa::tracked]
-fn compile_workspace(db: &dyn salsa::Database, files: Vec<SourceCst>) -> WorkspaceResult {
-    use rayon::prelude::*;
-    
-    let results: Vec<_> = files
-        .par_iter()
-        .map(|file| compile(db, *file))
-        .collect();
-        
-    WorkspaceResult::new(db, results)
-}
-```
-
-## Best Practices
-
-1. **Keep queries pure**: Side effects only through Accumulators
-2. **Split into small queries**: Improves reusability and incremental
-   computation efficiency
-3. **Use Tracked types**: Store intermediate results as Tracked types
-4. **Use attach pattern for tests**: Ensures isolation between tests
-5. **Minimize dependencies**: Pass only necessary data to queries
-6. **Use `&dyn salsa::Database`**: Always use the generic database type in
-   query signatures
-
-## Debugging Tips
-
-```rust
-// Enable Salsa event logging
-env_logger::init();
-RUST_LOG=salsa=debug cargo test
-
-// Trace query execution
-db.salsa_runtime().report_synthetic_reads(true);
-
-// Check dependency graph
-let deps = db.salsa_runtime().dependencies();
-
-// Debug a specific query
-#[salsa::tracked(recovery_fn = recover_from_parse_error)]
-pub fn parse_with_recovery(db: &dyn salsa::Database, source: SourceCst) -> Program<'_> {
-    // Implementation
-}
-
-fn recover_from_parse_error(
-    db: &dyn salsa::Database,
-    _cycle: &salsa::Cycle,
-    source: SourceCst,
-) -> Program<'_> {
-    // Return a default/error program
-    Program::new(db, source, vec![])
-}
-```
-
-This guide explains how to effectively use Salsa in the Tribute project.
-For more information, see the
-[official Salsa documentation](https://salsa-rs.github.io/salsa/).
+Arena analyses have their own cache scope and preservation/invalidation
+contract. A pass that changes IR must invalidate affected analyses or declare
+only analyses it actually preserves. Salsa's source-query invalidation cannot
+repair a stale arena analysis. See the analysis and pass contracts in
+[`new-plans/ir.md`](../new-plans/ir.md).

@@ -396,9 +396,8 @@ adt.string_const(text)
 있다. `String::Leaf` 생성은 target의 일반 enum/variant lowering보다 먼저 일어나고,
 그 이후에는 source에서 작성한 `Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
 
-Native와 Wasm 모두 이 의미적 경계를 공유한다. 정적 문자열을 linear-memory
-pointer와 별도 길이 metadata로 표현하는 legacy `__print_line` ABI는 canonical
-`String` 표현이 아니며 public source 또는 최종 backend 경계에서 요구하지 않는다.
+Native와 Wasm 모두 이 의미적 경계를 공유한다. Public I/O wrapper도 canonical
+`String`을 받아 명시적으로 `Bytes`로 변환한 뒤 target I/O operation에 전달한다.
 
 ### Rune
 

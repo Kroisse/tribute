@@ -186,7 +186,7 @@ Row ::= {}                    -- 빈 row (순수)
 
 ```rust
 // OK: 타입 파라미터가 다르면 다른 ability로 취급
-fn foo() ->{State(Int), State(Text)} Nil
+fn foo() ->{State(Int), State(String)} Nil
 
 // Error: 동일한 ability 중복
 fn bar() ->{State(Int), State(Int)} Nil
@@ -645,7 +645,7 @@ let h = compose(
 fn add(x: Int, y: Int) -> Int { x + y }
 
 // OK: effect도 명시 가능 (생략 시 암묵적 polymorphic)
-fn fetch(url: Text) ->{Http} Response { ... }
+fn fetch(url: String) ->{Http} Response { ... }
 
 // Error: 파라미터 타입 누락
 fn add(x, y) -> Int { x + y }
@@ -679,15 +679,15 @@ Effect annotation을 생략하면 fresh한 ability 변수가 생성된다:
 
 ```rust
 // 단순 함수: 생략 가능
-fn fetch(url: Text) -> Response
+fn fetch(url: String) -> Response
 // 위는 아래와 동일:
-fn fetch(url: Text) ->{e} Response
+fn fetch(url: String) ->{e} Response
 
 // 순수 함수는 명시적으로 {} 표기
 fn add(x: Int, y: Int) ->{} Int { x + y }
 
 // 특정 effect
-fn fetch_data(url: Text) ->{Http} Response { ... }
+fn fetch_data(url: String) ->{Http} Response { ... }
 ```
 
 **고차 함수에서 effect 전파**: 내부 함수의 effect를 외부로 전파하려면 **같은 변수를 명시**해야 한다:

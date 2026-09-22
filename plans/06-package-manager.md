@@ -3,7 +3,9 @@
 ## Overview
 
 Develop a modern package manager for Tribute with dependency resolution,
-version management, and seamless build integration.
+version management, and build integration. The commands and manifest below are
+a tooling proposal; the current CLI compiles one source file and does not
+provide package commands.
 
 ## Priority: Medium (6/8)
 

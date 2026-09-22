@@ -210,8 +210,8 @@ reference를 직접 전달할 수 없다. 첫 구현은 instance-local linear sc
 
 이 선택은 `tribute_io.write`의 target lowering 내부에만 존재한다. 이후 WASI
 preview2/component model이나 custom host import로 교체해도 source API와 shared IR
-boundary는 바뀌지 않는다. #771은 동적 출력만 다루며 Wasm `read_line`은 별도 후속
-범위다.
+boundary는 바뀌지 않는다. Wasm의 public I/O 지원은 동적 출력에 한정하며 `read_line`은
+지원하지 않는다.
 
 ### Native Runtime ABI
 
