@@ -87,6 +87,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
+tribute-core.workspace = true
 tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
@@ -101,7 +102,6 @@ insta.workspace = true
 itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
-tribute-core.workspace = true
 
 [profile.dev]
 debug = "line-tables-only"

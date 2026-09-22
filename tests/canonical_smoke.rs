@@ -3,7 +3,7 @@
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{DiagnosticSeverity, SourceCst};
-use tribute_passes::CompilationPhase;
+use tribute_core::diagnostic::CompilationPhase;
 
 const INVALID_SOURCE: &str = include_str!("../lang-examples/invalid_unresolved_name.trb");
 

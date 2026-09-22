@@ -26,8 +26,8 @@ use tribute::pipeline::{CompilationConfig, OptimizationOptions, compile_to_nativ
 use tribute_front::SourceCst;
 
 /// Helper to compile code and collect diagnostics using CLI pipeline.
-fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::Diagnostic> {
-    use tribute_passes::diagnostic::Diagnostic;
+fn compile_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+    use tribute_core::diagnostic::Diagnostic;
 
     let source_code = Rope::from_str(code);
 
@@ -47,11 +47,8 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::
 ///
 /// Use this instead of `compile_and_check` when testing for frontend errors that would
 /// cause later pipeline stages to panic.
-fn compile_frontend_and_check(
-    code: &str,
-    name: &str,
-) -> Vec<tribute_passes::diagnostic::Diagnostic> {
-    use tribute_passes::diagnostic::Diagnostic;
+fn compile_frontend_and_check(code: &str, name: &str) -> Vec<tribute_core::diagnostic::Diagnostic> {
+    use tribute_core::diagnostic::Diagnostic;
 
     let source_code = Rope::from_str(code);
 
@@ -67,7 +64,7 @@ fn compile_frontend_and_check(
 }
 
 /// Helper to print diagnostics concisely (truncating long messages).
-fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
+fn print_diagnostics(diagnostics: &[tribute_core::diagnostic::Diagnostic]) {
     for diag in diagnostics {
         let msg = if diag.inner.message.len() > 200 {
             format!(

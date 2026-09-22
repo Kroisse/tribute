@@ -11,8 +11,8 @@ use salsa::Database;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
 use tribute::pipeline::{compile_ast, compile_with_diagnostics};
+use tribute_core::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use tribute_front::SourceCst;
-use tribute_passes::diagnostic::{CompilationPhase, DiagnosticSeverity};
 use trunk_ir::Span;
 
 // =============================================================================

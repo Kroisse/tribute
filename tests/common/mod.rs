@@ -10,8 +10,8 @@ use tribute::pipeline::{
     BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
     PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary, link_native_binary,
 };
+use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_passes::Diagnostic;
 
 #[cfg(unix)]
 unsafe extern "C" {

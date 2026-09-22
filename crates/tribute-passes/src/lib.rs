@@ -6,13 +6,9 @@
 //! ## Pipeline
 //!
 //! This crate focuses on individual compiler passes and utilities.
-//! Name resolution and TDNR are now handled at the AST level in `tribute-front`.
-
-// === Diagnostics ===
-pub mod diagnostic;
+//! Name resolution and TDNR are handled at the AST level in `tribute-front`.
 
 // === TrunkIR passes ===
-pub mod boxing;
 pub mod closure_lower;
 pub mod intrinsic_to_arith;
 pub mod io_lowering;
@@ -28,6 +24,5 @@ pub mod type_converter;
 pub mod wasm;
 
 // Re-exports
-pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use trunk_ir::rewrite::{ApplyResult, PatternApplicator, PatternRewriter, RewritePattern};
 pub use type_converter::generic_type_converter;

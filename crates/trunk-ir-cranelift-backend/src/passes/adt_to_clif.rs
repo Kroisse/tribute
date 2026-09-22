@@ -23,10 +23,10 @@
 
 use tracing::warn;
 
-use crate::adt_layout::{
+use trunk_ir::Symbol;
+use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;

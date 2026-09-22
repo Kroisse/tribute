@@ -15,7 +15,6 @@
 //! - `function`: clif.* -> Cranelift FunctionBuilder emit
 //! - `validation`: Pre-emit validation (all ops must be clif.*)
 
-pub mod adt_layout;
 mod errors;
 mod function;
 pub mod passes;
