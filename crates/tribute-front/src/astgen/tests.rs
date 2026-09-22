@@ -14,6 +14,38 @@ fn parse_and_lower(source: &str) -> Module<UnresolvedName> {
 }
 
 #[test]
+fn operator_values_preserve_names_in_bindings_and_arguments() {
+    for name in ["Int::+", "+", "Nat::*"] {
+        let source = format!("fn main() {{ let action = ({name})\nconsume(({name})) }}");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&source, None).unwrap();
+        assert!(!tree.root_node().has_error(), "{source}");
+        let module = lower_cst_to_ast(&Rope::from_str(&source), &ParsedCst::new(tree));
+        let Decl::Function(function) = &module.decls[0] else {
+            panic!("expected function");
+        };
+        let ExprKind::Block { stmts, value } = function.body.kind.as_ref() else {
+            panic!("expected block");
+        };
+        let Stmt::Let { value: bound, .. } = &stmts[0] else {
+            panic!("expected local binding");
+        };
+        let ExprKind::Call { args, .. } = value.kind.as_ref() else {
+            panic!("expected consumer call");
+        };
+        for expr in [bound, &args[0]] {
+            let ExprKind::Var(reference) = expr.kind.as_ref() else {
+                panic!("expected operator reference {name}, got {:?}", expr.kind);
+            };
+            assert_eq!(reference.qualified.to_string(), name);
+        }
+    }
+}
+
+#[test]
 fn test_simple_function() {
     let source = "fn main() { 42 }";
     let module = parse_and_lower(source);
