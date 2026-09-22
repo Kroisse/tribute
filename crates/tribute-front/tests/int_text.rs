@@ -249,6 +249,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            compiler_intrinsics: std::collections::HashMap::new(),
         },
     )
     .expect("checked instances must specialize");
@@ -338,6 +339,7 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+            compiler_intrinsics: std::collections::HashMap::new(),
         },
     )
     .expect("checked instances must specialize");

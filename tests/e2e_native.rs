@@ -277,6 +277,109 @@ fn main() {
 }
 
 #[test]
+fn test_native_list_constructor_patterns_bind_payloads() {
+    assert_native_output(
+        "list_constructor_bindings.trb",
+        r#"
+enum Item { Number(Nat), Nested(Item), Other }
+
+fn exact(values: List(Item)) -> Nat {
+    case values {
+        [Number(first), Number(second)] -> first + second
+        _ -> 9
+    }
+}
+
+fn prefix(values: List(Item)) -> Nat {
+    case values {
+        [Number(first), Number(second), ..tail] -> first + second + exact(tail)
+        _ -> 8
+    }
+}
+
+fn nested(values: List(List(Item))) -> Nat {
+    case values {
+        [[Nested(Number(value)), ..], ..] -> value
+        _ -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(exact([Number(3), Number(4)]))
+    __tribute_print_nat(exact([Number(3), Number(4), Number(5)]))
+    __tribute_print_nat(exact([Other, Number(4)]))
+    __tribute_print_nat(exact([Number(3), Other]))
+    __tribute_print_nat(prefix([Number(1), Number(2), Number(3), Number(4)]))
+    __tribute_print_nat(prefix([Number(1), Number(2)]))
+    __tribute_print_nat(prefix([Other, Number(2)]))
+    __tribute_print_nat(prefix([Number(1), Other]))
+    __tribute_print_nat(nested([[Nested(Number(6))]]))
+    __tribute_print_nat(nested([]))
+    __tribute_print_nat(nested([[]]))
+    __tribute_print_nat(nested([[Nested(Other)]]))
+    __tribute_print_nat(nested([[Other]]))
+}
+"#,
+        "7\n9\n9\n9\n10\n12\n8\n8\n6\n0\n0\n0\n0",
+    );
+}
+
+#[test]
+fn test_native_list_generic_constructor_payloads_and_tails_survive_owners() {
+    let output = compile_and_run_native_asan(
+        "list_generic_constructor_ownership.trb",
+        r#"
+use std::io::{Io, print_line}
+
+enum Boxed(a) { Box(a), EmptyBox }
+
+fn first_or(values: List(Boxed(a)), fallback: a) -> a {
+    case values {
+        [Box(value), ..] -> value
+        _ -> fallback
+    }
+}
+
+fn tail(values: List(Boxed(String))) -> List(Boxed(String)) {
+    case values {
+        [Box(value), ..rest] -> rest
+        _ -> []
+    }
+}
+
+fn saved_tail(label: String) -> List(Boxed(String)) {
+    tail([Box(label), Box(label <> "!")])
+}
+
+fn main() ->{Io} Nil {
+    let original = [Box("first"), Box("second")]
+    let rest = tail(original)
+    print_line(first_or(rest, "missing"))
+    print_line(first_or(original, "missing"))
+    let saved = first_or([Box("kept" <> "!")], "missing")
+    print_line(saved)
+    print_line(first_or(saved_tail("tail"), "missing"))
+    print_line(first_or([EmptyBox], "empty"))
+    print_line(first_or([], "short"))
+    case first_or([Box(42)], 0) {
+        42 -> print_line("generic")
+        _ -> print_line("wrong")
+    }
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "ASan constructor-pattern ownership run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "second\nfirst\nkept!\ntail!\nempty\nshort\ngeneric"
+    );
+}
+
+#[test]
 fn test_native_list_tail_order_and_persistence() {
     assert_native_output(
         "list_tail_persistence.trb",

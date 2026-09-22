@@ -841,12 +841,9 @@ fn compute_entry_contracts(
         let entry = match ownership_callable_body(ctx, op)? {
             CallableBody::Declaration => {
                 let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
-                // Declarations have no block arguments. Their validated unmanaged
-                // signature still supplies the ownership contract for direct calls.
-                summaries.insert(
-                    symbol,
-                    vec![EntryOwnership::Plain; signature.inputs(ctx).len()],
-                );
+                let entries = bodyless_c_entry_contract(ctx, op, managed_layouts)?
+                    .unwrap_or_else(|| vec![EntryOwnership::Plain; signature.inputs(ctx).len()]);
+                summaries.insert(symbol, entries);
                 continue;
             }
             CallableBody::Definition { entry, .. } => entry,
@@ -905,6 +902,38 @@ fn compute_entry_contracts(
         }
     }
     Ok(summaries)
+}
+
+/// Native `extern "C"` declarations are the one trusted bodyless managed
+/// boundary. Their logical managed arguments are borrowed for the call; a
+/// logical managed result is a fresh owned value, as for every call result.
+fn bodyless_c_entry_contract(
+    ctx: &IrContext,
+    op: OpRef,
+    managed_layouts: &HashSet<TypeRef>,
+) -> Result<Option<Vec<EntryOwnership>>, OwnershipPlanError> {
+    if ctx.op(op).attributes.get_str("abi") != Some("C") {
+        return Ok(None);
+    }
+    let signature = ctx
+        .op(op)
+        .attributes
+        .get_type("type")
+        .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
+        .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
+    Ok(Some(
+        signature
+            .inputs(ctx)
+            .iter()
+            .map(|&ty| {
+                if is_typed_managed_reference(ctx, ty, managed_layouts) {
+                    EntryOwnership::Borrowed
+                } else {
+                    EntryOwnership::Plain
+                }
+            })
+            .collect(),
+    ))
 }
 
 fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
@@ -983,6 +1012,9 @@ fn validate_bodyless_signature(
         .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
+    if ctx.op(op).attributes.get_str("abi") == Some("C") {
+        return Ok(signature);
+    }
     if signature
         .inputs(ctx)
         .iter()

@@ -91,10 +91,14 @@ Compiler lowering에 필요한 `list.empty`, `list.prepend`, `list.is_empty`,
 operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노출하지
 않는다. Native와 Wasm은 각자 private layout으로 lower한다.
 
-Compiler intrinsic은 canonical prelude declaration identity와 typechecked complete
-signature가 registry에서 함께 확인될 때만 intrinsic이다. 같은 qualified symbol이나
-같은 `abi` 문자열을 사용한 source declaration은 ordinary external callable이며
-intrinsic 권한을 상속하지 않는다.
+`extern "intrinsic"`은 compiler-reserved directive다. Prelude와 사용자 선언 모두
+canonical qualified source name을 intrinsic identity로 요청하며, 병합한 AST 전체에서
+monomorphization 전에 지원되는 identity인지 검사한다. 미지원 directive는 미사용
+선언이라도 각 source span에서 진단한다. 지원되는 identity와 typechecked complete
+signature가 registry metadata와 함께 검증된 선언만 intrinsic lowering에 진입한다.
+Ordinary source function이나 `extern "C"`는 같은 symbol을 사용해도 intrinsic이 아니며,
+reserved ABI 문자열만으로 signature 검증을 우회할 수 없다. 이 directive는 일반적인
+symbol uniqueness 규칙을 완화하지 않는다.
 
 ### Use 문법
 

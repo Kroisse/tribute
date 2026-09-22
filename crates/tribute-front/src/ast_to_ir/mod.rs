@@ -93,6 +93,8 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
         "Float::<=",
         "Float::>",
         "Float::>=",
+        "__bytes_get_or_panic",
+        "std::io::__tribute_io_write",
         "std::io::__tribute_io_read_line",
     ]
     .into_iter()
@@ -104,11 +106,21 @@ fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
     SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
 }
 
-/// Register compiler intrinsics from the canonical prelude AST.
+/// An unsupported directive and its source declaration for diagnostics.
+#[derive(Debug)]
+pub struct UnsupportedCompilerIntrinsic {
+    pub node: NodeId,
+    pub identity: Symbol,
+}
+
+/// Register supported compiler intrinsic directives by canonical source name.
 ///
-/// Callers must invoke this only for the compiler-owned prelude module.  A
-/// user module with the same declarations must never be passed here.
-pub fn registered_compiler_intrinsics<V>(module: &AstModule<V>) -> HashMap<NodeId, Symbol>
+/// `extern "intrinsic"` is compiler-reserved: any source declaration using it
+/// requests lowering under its qualified name. The fixed supported set remains
+/// the validation boundary; return every unknown directive for source diagnostics.
+pub fn registered_compiler_intrinsics<V>(
+    module: &AstModule<V>,
+) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>>
 where
     V: salsa::Update,
 {
@@ -116,6 +128,7 @@ where
         declarations: &[crate::ast::Decl<V>],
         prefix: &mut String,
         result: &mut HashMap<NodeId, Symbol>,
+        unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) where
         V: salsa::Update,
     {
@@ -127,12 +140,17 @@ where
                     let symbol = crate::qualified_symbol(prefix, function.name);
                     if is_supported_compiler_intrinsic(symbol) {
                         result.insert(function.id, symbol);
+                    } else {
+                        unsupported.push(UnsupportedCompilerIntrinsic {
+                            node: function.id,
+                            identity: symbol,
+                        });
                     }
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
                         let saved = crate::push_prefix(prefix, module.name);
-                        collect(body, prefix, result);
+                        collect(body, prefix, result, unsupported);
                         prefix.truncate(saved);
                     }
                 }
@@ -142,8 +160,18 @@ where
     }
 
     let mut result = HashMap::new();
-    collect(&module.decls, &mut String::new(), &mut result);
-    result
+    let mut unsupported = Vec::new();
+    collect(
+        &module.decls,
+        &mut String::new(),
+        &mut result,
+        &mut unsupported,
+    );
+    if unsupported.is_empty() {
+        Ok(result)
+    } else {
+        Err(unsupported)
+    }
 }
 
 /// Policy for compiler-generated identity done continuations.
@@ -202,7 +230,7 @@ pub struct TypedModule<'db> {
     /// Case expressions whose source coverage is known to be exhaustive.
     pub exhaustive_cases: std::collections::HashSet<NodeId>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
-    /// Exact declaration IDs registered from the compiler-owned prelude.
+    /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
 }
 

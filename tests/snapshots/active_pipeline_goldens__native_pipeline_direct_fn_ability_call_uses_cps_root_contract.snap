@@ -12,15 +12,9 @@ main: Some(Direct) () -> (core.nil)
   func.call operands=0 results=1: 1
   func.call operands=2 results=0: 1
   func.return operands=1 results=0: 1
-run_all: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
+run: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
   func.call operands=0 results=1: 1
-  func.call operands=5 results=1: 1
-  func.tail_call operands=2 results=0: 1
-run_state_with_console: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
-  func.call operands=0 results=1: 1
-  func.call operands=5 results=1: 1
-  func.tail_call operands=2 results=0: 1
-step: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
   func.call operands=2 results=1: 2
-  func.call_indirect operands=5 results=1: 1
-  func.tail_call_indirect operands=8 results=0: 1
+  func.call operands=5 results=1: 1
+  func.call_indirect operands=5 results=1: 2
+  func.tail_call_indirect operands=3 results=0: 1

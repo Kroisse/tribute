@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use cranelift_entity::EntitySet;
 use derive_more::{Display, Error};
 
 use super::context::IrContext;
@@ -25,7 +26,7 @@ use super::op_interface::{
     RegionValueTransfer,
 };
 use super::ops::DialectType;
-use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
+use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::walk;
 
@@ -246,54 +247,56 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
         }
     };
 
-    // Collect all (value, use) pairs from actual operands
-    let mut actual_uses: HashSet<(ValueRef, OpRef, u32)> = HashSet::new();
-
-    walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
-        for (idx, &operand) in ctx.op_operands(op).iter().enumerate() {
-            actual_uses.insert((operand, op, idx as u32));
-        }
-        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
-    });
-
-    // Direction 1: actual operand → use-chain entry must exist
-    for &(val, op, idx) in &actual_uses {
-        let found = ctx
-            .uses(val)
-            .iter()
-            .any(|u| u.user == op && u.operand_index == idx);
-        if !found {
-            let data = ctx.op(op);
-            errors.push(ValidationError::UseChain {
-                message: format!(
-                    "operand #{} of {}.{} ({:?}) uses {:?} but no use-chain entry exists",
-                    idx, data.dialect, data.name, op, val,
-                ),
-            });
+    // Arena IDs are dense. Keep only module membership and the values to check;
+    // actual operands already provide the reverse lookup for use-chain entries.
+    let mut module_ops = EntitySet::<OpRef>::new();
+    let mut checked_values = EntitySet::<ValueRef>::new();
+    for &block in &ctx.region(body).blocks {
+        for &arg in ctx.block_args(block) {
+            checked_values.insert(arg);
         }
     }
 
-    // Direction 2: use-chain entry → actual operand must exist
-    // Collect all values that have uses
-    let mut checked_values: HashSet<ValueRef> = HashSet::new();
-    for &(val, _, _) in &actual_uses {
-        checked_values.insert(val);
-    }
-
-    // Also check block args and op results that might have stale use-chain entries
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        module_ops.insert(op);
         for &result in ctx.op_results(op) {
             checked_values.insert(result);
         }
+        for &region in &ctx.op(op).regions {
+            for &block in &ctx.region(region).blocks {
+                for &arg in ctx.block_args(block) {
+                    checked_values.insert(arg);
+                }
+            }
+        }
+        // Direction 1: actual operand -> use-chain entry must exist.
+        for (idx, &val) in ctx.op_operands(op).iter().enumerate() {
+            checked_values.insert(val);
+            if !ctx
+                .uses(val)
+                .iter()
+                .any(|u| u.user == op && u.operand_index == idx as u32)
+            {
+                let data = ctx.op(op);
+                errors.push(ValidationError::UseChain {
+                    message: format!(
+                        "operand #{} of {}.{} ({:?}) uses {:?} but no use-chain entry exists",
+                        idx, data.dialect, data.name, op, val,
+                    ),
+                });
+            }
+        }
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
-    for &block in &ctx.region(body).blocks {
-        collect_block_values(ctx, block, &mut checked_values);
-    }
 
-    for &val in &checked_values {
+    // Direction 2: every recorded use must be an actual operand in this module.
+    // Membership must be checked even when a detached/foreign user still has a
+    // matching operand. Unused results and nested block args are checked too.
+    for val in checked_values.iter() {
         for u in ctx.uses(val) {
-            if !actual_uses.contains(&(val, u.user, u.operand_index)) {
+            if !module_ops.contains(u.user)
+                || ctx.op_operands(u.user).get(u.operand_index as usize) != Some(&val)
+            {
                 errors.push(ValidationError::UseChain {
                     message: format!(
                         "use-chain entry for {:?} claims use by {:?} operand #{}, but no such operand exists",
@@ -1274,19 +1277,6 @@ fn validate_scf_switch_result_arity(ctx: &IrContext, op: OpRef, errors: &mut Vec
         && !ctx.op_results(op).is_empty()
     {
         errors.push(operation_verifier_error(ctx, op, "must be resultless"));
-    }
-}
-
-fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<ValueRef>) {
-    for &arg in ctx.block_args(block) {
-        values.insert(arg);
-    }
-    for &op in &ctx.block(block).ops {
-        for &region in &ctx.op(op).regions {
-            for &inner_block in &ctx.region(region).blocks {
-                collect_block_values(ctx, inner_block, values);
-            }
-        }
     }
 }
 
@@ -2311,6 +2301,86 @@ mod tests {
         let module = build_valid_module(&mut ctx);
         let result = validate_use_chains(&ctx, module);
         assert!(result.is_ok(), "Use chains should be valid: {}", result);
+    }
+
+    #[test]
+    fn use_chain_detects_missing_and_mismatched_operand_entries() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.i32) {
+    func.call %x {callee = @consume}
+    func.call %y {callee = @consume}
+    func.return
+  }
+  func.func @consume(%value: core.i32)
+}"#,
+        );
+        let function = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+        let first = ctx.block(block).ops[0];
+        let second = ctx.block(block).ops[1];
+        assert!(validate_use_chains(&ctx, module).is_ok());
+        // Swap operand lists without updating either recorded use: each call
+        // now has one missing use-chain entry and one mismatched recorded use.
+        let first_args = std::mem::take(&mut ctx.op_mut(first).operands);
+        let second_args = std::mem::replace(&mut ctx.op_mut(second).operands, first_args);
+        ctx.op_mut(first).operands = second_args;
+        let result = validate_use_chains(&ctx, module);
+        assert_eq!(result.errors.len(), 4, "{result}");
+        let message = result.to_string();
+        assert!(message.contains("no use-chain entry exists"), "{message}");
+        assert!(message.contains("no such operand exists"), "{message}");
+    }
+
+    #[test]
+    fn use_chain_checks_unused_results_and_nested_block_arguments() {
+        for use_argument in [false, true] {
+            for placement in ["detached", "other_module", "missing_operand"] {
+                let mut ctx = IrContext::new();
+                let module = crate::parser::parse_test_module(
+                    &mut ctx,
+                    r#"core.module @test {
+  func.func @f(%x: core.i32) {
+    %unused = arith.const {value = 0} : core.i32
+    func.return
+  }
+}"#,
+                );
+                let function = module.ops(&ctx)[0];
+                let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+                let value = if use_argument {
+                    ctx.block_args(block)[0]
+                } else {
+                    ctx.op_results(ctx.block(block).ops[0])[0]
+                };
+                assert!(validate_use_chains(&ctx, module).is_ok());
+                let loc = test_location(&mut ctx);
+                let user = func::r#return(&mut ctx, loc, [value]).op_ref();
+                match placement {
+                    "other_module" => {
+                        let other = crate::parser::parse_test_module(
+                            &mut ctx,
+                            "core.module @other { func.func @g() { func.return } }",
+                        );
+                        let other_block = ctx.region(other.body(&ctx).unwrap()).blocks[0];
+                        ctx.push_op(other_block, user);
+                    }
+                    "missing_operand" => {
+                        ctx.push_op(block, user);
+                        let _operands = std::mem::take(&mut ctx.op_mut(user).operands);
+                    }
+                    _ => {}
+                }
+                let result = validate_use_chains(&ctx, module);
+                assert_eq!(result.errors.len(), 1, "{placement}: {result}");
+                assert!(
+                    result.to_string().contains("no such operand exists"),
+                    "{result}"
+                );
+            }
+        }
     }
 
     #[test]

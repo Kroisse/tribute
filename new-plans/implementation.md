@@ -148,8 +148,14 @@ identity와 signature를 소비하며 이름이나 `abi` 문자열을 fallback�
 `adt.ref_cast`, direct/indirect call과 return을 모두 검사한다. `core.ptr`에서 시작해
 unrealized cast 또는 reference cast를 거쳐 managed nominal reference가 되는 경로는
 전체 validation 실패이며 conversion은 시작하지 않는다. Defined Tribute function은
-managed logical parameter/result를 사용할 수 있지만, 등록되지 않은 bodyless external과
-private target runtime helper는 사용할 수 없다.
+managed logical parameter/result를 사용할 수 있다. Bodyless external은 exact registry
+검증을 통과한 compiler intrinsic 또는 명시적 trusted/unsafe `extern "C"` FFI 경계에서만
+managed logical parameter/result를 사용할 수 있다. C FFI의 representation과 ownership
+책임은 호출자에게 있으며, native adapter는 managed argument를 borrowed로, managed
+result를 fresh owned transfer로 취급한다. Shared 단계의 허용은 target 바인딩을 보장하지
+않으며, Wasm은 별도의 [bodyless 선언 처분](wasm-backend.md#bodyless-선언의-처분)을
+따른다. 그 밖의 미등록 bodyless external과 private target runtime helper는 managed
+logical parameter/result를 사용할 수 없다.
 
 기존 source-visible bytes/runtime bridge는 새 semantic callable origin을 만들지 않고
 현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기

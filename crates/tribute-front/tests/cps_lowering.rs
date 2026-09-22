@@ -811,11 +811,13 @@ fn main() {
 /// promoted for an open-callback call.
 #[salsa_test]
 fn test_open_callback_evidence_root_main_stays_evidence_direct(db: &salsa::DatabaseImpl) {
+    // This helper lowers before monomorphization. The original generic fixture
+    // is covered through the production pipeline in tests/open_callback_evidence_root.rs.
     let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
-fn apply_open(value: a, callback: fn(a) -> b) -> b {
+fn apply_open(value: Int, callback: fn(Int) -> Int) -> Int {
     callback(value)
 }
 
