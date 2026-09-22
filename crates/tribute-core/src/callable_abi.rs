@@ -28,12 +28,12 @@ impl<T: Copy> CallableAbi<T> {
         let mut params = Vec::with_capacity(
             self.source_params.len()
                 + usize::from(self.convention.needs_evidence())
-                + usize::from(self.convention.needs_done_k()),
+                + usize::from(self.convention.needs_continuation_frame()),
         );
         if self.convention.needs_evidence() {
             params.push(evidence);
         }
-        if self.convention.needs_done_k() {
+        if self.convention.needs_continuation_frame() {
             params.push(continuation_frame);
         }
         params.extend_from_slice(&self.source_params);
@@ -41,14 +41,15 @@ impl<T: Copy> CallableAbi<T> {
     }
 
     pub fn source_param_offset(&self) -> usize {
-        usize::from(self.convention.needs_evidence()) + usize::from(self.convention.needs_done_k())
+        usize::from(self.convention.needs_evidence())
+            + usize::from(self.convention.needs_continuation_frame())
     }
 
     /// Interpose the physical closure environment in convention order.
     ///
     /// Direct: `env, source...`
     /// EvidenceDirect: `evidence, env, source...`
-    /// Cps: `evidence, env, done_k, source...`
+    /// Cps: `evidence, env, continuation_frame, source...`
     pub fn interpose_environment(&self, logical_params: &[T], environment: T) -> Vec<T> {
         debug_assert_eq!(
             logical_params.len(),
@@ -75,19 +76,13 @@ mod tests {
     #[test]
     fn lowered_function_layouts_are_centralized() {
         let direct = abi(CallingConvention::Direct);
-        assert_eq!(direct.lowered_params("ev", "control"), ["arg"]);
+        assert_eq!(direct.lowered_params("ev", "frame"), ["arg"]);
 
         let evidence_direct = abi(CallingConvention::EvidenceDirect);
-        assert_eq!(
-            evidence_direct.lowered_params("ev", "control"),
-            ["ev", "arg"]
-        );
+        assert_eq!(evidence_direct.lowered_params("ev", "frame"), ["ev", "arg"]);
 
         let cps = abi(CallingConvention::Cps);
-        assert_eq!(
-            cps.lowered_params("ev", "control"),
-            ["ev", "control", "arg"]
-        );
+        assert_eq!(cps.lowered_params("ev", "frame"), ["ev", "frame", "arg"]);
     }
 
     #[test]
@@ -106,8 +101,8 @@ mod tests {
 
         let cps = abi(CallingConvention::Cps);
         assert_eq!(
-            cps.interpose_environment(&["ev", "control", "arg"], "env"),
-            ["ev", "env", "control", "arg"]
+            cps.interpose_environment(&["ev", "frame", "arg"], "env"),
+            ["ev", "env", "frame", "arg"]
         );
     }
 }

@@ -1996,7 +1996,7 @@ impl<'a> Converter<'a> {
             .needs_evidence()
             .then(|| self.ctx.block_args(block)[0]);
         let exit_k = convention
-            .needs_done_k()
+            .needs_continuation_frame()
             .then(|| self.ctx.block_args(block)[usize::from(convention.needs_evidence())]);
         let flow = Flow {
             convention,
@@ -2127,7 +2127,8 @@ impl<'a> Converter<'a> {
             .map(convert_convention)
             .expect("pre-CPS validation checked func_ref convention");
         debug_assert!(
-            !target.convention.needs_done_k() || result_convention.needs_done_k(),
+            !target.convention.needs_continuation_frame()
+                || result_convention.needs_continuation_frame(),
             "pre-CPS validation rejects a weaker func_ref result convention"
         );
         let result = self.convert_type(result_callable.result(self.ctx));
@@ -2158,12 +2159,12 @@ impl<'a> Converter<'a> {
         let frame_offset = evidence_offset + 1;
         let source_offset = usize::from(result_convention.needs_evidence())
             + 1
-            + usize::from(result_convention.needs_done_k());
+            + usize::from(result_convention.needs_continuation_frame());
         let mut target_args = Vec::new();
         if target.convention.needs_evidence() {
             target_args.push(args[0]);
         }
-        if target.convention.needs_done_k() {
+        if target.convention.needs_continuation_frame() {
             target_args.push(args[frame_offset]);
         }
         target_args.extend_from_slice(&args[source_offset..]);
@@ -3708,7 +3709,7 @@ impl<'a> Converter<'a> {
             .then(|| self.ctx.block_args(block)[0]);
         let exit_k = info
             .convention
-            .needs_done_k()
+            .needs_continuation_frame()
             .then(|| self.ctx.block_args(block)[usize::from(info.convention.needs_evidence())]);
         let flow = Flow {
             convention: info.convention,
