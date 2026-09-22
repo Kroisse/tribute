@@ -1,0 +1,17 @@
+---
+source: tests/active_pipeline_goldens.rs
+expression: "pipeline_contract_summary(&ir_text, false)"
+---
+main: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.nil>) -> (core.never)
+  func.call operands=2 results=1: 1
+  func.tail_call operands=2 results=0: 1
+run: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
+  effect.extend operands=4 results=1: 1
+  func.call operands=0 results=1: 1
+  func.call operands=1 results=1: 1
+  func.call operands=2 results=1: 2
+  func.call operands=5 results=1: 1
+  func.tail_call_indirect operands=2 results=0: 1
+use_console: Some(EvidenceDirect) (core.array<adt.struct<_Marker>>) -> (core.i32)
+  effect.dispatch_tail operands=2 results=1: 2
+  func.return operands=1 results=0: 1

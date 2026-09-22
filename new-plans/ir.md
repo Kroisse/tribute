@@ -207,7 +207,11 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 
 - A `core.module` owns the top-level region for a compilation unit.
 - `core.unrealized_conversion_cast` is temporary conversion glue and must not
-  remain at backend-ready boundaries.
+  remain at backend-ready boundaries. 두 타입이 모두 `tribute_control.func_sig`이면
+  calling convention을 바꿀 수 없으며, pre-CPS whole-IR 검증에서 이를 거부한다.
+  이 cast는 callable adapter를 생성하지 않는다. Named callable의 convention 강화는
+  declaration provenance가 있는 `tribute_control.func_ref`로 표현하고 shared
+  legalization에서 실제 adapter를 생성해야 한다.
 - Operation and type names are interned `Symbol`s. Qualified paths are stored as
   `::`-separated symbols.
 - Nested regions use normal SSA visibility rules: values defined inside a
@@ -353,11 +357,10 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
 
 Named callable의 source definition은 body를 가진 Tribute callable이다.
 `extern "intrinsic"`은 compiler-reserved directive이며, canonical qualified
-source name이
-intrinsic identity가 된다. 지원되는 identity와 완전한 logical signature는 mutation 전에
-검증하며, unknown directive나 signature mismatch는 lowering input error다. Compiler
-intrinsic identity는 prelude와 사용자 선언을 병합한 AST 전체에서 monomorphization 전에
-검증한다. 미사용 generic 선언과 중첩 모듈의 선언도 포함하며, 지원하지 않는 모든
+source name이 intrinsic identity가 된다. 지원되는 identity와 완전한 logical signature는
+mutation 전에 검증하며, unknown directive나 signature mismatch는 lowering input error다.
+Compiler intrinsic identity는 prelude와 사용자 선언을 병합한 AST 전체에서
+monomorphization 전에 검증한다. 미사용 generic 선언과 중첩 모듈의 선언도 포함하며, 지원하지 않는 모든
 directive를 각 선언의 source span에서 진단한다. 등록된 compiler
 intrinsic의 logical callable convention은 항상 `Direct`이다. Generic specialization은 base
 identity를 concrete declaration으로 transport할 수 있지만, mangled name을 parse하여

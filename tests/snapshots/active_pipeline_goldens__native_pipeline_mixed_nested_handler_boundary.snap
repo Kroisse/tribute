@@ -1,0 +1,26 @@
+---
+source: tests/active_pipeline_goldens.rs
+expression: "pipeline_contract_summary(&ir_text, true)"
+---
+__tribute_cps_main: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.nil>) -> ()
+  func.tail_call operands=2 results=0: 1
+__tribute_root_dispatch: Some(Cps) (core.array<adt.struct<_Marker>>, tribute_rt.anyref, adt.struct<_closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
+  func.unreachable operands=0 results=0: 1
+__tribute_root_done_k: Some(Cps) (tribute_rt.anyref, core.nil) -> ()
+  func.return operands=0 results=0: 1
+main: Some(Direct) () -> (core.nil)
+  func.call operands=0 results=1: 1
+  func.call operands=2 results=0: 1
+  func.return operands=1 results=0: 1
+run_all: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
+  func.call operands=0 results=1: 1
+  func.call operands=5 results=1: 1
+  func.tail_call operands=2 results=0: 1
+run_state_with_console: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
+  func.call operands=0 results=1: 1
+  func.call operands=5 results=1: 1
+  func.tail_call operands=2 results=0: 1
+step: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> ()
+  func.call operands=2 results=1: 2
+  func.call_indirect operands=5 results=1: 1
+  func.tail_call_indirect operands=8 results=0: 1

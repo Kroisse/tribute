@@ -113,7 +113,11 @@ pub struct CompilationConfig {
     pub optimizations: OptimizationOptions,
 }
 
-/// Independently selectable optimization stages.
+/// Optimization policies for the source-logical production pipeline.
+///
+/// Only `native` policies affect this route. `ast_to_ir` is retained for legacy
+/// API compatibility and is ignored by both `production()` and `baseline()`
+/// compilation; it cannot enable legacy Done-continuation deduplication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OptimizationOptions {
     /// Compatibility-only legacy frontend settings. The source-logical
@@ -130,6 +134,8 @@ impl OptimizationOptions {
         }
     }
 
+    /// Disable optional native optimizations. Source-logical legalization is
+    /// unchanged; this does not select the legacy frontend or disable CPS.
     pub const fn baseline() -> Self {
         Self {
             ast_to_ir: ast_to_ir::AstToIrOptions::baseline(),
@@ -3456,6 +3462,46 @@ fn main() {
                 "specialized handler body must not retain BoundVar metadata"
             );
         });
+    }
+
+    #[salsa_test]
+    fn wasm_managed_c_ffi_requires_a_binding_only_when_referenced(db: &salsa::DatabaseImpl) {
+        for (name, body, referenced) in [
+            ("unused_c_ffi.trb", "Nil", false),
+            ("used_c_ffi.trb", r#"user_bridge("hello")"#, true),
+        ] {
+            let code = format!(
+                r#"extern "C" fn user_bridge(value: String) -> String
+fn main() {{ let _ = {body}
+Nil }}"#
+            );
+            let source = SourceCst::from_source_str(db, name, &code);
+            let shared = compile_with_diagnostics(db, source);
+            assert!(shared.diagnostics.is_empty(), "{:?}", shared.diagnostics);
+            assert!(
+                shared.module.is_some(),
+                "shared C FFI contract must accept managed values"
+            );
+            let binary = compile_to_wasm_binary(db, source);
+            if referenced {
+                let error = binary.expect_err("C ABI alone must not create a Wasm import");
+                assert!(
+                    error.iter().any(|diagnostic| {
+                        diagnostic.inner.message.contains("user_bridge")
+                            && diagnostic
+                                .inner
+                                .message
+                                .contains("no import binding and no body")
+                    }),
+                    "{error:?}"
+                );
+            } else {
+                let binary = binary.expect("unused managed C declaration may be omitted");
+                wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+                    .validate_all(&binary)
+                    .expect("unused C declaration must not leave an invalid Wasm definition");
+            }
+        }
     }
 
     #[salsa_test]

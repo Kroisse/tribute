@@ -243,6 +243,15 @@ rewriting 이후에도 유지되는 ordinary C helper 선언과, 호출이 제�
 intrinsic 선언이다. Wasm module은 import가 아닌 모든 function에 code entry와 body를
 요구하므로 bodyless 선언은 explicit import로만 emit될 수 있다.
 
+Shared pre-CPS 단계는 managed logical parameter/result를 가진 `extern "C"`도
+trusted/unsafe FFI 선언으로 허용한다. 이는 native ABI나 C linkage를 Wasm에 제공한다는
+뜻이 아니다. Wasm target은 logical signature를 Wasm 타입으로 변환하고, 남은 참조에는
+그 target signature와 호환되는 명시적 import 또는 본문을 요구한다. `abi = "C"`만으로
+import나 managed reference adapter를 합성하지 않는다. 바인딩 없는 선언은 미참조일 때만
+emission에서 제외하며, 참조가 남으면 오류다. Native의 borrowed/fresh-owned RC 계약을
+Wasm host ABI로 그대로 적용하지 않으며, 명시적 host 바인딩은 해당 Wasm reference
+representation을 지켜야 한다.
+
 선언·정의·malformed 분류는 [공통 본문 구조](ir.md#callable-본문-구조)를 따른다.
 Emitter는 malformed를 먼저 거부한 뒤 IR을 수정하지 않는 read-only 처분을 수행한다.
 

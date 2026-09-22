@@ -1,0 +1,6 @@
+---
+source: tests/active_pipeline_goldens.rs
+expression: "pipeline_contract_summary(&ir_text, false)"
+---
+main: Some(Direct) () -> (core.nil)
+  func.return operands=1 results=0: 1
