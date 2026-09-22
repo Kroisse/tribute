@@ -445,13 +445,10 @@ fn emit_module_impl(
             CallableBody::Definition { .. } => Linkage::Local,
         };
 
-        // Skip imported functions whose types can't be translated to Cranelift
-        // (e.g., prelude extern functions using core.bytes that are never called).
-        let sig = match translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty) {
-            Ok(sig) => sig,
-            Err(_) if linkage == Linkage::Import => continue,
-            Err(e) => return Err(e),
-        };
+        let sig =
+            translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty).map_err(|error| {
+                CompilationError::type_error(format!("clif.func @{name_sym}: {error}"))
+            })?;
 
         let linker_name = if linkage == Linkage::Local {
             name_sym.with_str(mangle_native_name)
@@ -859,6 +856,30 @@ mod tests {
                 .contains("clif.func @helper: has more than one body region"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn unsupported_bound_declaration_signatures_are_rejected_even_when_unreferenced() {
+        for signature in ["(core.bytes) -> ()", "() -> core.bytes"] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ clif.func {{sym_name = @helper, type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
+                ),
+            );
+            let before = trunk_ir::printer::print_module(&ctx, module.op());
+            let error = emit_module_to_native(&ctx, module, &[])
+                .expect_err("unsupported declarations must not be silently omitted");
+            assert!(error.to_string().contains("clif.func @helper"), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported type for Cranelift: core.bytes"),
+                "{error}"
+            );
+            assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
+        }
     }
 
     #[test]

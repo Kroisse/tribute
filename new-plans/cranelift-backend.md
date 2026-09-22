@@ -169,7 +169,9 @@ target 이전 ownership planner의 bodyless signature 검증에 바인딩 조건
 않는다. Runtime helper의 외부 선언을 생성하는 producer도 region 없이 생성하며,
 `unreachable` 가짜 본문을 외부 바인딩 표기로 사용하지 않는다.
 
-Emitter는 바인딩된 선언을 import로 등록하고, 참조가 없어도 보존한다. 정의는
+Emitter는 바인딩된 선언을 import로 등록하고, 참조가 없어도 보존한다. 선언의 입력이나
+결과 타입을 native 시그니처로 변환할 수 없으면 함수 identity와 변환 오류를 진단하며,
+무참조 선언이라는 이유로 오류를 숨기거나 선언을 생략하지 않는다. 정의는
 `main`이면 export, 그 밖에는 local linkage로 등록한다. Define pass는 공통 구조
 판정으로 선언을 건너뛰고 정의의 본문만 생성한다. `abi` 유무로 본문을 추정하거나
 없는 본문에 접근하지 않는다. 이 처분은 IR이나 `global_dce`의 reachability root를
