@@ -215,6 +215,13 @@ The RC implementation is divided into four stages:
 검증된 typed native IR에서 immutable ownership plan을 만든다. 이 단계는 IR을
 변경하지 않으며 `func_to_clif`와 native type erasure보다 먼저 실행한다.
 
+이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
+Module 범위 분석이 function 정의와 검증된 managed nominal layout을, function
+범위 분석이 flat CFG, managed 값, exact alias root, managed projection-owner
+관계와 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
+무관하며 borrow elision과 entry ownership 정책은 사실을 소비하는 planner와
+action planner가 적용한다.
+
 **Algorithm:**
 
 1. Exact semantic type과 callable contract로 managed value, field와 parameter
