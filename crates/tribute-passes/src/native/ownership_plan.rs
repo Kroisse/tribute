@@ -11,6 +11,7 @@ use std::ops::ControlFlow;
 use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
@@ -23,8 +24,10 @@ use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 
 mod actions;
 mod cfg;
+mod facts;
 use actions::{exact_into_raw_transfers, plan_function_actions, validate_result_contract};
 use cfg::ValidatedFlatCfg;
+pub use facts::{NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
@@ -367,56 +370,60 @@ pub fn build_native_ownership_plan_with_options(
     module: Module,
     options: NativeOwnershipPlanOptions,
 ) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
-    let _module_block = module
-        .first_block(ctx)
-        .ok_or_else(|| OwnershipPlanError::new("module has no body block"))?;
-    let mut function_ops = Vec::new();
-    walk_module(ctx, module, |op| {
-        if func::Func::matches(ctx, op) {
-            function_ops.push(op);
-        }
-    });
-    // Reject malformed topology before entry-contract or call-graph analysis.
-    for &op in &function_ops {
-        ownership_callable_body(ctx, op)?;
-    }
-    let definitions = collect_function_definitions(ctx, &function_ops)?;
-    let managed_layouts = collect_and_validate_managed_layouts(ctx, module)?;
+    let mut analyses = AnalysisCache::new();
+    build_native_ownership_plan_with_analyses(ctx, module, options, &mut analyses)
+}
+
+/// Build the plan while reusing cached policy-neutral ownership flow facts.
+///
+/// Callers inside one pipeline phase share an [`AnalysisCache`] so the module
+/// and function facts are computed once per target. The facts never depend on
+/// `options`; borrow elision and entry ownership stay policy decisions made
+/// here.
+pub fn build_native_ownership_plan_with_analyses(
+    ctx: &IrContext,
+    module: Module,
+    options: NativeOwnershipPlanOptions,
+    analyses: &mut AnalysisCache,
+) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
+    let module_facts = analyses
+        .get::<NativeOwnershipModuleFacts>(ctx, module.op())
+        .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
+    let definitions = module_facts.definitions();
+    let managed_layouts = module_facts.managed_layouts().clone();
     let closure_layout = collect_closure_layout(ctx, module, &managed_layouts)?;
     let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
     let entry_contracts = compute_entry_contracts(
         ctx,
         module,
-        &definitions,
+        definitions,
         &managed_layouts,
         options.elide_proven_borrowed_parameters,
     )?;
 
     let mut functions = Vec::new();
-    for &op in &function_ops {
+    for &op in module_facts.function_ops() {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
         let symbol = function.sym_name(ctx);
-        let body = match ownership_callable_body(ctx, op)? {
-            CallableBody::Declaration => {
-                validate_bodyless_signature(ctx, op, &managed_layouts)?;
-                continue;
-            }
-            CallableBody::Definition { region, .. } => region,
-        };
-        let cfg = ValidatedFlatCfg::build(ctx, body)?;
-        validate_function_contract(ctx, op, &cfg, &managed_layouts)?;
+        if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
+            validate_bodyless_signature(ctx, op, &managed_layouts)?;
+            continue;
+        }
+        let facts = analyses
+            .get::<NativeOwnershipFunctionFacts>(ctx, op)
+            .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
         let entries = entry_contracts
             .get(&symbol)
             .cloned()
             .ok_or_else(|| OwnershipPlanError::new("defined function has no entry contract"))?;
         let actions = plan_function_actions(
             ctx,
-            &cfg,
+            &facts,
             &entries,
             &entry_contracts,
-            &definitions,
+            definitions,
             &managed_layouts,
             options.elide_proven_field_borrows,
         )?;
@@ -1322,5 +1329,7 @@ fn walk_module(ctx: &IrContext, module: Module, mut visit: impl FnMut(OpRef)) {
 }
 
 #[cfg(test)]
-#[path = "ownership_plan/tests.rs"]
+mod facts_tests;
+
+#[cfg(test)]
 mod tests;

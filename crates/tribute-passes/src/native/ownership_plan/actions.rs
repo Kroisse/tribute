@@ -1,7 +1,11 @@
+use super::facts::{
+    FlowKind, NativeOwnershipFunctionFacts, borrowed_owner, is_core_ptr_type,
+    is_internal_closure_layout, root_value,
+};
 use super::*;
 pub(super) fn plan_function_actions(
     ir: &IrContext,
-    cfg: &ValidatedFlatCfg,
+    facts: &NativeOwnershipFunctionFacts,
     entries: &[EntryOwnership],
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
@@ -10,26 +14,24 @@ pub(super) fn plan_function_actions(
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
     ActionPlanner::new(
         ir,
-        cfg,
+        facts,
         entries,
         entry_contracts,
         definitions,
         managed_layouts,
         elide_proven_field_borrows,
-    )?
+    )
     .plan()
 }
 
 struct ActionPlanner<'a> {
     ir: &'a IrContext,
-    cfg: &'a ValidatedFlatCfg,
+    facts: &'a NativeOwnershipFunctionFacts,
     entries: &'a [EntryOwnership],
     entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &'a HashMap<Symbol, OpRef>,
     managed_layouts: &'a HashSet<TypeRef>,
-    aliases: HashMap<ValueRef, ValueRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
-    field_borrow_values: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     liveness: Liveness,
     actions: Vec<OwnershipAction>,
@@ -38,48 +40,44 @@ struct ActionPlanner<'a> {
 impl<'a> ActionPlanner<'a> {
     fn new(
         ir: &'a IrContext,
-        cfg: &'a ValidatedFlatCfg,
+        facts: &'a NativeOwnershipFunctionFacts,
         entries: &'a [EntryOwnership],
         entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
         definitions: &'a HashMap<Symbol, OpRef>,
         managed_layouts: &'a HashSet<TypeRef>,
         elide_proven_field_borrows: bool,
-    ) -> Result<Self, OwnershipPlanError> {
-        let mut managed = collect_managed_values(ir, cfg.blocks(), managed_layouts);
-        let aliases = build_aliases(ir, cfg.blocks(), &mut managed, managed_layouts)?;
-        let field_borrow_values =
-            collect_borrowed_loads(ir, cfg.blocks(), managed_layouts, &aliases)?;
+    ) -> Self {
+        // The temporary-borrow policy selects which policy-neutral projection
+        // facts participate; it never changes the facts themselves.
         let borrowed = if elide_proven_field_borrows {
-            field_borrow_values.clone()
+            facts.projection_owners().clone()
         } else {
             HashMap::new()
         };
-        let liveness = compute_liveness(ir, cfg, &managed, &aliases, &borrowed);
-        let mut owned = managed;
-        for (&value, entry) in ir.block_args(cfg.entry()).iter().zip(entries) {
+        let liveness = compute_liveness(facts, &borrowed);
+        let mut owned = facts.managed_values().clone();
+        for (&value, entry) in ir.block_args(facts.cfg().entry()).iter().zip(entries) {
             if *entry == EntryOwnership::Borrowed {
                 owned.remove(&value);
             }
         }
-        Ok(Self {
+        Self {
             ir,
-            cfg,
+            facts,
             entries,
             entry_contracts,
             definitions,
             managed_layouts,
-            aliases,
             borrowed,
-            field_borrow_values,
             owned,
             liveness,
             actions: Vec::new(),
-        })
+        }
     }
 
     fn plan(mut self) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
         self.plan_entries();
-        let blocks = self.cfg.blocks().to_vec();
+        let blocks = self.facts.cfg().blocks().to_vec();
         for block in blocks {
             self.plan_block(block)?;
         }
@@ -87,7 +85,7 @@ impl<'a> ActionPlanner<'a> {
     }
 
     fn plan_entries(&mut self) {
-        let entry_block = self.cfg.entry();
+        let entry_block = self.facts.cfg().entry();
         for (index, (&value, entry)) in self
             .ir
             .block_args(entry_block)
@@ -122,7 +120,7 @@ impl<'a> ActionPlanner<'a> {
                     destination: 0,
                 });
             } else if let Some(&result) = self.ir.op_results(op).first()
-                && self.field_borrow_values.contains_key(&result)
+                && self.facts.projection_owners().contains_key(&result)
             {
                 // Preserving the temporary-borrow policy gives the projected
                 // semantic value its own unit at the exact typed projection.
@@ -140,232 +138,6 @@ impl<'a> ActionPlanner<'a> {
     }
 }
 
-fn collect_managed_values(
-    ctx: &IrContext,
-    blocks: &[BlockRef],
-    managed_layouts: &HashSet<TypeRef>,
-) -> HashSet<ValueRef> {
-    let mut values = HashSet::new();
-    for &block in blocks {
-        for &value in ctx.block_args(block) {
-            if is_managed_value(ctx, value, managed_layouts) {
-                values.insert(value);
-            }
-        }
-        for &op in &ctx.block(block).ops {
-            for &value in ctx.op_results(op) {
-                if is_managed_value(ctx, value, managed_layouts) {
-                    values.insert(value);
-                }
-            }
-        }
-    }
-    values
-}
-
-fn build_aliases(
-    ctx: &IrContext,
-    blocks: &[BlockRef],
-    managed: &mut HashSet<ValueRef>,
-    managed_layouts: &HashSet<TypeRef>,
-) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut aliases = HashMap::new();
-    for &block in blocks {
-        for &op in &ctx.block(block).ops {
-            if !(adt::RefCast::matches(ctx, op)
-                || adt::VariantCast::matches(ctx, op)
-                || core::UnrealizedConversionCast::matches(ctx, op))
-            {
-                continue;
-            }
-            let ([input], [output]) = (ctx.op_operands(op), ctx.op_results(op)) else {
-                return Err(OwnershipPlanError::new("managed alias has malformed arity"));
-            };
-            let input_managed = is_managed_value(ctx, *input, managed_layouts);
-            let output_managed = is_managed_value(ctx, *output, managed_layouts);
-            let input_data = ctx.types.get(ctx.value_ty(*input));
-            let output_data = ctx.types.get(ctx.value_ty(*output));
-            if input_data.dialect == Symbol::new("core")
-                && input_data.name == Symbol::new("ptr")
-                && output_data.dialect == Symbol::new("adt")
-                && output_data.name == Symbol::new("typeref")
-            {
-                return Err(OwnershipPlanError::new(format!(
-                    "raw pointer alias {op:?} masquerades as managed adt.typeref: {} -> {}",
-                    ctx.value_ty(*input),
-                    ctx.value_ty(*output)
-                )));
-            }
-            if let Ok(cast) = adt::RefCast::from_op(ctx, op) {
-                let target = cast.r#type(ctx);
-                if ctx.value_ty(*output) != target
-                    || !input_managed
-                    || !output_managed
-                    || (!is_anyref_type(ctx, ctx.value_ty(*input))
-                        && !is_anyref_type(ctx, target)
-                        && !nominal_types_compatible(ctx, ctx.value_ty(*input), target))
-                {
-                    return Err(OwnershipPlanError::new(
-                        "adt.ref_cast does not preserve a compatible managed reference",
-                    ));
-                }
-            }
-            // A compiler-generated conversion of a managed closure value to
-            // its exact callable representation keeps the source ownership
-            // unit live through the callable use. This is a typed pre-erasure
-            // handoff, not a `core.ptr` provenance rule.
-            let callable_handoff = core::UnrealizedConversionCast::matches(ctx, op)
-                && func::FuncSig::from_type_ref(ctx, ctx.value_ty(*output)).is_some();
-            if input_managed
-                && is_internal_closure_layout(ctx, ctx.value_ty(*input), managed_layouts)
-                && is_core_ptr_type(ctx, ctx.value_ty(*output))
-            {
-                return Err(OwnershipPlanError::new(
-                    "internal _closure to core.ptr handoff requires tribute_rt.into_raw",
-                ));
-            }
-            if input_managed && (output_managed || callable_handoff) {
-                let root = aliases.get(input).copied().unwrap_or(*input);
-                aliases.insert(*output, root);
-                if output_managed {
-                    managed.remove(output);
-                }
-            }
-        }
-    }
-    Ok(aliases)
-}
-
-fn is_internal_closure_layout(
-    ctx: &IrContext,
-    ty: TypeRef,
-    managed_layouts: &HashSet<TypeRef>,
-) -> bool {
-    if !managed_layouts.contains(&ty) || !crate::closure_lower::is_closure_struct_type_ref(ctx, ty)
-    {
-        return false;
-    }
-    let Some(fields) = get_struct_fields(ctx, ty) else {
-        return false;
-    };
-    matches!(
-        fields.as_slice(),
-        [(code_name, code_ty), (environment_name, environment_ty)]
-            if *code_name == Symbol::new("func_ptr")
-                && *environment_name == Symbol::new("env")
-                && is_core_i32_type(ctx, *code_ty)
-                && is_anyref_type(ctx, *environment_ty)
-    )
-}
-
-fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
-}
-
-fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
-}
-
-fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
-    aliases.get(&value).copied().unwrap_or(value)
-}
-
-fn borrowed_owner(
-    borrowed: &HashMap<ValueRef, ValueRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
-    value: ValueRef,
-) -> Option<ValueRef> {
-    let mut owner = root_value(aliases, value);
-    let mut found = false;
-    while let Some(next) = borrowed.get(&owner) {
-        let next = root_value(aliases, *next);
-        if next == owner {
-            break;
-        }
-        owner = next;
-        found = true;
-    }
-    found.then_some(owner)
-}
-
-fn collect_borrowed_loads(
-    ctx: &IrContext,
-    blocks: &[BlockRef],
-    managed_layouts: &HashSet<TypeRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
-) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut borrowed = HashMap::new();
-    for &block in blocks {
-        for &op in &ctx.block(block).ops {
-            let source = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-                Some(get.r#ref(ctx))
-            } else if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
-                Some(get.r#ref(ctx))
-            } else {
-                None
-            };
-            let Some(source) = source else { continue };
-            let [result] = ctx.op_results(op) else {
-                return Err(OwnershipPlanError::new(
-                    "ADT projection must have exactly one result",
-                ));
-            };
-            validate_projection_contract(ctx, op, source, *result, managed_layouts)?;
-            if is_managed_value(ctx, *result, managed_layouts) {
-                borrowed.insert(*result, root_value(aliases, source));
-            }
-        }
-    }
-    Ok(borrowed)
-}
-
-fn validate_projection_contract(
-    ctx: &IrContext,
-    op: OpRef,
-    source: ValueRef,
-    result: ValueRef,
-    managed_layouts: &HashSet<TypeRef>,
-) -> Result<(), OwnershipPlanError> {
-    let (layout, field_ty) = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
-        let fields = get_struct_fields(ctx, get.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("struct_get has invalid layout"))?;
-        let (_, field_ty) = fields
-            .get(get.field(ctx) as usize)
-            .ok_or_else(|| OwnershipPlanError::new("struct_get field is stale"))?;
-        (get.r#type(ctx), *field_ty)
-    } else {
-        let get = adt::VariantGet::from_op(ctx, op)
-            .map_err(|_| OwnershipPlanError::new("unsupported ADT projection"))?;
-        let variants = get_enum_variants(ctx, get.r#type(ctx))
-            .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?;
-        let fields = variants
-            .iter()
-            .find(|(tag, _)| *tag == get.tag(ctx))
-            .map(|(_, fields)| fields)
-            .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
-        let field_ty = fields
-            .get(get.field(ctx) as usize)
-            .ok_or_else(|| OwnershipPlanError::new("variant_get field is stale"))?;
-        (get.r#type(ctx), *field_ty)
-    };
-    let source_ty = ctx.value_ty(source);
-    let source_data = ctx.types.get(source_ty);
-    let raw_source =
-        source_data.dialect == Symbol::new("core") && source_data.name == Symbol::new("ptr");
-    let result_managed = is_managed_value(ctx, result, managed_layouts);
-    if (!raw_source && !types_compatible(ctx, source_ty, layout, managed_layouts))
-        || (result_managed
-            && !types_compatible(ctx, ctx.value_ty(result), field_ty, managed_layouts))
-    {
-        return Err(OwnershipPlanError::new(
-            "ADT projection managed type contract is malformed",
-        ));
-    }
-    Ok(())
-}
-
 struct Liveness {
     defs: HashMap<BlockRef, HashSet<ValueRef>>,
     live_in: HashMap<BlockRef, HashSet<ValueRef>>,
@@ -373,40 +145,39 @@ struct Liveness {
 }
 
 fn compute_liveness(
-    ctx: &IrContext,
-    cfg: &ValidatedFlatCfg,
-    managed: &HashSet<ValueRef>,
-    aliases: &HashMap<ValueRef, ValueRef>,
+    facts: &NativeOwnershipFunctionFacts,
     borrowed: &HashMap<ValueRef, ValueRef>,
 ) -> Liveness {
+    let cfg = facts.cfg();
+    let managed = facts.managed_values();
+    let aliases = facts.aliases();
     let blocks = cfg.blocks();
     let mut uses = HashMap::new();
     let mut defs = HashMap::new();
     for &block in blocks {
         let mut block_uses = HashSet::new();
         let mut block_defs = HashSet::new();
-        for &value in ctx.block_args(block) {
-            if managed.contains(&value) {
-                block_defs.insert(value);
-            }
-        }
-        for &op in &ctx.block(block).ops {
-            for &operand in ctx.op_operands(op) {
-                let root = root_value(aliases, operand);
-                if managed.contains(&root) && !block_defs.contains(&root) {
-                    block_uses.insert(root);
+        // Replaying the recorded policy-neutral events keeps the scan order
+        // identical to the original direct walk: arguments, then each
+        // operation's operands followed by its results.
+        for event in facts.block_flow(block).events() {
+            match event.kind {
+                FlowKind::Def => {
+                    if managed.contains(&event.root) {
+                        block_defs.insert(event.root);
+                    }
                 }
-                if let Some(owner) = borrowed_owner(borrowed, aliases, root)
-                    && managed.contains(&owner)
-                    && !block_defs.contains(&owner)
-                {
-                    block_uses.insert(owner);
-                }
-            }
-            for &result in ctx.op_results(op) {
-                let root = root_value(aliases, result);
-                if managed.contains(&root) {
-                    block_defs.insert(root);
+                FlowKind::Use => {
+                    let root = event.root;
+                    if managed.contains(&root) && !block_defs.contains(&root) {
+                        block_uses.insert(root);
+                    }
+                    if let Some(owner) = borrowed_owner(borrowed, aliases, root)
+                        && managed.contains(&owner)
+                        && !block_defs.contains(&owner)
+                    {
+                        block_uses.insert(owner);
+                    }
                 }
             }
         }
@@ -559,7 +330,7 @@ impl ActionPlanner<'_> {
         if func::Return::matches(self.ir, op) {
             for (index, &operand) in self.ir.op_operands(op).iter().enumerate() {
                 if is_managed_value(self.ir, operand, self.managed_layouts) {
-                    let root = root_value(&self.aliases, operand);
+                    let root = root_value(self.facts.aliases(), operand);
                     if self.borrowed.contains_key(&root) {
                         self.actions.push(OwnershipAction {
                             kind: ActionKind::CopyAcquire,
@@ -577,11 +348,11 @@ impl ActionPlanner<'_> {
                     });
                 }
             }
-        } else if let Some(transfers) = self.cfg.branch_transfers(op) {
+        } else if let Some(transfers) = self.facts.cfg().branch_transfers(op) {
             let mut counts = HashMap::<ValueRef, u32>::new();
             for (index, transfer) in transfers.enumerate() {
                 if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
-                    let root = root_value(&self.aliases, transfer.source);
+                    let root = root_value(self.facts.aliases(), transfer.source);
                     let count = counts.entry(root).or_default();
                     if *count > 0 || self.borrowed.contains_key(&root) {
                         self.actions.push(OwnershipAction {
@@ -616,7 +387,7 @@ impl ActionPlanner<'_> {
                 "tribute_rt.into_raw requires the exact managed closure layout and a core.ptr result",
             ));
         }
-        let root = root_value(&self.aliases, *input);
+        let root = root_value(self.facts.aliases(), *input);
         if root != *input {
             return Err(OwnershipPlanError::new(
                 "tribute_rt.into_raw requires an exact closure ownership value",
@@ -865,7 +636,7 @@ impl ActionPlanner<'_> {
                 }
             };
             if kind == ActionKind::TailTransfer {
-                let root = root_value(&self.aliases, argument);
+                let root = root_value(self.facts.aliases(), argument);
                 let count = transfers.entry(root).or_default();
                 if *count > 0 || self.borrowed.contains_key(&root) {
                     self.actions.push(OwnershipAction {
@@ -994,11 +765,11 @@ impl ActionPlanner<'_> {
         let mut last_use = HashMap::new();
         for (index, &op) in ops.iter().enumerate() {
             for &operand in self.ir.op_operands(op) {
-                let root = root_value(&self.aliases, operand);
+                let root = root_value(self.facts.aliases(), operand);
                 if self.owned.contains(&root) {
                     last_use.insert(root, index);
                 }
-                if let Some(owner) = borrowed_owner(&self.borrowed, &self.aliases, root)
+                if let Some(owner) = borrowed_owner(&self.borrowed, self.facts.aliases(), root)
                     && self.owned.contains(&owner)
                 {
                     last_use.insert(owner, index);
@@ -1029,7 +800,7 @@ impl ActionPlanner<'_> {
         for (destination, value) in dying.into_iter().enumerate() {
             let anchor = if let Some(&index) = last_use.get(&value) {
                 let op = ops[index];
-                if self.cfg.is_terminator(op) {
+                if self.facts.cfg().is_terminator(op) {
                     ActionAnchor::Before(op)
                 } else {
                     ActionAnchor::After(op)
