@@ -12,7 +12,8 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::clif;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
@@ -45,69 +46,29 @@ fn arith_to_clif_target() -> ConversionTarget {
         .illegal_dialect("arith")
 }
 
-/// Classify arena type into integer vs float category (for clif lowering).
-fn type_category(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
-    match ty {
-        Some(t) => {
-            let name = ctx.get_type(t).name;
-            if name == Symbol::new("i1")
-                || name == Symbol::new("i8")
-                || name == Symbol::new("i16")
-                || name == Symbol::new("i32")
-                || name == Symbol::new("i64")
-                || name == Symbol::new("int")
-                || name == Symbol::new("nat")
-                || name == Symbol::new("bool")
-            {
-                "int"
-            } else if name == Symbol::new("f32") {
-                "f32"
-            } else if name == Symbol::new("f64") {
-                "f64"
-            } else if name == Symbol::new("nil") {
-                "nil"
-            } else {
-                "int"
-            }
-        }
+/// Classify a type into the clif lowering category.
+///
+/// Non-float, non-nil types are lowered as integers; `core` integer types carry
+/// no signedness, so signed conversions are used unless an operation says
+/// otherwise.
+fn type_category(ctx: &IrContext, ty: TypeRef) -> &'static str {
+    match FloatLike::width(ctx, ty) {
+        Some(32) => "f32",
+        Some(_) => "f64",
+        None if core::Nil::matches(ctx, ty) => "nil",
         None => "int",
     }
 }
 
-fn is_unsigned_int(ctx: &IrContext, ty: Option<TypeRef>) -> bool {
-    match ty {
-        Some(t) => {
-            let name = ctx.get_type(t).name;
-            name == Symbol::new("nat") || name == Symbol::new("bool")
-        }
-        None => false,
-    }
-}
-
-fn is_wider_int(ctx: &IrContext, dst: TypeRef, src: Option<TypeRef>) -> bool {
-    let width = |t: TypeRef| -> u8 {
-        let name = ctx.get_type(t).name;
-        if name == Symbol::new("i64") {
-            64
-        } else if name == Symbol::new("i32")
-            || name == Symbol::new("int")
-            || name == Symbol::new("nat")
-        {
-            32
-        } else if name == Symbol::new("i16") {
-            16
-        } else if name == Symbol::new("i8")
-            || name == Symbol::new("bool")
-            || name == Symbol::new("i1")
-        {
-            8
-        } else {
-            32
-        }
-    };
-    match src {
-        Some(s) => width(dst) > width(s),
-        None => true,
+/// Bit width clif uses for an integer-category type.
+///
+/// `core.i1` is materialized as `i8`; other non-integer handles keep the
+/// historical 32-bit default.
+fn clif_int_width(ctx: &IrContext, ty: TypeRef) -> u32 {
+    match IntegerLike::width(ctx, ty) {
+        Some(1) => 8,
+        Some(width) => width,
+        None => 32,
     }
 }
 
@@ -134,7 +95,7 @@ impl RewritePattern for ArithConstPattern {
             .convert_type(ctx, raw_result_ty)
             .unwrap_or(raw_result_ty);
 
-        let category = type_category(ctx, Some(result_ty));
+        let category = type_category(ctx, result_ty);
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
 
@@ -430,21 +391,19 @@ impl RewritePattern for ArithConversionPattern {
         };
 
         let src_ty = ctx.value_ty(operand);
-        let src_cat = type_category(ctx, Some(src_ty));
+        let src_cat = type_category(ctx, src_ty);
 
         let Some(dst_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-        // Use raw (pre-conversion) result type for signedness checks.
-        let raw_dst_ty = ctx.op_result_types(op).first().copied();
-        let dst_cat = type_category(ctx, Some(dst_ty));
+        let dst_cat = type_category(ctx, dst_ty);
 
         let loc = ctx.op(op).location;
 
         let new_op = if name == Symbol::new("cast") {
             match (src_cat, dst_cat) {
                 ("int", "int") => {
-                    if is_wider_int(ctx, dst_ty, Some(src_ty)) {
+                    if clif_int_width(ctx, dst_ty) > clif_int_width(ctx, src_ty) {
                         clif::sextend(ctx, loc, operand, dst_ty).op_ref()
                     } else {
                         clif::ireduce(ctx, loc, operand, dst_ty).op_ref()
@@ -460,22 +419,13 @@ impl RewritePattern for ArithConversionPattern {
             }
         } else if name == Symbol::new("extend") {
             match (src_cat, dst_cat) {
-                ("int", "int") if is_unsigned_int(ctx, Some(src_ty)) => {
-                    clif::uextend(ctx, loc, operand, dst_ty).op_ref()
-                }
                 ("int", "int") => clif::sextend(ctx, loc, operand, dst_ty).op_ref(),
                 ("f32", "f64") => clif::fpromote(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("convert") {
             match (src_cat, dst_cat) {
-                ("int", "f32" | "f64") if is_unsigned_int(ctx, Some(src_ty)) => {
-                    clif::fcvt_from_uint(ctx, loc, operand, dst_ty).op_ref()
-                }
                 ("int", "f32" | "f64") => clif::fcvt_from_sint(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32" | "f64", "int") if is_unsigned_int(ctx, raw_dst_ty) => {
-                    clif::fcvt_to_uint(ctx, loc, operand, dst_ty).op_ref()
-                }
                 ("f32" | "f64", "int") => clif::fcvt_to_sint(ctx, loc, operand, dst_ty).op_ref(),
                 ("f32", "f64") => clif::fpromote(ctx, loc, operand, dst_ty).op_ref(),
                 ("f64", "f32") => clif::fdemote(ctx, loc, operand, dst_ty).op_ref(),
@@ -517,5 +467,33 @@ mod tests {
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn conversions_follow_core_scalar_categories() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @convert(%b: core.i1, %w: core.i64, %n: core.i32, %x: core.f32, %y: core.f64) {
+    %widened = arith.cast %b : core.i32
+    %narrowed = arith.cast %w : core.i32
+    %extended = arith.extend %n : core.i64
+    %to_float = arith.convert %n : core.f64
+    %to_int = arith.convert %y : core.i32
+    %promoted = arith.extend %x : core.f64
+    func.return
+  }
+}"#,
+        );
+        for (op, count) in [
+            ("clif.sextend", 2),
+            ("clif.ireduce", 1),
+            ("clif.fcvt_from_sint", 1),
+            ("clif.fcvt_to_sint", 1),
+            ("clif.fpromote", 1),
+        ] {
+            assert_eq!(result.matches(op).count(), count, "{op}:\n{result}");
+        }
+        assert!(!result.contains("arith."), "{result}");
+        assert!(!result.contains("uextend"), "{result}");
     }
 }

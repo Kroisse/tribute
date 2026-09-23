@@ -13,8 +13,9 @@ use tracing::warn;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
+use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -541,38 +542,24 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str 
 }
 
 fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
-    match ty {
-        Some(t) => {
-            let data = ctx.get_type(t);
-            let name = data.name;
-            if name == Symbol::new("i32") {
-                "i32"
-            } else if name == Symbol::new("i64") {
-                "i64"
-            } else if name == Symbol::new("f32") {
-                "f32"
-            } else if name == Symbol::new("f64") {
-                "f64"
-            } else if name == Symbol::new("i1")
-                || name == Symbol::new("int")
-                || name == Symbol::new("nat")
-                || name == Symbol::new("bool")
-            {
-                "i32"
-            } else if name == Symbol::new("nil") {
-                "nil"
-            } else {
-                #[cfg(debug_assertions)]
-                warn!(
-                    "Unknown type '{}' in arith_to_wasm, defaulting to i32",
-                    name
-                );
-                "i32"
-            }
-        }
-        None => {
+    let Some(t) = ty else {
+        #[cfg(debug_assertions)]
+        warn!("No type in arith_to_wasm, defaulting to i32");
+        return "i32";
+    };
+    if let Some(width) = FloatLike::width(ctx, t) {
+        return if width == 32 { "f32" } else { "f64" };
+    }
+    match IntegerLike::width(ctx, t) {
+        Some(64) => "i64",
+        Some(width) if width <= 32 => "i32",
+        _ if core::Nil::matches(ctx, t) => "nil",
+        _ => {
             #[cfg(debug_assertions)]
-            warn!("No type in arith_to_wasm, defaulting to i32");
+            warn!(
+                "Unknown type '{}' in arith_to_wasm, defaulting to i32",
+                ctx.get_type(t).name
+            );
             "i32"
         }
     }

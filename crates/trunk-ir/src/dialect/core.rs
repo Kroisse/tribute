@@ -26,6 +26,70 @@ mod core {
 }
 
 // =========================================================================
+// Scalar type categories
+//
+// Closed predicates over `core` scalar types, shared by operation
+// verification and target lowering instead of comparing type names.
+// =========================================================================
+
+use crate::Symbol;
+use crate::refs::TypeRef;
+
+/// Parse a bare `core.<prefix>{N}` scalar type name.
+fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> {
+    let data = ctx.get_type(ty);
+    if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
+        return None;
+    }
+    data.name.with_str(|s| {
+        let digits = s.strip_prefix(prefix)?;
+        // u32::from_str rejects empty input and any sign character, so
+        // `i`, `i+32`, `i-1` all fail here.
+        digits.parse().ok()
+    })
+}
+
+/// Fixed-width signless integer types `core.i{N}` with `1 <= N <= 128`.
+///
+/// The upper bound is what an `i128` constant can represent. Signedness is
+/// a property of each operation, not of the type.
+pub struct IntegerLike;
+
+impl IntegerLike {
+    /// The bit width of `ty`, or `None` if it is not an integer type.
+    pub fn width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+        core_scalar_width(ctx, ty, 'i').filter(|width| (1..=128).contains(width))
+    }
+
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        Self::width(ctx, ty).is_some()
+    }
+}
+
+/// The boolean integer type `core.i1`.
+pub struct BoolLike;
+
+impl BoolLike {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        IntegerLike::width(ctx, ty) == Some(1)
+    }
+}
+
+/// IEEE floating-point types `core.f32` and `core.f64`.
+pub struct FloatLike;
+
+impl FloatLike {
+    /// The bit width of `ty`, or `None` if it is not a float type.
+    pub fn width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+        core_scalar_width(ctx, ty, 'f').filter(|width| matches!(width, 32 | 64))
+    }
+
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        Self::width(ctx, ty).is_some()
+    }
+}
+
+// =========================================================================
 // Canonicalization folds
 //
 // Owned by this dialect and aggregated by `transforms::canonicalize` via
@@ -219,5 +283,58 @@ mod canonicalize_tests {
             count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
             2
         );
+    }
+}
+
+#[cfg(test)]
+mod scalar_category_tests {
+    use super::*;
+    use crate::types::{Attribute, TypeDataBuilder};
+
+    fn ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    }
+
+    #[test]
+    fn integer_like_accepts_bare_core_integer_widths() {
+        let mut ctx = IrContext::new();
+        for (name, width) in [("i1", Some(1)), ("i32", Some(32)), ("i128", Some(128))] {
+            let t = ty(&mut ctx, "core", name);
+            assert_eq!(IntegerLike::width(&ctx, t), width, "{name}");
+        }
+        for (dialect, name) in [
+            ("core", "i0"),
+            ("core", "i129"),
+            ("core", "i"),
+            ("core", "i-1"),
+            ("core", "int"),
+            ("core", "f32"),
+            ("tribute_rt", "i32"),
+        ] {
+            let t = ty(&mut ctx, dialect, name);
+            assert!(!IntegerLike::matches(&ctx, t), "{dialect}.{name}");
+        }
+        let with_attr = ctx.intern_type(
+            TypeDataBuilder::new("core", "i32")
+                .attr("x", Attribute::Int(0))
+                .build(),
+        );
+        assert!(!IntegerLike::matches(&ctx, with_attr));
+    }
+
+    #[test]
+    fn bool_and_float_categories() {
+        let mut ctx = IrContext::new();
+        let i1 = ty(&mut ctx, "core", "i1");
+        let i8 = ty(&mut ctx, "core", "i8");
+        let f32 = ty(&mut ctx, "core", "f32");
+        let f64 = ty(&mut ctx, "core", "f64");
+        let f16 = ty(&mut ctx, "core", "f16");
+        assert!(BoolLike::matches(&ctx, i1));
+        assert!(!BoolLike::matches(&ctx, i8));
+        assert_eq!(FloatLike::width(&ctx, f32), Some(32));
+        assert_eq!(FloatLike::width(&ctx, f64), Some(64));
+        assert!(!FloatLike::matches(&ctx, f16));
+        assert!(!FloatLike::matches(&ctx, i1));
     }
 }

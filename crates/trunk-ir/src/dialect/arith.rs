@@ -98,9 +98,9 @@ mod arith {
 // =========================================================================
 
 use crate::context::IrContext;
+use crate::dialect::core::IntegerLike;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use crate::symbol::Symbol;
 use crate::transforms::canonicalize::FoldResult;
 use crate::types::Attribute;
 
@@ -121,7 +121,7 @@ pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::Forward(rhs));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a.wrapping_add(b), width),
     )))
@@ -138,7 +138,7 @@ pub(crate) fn fold_subi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::Forward(lhs));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a.wrapping_sub(b), width),
     )))
@@ -161,7 +161,7 @@ pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::Forward(rhs));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a.wrapping_mul(b), width),
     )))
@@ -184,7 +184,7 @@ pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     if b == 0 {
         return None;
     }
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     if is_signed_overflow_at_width(a, b, width) {
         return None;
     }
@@ -200,7 +200,7 @@ pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 pub(crate) fn fold_divui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     let mask = width_mask_u128(width);
     let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
     if b_u == 0 {
@@ -223,7 +223,7 @@ pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     if b == 0 {
         return None;
     }
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     if is_signed_overflow_at_width(a, b, width) {
         return None;
     }
@@ -239,7 +239,7 @@ pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     let mask = width_mask_u128(width);
     let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
     if b_u == 0 {
@@ -271,7 +271,7 @@ pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::Forward(rhs));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a & b, width),
     )))
@@ -295,7 +295,7 @@ pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::ArithConst(Attribute::Int(-1)));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a | b, width),
     )))
@@ -318,7 +318,7 @@ pub(crate) fn fold_xor(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return Some(FoldResult::Forward(rhs));
     }
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
-    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let width = IntegerLike::width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a ^ b, width),
     )))
@@ -362,26 +362,6 @@ pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> 
         Attribute::Int(v) => Some(v),
         _ => None,
     }
-}
-
-/// If `ty` is `core.i{N}` for some `1 <= N <= 128`, return `N`.
-///
-/// Returns `None` for other dialects, parameterized types, types
-/// carrying attributes, names that don't follow the `i{N}` shape, or
-/// widths outside `[1, 128]` (the upper bound is what
-/// `wrap_signed_to_width` can represent in i128).
-pub(crate) fn core_int_width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
-        return None;
-    }
-    data.name.with_str(|s| {
-        let digits = s.strip_prefix('i')?;
-        // u32::from_str rejects empty input and any sign character, so
-        // `i`, `i+32`, `i-1` all fail here.
-        let width: u32 = digits.parse().ok()?;
-        (1..=128).contains(&width).then_some(width)
-    })
 }
 
 /// Truncate `value` to `width` bits, sign-extended back to i128.
@@ -435,6 +415,7 @@ fn is_signed_overflow_at_width(a: i128, b: i128, width: u32) -> bool {
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
+    use crate::Symbol;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
