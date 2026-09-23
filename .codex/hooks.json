@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".ci/lint.sh"
+            "command": ".ci/lint.sh 1>&2"
           }
         ]
       }
