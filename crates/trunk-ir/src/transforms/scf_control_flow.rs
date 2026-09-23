@@ -18,9 +18,9 @@ use crate::walk::{WalkAction, walk_op};
 /// analysis failure or proof that execution returns. Target acceptance and
 /// conversion diagnostics belong to consumers, not this analysis.
 ///
-/// Consumers must invalidate this analysis before changing the subtree. A
-/// lowering may retain decisions derived from it for the original operations,
-/// but must not use those decisions as facts about the rewritten IR.
+/// Cache lookups recompute this analysis after the IR changes. A lowering may
+/// retain decisions derived from it for the original operations, but must not
+/// use those decisions as facts about the rewritten IR.
 #[derive(Default)]
 pub struct StructuredControlAnalysis {
     terminal_regions: HashSet<RegionRef>,
@@ -75,7 +75,7 @@ impl Analysis for StructuredControlAnalysis {
             }
             let results = ir.op_results(op);
             if let [result] = results {
-                let ty = ir.types.get(ir.value_ty(*result));
+                let ty = ir.get_type(ir.value_ty(*result));
                 if ty.dialect == "core" && ty.name == "never" && !ir.has_uses(*result) {
                     analysis.unused_never_controls.insert(op);
                 }
@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn invalidation_recomputes_use_position_and_nested_exit_facts() {
+    fn ir_revision_recomputes_use_position_and_nested_exit_facts() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, NESTED_CONTROL);
         let first = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
@@ -198,10 +198,14 @@ mod tests {
         assert!(original.has_terminal_unused_never_result(control));
 
         // A synthetic use before the control isolates liveness from final position.
-        cache.invalidate::<StructuredControlAnalysis>(module.op());
         let loc = ctx.op(control).location;
         let user = scf::r#yield(&mut ctx, loc, [never]);
         ctx.insert_op_before(entry, control, user.op_ref());
+        assert!(
+            cache
+                .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
+                .is_none()
+        );
         let used = cache
             .get::<StructuredControlAnalysis>(&ctx, module.op())
             .unwrap();
@@ -211,11 +215,15 @@ mod tests {
         assert!(!used.is_terminal_region(body));
 
         // Remove the use and append an exit: only the final-position fact changes.
-        cache.invalidate::<StructuredControlAnalysis>(module.op());
         ctx.detach_op(user.op_ref());
         ctx.remove_op(user.op_ref());
         let trailing = func::unreachable(&mut ctx, loc);
         ctx.push_op(entry, trailing.op_ref());
+        assert!(
+            cache
+                .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
+                .is_none()
+        );
         let followed = cache
             .get::<StructuredControlAnalysis>(&ctx, module.op())
             .unwrap();
@@ -224,7 +232,6 @@ mod tests {
         assert!(followed.is_terminal_region(body));
 
         // Restoring the outer position cannot hide a changed nested exit.
-        cache.invalidate::<StructuredControlAnalysis>(module.op());
         ctx.detach_op(trailing.op_ref());
         ctx.remove_op(trailing.op_ref());
         let mut nested_exit = None;
@@ -240,6 +247,11 @@ mod tests {
         ctx.remove_op(exit);
         let yielding = scf::r#yield(&mut ctx, loc, []);
         ctx.push_op(arm, yielding.op_ref());
+        assert!(
+            cache
+                .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
+                .is_none()
+        );
         let changed = cache
             .get::<StructuredControlAnalysis>(&ctx, module.op())
             .unwrap();

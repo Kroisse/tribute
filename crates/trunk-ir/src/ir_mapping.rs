@@ -90,12 +90,10 @@ mod tests {
     #[test]
     fn lookup_or_default_returns_original_when_unmapped() {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
 
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let block = ctx.create_block(context::BlockData {
             location: loc,
@@ -116,12 +114,10 @@ mod tests {
     #[test]
     fn mapping_returns_mapped_value() {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
 
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let block1 = ctx.create_block(context::BlockData {
             location: loc,

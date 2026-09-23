@@ -171,7 +171,7 @@ impl FuncSig {
         ctx: &crate::IrContext,
         ty: crate::TypeRef,
     ) -> Result<Self, FuncSigTypeError> {
-        let data = ctx.types.get(ty);
+        let data = ctx.get_type(ty);
         debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
         let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)?;
@@ -189,7 +189,7 @@ impl FuncSig {
     }
 
     fn counts(self, ctx: &crate::IrContext) -> (usize, usize) {
-        let data = ctx.types.get(self.0);
+        let data = ctx.get_type(self.0);
         let inputs = usize::try_from(
             read_count(&data.attrs, NUM_INPUTS_ATTR)
                 .expect("validated clif.func_sig must retain num_inputs"),
@@ -205,12 +205,12 @@ impl FuncSig {
 
     pub fn inputs(self, ctx: &crate::IrContext) -> &[crate::TypeRef] {
         let (inputs, _) = self.counts(ctx);
-        &ctx.types.get(self.0).params[..inputs]
+        &ctx.get_type(self.0).params[..inputs]
     }
 
     pub fn results(self, ctx: &crate::IrContext) -> &[crate::TypeRef] {
         let (inputs, results) = self.counts(ctx);
-        &ctx.types.get(self.0).params[inputs..inputs + results]
+        &ctx.get_type(self.0).params[inputs..inputs + results]
     }
 
     pub fn is_resultless(self, ctx: &crate::IrContext) -> bool {
@@ -226,7 +226,7 @@ impl FuncSig {
         self,
         ctx: &crate::IrContext,
     ) -> impl Iterator<Item = (&crate::Symbol, &Attribute)> {
-        ctx.types.get(self.0).attrs.iter().filter(|(key, _)| {
+        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
             **key != crate::Symbol::new(NUM_INPUTS_ATTR)
                 && **key != crate::Symbol::new(NUM_RESULTS_ATTR)
         })
@@ -299,7 +299,7 @@ pub fn func_sig_with_attrs(
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
-    let ty = ctx.types.intern(
+    let ty = ctx.intern_type(
         builder
             .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
             .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
@@ -429,10 +429,10 @@ mod tests {
     #[test]
     fn func_sig_owns_zero_and_multiple_result_lists_and_metadata() {
         let mut ctx = crate::IrContext::new();
-        let i32 = ctx.types.intern(
+        let i32 = ctx.intern_type(
             TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i32")).build(),
         );
-        let i64 = ctx.types.intern(
+        let i64 = ctx.intern_type(
             TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i64")).build(),
         );
         let mut attrs = AttributeMap::new();
@@ -491,10 +491,10 @@ mod tests {
     #[test]
     fn func_sig_rejects_malformed_delimiters_without_slicing() {
         let mut ctx = crate::IrContext::new();
-        let i32 = ctx.types.intern(
+        let i32 = ctx.intern_type(
             TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i32")).build(),
         );
-        let malformed = ctx.types.intern(
+        let malformed = ctx.intern_type(
             TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
                 .param(i32)
                 .attr(NUM_INPUTS_ATTR, Attribute::Int(2))
@@ -502,7 +502,7 @@ mod tests {
                 .build(),
         );
         assert!(FuncSig::from_type_ref(&ctx, malformed).is_none());
-        let missing = ctx.types.intern(
+        let missing = ctx.intern_type(
             TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
                 .param(i32)
                 .attr(NUM_INPUTS_ATTR, Attribute::Int(1))
@@ -513,7 +513,7 @@ mod tests {
             Err(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR))
         );
 
-        let wrong_kind = ctx.types.intern(
+        let wrong_kind = ctx.intern_type(
             TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
                 .param(i32)
                 .attr(
@@ -528,7 +528,7 @@ mod tests {
             Err(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR))
         );
 
-        let overflow = ctx.types.intern(
+        let overflow = ctx.intern_type(
             TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
                 .attr(NUM_INPUTS_ATTR, Attribute::Int(i128::from(u32::MAX)))
                 .attr(NUM_RESULTS_ATTR, Attribute::Int(1))

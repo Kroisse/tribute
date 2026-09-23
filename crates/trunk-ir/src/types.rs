@@ -599,6 +599,11 @@ impl PathInterner {
         r
     }
 
+    /// Find an existing path without changing the interner.
+    pub fn lookup(&self, path: &str) -> Option<PathRef> {
+        self.dedup.get(path).copied()
+    }
+
     /// Look up path string by reference.
     pub fn get(&self, r: PathRef) -> &str {
         &self.paths[r]
@@ -707,16 +712,14 @@ mod tests {
     #[test]
     fn type_interner_with_params() {
         let mut ctx = IrContext::new();
-        let i32_ref = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ref = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let tup = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]);
         let r1 = tup.as_type_ref();
         // Interning the same tuple again should return the same ref
         let r2 = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]).as_type_ref();
         assert_eq!(r1, r2);
 
-        let data = ctx.types.get(r1);
+        let data = ctx.get_type(r1);
         assert_eq!(data.params.len(), 2);
         assert_eq!(data.params[0], i32_ref);
     }

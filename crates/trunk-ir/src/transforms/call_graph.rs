@@ -327,7 +327,7 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
@@ -338,8 +338,7 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn simple_func(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
@@ -497,6 +496,38 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         assert_eq!(g.call_site_count[&Symbol::new("leaf")], 2);
+    }
+
+    #[test]
+    fn cached_call_graph_recomputes_after_call_target_changes() {
+        use crate::analysis::AnalysisCache;
+
+        let (mut ctx, loc) = test_ctx();
+        let leaf = simple_func(&mut ctx, loc, "leaf");
+        let other = simple_func(&mut ctx, loc, "other");
+        let caller = func_that_calls(&mut ctx, loc, "caller", &["leaf"]);
+        let module = build_module(&mut ctx, loc, vec![leaf, other, caller]);
+        let mut analyses = AnalysisCache::new();
+        let old = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+
+        let body = ctx.op(caller).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let call = ctx.block(block).ops[0];
+        ctx.op_mut(call).attributes.insert(
+            Symbol::new("callee"),
+            Attribute::Symbol(Symbol::new("other")),
+        );
+        assert!(
+            analyses
+                .get_cached::<CallGraph>(&ctx, module.op())
+                .is_none()
+        );
+        let fresh = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        assert_eq!(fresh.call_site_count.get(&Symbol::new("leaf")), None);
+        assert_eq!(fresh.call_site_count.get(&Symbol::new("other")), Some(&1));
+        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+        assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
     }
 
     #[test]

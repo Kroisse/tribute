@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn classifies_topology_without_dialect_signature_or_binding() {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.ir".to_owned());
+        let path = ctx.intern_path("test.ir".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("callable"))
             .build(&mut ctx);

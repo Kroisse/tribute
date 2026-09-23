@@ -82,24 +82,14 @@ impl NativeTypeRefs {
             tribute_rt_float: tribute_rt::float(ctx).as_type_ref(),
             tribute_rt_intref: tribute_rt::intref(ctx).as_type_ref(),
             tribute_rt_anyref: tribute_rt::anyref(ctx).as_type_ref(),
-            core_i1: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
+            core_i1: ctx.intern_type(TypeDataBuilder::new("core", "i1").build()),
 
-            core_i32: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build()),
-            core_i64: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build()),
-            core_f64: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build()),
+            core_i32: ctx.intern_type(TypeDataBuilder::new("core", "i32").build()),
+            core_i64: ctx.intern_type(TypeDataBuilder::new("core", "i64").build()),
+            core_f64: ctx.intern_type(TypeDataBuilder::new("core", "f64").build()),
             core_ptr: core::ptr(ctx).as_type_ref(),
             core_nil: core::nil(ctx).as_type_ref(),
-            core_i8: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build()),
+            core_i8: ctx.intern_type(TypeDataBuilder::new("core", "i8").build()),
 
             evidence_ty: ability::evidence_adt_type_ref(ctx),
             marker_ty: ability::marker_adt_type_ref(ctx),
@@ -379,7 +369,7 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         return true;
     }
 
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
 
     // adt.struct, adt.enum, adt.typeref, or variant instance (adt.*)
     if data.dialect == Symbol::new("adt") {
@@ -431,7 +421,7 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") {
         return false;
     }
@@ -444,25 +434,25 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Helper: Check if a type is closure.closure.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure")
 }
 
 /// Helper: Check if a type is func.func_sig.
 fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig")
 }
 
 /// Helper: Check if a type is core.array.
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("array")
 }
 
 /// Helper: Check if a type is core.bytes.
 fn is_bytes_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
 }
 

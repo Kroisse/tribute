@@ -352,7 +352,7 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 }
 
 fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
-    for (ty, data) in ctx.types.iter() {
+    for (ty, data) in ctx.types().iter() {
         if data.dialect == crate::dialect::core::DIALECT_NAME() && data.name == Symbol::new("func")
         {
             errors.push(ValidationError::Operation {
@@ -395,7 +395,7 @@ fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Vali
         ));
         return;
     };
-    let callee_ty = ctx.types.get(ctx.value_ty(callee));
+    let callee_ty = ctx.get_type(ctx.value_ty(callee));
     let func_ty = if callee_ty.dialect == Symbol::new("closure")
         && callee_ty.name == Symbol::new("closure")
     {
@@ -566,7 +566,7 @@ fn typed_callee_signature(
     value: ValueRef,
 ) -> Option<crate::dialect::func::FuncSig> {
     let ty = ctx.value_ty(value);
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     let ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
         let [ty] = data.params.as_slice() else {
             return None;
@@ -1222,7 +1222,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
             let never_result = match ctx.op_result_types(op) {
                 [ty] => {
-                    let ty = ctx.types.get(*ty);
+                    let ty = ctx.get_type(*ty);
                     ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
                 }
                 _ => false,
@@ -1448,13 +1448,12 @@ mod tests {
     use crate::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> super::super::refs::TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn make_func_type(
@@ -1586,7 +1585,7 @@ mod tests {
         for (case, builder, expected) in cases {
             let mut ctx = IrContext::new();
             let module = empty_module(&mut ctx);
-            let malformed = ctx.types.intern(builder.build());
+            let malformed = ctx.intern_type(builder.build());
             assert!(
                 func::FuncSig::from_type_ref(&ctx, malformed).is_none(),
                 "{case} must fail typed validation"
@@ -1608,9 +1607,7 @@ mod tests {
     fn retired_raw_core_func_identity_is_rejected_by_whole_ir_validation() {
         let mut ctx = IrContext::new();
         let module = empty_module(&mut ctx);
-        let legacy = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+        let legacy = ctx.intern_type(TypeDataBuilder::new("core", "func").build());
 
         assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
         for result in [
@@ -1967,9 +1964,7 @@ mod tests {
         });
 
         // Create a bool condition
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
         let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(entry, cond.op_ref());
         let cond_val = cond.result(&ctx);
@@ -2176,9 +2171,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3468,9 +3461,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3506,9 +3497,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3538,9 +3527,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,

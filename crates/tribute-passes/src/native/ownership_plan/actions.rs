@@ -260,7 +260,7 @@ impl ActionPlanner<'_> {
                 OwnershipPlanError::new(format!(
                     "struct_new {op:?} has invalid layout {} ({:?})",
                     new.r#type(self.ir),
-                    self.ir.types.get(new.r#type(self.ir))
+                    self.ir.get_type(new.r#type(self.ir))
                 ))
             })?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;
@@ -727,7 +727,7 @@ pub(super) fn validate_result_contract(
         };
     };
     let expected = *expected;
-    let expected_data = ctx.types.get(expected);
+    let expected_data = ctx.get_type(expected);
     let physically_empty = expected_data.dialect == Symbol::new("core")
         && (expected_data.name == Symbol::new("nil") || expected_data.name == Symbol::new("never"));
     if physically_empty {

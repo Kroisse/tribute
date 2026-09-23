@@ -110,7 +110,7 @@ enum TypeBoundary {
 }
 
 fn type_is(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::from_dynamic(dialect) && data.name == Symbol::from_dynamic(name)
 }
 
@@ -142,7 +142,7 @@ fn walk_type(
     if !seen.insert(ty) {
         return;
     }
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     let forbidden = match boundary {
         TypeBoundary::Pre => {
             type_is(ctx, ty, "func", "func_sig")
@@ -234,7 +234,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
         general: bool,
         failures: &mut Vec<BoundaryFailure>,
     ) {
-        let closure_ty = ctx.types.get(ctx.value_ty(value));
+        let closure_ty = ctx.get_type(ctx.value_ty(value));
         let valid = if closure_ty.dialect == Symbol::new("closure")
             && closure_ty.name == Symbol::new("closure")
             && closure_ty.params.len() == 1
@@ -902,8 +902,7 @@ impl<'a> Converter<'a> {
 
     fn i32_type(&mut self) -> TypeRef {
         self.ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+            .intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn frame_types(&mut self, answer: TypeRef) -> FrameTypes {
@@ -1241,7 +1240,7 @@ impl<'a> Converter<'a> {
             } else {
                 result
             };
-            let mut attrs = self.ctx.types.get(ty).attrs.clone();
+            let mut attrs = self.ctx.get_type(ty).attrs.clone();
             tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
             for value in attrs.values_mut() {
                 *value = self.convert_attribute(value);
@@ -1253,7 +1252,7 @@ impl<'a> Converter<'a> {
             self.converted_types.insert(ty, converted);
             return converted;
         }
-        let data = self.ctx.types.get(ty).clone();
+        let data = self.ctx.get_type(ty).clone();
         if data.dialect == func::DIALECT_NAME() && data.name == func::FUNC_SIG() {
             let function = func::FuncSig::from_type_ref(self.ctx, ty)
                 .expect("pre-CPS validation must reject malformed func.func_sig types");
@@ -1311,7 +1310,7 @@ impl<'a> Converter<'a> {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        let converted = self.ctx.types.intern(builder.build());
+        let converted = self.ctx.intern_type(builder.build());
         self.converted_types.insert(ty, converted);
         converted
     }
@@ -1338,7 +1337,7 @@ impl<'a> Converter<'a> {
         } else {
             result
         };
-        let mut attrs = self.ctx.types.get(logical).attrs.clone();
+        let mut attrs = self.ctx.get_type(logical).attrs.clone();
         tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
         for value in attrs.values_mut() {
             *value = self.convert_attribute(value);
@@ -2198,7 +2197,7 @@ impl<'a> Converter<'a> {
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let empty_env_ty = self.ctx.types.intern(
+        let empty_env_ty = self.ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                 .attr(
                     "name",
@@ -2524,8 +2523,7 @@ impl<'a> Converter<'a> {
         let switch_block = self.make_block(location, &[]);
         let i1_type = self
             .ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+            .intern_type(TypeDataBuilder::new("core", "i1").build());
         for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
             let case_block = self.make_block(location, &[]);
             let same_prompt = arith::cmpi(
@@ -2592,7 +2590,7 @@ impl<'a> Converter<'a> {
             self.ctx.push_op(case_block, choose.op_ref());
             let case_region = self.single_block_region(location, case_block);
             let op_index = ability::compute_op_idx(
-                self.ctx.types.get(arm.ability_ref).attrs.get_symbol("name"),
+                self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
             let case = scf::case(
@@ -2638,10 +2636,9 @@ impl<'a> Converter<'a> {
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         let i1_type = self
             .ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+            .intern_type(TypeDataBuilder::new("core", "i1").build());
         let state_name = self.fresh_helper("one_shot_state");
-        let state_type = self.ctx.types.intern(
+        let state_type = self.ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                 .attr("name", Attribute::Symbol(state_name))
                 .attr(
@@ -3065,8 +3062,7 @@ impl<'a> Converter<'a> {
         let anyref = self.anyref_type();
         let i32_type = self
             .ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            .intern_type(TypeDataBuilder::new("core", "i32").build());
         let params = if general {
             vec![evidence_type, anyref, i32_type, anyref]
         } else {
@@ -3140,7 +3136,7 @@ impl<'a> Converter<'a> {
             }
             let case_region = self.single_block_region(location, case_block);
             let op_index = ability::compute_op_idx(
-                self.ctx.types.get(arm.ability_ref).attrs.get_symbol("name"),
+                self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
             let case = scf::case(
@@ -4021,7 +4017,7 @@ mod tests {
         let (mut ctx, module) =
             parse("core.module @m { func.func @placeholder() { func.return } }");
         let block = ctx.region(module.body(&ctx).unwrap()).blocks[0];
-        let i32_ty = ctx.types.intern(
+        let i32_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
         let source_callable = tribute_control::func_sig(
@@ -4055,7 +4051,7 @@ mod tests {
                 assert_eq!(function.results(converter.ctx), [converted_callable]);
             }
             assert_eq!(
-                converter.ctx.types.get(converted).attrs.get_type("nested"),
+                converter.ctx.get_type(converted).attrs.get_type("nested"),
                 Some(converted_callable)
             );
         }
@@ -4066,7 +4062,7 @@ mod tests {
         operations: &[(&str, &str)],
     ) -> Vec<tribute_control::OperationDeclaration> {
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -4077,7 +4073,7 @@ mod tests {
             .iter()
             .map(|&(ability_name, op_name)| {
                 let ability_ref = ctx
-                    .types
+                    .types()
                     .iter()
                     .find_map(|(ty, data)| {
                         (data.dialect == Symbol::new("core")
@@ -4504,8 +4500,7 @@ mod tests {
         let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
         let physical = func::FuncSig::from_type_ref(&ctx, physical).unwrap();
         let Attribute::List(function_metadata) = ctx
-            .types
-            .get(physical.as_type_ref())
+            .get_type(physical.as_type_ref())
             .attrs
             .get("metadata")
             .unwrap()
@@ -4525,8 +4520,7 @@ mod tests {
         assert_eq!(*function_tag, Symbol::new("function"));
         assert!(closure::Closure::matches(&ctx, *function_nested));
         assert!(
-            ctx.types
-                .get(physical.as_type_ref())
+            ctx.get_type(physical.as_type_ref())
                 .attrs
                 .get(CALLING_CONVENTION_ATTR)
                 .is_none()
@@ -4543,8 +4537,7 @@ mod tests {
             let closure = closure::Closure::from_type_ref(&ctx, closure_ty)?;
             let signature = func::FuncSig::from_type_ref(&ctx, closure.func_type(&ctx))?;
             let Attribute::List(metadata) = ctx
-                .types
-                .get(signature.as_type_ref())
+                .get_type(signature.as_type_ref())
                 .attrs
                 .get("metadata")?
             else {
@@ -4610,20 +4603,18 @@ mod tests {
 }"#,
             );
             let i32_ty = ctx
-                .types
+                .types()
                 .iter()
                 .find_map(|(ty, data)| {
                     (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
                         .then_some(ty)
                 })
                 .unwrap();
-            let mut builder =
-                TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new(name))
-                    .params([i32_ty]);
+            let mut builder = TypeDataBuilder::new("tribute_control", name).params([i32_ty]);
             for (key, value) in attrs {
                 builder = builder.attr(key, value);
             }
-            let malformed = ctx.types.intern(builder.build());
+            let malformed = ctx.intern_type(builder.build());
             let function = module.ops(&ctx)[0];
             ctx.op_mut(function)
                 .attributes
@@ -4854,9 +4845,7 @@ mod tests {
         let before = print_module(&ctx, candidate.op());
         let source_aliases = ctx.type_aliases().to_vec();
         let (alias_name, source_type) = source_aliases[0];
-        let converted_type = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         ctx.register_type_alias(alias_name, converted_type);
 
         let error =
@@ -5166,7 +5155,7 @@ mod tests {
         }
         find_ability(&ctx, module.body(&ctx).unwrap(), &mut ability_ref);
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5231,8 +5220,7 @@ mod tests {
             consumed_set: &mut Option<ValueRef>,
         ) {
             let is_one_shot_type = |ty: TypeRef| {
-                ctx.types
-                    .get(ty)
+                ctx.get_type(ty)
                     .attrs
                     .get_symbol("name")
                     .is_some_and(|name| {
@@ -5300,7 +5288,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5308,7 +5296,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5407,7 +5395,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5415,7 +5403,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5467,7 +5455,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5475,7 +5463,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5634,7 +5622,7 @@ mod tests {
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5642,7 +5630,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5997,7 +5985,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6005,7 +5993,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -6013,7 +6001,7 @@ mod tests {
             })
             .unwrap();
         let never_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
@@ -6131,7 +6119,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6139,7 +6127,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -6210,7 +6198,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6218,7 +6206,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))

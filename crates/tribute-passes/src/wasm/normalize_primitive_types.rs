@@ -54,7 +54,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 
 /// Check if a type is a tribute_rt primitive type or closure type.
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
@@ -66,7 +66,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         || is_type(ctx, ty, "tribute_rt", "nat")
         || is_type(ctx, ty, "tribute_rt", "bool")
     {
-        let i32_ty = ctx.types.intern(
+        let i32_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
         return Some(i32_ty);
@@ -74,7 +74,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
 
     // tribute_rt.float -> core.f64
     if is_type(ctx, ty, "tribute_rt", "float") {
-        let f64_ty = ctx.types.intern(
+        let f64_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build(),
         );
         return Some(f64_ty);
@@ -82,7 +82,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
 
     // tribute_rt.anyref -> wasm.anyref
     if is_type(ctx, ty, "tribute_rt", "anyref") {
-        let anyref_ty = ctx.types.intern(
+        let anyref_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref"))
                 .build(),
         );
@@ -91,7 +91,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
 
     // tribute_rt.intref -> wasm.i31ref
     if is_type(ctx, ty, "tribute_rt", "intref") {
-        let i31ref_ty = ctx.types.intern(
+        let i31ref_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("i31ref"))
                 .build(),
         );

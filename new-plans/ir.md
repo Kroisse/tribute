@@ -147,6 +147,24 @@ Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조�
 rewrite는 원래 operation에 대한 변환 전 결정만 소비한다. 보존성을 증명하지
 않은 다른 pass를 가로질러 이 결정을 재사용하지 않는다.
 
+`IrContext`는 주소와 무관한 고유 identity와 단조 증가하는 전체 IR revision을
+가진다. Operation, value/use-list, block, region, type·path interner 및 전역
+metadata의 관측 가능한 변경은 첫 쓰기 전에 revision을 올린다. 직접 mutable
+reference를 제공하는 경로는 실제 변경 여부를 알 수 없으므로 반환 전에
+보수적으로 올린다. 부분 변경 뒤 pass가 실패해도 revision은 되돌리지 않는다.
+진단 버퍼는 IR 상태가 아니며 분석의 입력으로 사용하지 않는다.
+
+`AnalysisCache`는 조회마다 context identity와 revision을 대조한다. 어느
+하나라도 달라지면 기존 결과와 분석 간 의존성 기록을 모두 폐기한 뒤 현재
+context에 결합한다. 따라서 변경이 없는 IR의 반복 조회는 같은 `Arc`를
+재사용하지만, 변경된 IR을 읽는 조회는 이전 결과를 반환하지 않는다. 다른
+`IrContext`에 같은 캐시를 넘겨도 새 context에서 다시 계산한다. 명시적인
+분석 무효화는 revision이 그대로일 때 관련 분석과 그 의존 분석만 제거한다.
+Pass의 보존 선언은 revision 검사가 거부한 결과를 재사용하게 할 수 없다.
+이미 반환한 `Arc`는 이전 IR에 대한 snapshot으로 남으며, 현재 사실이 필요한
+소비자는 캐시를 다시 조회한다. 조회 결과나 실패한 분석 계산은 변경 전후에
+부분적으로 캐시되지 않는다.
+
 Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed

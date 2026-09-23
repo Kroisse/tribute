@@ -547,9 +547,7 @@ pub fn compose_root_entry_bridge(
     let evidence = if export_convention == CallingConvention::EvidenceDirect {
         ctx.block_args(wrapper_entry)[0]
     } else {
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let zero = arith::r#const(ctx, location, i32_ty, Attribute::Int(0));
         ctx.push_op(wrapper_entry, zero.op_ref());
         let empty = adt::array_new(ctx, location, [zero.result(ctx)], evidence_ty, evidence_ty);
@@ -602,7 +600,7 @@ pub fn compose_root_entry_bridge(
 }
 
 fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    ctx.types.intern(TypeData {
+    ctx.intern_type(TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
         params: smallvec![value_ty],
@@ -725,7 +723,7 @@ fn validate_root_continuation_frame(
     evidence: TypeRef,
     physical_results: &[TypeRef],
 ) -> Result<RootFrameContract, TargetAbiError> {
-    let reference_data = ctx.types.get(frame);
+    let reference_data = ctx.get_type(frame);
     if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
     {
         return Err(TargetAbiError::new(
@@ -743,7 +741,7 @@ fn validate_root_continuation_frame(
     let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
-    let layout_data = ctx.types.get(layout);
+    let layout_data = ctx.get_type(layout);
     if layout_data.dialect != Symbol::new("adt")
         || layout_data.name != Symbol::new("struct")
         || layout_data.attrs.get_symbol("name") != Some(name)
@@ -925,9 +923,9 @@ fn is_parameterless_dialect_type(
     dialect: Symbol,
     name: Symbol,
 ) -> bool {
-    ctx.types.is_dialect(ty, dialect, name)
-        && ctx.types.get(ty).params.is_empty()
-        && ctx.types.get(ty).attrs.is_empty()
+    ctx.types().is_dialect(ty, dialect, name)
+        && ctx.get_type(ty).params.is_empty()
+        && ctx.get_type(ty).attrs.is_empty()
 }
 
 fn root_export_convention(
@@ -1439,7 +1437,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         if let Some(&converted) = self.embedded.get(&ty) {
             return Ok(converted);
         }
-        let data = self.ctx.types.get(ty).clone();
+        let data = self.ctx.get_type(ty).clone();
         if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
             let [function] = data.params.as_slice() else {
                 return Err(TargetAbiError::new(
@@ -1531,10 +1529,10 @@ impl<'a> PhysicalTypeConverter<'a> {
     }
 
     fn intern_if_changed(&mut self, original: TypeRef, data: TypeData) -> TypeRef {
-        if data == *self.ctx.types.get(original) {
+        if data == *self.ctx.get_type(original) {
             original
         } else {
-            self.ctx.types.intern(data)
+            self.ctx.intern_type(data)
         }
     }
 }
@@ -1646,7 +1644,7 @@ mod tests {
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
                     let value = ctx.op_operands(dispatch)[index];
-                    let mut ty = ctx.types.get(ctx.value_ty(value)).clone();
+                    let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
                         ty.attrs.insert(
                             Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
@@ -1668,13 +1666,13 @@ mod tests {
                         let results = signature.results(&ctx).to_vec();
                         ty.params[0] = func::func_sig(&mut ctx, inputs, results).as_type_ref();
                     }
-                    let ty = ctx.types.intern(ty);
+                    let ty = ctx.intern_type(ty);
                     let entry = ctx.op(dispatch).parent_block.unwrap();
                     ctx.set_block_arg_type(entry, index as u32, ty);
                 }
                 7 | 8 => {
                     let ty = if mutation == 7 {
-                        ctx.types.intern(
+                        ctx.intern_type(
                             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
                         )
                     } else {
@@ -1884,9 +1882,7 @@ mod tests {
             &mut ctx, frame_name, nil,
         );
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
@@ -1977,18 +1973,17 @@ mod tests {
         };
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[0]), *worker_evidence);
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
-        assert_eq!(ctx.types.get(*worker_frame).dialect, Symbol::new("adt"));
-        assert_eq!(ctx.types.get(*worker_frame).name, Symbol::new("typeref"));
+        assert_eq!(ctx.get_type(*worker_frame).dialect, Symbol::new("adt"));
+        assert_eq!(ctx.get_type(*worker_frame).name, Symbol::new("typeref"));
         let frame_name = ctx
-            .types
-            .get(*worker_frame)
+            .get_type(*worker_frame)
             .attrs
             .get_symbol("name")
             .unwrap();
         let frame_layout = ctx
             .type_alias_by_name(frame_name)
             .expect("worker frame must retain its exact nominal layout");
-        let fields = ctx.types.get(frame_layout).attrs.get("fields");
+        let fields = ctx.get_type(frame_layout).attrs.get("fields");
         let Attribute::List(fields) = fields.expect("frame fields") else {
             panic!("frame fields must be a list");
         };
@@ -2028,7 +2023,7 @@ mod tests {
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
                 && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.types.get(*ty).attrs.get_symbol("name")
+                    ctx.get_type(*ty).attrs.get_symbol("name")
                         == Some(Symbol::new(ROOT_COMPLETION_CELL_NAME))
                 })
         }));
@@ -2110,16 +2105,14 @@ mod tests {
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = Symbol::new("__tribute_malformed_root_frame");
-            let i32_ty = ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
             let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
                 &mut ctx,
                 frame_name,
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong = ctx.types.intern(
+                let wrong = ctx.intern_type(
                     TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                         .attr("name", Attribute::Symbol(frame_name))
                         .attr("fields", Attribute::List(vec![]))
@@ -2173,7 +2166,7 @@ mod tests {
         );
         let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let parameterized_i32 = ctx.types.intern(
+        let parameterized_i32 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
                 .param(nil)
                 .build(),
@@ -2452,7 +2445,7 @@ mod tests {
     fn malformed_zero_parameter_func_sig_fails_without_panicking() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
-        let malformed = ctx.types.intern(
+        let malformed = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                 .build(),
         );

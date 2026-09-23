@@ -106,7 +106,7 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
 
     assert!(
         cache
-            .get_cached::<NativeOwnershipFunctionFacts>(op)
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
             .is_none()
     );
     let first = cache
@@ -125,7 +125,7 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
     // Invalidating only the dependent keeps the reusable prerequisite.
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_some()
     );
 
@@ -133,13 +133,55 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
     cache.invalidate::<NativeOwnershipModuleFacts>(module.op());
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_none()
     );
     let cascaded = cache
         .get::<NativeOwnershipFunctionFacts>(&ctx, op)
         .expect("function facts");
     assert!(!Arc::ptr_eq(&recomputed, &cascaded));
+}
+
+#[test]
+fn ir_revision_change_recomputes_function_and_module_facts() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, BORROW_FIXTURE);
+    let op = function_op(&ctx, module, "load");
+    let mut cache = AnalysisCache::new();
+    let old_function = cache
+        .get::<NativeOwnershipFunctionFacts>(&ctx, op)
+        .expect("function facts");
+    let old_module = cache
+        .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+        .expect("module prerequisite");
+
+    ctx.op_mut(module.op()).attributes.insert(
+        Symbol::new("revision_probe"),
+        trunk_ir::types::Attribute::Unit,
+    );
+    assert!(
+        cache
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
+            .is_none()
+    );
+    assert!(
+        cache
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+            .is_none()
+    );
+
+    let fresh_function = cache
+        .get::<NativeOwnershipFunctionFacts>(&ctx, op)
+        .expect("recomputed function facts");
+    let fresh_module = cache
+        .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+        .expect("recomputed module prerequisite");
+    assert!(!Arc::ptr_eq(&old_function, &fresh_function));
+    assert!(!Arc::ptr_eq(&old_module, &fresh_module));
+    assert_eq!(
+        old_function.managed_values(),
+        fresh_function.managed_values()
+    );
 }
 
 #[test]
@@ -169,7 +211,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     assert!(cache.get::<NativeOwnershipFunctionFacts>(&ctx, op).is_err());
     assert!(
         cache
-            .get_cached::<NativeOwnershipFunctionFacts>(op)
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
             .is_none()
     );
     // A retry revalidates from scratch instead of reusing a partial result.
@@ -200,7 +242,7 @@ fn nested_functions_depend_on_the_outermost_module_facts() {
     // so no narrower inner-module entry is ever published.
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_some()
     );
     let mut inner = None;
@@ -212,7 +254,7 @@ fn nested_functions_depend_on_the_outermost_module_facts() {
     let inner = inner.expect("nested module");
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(inner)
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, inner)
             .is_none()
     );
 }

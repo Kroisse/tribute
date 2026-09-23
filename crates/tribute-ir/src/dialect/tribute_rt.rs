@@ -55,26 +55,26 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
-    use trunk_ir::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
+    use trunk_ir::{Attribute, IrContext, TypeDataBuilder};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
-    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
-    fn make_ptr_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+    fn make_ptr_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
+        ctx.intern_type(TypeDataBuilder::new("core", "ptr").build())
     }
 
     #[test]
     fn test_box_int_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let i32_ty = make_i32_type(&mut ctx);
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a value to box
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
@@ -104,8 +104,8 @@ mod tests {
     fn test_unbox_int_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let i32_ty = make_i32_type(&mut ctx);
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a boxed value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -134,7 +134,7 @@ mod tests {
     fn test_retain_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -163,7 +163,7 @@ mod tests {
     fn test_release_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -191,12 +191,12 @@ mod tests {
     fn test_into_raw_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let managed_ty = ctx.types.intern(
+        let managed_ty = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(Symbol::new("Box")))
                 .build(),
         );
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(&mut ctx);
         let value = trunk_ir::dialect::arith::r#const(&mut ctx, loc, managed_ty, Attribute::Int(0))
             .result(&ctx);
 
@@ -215,10 +215,8 @@ mod tests {
     fn test_box_float_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::Int(0));
         let val = c.result(&ctx);
@@ -235,10 +233,8 @@ mod tests {
     fn test_box_bool_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let bool_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "bool").build());
+        let ptr_ty = make_ptr_type(&mut ctx);
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::Int(1));
         let val = c.result(&ctx);
@@ -254,7 +250,7 @@ mod tests {
     fn test_from_op_wrong_dialect() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match tribute_rt ops
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));

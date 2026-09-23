@@ -578,7 +578,7 @@ impl SwitchDispatch<'_> {
                 let case_const = arith::r#const(ctx, loc, disc_ty, case_attr.clone());
                 ctx.push_op(current_block, case_const.op_ref());
 
-                let i1_ty = ctx.types.intern(
+                let i1_ty = ctx.intern_type(
                     crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
                         .build(),
                 );
@@ -746,19 +746,17 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn i1_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i1").build())
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {
@@ -1231,7 +1229,7 @@ mod tests {
             .skip(1)
             .flat_map(|&block| ctx.block_args(block))
             .any(|&arg| {
-                let ty = ctx.types.get(ctx.value_ty(arg));
+                let ty = ctx.get_type(ctx.value_ty(arg));
                 ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
             });
         assert!(

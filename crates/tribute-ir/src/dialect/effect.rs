@@ -75,13 +75,13 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, dialect: &str, name: &str) -> trunk_ir::TypeRef {
-        ctx.types.intern(
+        ctx.intern_type(
             TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name)).build(),
         )
     }
 
     fn ability_ref(ctx: &mut IrContext, name: &str) -> trunk_ir::TypeRef {
-        ctx.types.intern(
+        ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
                 .build(),

@@ -462,14 +462,13 @@ mod mechanics {
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     /// Build `func.func @name(params) -> ret_ty { body_builder }`.
@@ -831,14 +830,13 @@ mod pass {
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn build_func<F>(
@@ -1161,7 +1159,7 @@ mod pass {
         // the cache therefore holds a **fresh** graph that reflects the
         // rewritten IR, not the pre-pass one: no call sites remain.
         let post = am
-            .get_cached::<CallGraph>(module.op())
+            .get_cached::<CallGraph>(&ctx, module.op())
             .expect("driver must leave a fresh graph cached after the pass");
         assert_eq!(post.call_site_count.get(&Symbol::new("helper")), None);
         // And a subsequent explicit `get` must coincide with the cached
@@ -1194,7 +1192,7 @@ mod pass {
 
         // No rewrite happened → cache preserved, same Arc.
         let after = am
-            .get_cached::<CallGraph>(module.op())
+            .get_cached::<CallGraph>(&ctx, module.op())
             .expect("cache should survive a no-op pass run");
         assert!(std::sync::Arc::ptr_eq(&before, &after));
     }

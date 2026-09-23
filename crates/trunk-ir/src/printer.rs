@@ -110,7 +110,7 @@ impl<'a> PrintState<'a> {
         if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
-        let data = self.ctx.types.get(ty);
+        let data = self.ctx.get_type(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
         if !data.params.is_empty() {
             f.write_char('(')?;
@@ -145,7 +145,7 @@ impl<'a> PrintState<'a> {
         inputs: &[TypeRef],
         results: &[TypeRef],
     ) -> fmt::Result {
-        let data = self.ctx.types.get(ty);
+        let data = self.ctx.get_type(ty);
         write!(f, "{}.{}<(", data.dialect, data.name)?;
         for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
@@ -221,7 +221,7 @@ impl<'a> PrintState<'a> {
                 f.write_char(']')
             }
             Attribute::Location(loc) => {
-                let path_str = self.ctx.paths.get(loc.path);
+                let path_str = self.ctx.paths().get(loc.path);
                 f.write_str("loc(\"")?;
                 write_escaped_string(f, path_str)?;
                 write!(f, "\" {}:{})", loc.span.start, loc.span.end)
@@ -233,7 +233,7 @@ impl<'a> PrintState<'a> {
 /// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
 /// Other types, including malformed count-shaped data, retain concrete printing.
 fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.name != crate::Symbol::new("func_sig") {
         return None;
     }
@@ -566,7 +566,7 @@ fn generate_auto_aliases(
         if existing.contains_key(&ty) {
             continue;
         }
-        let complexity = ctx.types.complexity(ty);
+        let complexity = ctx.types().complexity(ty);
         let has_hint = crate::op_interface::suggest_type_alias_name(ctx, ty).is_some();
         // Types with a dialect-provided name hint (e.g. named structs) are
         // alias-eligible when used often enough. Types without a hint need
@@ -688,7 +688,7 @@ fn collect_type_deps(
     alias_set: &HashSet<TypeRef>,
     deps: &mut HashSet<TypeRef>,
 ) {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     for &param in &data.params {
         if alias_set.contains(&param) {
             deps.insert(param);
@@ -1008,13 +1008,12 @@ mod tests {
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         Location::new(path, crate::Span::new(0, 0))
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     /// Create a one-result `func.func_sig` type.
@@ -1093,7 +1092,7 @@ mod tests {
     fn malformed_func_sig_storage_prints_as_concrete_type() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let foreign = ctx.types.intern(
+        let foreign = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("foreign"), Symbol::new("func_sig"))
                 .param(i32_ty)
                 .attr(func::NUM_INPUTS_ATTR, Attribute::Int(2))
@@ -1107,7 +1106,7 @@ mod tests {
 
         // Shared signatures have a stricter one-result contract, so raw
         // multi-result storage must not be printed in arrow syntax either.
-        let shared = ctx.types.intern(
+        let shared = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                 .params([i32_ty, i32_ty, i32_ty])
                 .attr(func::NUM_INPUTS_ATTR, Attribute::Int(1))
@@ -1436,7 +1435,7 @@ mod tests {
             .attr("fields", Attribute::List(field_list))
             .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
             .build();
-        ctx.types.intern(data)
+        ctx.intern_type(data)
     }
 
     /// Helper: build a module with given functions.

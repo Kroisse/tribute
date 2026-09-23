@@ -763,8 +763,8 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
                 .unresolved
                 .iter()
                 .map(|c| {
-                    let from_td = ctx.types.get(c.from_type);
-                    let to_td = ctx.types.get(c.to_type);
+                    let from_td = ctx.get_type(c.from_type);
+                    let to_td = ctx.get_type(c.to_type);
                     format!(
                         "{}.{} -> {}.{}",
                         from_td.dialect, from_td.name, to_td.dialect, to_td.name,
@@ -1376,8 +1376,8 @@ fn prepare_module_to_native(
                 .unresolved
                 .iter()
                 .map(|c| {
-                    let from_td = ctx.types.get(c.from_type);
-                    let to_td = ctx.types.get(c.to_type);
+                    let from_td = ctx.get_type(c.from_type);
+                    let to_td = ctx.get_type(c.to_type);
                     format!(
                         "{}.{} -> {}.{}",
                         from_td.dialect, from_td.name, to_td.dialect, to_td.name,
@@ -2179,7 +2179,7 @@ fn main() {
         );
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == trunk_ir::Symbol::new("core")
@@ -2216,7 +2216,7 @@ fn main() {
         );
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == trunk_ir::Symbol::new("core")
@@ -2949,11 +2949,11 @@ fn main() {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("dependency layout is published");
-            assert_eq!(ir.types.get(ty).attrs.get_symbol("name"), Some(name));
+            assert_eq!(ir.get_type(ty).attrs.get_symbol("name"), Some(name));
             ty
         }
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
-            let data = ir.types.get(ty);
+            let data = ir.get_type(ty);
             assert_eq!(data.name, Symbol::new("typeref"));
             ir.type_alias_by_name(data.attrs.get_symbol("name").unwrap())
                 .expect("referenced layout")
@@ -3042,19 +3042,19 @@ fn main() {}
             for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
                 let inner = alias(&ir, &format!("Inner${suffix}"));
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
-                assert_eq!(ir.types.get(value).name, Symbol::from_dynamic(primitive));
+                assert_eq!(ir.get_type(value).name, Symbol::from_dynamic(primitive));
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
                 assert_eq!(outer[0].0, Symbol::new("Wrap"));
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
                 assert!(outer[2].1.is_empty());
                 assert_eq!(outer[3].1.len(), 2);
                 assert_eq!(outer[3].1[0], value);
-                assert_eq!(ir.types.get(outer[3].1[1]).name, Symbol::new("i1"));
+                assert_eq!(ir.get_type(outer[3].1[1]).name, Symbol::new("i1"));
                 assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "String"));
                 let tuple = target(&ir, outer[1].1[0]);
                 let fields = get_struct_fields(&ir, tuple).unwrap();
                 assert_eq!(fields[0].1, value);
-                let callback = ir.types.get(fields[1].1);
+                let callback = ir.get_type(fields[1].1);
                 assert_eq!(
                     callback.dialect,
                     Symbol::new(if after_cps {
@@ -3076,7 +3076,7 @@ fn main() {}
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
                 assert_eq!(variants[0].0, Symbol::new("Item"));
                 assert_eq!(
-                    ir.types.get(variants[0].1[0]).name,
+                    ir.get_type(variants[0].1[0]).name,
                     Symbol::from_dynamic(primitive)
                 );
             }
@@ -3102,14 +3102,14 @@ fn main() {}
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("published nominal layout");
-            let data = ir.types.get(ty);
+            let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::from_dynamic(kind));
             assert_eq!(data.attrs.get_symbol("name"), Some(name));
             assert_eq!(
                 ir.type_aliases()
                     .iter()
-                    .filter(|(_, ty)| ir.types.get(*ty).attrs.get_symbol("name") == Some(name))
+                    .filter(|(_, ty)| ir.get_type(*ty).attrs.get_symbol("name") == Some(name))
                     .count(),
                 1,
                 "one published layout for {name}"
@@ -3118,7 +3118,7 @@ fn main() {}
         }
 
         fn reference_name(ir: &IrContext, ty: TypeRef) -> Symbol {
-            let data = ir.types.get(ty);
+            let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
             data.attrs.get_symbol("name").expect("nominal identity")
@@ -3209,7 +3209,7 @@ fn main() {}
             let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
             let tuple = layout(&ir, reference_name(&ir, pair), "struct");
             let fields = get_struct_fields(&ir, tuple).unwrap();
-            let callback = ir.types.get(fields[1].1);
+            let callback = ir.get_type(fields[1].1);
             if after_cps {
                 assert_ne!(Some(tuple), source_tuple);
                 assert_eq!(callback.dialect, Symbol::new("closure"));
@@ -3243,7 +3243,7 @@ fn main() {}
             if function.sym_name(&ir) == Symbol::new("std::collections::List::prepend") {
                 let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
                     .expect("logical signature");
-                let result = ir.types.get(signature.result(&ir));
+                let result = ir.get_type(signature.result(&ir));
                 assert_eq!(result.dialect, Symbol::new("tribute_rt"));
                 assert_eq!(result.name, Symbol::new("anyref"));
                 assert_eq!(signature.inputs(&ir)[1], signature.result(&ir));
@@ -3446,7 +3446,7 @@ fn main() -> String { "hello" }
         let string_ty = tribute_ir::metadata::WellKnownTypes::from_module(&ctx, module.op())
             .string
             .expect("String IR metadata");
-        let string_data = ctx.types.get(string_ty);
+        let string_data = ctx.get_type(string_ty);
 
         assert_eq!(
             string_data.attrs.get("tribute.definition.source"),
@@ -3465,7 +3465,7 @@ fn main() -> String { "hello" }
             Some(&trunk_ir::Attribute::Int(canonical.definition.end as i128))
         );
 
-        let user_lookalike = ctx.types.iter().find_map(|(ty, data)| {
+        let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {
             (ty != string_ty
                 && data.dialect == "adt"
                 && data.name == "enum"

@@ -173,12 +173,8 @@ pub fn lower(
     }
 
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
     let content_to_symbol = analysis.content_to_symbol.clone();
     let string_enum_ty = analysis.string_enum_ty;

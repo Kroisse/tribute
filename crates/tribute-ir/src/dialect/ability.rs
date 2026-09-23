@@ -79,7 +79,7 @@ pub fn operation_payload_type_ref(
 ) -> trunk_ir::TypeRef {
     use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-    let ability_name = ctx.types.get(ability_ref).attrs.get_symbol("name");
+    let ability_name = ctx.get_type(ability_ref).attrs.get_symbol("name");
     let op_idx = compute_op_idx(ability_name, Some(op_name));
     let fields = fields
         .into_iter()
@@ -91,7 +91,7 @@ pub fn operation_payload_type_ref(
             ])
         })
         .collect();
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr(
                 "name",
@@ -108,7 +108,7 @@ pub fn operation_payload_type_ref(
 pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
     use std::hash::{Hash, Hasher};
 
-    let data = ctx.types.get(ability_ref);
+    let data = ctx.get_type(ability_ref);
     let name = match ability_name(ctx, ability_ref) {
         Some(s) => s,
         _ => panic!(
@@ -130,7 +130,7 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
 
 /// Return the source-level ability name attached to an ability reference type.
 pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
-    ctx.types.get(ability_ref).attrs.get_symbol("name")
+    ctx.get_type(ability_ref).attrs.get_symbol("name")
 }
 
 /// Build an `arith.const` for the stable runtime ability ID.
@@ -147,7 +147,7 @@ pub fn ability_id_const(
 fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
     use std::hash::{Hash, Hasher};
 
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     let mut hasher = rustc_hash::FxHasher::default();
     data.dialect.hash(&mut hasher);
     data.name.hash(&mut hasher);
@@ -256,8 +256,7 @@ impl MarkerFieldType {
             Self::I32 => Symbol::new("i32"),
             Self::Ptr => Symbol::new("ptr"),
         };
-        ctx.types
-            .intern(TypeDataBuilder::new(dialect, name).build())
+        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
     }
 }
 
@@ -369,7 +368,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
             .collect(),
     );
 
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(Symbol::new("_Marker")))
             .attr("fields", fields_attr)
@@ -385,7 +384,7 @@ pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 
 /// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
 pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
@@ -394,7 +393,7 @@ pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type is the evidence ADT type (`core.array(Marker)`).
 pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("core") || data.name != Symbol::new("array") {
         return false;
     }
@@ -418,7 +417,7 @@ mod tests {
         assert!(is_marker_type_ref(&ctx, marker_ty));
 
         // Should be an adt.struct
-        let data = ctx.types.get(marker_ty);
+        let data = ctx.get_type(marker_ty);
         assert_eq!(data.dialect, Symbol::new("adt"));
         assert_eq!(data.name, Symbol::new("struct"));
 
@@ -505,7 +504,7 @@ mod tests {
         assert!(is_evidence_type_ref(&ctx, evidence_ty));
 
         // Should be a core.array type
-        let data = ctx.types.get(evidence_ty);
+        let data = ctx.get_type(evidence_ty);
         assert_eq!(data.dialect, Symbol::new("core"));
         assert_eq!(data.name, Symbol::new("array"));
         assert_eq!(data.params.len(), 1);
@@ -519,7 +518,7 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Non-marker struct should return false
-        let other_struct = ctx.types.intern(
+        let other_struct = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                 .attr("name", Attribute::Symbol(Symbol::new("OtherStruct")))
                 .build(),
@@ -527,9 +526,7 @@ mod tests {
         assert!(!is_marker_type_ref(&ctx, other_struct));
 
         // Non-struct type should return false
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         assert!(!is_marker_type_ref(&ctx, i32_ty));
     }
 
@@ -538,9 +535,7 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Array of non-marker should return false
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 

@@ -47,11 +47,9 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(Symbol::new("_closure")))
             .attr(
@@ -73,7 +71,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
 
 /// Check if a TypeRef is an adt.struct with name "_closure".
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
@@ -182,9 +180,7 @@ impl RewritePattern for LowerClosureCallArena {
             return false;
         };
 
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
@@ -265,9 +261,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         }
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(results) = exact_tail_results(ctx, op, callee) else {
             return false;
@@ -420,7 +414,7 @@ fn exact_physical_call_contract(
     }
     let mut params = callable.inputs(ctx).to_vec();
     params.insert(environment_index, environment);
-    let mut type_attrs = ctx.types.get(function).attrs.clone();
+    let mut type_attrs = ctx.get_type(function).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
@@ -447,9 +441,7 @@ impl RewritePattern for LowerClosureFuncArena {
 
         let loc = ctx.op(op).location;
         let closure_value = ctx.op_operands(op)[0];
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);
@@ -749,7 +741,7 @@ impl<'a> ClosureTypePhysicalizer<'a> {
             return ty;
         }
 
-        let data = self.ctx.types.get(ty).clone();
+        let data = self.ctx.get_type(ty).clone();
         let mut converted = data.clone();
         for parameter in &mut converted.params {
             *parameter = self.convert_type(*parameter);
@@ -764,7 +756,7 @@ impl<'a> ClosureTypePhysicalizer<'a> {
         let converted = if converted == data {
             ty
         } else {
-            self.ctx.types.intern(converted)
+            self.ctx.intern_type(converted)
         };
         self.visiting.remove(&ty);
         self.cache.insert(ty, converted);

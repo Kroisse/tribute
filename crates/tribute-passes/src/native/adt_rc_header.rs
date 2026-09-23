@@ -45,12 +45,8 @@ pub fn lower(
 ) -> Result<(), ConversionError> {
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
@@ -150,7 +146,7 @@ impl RewritePattern for StructNewPattern {
                 "adt_rc_header: missing RTTI entry for struct type {:?}; \
                      ensure generate_rtti runs before this pass; layout = {:?}",
                 struct_ty,
-                ctx.types.get(struct_ty)
+                ctx.get_type(struct_ty)
             )
         }) as i64;
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
@@ -352,14 +348,13 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
     }
 
     fn build_and_lower(

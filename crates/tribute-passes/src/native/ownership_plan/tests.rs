@@ -1229,7 +1229,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
         .rtti_types()
         .iter()
         .find(|entry| {
-            ctx.types.get(entry.ty).attrs.get_symbol("name") == Some(Symbol::new("Choice"))
+            ctx.get_type(entry.ty).attrs.get_symbol("name") == Some(Symbol::new("Choice"))
         })
         .unwrap();
     assert!(matches!(
@@ -1569,10 +1569,8 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let stale = ctx.types.intern(
+    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+    let stale = ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", trunk_ir::Attribute::Symbol(Symbol::new("R")))
             .attr(
@@ -1795,7 +1793,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
     });
     let allocation = allocation.unwrap();
     let candidates = ctx
-        .types
+        .types()
         .iter()
         .filter_map(|(ty, data)| {
             (data.dialect == Symbol::new("adt")

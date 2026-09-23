@@ -271,19 +271,17 @@ mod tests {
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, crate::types::Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = crate::types::Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -348,7 +346,7 @@ mod tests {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |ctx, ty| {
             if ctx
-                .types
+                .types()
                 .is_dialect(ty, Symbol::new("core"), Symbol::new("i32"))
             {
                 Some(i64_ty)
@@ -394,7 +392,7 @@ mod tests {
         assert_eq!(function.inputs(&ctx), &[i64_ty]);
         assert_eq!(function.single_result(&ctx), Some(i64_ty));
         assert_eq!(
-            ctx.types.get(new_type).attrs.get_type("metadata_type"),
+            ctx.get_type(new_type).attrs.get_type("metadata_type"),
             Some(i64_ty),
             "nested type attributes should be converted and preserved"
         );
@@ -435,11 +433,11 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let i64_ty = i64_type(&mut ctx);
         let resultless = func::func_sig(&mut ctx, [i32_ty, i32_ty], []).as_type_ref();
-        let before = ctx.types.get(resultless).clone();
+        let before = ctx.get_type(resultless).clone();
         let converter = i32_to_i64_converter(i32_ty, i64_ty);
 
         let converted = convert_function_type(&mut ctx, resultless, &converter).unwrap();
-        assert_eq!(ctx.types.get(resultless), &before);
+        assert_eq!(ctx.get_type(resultless), &before);
         let function = func::FuncSig::from_type_ref(&ctx, converted).unwrap();
         assert_eq!(function.inputs(&ctx), [i64_ty, i64_ty]);
         assert!(function.is_resultless(&ctx));
@@ -593,13 +591,13 @@ mod result_list_tests {
                 assert_eq!(function.inputs(&ctx), vec![ptr; inputs]);
                 assert_eq!(function.results(&ctx), vec![ptr; results]);
                 assert_eq!(
-                    ctx.types.get(converted).attrs.get("nested"),
+                    ctx.get_type(converted).attrs.get("nested"),
                     Some(&Attribute::List(vec![Attribute::List(vec![
                         Attribute::Type(ptr)
                     ])]))
                 );
                 assert_eq!(
-                    ctx.types.get(converted).attrs.get_symbol("tag"),
+                    ctx.get_type(converted).attrs.get_symbol("tag"),
                     Some(Symbol::new("keep"))
                 );
             }

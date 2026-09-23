@@ -1293,8 +1293,7 @@ fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.i32` type.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 /// Intern a target-owned `wasm.func_sig` type with the given parameter and return types.

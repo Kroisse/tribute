@@ -1,18 +1,17 @@
 //! Analysis framework for TrunkIR passes.
 //!
-//! [`AnalysisCache`] provides lazy, cached analyses with explicit
-//! invalidation semantics. Types implementing the [`Analysis`] trait are
-//! computed on demand and cached keyed by `(TypeId, OpRef)`; passes that
-//! mutate the IR are expected to call [`AnalysisCache::invalidate`] to
-//! keep downstream consumers correct.
+//! [`AnalysisCache`] provides lazy, cached analyses keyed by `(TypeId, OpRef)`.
+//! Each lookup compares the context identity and IR revision, discarding all
+//! cached results after any observable IR change. Explicit invalidation
+//! remains available for precise removal when the revision is unchanged.
 //!
 //! A lookup either returns a complete cached result or an [`AnalysisError`].
 //! Analysis errors describe invalid input IR or an unsupported analysis
 //! boundary, not ordinary source-language diagnostics. A failed computation
 //! is never inserted: a later lookup retries from scratch after the IR is
-//! repaired or changed, while cached results for other analysis types and
-//! targets remain available. This also means the type-erased cache can never
-//! expose a partially constructed result. Unchanged invalid IR is expected to
+//! repaired or changed. With unchanged IR, cached results for other analysis
+//! types and targets remain available. The type-erased cache can never expose
+//! a partially constructed result. Unchanged invalid IR is expected to
 //! fail again; cache type mismatches and caller-contract violations remain
 //! programming errors and panic.
 //!
@@ -25,9 +24,8 @@
 //! An [`AnalysisCache`] is owned by the **pipeline orchestrator** for
 //! the duration of one pipeline phase and **injected** into each pass
 //! that needs it. The cache is short-lived — dropped when the phase
-//! returns — so cached [`OpRef`] keys never outlive the [`IrContext`]
-//! they refer to, and the "one cache = one context" invariant holds by
-//! construction rather than by a runtime guard.
+//! returns. Reusing a cache with another [`IrContext`] discards the prior
+//! context's results before lookup.
 //!
 //! The [`AnalysisCache::scope`] helper bundles this pattern:
 //!
@@ -54,7 +52,8 @@
 //! let graph = analyses.get::<CallGraph>(ctx, module.op())?;
 //! // `graph: Arc<CallGraph>` — safe to hold while `ctx` is mutated.
 //! do_some_mutation(ctx);
-//! analyses.invalidate::<CallGraph>(module.op());
+//! let fresh_graph = analyses.get::<CallGraph>(ctx, module.op())?;
+//! // `graph` still describes the old IR; `fresh_graph` describes the new IR.
 //! ```
 //!
 //! # Thread-safety
@@ -257,10 +256,10 @@ struct InProgressAnalysis {
 
 /// Lazy, typed cache of analyses keyed by `(TypeId, OpRef)`.
 ///
-/// See the [module docs](self) for the pipeline-scoped ownership
-/// model and the single-context invariant.
+/// See the [module docs](self) for the pipeline-scoped ownership model.
 #[derive(Default)]
 pub struct AnalysisCache {
+    bound_stamp: Option<(u64, u64)>,
     cache: HashMap<AnalysisKey, Arc<dyn Any + Send + Sync>>,
     /// Computed analysis -> its direct prerequisites.
     dependencies: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
@@ -309,6 +308,7 @@ impl AnalysisCache {
         ctx: &IrContext,
         target: OpRef,
     ) -> Result<Arc<A>, AnalysisError> {
+        self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
         if let Some(entry) = self.cache.get(&key) {
             return Ok(Arc::clone(entry)
@@ -360,7 +360,10 @@ impl AnalysisCache {
     }
 
     /// Return the cached analysis `A` for `target` without computing it.
-    pub fn get_cached<A: Analysis>(&self, target: OpRef) -> Option<Arc<A>> {
+    ///
+    /// A changed revision or context clears the cache and returns `None`.
+    pub fn get_cached<A: Analysis>(&mut self, ctx: &IrContext, target: OpRef) -> Option<Arc<A>> {
+        self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
         self.cache.get(&key).map(|v| {
             Arc::clone(v)
@@ -397,6 +400,7 @@ impl AnalysisCache {
         self.dependencies.clear();
         self.dependents.clear();
         self.in_progress.clear();
+        self.bound_stamp = None;
     }
 
     /// Number of cached analyses (useful for diagnostics/tests).
@@ -407,6 +411,19 @@ impl AnalysisCache {
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+
+    fn sync_with(&mut self, ctx: &IrContext) {
+        let stamp = ctx.analysis_stamp();
+        if self.bound_stamp == Some(stamp) {
+            return;
+        }
+        assert!(
+            self.in_progress.is_empty(),
+            "IR changed during analysis computation"
+        );
+        self.clear();
+        self.bound_stamp = Some(stamp);
     }
 
     fn replace_dependencies(&mut self, key: AnalysisKey, dependencies: HashSet<AnalysisKey>) {
@@ -523,6 +540,21 @@ mod tests {
         fn compute(_ctx: &mut AnalysisContext<'_>, _target: OpRef) -> Result<Self, AnalysisError> {
             COUNTED_COMPUTES.fetch_add(1, Ordering::SeqCst);
             Ok(Self)
+        }
+    }
+
+    #[derive(Debug)]
+    struct MarkerAnalysis(Option<i128>);
+
+    impl Analysis for MarkerAnalysis {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            let marker = ctx
+                .ir()
+                .op(target)
+                .attributes
+                .get("marker")
+                .and_then(|a| a.as_i128());
+            Ok(Self(marker))
         }
     }
 
@@ -691,6 +723,228 @@ mod tests {
     }
 
     #[test]
+    fn mutation_invalidates_every_result_and_preserves_old_arc_snapshot() {
+        let _counters = lock_counters();
+        let (mut ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        let old = analyses.get::<MarkerAnalysis>(&ctx, op).unwrap();
+        let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
+        let _ = analyses.get::<OtherAnalysis>(&ctx, op).unwrap();
+        assert_eq!(analyses.len(), 5);
+
+        ctx.op_mut(op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(7));
+        assert!(analyses.get_cached::<MarkerAnalysis>(&ctx, op).is_none());
+        assert!(analyses.cache.is_empty());
+        assert!(analyses.dependencies.is_empty());
+        assert!(analyses.dependents.is_empty());
+
+        let fresh = analyses.get::<MarkerAnalysis>(&ctx, op).unwrap();
+        assert_eq!(old.0, None);
+        assert_eq!(fresh.0, Some(7));
+        assert!(!Arc::ptr_eq(&old, &fresh));
+        assert!(Arc::ptr_eq(
+            &fresh,
+            &analyses.get::<MarkerAnalysis>(&ctx, op).unwrap()
+        ));
+    }
+
+    #[test]
+    fn operand_and_type_setters_invalidate_only_on_changes() {
+        use crate::context::{BlockArgData, BlockData, OperationDataBuilder};
+        use crate::symbol::Symbol;
+        use crate::types::TypeDataBuilder;
+
+        let (mut ctx, module) = test_ctx();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let location = ctx.op(module).location;
+        let source_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let source_a = ctx.create_op(source_data);
+        let source_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let source_b = ctx.create_op(source_data);
+        let consumer_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("consumer"))
+                .operand(ctx.op_result(source_a, 0))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let consumer = ctx.create_op(consumer_data);
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: smallvec::SmallVec::new(),
+            parent_region: None,
+        });
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+
+        let unchanged = ctx.analysis_stamp();
+        ctx.set_op_operand(consumer, 0, ctx.op_result(source_a, 0));
+        ctx.set_op_result_type(consumer, 0, i32_ty);
+        ctx.set_block_arg_type(block, 0, i32_ty);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_some());
+
+        ctx.set_op_operand(consumer, 0, ctx.op_result(source_b, 0));
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+        ctx.set_op_result_type(consumer, 0, f64_ty);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+        ctx.set_block_arg_type(block, 0, f64_ty);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+    }
+
+    #[test]
+    fn cache_rebinds_even_when_contexts_have_equal_revisions_and_op_refs() {
+        let (mut first_ctx, first_op) = test_ctx();
+        let (mut second_ctx, second_op) = test_ctx();
+        first_ctx
+            .op_mut(first_op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(1));
+        second_ctx
+            .op_mut(second_op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(2));
+        assert_eq!(first_op, second_op);
+        assert_eq!(first_ctx.analysis_stamp().1, second_ctx.analysis_stamp().1);
+        assert_ne!(first_ctx.analysis_stamp().0, second_ctx.analysis_stamp().0);
+
+        let mut analyses = AnalysisCache::new();
+        let first = analyses
+            .get::<MarkerAnalysis>(&first_ctx, first_op)
+            .unwrap();
+        assert_eq!(first.0, Some(1));
+        assert!(
+            analyses
+                .get_cached::<MarkerAnalysis>(&second_ctx, second_op)
+                .is_none()
+        );
+        let second = analyses
+            .get::<MarkerAnalysis>(&second_ctx, second_op)
+            .unwrap();
+        assert_eq!(second.0, Some(2));
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn interning_follows_revision_contract() {
+        let (mut ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        let initial = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let stamp = ctx.analysis_stamp();
+
+        let path = ctx.intern_path("file:///same.trb".to_owned());
+        assert_ne!(ctx.analysis_stamp(), stamp);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_path = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        assert!(!Arc::ptr_eq(&initial, &after_path));
+
+        let unchanged = ctx.analysis_stamp();
+        assert_eq!(ctx.intern_path("file:///same.trb".to_owned()), path);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(Arc::ptr_eq(
+            &after_path,
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
+        ));
+
+        let ty = crate::types::TypeDataBuilder::new(
+            crate::symbol::Symbol::new("test"),
+            crate::symbol::Symbol::new("fresh"),
+        )
+        .build();
+        let interned = ctx.intern_type(ty.clone());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_type = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let unchanged = ctx.analysis_stamp();
+        assert_eq!(ctx.intern_type(ty), interned);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(Arc::ptr_eq(
+            &after_type,
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
+        ));
+
+        ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let unchanged = ctx.analysis_stamp();
+        ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+    }
+
+    #[test]
+    fn detached_builder_is_not_ir_but_raw_entity_access_invalidates() {
+        use crate::context::{BlockData, OperationDataBuilder, RegionData};
+        use crate::symbol::Symbol;
+
+        let (mut ctx, op) = test_ctx();
+        let location = ctx.op(op).location;
+        let stamp = ctx.analysis_stamp();
+        let _detached =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("unused"))
+                .build(&mut ctx);
+        assert_eq!(ctx.analysis_stamp(), stamp);
+
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec::SmallVec::new(),
+            parent_region: None,
+        });
+        let region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec::smallvec![block],
+            parent_op: None,
+        });
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+
+        let _ = ctx.op_mut(op);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let _ = ctx.block_mut(block);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let _ = ctx.region_mut(region);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+    }
+
+    #[test]
+    fn same_pass_mutation_and_failed_pass_cannot_reuse_old_result() {
+        let (mut ctx, op) = test_ctx();
+        AnalysisCache::scope(&mut ctx, |ctx, analyses| {
+            let before = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
+            ctx.op_mut(op)
+                .attributes
+                .insert("marker".into(), crate::types::Attribute::Int(3));
+            let after = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
+            assert_eq!(before.0, None);
+            assert_eq!(after.0, Some(3));
+
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ctx.op_mut(op)
+                    .attributes
+                    .insert("marker".into(), crate::types::Attribute::Int(4));
+                panic!("pass failed after partial mutation");
+            }));
+            assert!(failed.is_err());
+            assert!(analyses.get_cached::<MarkerAnalysis>(ctx, op).is_none());
+            assert_eq!(analyses.get::<MarkerAnalysis>(ctx, op).unwrap().0, Some(4));
+        });
+    }
+
+    #[test]
     fn invalidate_forces_recompute() {
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
@@ -707,9 +961,9 @@ mod tests {
 
     #[test]
     fn get_cached_returns_none_before_compute() {
-        let (_ctx, op) = test_ctx();
-        let analyses = AnalysisCache::new();
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
+        let (ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
     }
 
     #[test]
@@ -717,7 +971,7 @@ mod tests {
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_some());
     }
 
     #[test]
@@ -741,8 +995,8 @@ mod tests {
         assert_eq!(analyses.len(), 2);
 
         analyses.invalidate::<DummyAnalysis>(op);
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<OtherAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<OtherAnalysis>(&ctx, op).is_some());
     }
 
     #[test]
@@ -777,7 +1031,11 @@ mod tests {
         assert_eq!(error.analysis_type(), type_name::<NonEmptyModuleAnalysis>());
         assert_eq!(error.target(), op);
         assert_eq!(error.source().unwrap().to_string(), "test analysis failed");
-        assert!(analyses.get_cached::<NonEmptyModuleAnalysis>(op).is_none());
+        assert!(
+            analyses
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, op)
+                .is_none()
+        );
         assert!(analyses.is_empty());
 
         // Repair the analysis input before retrying. An unchanged malformed
@@ -827,14 +1085,14 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<NonEmptyModuleAnalysis>(empty_module)
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, empty_module)
                 .is_none()
         );
-        assert!(analyses.get_cached::<DummyAnalysis>(module).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_some());
         assert!(Arc::ptr_eq(
             &module_analysis,
             &analyses
-                .get_cached::<NonEmptyModuleAnalysis>(module)
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, module)
                 .unwrap()
         ));
         assert_eq!(analyses.len(), 2);
@@ -868,8 +1126,8 @@ mod tests {
         let _ = analyses.get::<MiddleAnalysis>(&ctx, op).unwrap();
 
         analyses.invalidate::<LeafAnalysis>(op);
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<MiddleAnalysis>(op).is_none());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<MiddleAnalysis>(&ctx, op).is_none());
     }
 
     #[test]
@@ -920,9 +1178,9 @@ mod tests {
         let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
 
         analyses.invalidate::<RootAnalysis>(op);
-        assert!(analyses.get_cached::<RootAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<MiddleAnalysis>(op).is_some());
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<RootAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<MiddleAnalysis>(&ctx, op).is_some());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_some());
         let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
         assert_eq!(ROOT_COMPUTES.load(Ordering::SeqCst), 2);
         assert_eq!(MIDDLE_COMPUTES.load(Ordering::SeqCst), 1);
@@ -951,7 +1209,7 @@ mod tests {
         let _ = analyses.get::<ChoiceDependent>(&ctx, outer).unwrap();
         assert!(
             analyses
-                .get_cached::<ChoicePrerequisiteFirst>(first)
+                .get_cached::<ChoicePrerequisiteFirst>(&ctx, first)
                 .is_some()
         );
         ctx.block_mut(block).ops.swap(0, 1);
@@ -960,13 +1218,21 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<ChoicePrerequisiteSecond>(second)
+                .get_cached::<ChoicePrerequisiteSecond>(&ctx, second)
                 .is_some()
         );
         analyses.invalidate::<ChoicePrerequisiteFirst>(first);
-        assert!(analyses.get_cached::<ChoiceDependent>(outer).is_some());
+        assert!(
+            analyses
+                .get_cached::<ChoiceDependent>(&ctx, outer)
+                .is_some()
+        );
         analyses.invalidate::<ChoicePrerequisiteSecond>(second);
-        assert!(analyses.get_cached::<ChoiceDependent>(outer).is_none());
+        assert!(
+            analyses
+                .get_cached::<ChoiceDependent>(&ctx, outer)
+                .is_none()
+        );
     }
 
     #[test]
@@ -976,8 +1242,8 @@ mod tests {
         let mut analyses = AnalysisCache::new();
 
         assert!(analyses.get::<FailingDependent>(&ctx, op).is_err());
-        assert!(analyses.get_cached::<FailingDependent>(op).is_none());
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<FailingDependent>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_some());
         assert!(analyses.dependencies.is_empty());
         assert!(analyses.dependents.is_empty());
 
@@ -1010,13 +1276,21 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<CrossTargetPrerequisite>(inner)
+                .get_cached::<CrossTargetPrerequisite>(&ctx, inner)
                 .is_none()
         );
-        assert!(analyses.get_cached::<CrossTargetDependent>(outer).is_none());
-        assert!(analyses.get_cached::<OtherAnalysis>(inner).is_none());
-        assert!(analyses.get_cached::<DummyAnalysis>(outer).is_some());
-        assert!(analyses.get_cached::<DummyAnalysis>(unrelated).is_some());
+        assert!(
+            analyses
+                .get_cached::<CrossTargetDependent>(&ctx, outer)
+                .is_none()
+        );
+        assert!(analyses.get_cached::<OtherAnalysis>(&ctx, inner).is_none());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, outer).is_some());
+        assert!(
+            analyses
+                .get_cached::<DummyAnalysis>(&ctx, unrelated)
+                .is_some()
+        );
         assert_eq!(analyses.len(), 2);
         assert!(analyses.dependencies.is_empty());
         assert!(analyses.dependents.is_empty());
