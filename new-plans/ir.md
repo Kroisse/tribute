@@ -147,6 +147,22 @@ Native와 Wasm lowering은 phase 범위의 `AnalysisCache`에서 분석을 조�
 rewrite는 원래 operation에 대한 변환 전 결정만 소비한다. 보존성을 증명하지
 않은 다른 pass를 가로질러 이 결정을 재사용하지 않는다.
 
+Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
+`func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
+module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
+nominal layout을 담는다. Function 범위 분석은 그 module 분석에 의존하며,
+검증된 flat CFG, type erasure 이전의 managed 값, typed 계약에서 유도한
+exact managed alias root, 검증된 managed projection-owner 관계, liveness가
+소비하는 policy-neutral block use/definition 입력을 담는다. Alias root는
+`core.ptr`이나 물리적 형태에서 provenance를 추론하지 않는다. 분석은 IR을
+읽기만 하며, 잘못된 CFG, alias, nominal layout 또는 projection 계약을
+fail-closed로 거부하고 실패를 캐시하지 않는다.
+
+이 사실은 `NativeOwnershipPlanOptions`와 무관하게 동일하다. Borrow elision,
+entry ownership 같은 정책 선택은 사실을 소비하는 planner가 적용하며 사실의
+identity나 계산에 참여하지 않는다. 따라서 phase 범위 캐시는 정책-중립 사실만
+재사용하며, planner는 호출마다 그 사실 위에 정책 결정을 새로 적용한다.
+
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
 SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.
