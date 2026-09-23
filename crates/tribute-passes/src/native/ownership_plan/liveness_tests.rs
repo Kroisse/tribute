@@ -107,10 +107,12 @@ fn both_views_reuse_facts_but_extend_only_proven_owner_liveness() {
     let module = parse_test_module(&mut ctx, CROSS_BLOCK_BORROW);
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let conservative = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
-    let extended = cache
-        .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    let liveness = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
+    assert_eq!(liveness.computed_views(), (false, false));
+    let conservative = liveness.view(false);
+    assert_eq!(liveness.computed_views(), (true, false));
+    let extended = liveness.view(true);
+    assert_eq!(liveness.computed_views(), (true, true));
     let facts = cache
         .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
         .unwrap();
@@ -121,7 +123,7 @@ fn both_views_reuse_facts_but_extend_only_proven_owner_liveness() {
     let loaded = ctx.op_result(ctx.block(*entry).ops[1], 0);
     let child = ctx.block_args(*entry)[0];
 
-    for view in [conservative.blocks(), extended.blocks()] {
+    for view in [conservative, extended] {
         assert_eq!(
             view.defs(*entry).unwrap(),
             &HashSet::from([child, owner, loaded])
@@ -131,31 +133,26 @@ fn both_views_reuse_facts_but_extend_only_proven_owner_liveness() {
         assert!(view.live_out(*next).unwrap().is_empty());
     }
     assert_eq!(
-        conservative.blocks().live_in(*next).unwrap(),
+        conservative.live_in(*next).unwrap(),
         &HashSet::from([loaded])
     );
     assert_eq!(
-        conservative.blocks().live_out(*entry).unwrap(),
+        conservative.live_out(*entry).unwrap(),
         &HashSet::from([loaded])
     );
     assert_eq!(
-        extended.blocks().live_in(*next).unwrap(),
+        extended.live_in(*next).unwrap(),
         &HashSet::from([loaded, owner])
     );
     assert_eq!(
-        extended.blocks().live_out(*entry).unwrap(),
+        extended.live_out(*entry).unwrap(),
         &HashSet::from([loaded, owner])
     );
     assert!(Arc::ptr_eq(
-        &conservative,
-        &cache.get::<Liveness<Conservative>>(&ctx, op).unwrap()
+        &liveness,
+        &cache.get::<NativeManagedLiveness>(&ctx, op).unwrap()
     ));
-    assert!(Arc::ptr_eq(
-        &extended,
-        &cache
-            .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .unwrap()
-    ));
+    assert!(std::ptr::eq(extended, liveness.view(true)));
 }
 
 #[test]
@@ -164,10 +161,9 @@ fn branch_merge_and_loop_reach_a_stable_fixed_point() {
     let module = parse_test_module(&mut ctx, BRANCH_LOOP);
     let op = function_op(&ctx, module, "flow");
     let mut cache = AnalysisCache::new();
-    let conservative = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
-    let extended = cache
-        .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    let liveness = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
+    let conservative = liveness.view(false);
+    let extended = liveness.view(true);
     let facts = cache
         .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
         .unwrap();
@@ -175,7 +171,7 @@ fn branch_merge_and_loop_reach_a_stable_fixed_point() {
         panic!("six-block fixture")
     };
     let value = ctx.block_args(*entry)[1];
-    for view in [conservative.blocks(), extended.blocks()] {
+    for view in [conservative, extended] {
         assert_eq!(view.defs(*entry).unwrap(), &HashSet::from([value]));
         assert!(view.live_in(*entry).unwrap().is_empty());
         for block in [*left, *right, *join, *loop_block] {
@@ -196,10 +192,9 @@ fn exact_aliases_do_not_become_separate_managed_definitions() {
     let module = parse_test_module(&mut ctx, ALIAS_PROJECTION);
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let conservative = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
-    let extended = cache
-        .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    let liveness = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
+    let conservative = liveness.view(false);
+    let extended = liveness.view(true);
     let facts = cache
         .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
         .unwrap();
@@ -210,18 +205,18 @@ fn exact_aliases_do_not_become_separate_managed_definitions() {
     let erased = ctx.op_result(ctx.block(*entry).ops[0], 0);
     let restored = ctx.op_result(ctx.block(*entry).ops[1], 0);
     let child = ctx.op_result(ctx.block(*entry).ops[2], 0);
-    for view in [conservative.blocks(), extended.blocks()] {
+    for view in [conservative, extended] {
         assert_eq!(view.defs(*entry).unwrap(), &HashSet::from([root, child]));
         assert!(view.defs(*next).unwrap().is_empty());
     }
     assert!(!facts.managed_values().contains(&erased));
     assert!(!facts.managed_values().contains(&restored));
     assert_eq!(
-        conservative.blocks().live_in(*next).unwrap(),
+        conservative.live_in(*next).unwrap(),
         &HashSet::from([child])
     );
     assert_eq!(
-        extended.blocks().live_in(*next).unwrap(),
+        extended.live_in(*next).unwrap(),
         &HashSet::from([root, child])
     );
 }
@@ -232,10 +227,9 @@ fn nested_projection_extends_the_outer_owner_through_cross_block_use() {
     let module = parse_test_module(&mut ctx, NESTED_PROJECTION);
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let conservative = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
-    let extended = cache
-        .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    let liveness = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
+    let conservative = liveness.view(false);
+    let extended = liveness.view(true);
     let facts = cache
         .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
         .unwrap();
@@ -247,21 +241,15 @@ fn nested_projection_extends_the_outer_owner_through_cross_block_use() {
     let nested = ctx.op_result(ctx.block(*entry).ops[5], 0);
     assert!(facts.projection_owners().contains_key(&loaded));
     assert!(facts.projection_owners().contains_key(&nested));
-    for view in [conservative.blocks(), extended.blocks()] {
+    for view in [conservative, extended] {
         assert!(view.defs(*entry).unwrap().contains(&outer));
         assert!(view.defs(*entry).unwrap().contains(&loaded));
         assert!(view.defs(*entry).unwrap().contains(&nested));
         assert!(view.live_in(*next).unwrap().contains(&nested));
     }
-    assert!(
-        !conservative
-            .blocks()
-            .live_in(*next)
-            .unwrap()
-            .contains(&outer)
-    );
-    assert!(extended.blocks().live_in(*next).unwrap().contains(&outer));
-    assert!(!extended.blocks().live_in(*next).unwrap().contains(&loaded));
+    assert!(!conservative.live_in(*next).unwrap().contains(&outer));
+    assert!(extended.live_in(*next).unwrap().contains(&outer));
+    assert!(!extended.live_in(*next).unwrap().contains(&loaded));
 }
 
 #[test]
@@ -270,18 +258,17 @@ fn liveness_invalidation_is_precise_and_transitive() {
     let module = parse_test_module(&mut ctx, CROSS_BLOCK_BORROW);
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
-    let first = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
-    let extended = cache
-        .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    let first = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
+    first.view(false);
+    first.view(true);
     let facts = cache
         .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
         .unwrap();
 
-    cache.invalidate::<Liveness<Conservative>>(op);
+    cache.invalidate::<NativeManagedLiveness>(op);
     assert!(
         cache
-            .get_cached::<Liveness<Conservative>>(&ctx, op)
+            .get_cached::<NativeManagedLiveness>(&ctx, op)
             .is_none()
     );
     assert!(Arc::ptr_eq(
@@ -290,24 +277,16 @@ fn liveness_invalidation_is_precise_and_transitive() {
             .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
             .unwrap()
     ));
-    assert!(Arc::ptr_eq(
-        &extended,
-        &cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .unwrap()
-    ));
-    let recomputed = cache.get::<Liveness<Conservative>>(&ctx, op).unwrap();
+    let recomputed = cache.get::<NativeManagedLiveness>(&ctx, op).unwrap();
     assert!(!Arc::ptr_eq(&first, &recomputed));
+    assert_eq!(recomputed.computed_views(), (false, false));
+    recomputed.view(false);
+    assert_eq!(recomputed.computed_views(), (true, false));
 
     cache.invalidate::<NativeOwnershipFunctionFacts>(op);
     assert!(
         cache
-            .get_cached::<Liveness<Conservative>>(&ctx, op)
-            .is_none()
-    );
-    assert!(
-        cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
+            .get_cached::<NativeManagedLiveness>(&ctx, op)
             .is_none()
     );
     assert!(
@@ -339,14 +318,8 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
         &mut cache,
     )
     .unwrap();
-    let conservative = cache
-        .get_cached::<Liveness<Conservative>>(&ctx, op)
-        .unwrap();
-    assert!(
-        cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .is_none()
-    );
+    let liveness = cache.get_cached::<NativeManagedLiveness>(&ctx, op).unwrap();
+    assert_eq!(liveness.computed_views(), (true, false));
 
     build_native_ownership_plan_with_analyses(
         &ctx,
@@ -359,16 +332,10 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     )
     .unwrap();
     assert!(Arc::ptr_eq(
-        &conservative,
-        &cache
-            .get_cached::<Liveness<Conservative>>(&ctx, op)
-            .unwrap()
+        &liveness,
+        &cache.get_cached::<NativeManagedLiveness>(&ctx, op).unwrap()
     ));
-    assert!(
-        cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .is_none()
-    );
+    assert_eq!(liveness.computed_views(), (true, false));
 
     let field_borrows = build_native_ownership_plan_with_analyses(
         &ctx,
@@ -380,9 +347,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
         &mut cache,
     )
     .unwrap();
-    let owner_extended = cache
-        .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-        .unwrap();
+    assert_eq!(liveness.computed_views(), (true, true));
     assert_ne!(
         preserved.function(Symbol::new("load")).unwrap().actions(),
         field_borrows
@@ -398,15 +363,36 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     )
     .unwrap();
     assert!(Arc::ptr_eq(
-        &owner_extended,
-        &cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .unwrap()
+        &liveness,
+        &cache.get_cached::<NativeManagedLiveness>(&ctx, op).unwrap()
     ));
 }
 
 #[test]
-fn failed_facts_lookup_does_not_publish_either_liveness_view() {
+fn production_plan_computes_only_owner_extended_view() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, CROSS_BLOCK_BORROW);
+    let op = function_op(&ctx, module, "load");
+    let mut cache = AnalysisCache::new();
+
+    build_native_ownership_plan_with_analyses(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut cache,
+    )
+    .unwrap();
+    let liveness = cache.get_cached::<NativeManagedLiveness>(&ctx, op).unwrap();
+    assert_eq!(liveness.computed_views(), (false, true));
+    assert!(Arc::ptr_eq(
+        &liveness,
+        &cache.get::<NativeManagedLiveness>(&ctx, op).unwrap()
+    ));
+    assert_eq!(liveness.computed_views(), (false, true));
+}
+
+#[test]
+fn failed_facts_lookup_does_not_publish_liveness() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -425,20 +411,13 @@ fn failed_facts_lookup_does_not_publish_either_liveness_view() {
         .get::<NativeOwnershipFunctionFacts>(&ctx, op)
         .err()
         .expect("invalid facts");
-    for error in [
-        cache
-            .get::<Liveness<Conservative>>(&ctx, op)
-            .err()
-            .expect("invalid conservative liveness"),
-        cache
-            .get::<Liveness<NativeOwnershipExtended>>(&ctx, op)
-            .err()
-            .expect("invalid owner-extended liveness"),
-    ] {
-        assert_eq!(error.analysis_type(), direct.analysis_type());
-        assert_eq!(error.target(), direct.target());
-        assert_eq!(error.to_string(), direct.to_string());
-    }
+    let error = cache
+        .get::<NativeManagedLiveness>(&ctx, op)
+        .err()
+        .expect("invalid liveness");
+    assert_eq!(error.analysis_type(), direct.analysis_type());
+    assert_eq!(error.target(), direct.target());
+    assert_eq!(error.to_string(), direct.to_string());
     assert!(
         cache
             .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
@@ -446,12 +425,7 @@ fn failed_facts_lookup_does_not_publish_either_liveness_view() {
     );
     assert!(
         cache
-            .get_cached::<Liveness<Conservative>>(&ctx, op)
-            .is_none()
-    );
-    assert!(
-        cache
-            .get_cached::<Liveness<NativeOwnershipExtended>>(&ctx, op)
+            .get_cached::<NativeManagedLiveness>(&ctx, op)
             .is_none()
     );
 }

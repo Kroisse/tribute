@@ -32,7 +32,7 @@ use actions::{
 use cfg::ValidatedFlatCfg;
 pub use facts::{NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts};
 use liveness::BlockLiveness;
-pub use liveness::{Conservative, Liveness, NativeOwnershipExtended};
+pub use liveness::NativeManagedLiveness;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
@@ -419,23 +419,9 @@ pub fn build_native_ownership_plan_with_analyses(
         let facts = analyses
             .get::<NativeOwnershipFunctionFacts>(ctx, op)
             .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
-        let liveness = if options.elide_proven_field_borrows {
-            SelectedLiveness::OwnerExtended(
-                analyses
-                    .get::<Liveness<NativeOwnershipExtended>>(ctx, op)
-                    .map_err(|error| OwnershipPlanError::new(error.to_string()))?,
-            )
-        } else {
-            SelectedLiveness::Conservative(
-                analyses
-                    .get::<Liveness<Conservative>>(ctx, op)
-                    .map_err(|error| OwnershipPlanError::new(error.to_string()))?,
-            )
-        };
-        let liveness = match &liveness {
-            SelectedLiveness::Conservative(result) => result.blocks(),
-            SelectedLiveness::OwnerExtended(result) => result.blocks(),
-        };
+        let liveness = analyses
+            .get::<NativeManagedLiveness>(ctx, op)
+            .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
         let entries = entry_contracts
             .get(&symbol)
             .cloned()
@@ -444,7 +430,7 @@ pub fn build_native_ownership_plan_with_analyses(
             ctx,
             ActionInputs {
                 facts: &facts,
-                liveness,
+                liveness: liveness.view(options.elide_proven_field_borrows),
             },
             &entries,
             &entry_contracts,
@@ -469,11 +455,6 @@ pub fn build_native_ownership_plan_with_analyses(
     };
     validate_plan(ctx, &plan)?;
     Ok(plan)
-}
-
-enum SelectedLiveness {
-    Conservative(std::sync::Arc<Liveness<Conservative>>),
-    OwnerExtended(std::sync::Arc<Liveness<NativeOwnershipExtended>>),
 }
 
 fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, OwnershipPlanError> {

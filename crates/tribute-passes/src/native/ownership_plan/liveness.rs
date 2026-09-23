@@ -1,44 +1,22 @@
 //! Cached native managed-liveness views over policy-neutral ownership facts.
 
 use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
+use std::sync::{Arc, OnceLock};
 
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
 use trunk_ir::{BlockRef, OpRef, ValueRef};
 
 use super::facts::{FlowKind, NativeOwnershipFunctionFacts, borrowed_owner};
 
-mod sealed {
-    pub trait Sealed {}
-}
-
-/// The two supported native managed-liveness views.
-pub trait LivenessPolicy: sealed::Sealed + Send + Sync + 'static {
-    /// Whether proven projection borrows also use their managed owner.
-    const EXTEND_PROJECTION_OWNERS: bool;
-}
-
-/// Conservative managed-value liveness.
-pub struct Conservative;
-
-/// Managed liveness extended through proven projection borrows.
-pub struct NativeOwnershipExtended;
-
-impl sealed::Sealed for Conservative {}
-impl sealed::Sealed for NativeOwnershipExtended {}
-
-impl LivenessPolicy for Conservative {
-    const EXTEND_PROJECTION_OWNERS: bool = false;
-}
-
-impl LivenessPolicy for NativeOwnershipExtended {
-    const EXTEND_PROJECTION_OWNERS: bool = true;
-}
-
-/// Cached block liveness for a defined `func.func` under one policy view.
-pub struct Liveness<P: LivenessPolicy> {
-    blocks: BlockLiveness,
-    policy: PhantomData<P>,
+/// Lazy block-liveness views for a defined `func.func`.
+///
+/// The policy-neutral facts are the cache prerequisite. Each fixed point is
+/// computed only when its view is first requested, so production planning
+/// does not compute the unused conservative result.
+pub struct NativeManagedLiveness {
+    facts: Arc<NativeOwnershipFunctionFacts>,
+    conservative: OnceLock<BlockLiveness>,
+    owner_extended: OnceLock<BlockLiveness>,
 }
 
 /// Block-level liveness sets used by both policy views.
@@ -65,25 +43,34 @@ impl BlockLiveness {
     }
 }
 
-impl<P: LivenessPolicy> Liveness<P> {
-    /// Block-level liveness sets for this policy view.
-    pub fn blocks(&self) -> &BlockLiveness {
-        &self.blocks
+impl NativeManagedLiveness {
+    /// Select liveness for the field-borrow policy without recomputing it.
+    pub fn view(&self, elide_proven_field_borrows: bool) -> &BlockLiveness {
+        if elide_proven_field_borrows {
+            self.owner_extended
+                .get_or_init(|| compute_liveness(&self.facts, self.facts.projection_owners()))
+        } else {
+            self.conservative
+                .get_or_init(|| compute_liveness(&self.facts, &HashMap::new()))
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn computed_views(&self) -> (bool, bool) {
+        (
+            self.conservative.get().is_some(),
+            self.owner_extended.get().is_some(),
+        )
     }
 }
 
-impl<P: LivenessPolicy> Analysis for Liveness<P> {
+impl Analysis for NativeManagedLiveness {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
         let facts = ctx.get::<NativeOwnershipFunctionFacts>(target)?;
-        let empty = HashMap::new();
-        let borrowed = if P::EXTEND_PROJECTION_OWNERS {
-            facts.projection_owners()
-        } else {
-            &empty
-        };
         Ok(Self {
-            blocks: compute_liveness(&facts, borrowed),
-            policy: PhantomData,
+            facts,
+            conservative: OnceLock::new(),
+            owner_extended: OnceLock::new(),
         })
     }
 }
