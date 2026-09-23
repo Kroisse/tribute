@@ -582,13 +582,6 @@ fn validate_closure_transfers(ctx: &mut IrContext, func_op: func::Func) -> PassR
     }
 }
 
-/// Validate and lower a function's closures, interposing the physical environment.
-pub(crate) fn lower_closures_in_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
-    validate_closure_transfers(ctx, func_op)?;
-    rewrite_validated_closures_in_func(ctx, func_op);
-    Ok(())
-}
-
 fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
     if ctx.op(func_op.op_ref()).regions.is_empty() {
         return;
@@ -817,21 +810,6 @@ impl Pass for LowerPreparedClosures {
     }
 }
 
-/// PassManager-friendly function-local closure lowering pass.
-pub struct LowerClosuresInFunc;
-
-impl Pass for LowerClosuresInFunc {
-    type Target = func::Func;
-
-    fn name(&self) -> &'static str {
-        "lower-closures-in-func"
-    }
-
-    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
-        lower_closures_in_func(ctx, target)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,36 +934,6 @@ mod tests {
     }
 
     #[test]
-    fn function_pass_rewrites_only_selected_function_and_uses_evidence_param() {
-        let mut ctx = IrContext::new();
-        let module = closure_test_module(&mut ctx);
-        let selected = func_by_name(&ctx, module, "selected");
-
-        let mut pass = LowerClosuresInFunc;
-        pass.run(&mut ctx, selected).unwrap();
-
-        let selected_calls = call_indirect_operands_in_func(&ctx, selected);
-        assert_eq!(selected_calls.len(), 1);
-        let selected_operands = &selected_calls[0];
-        assert!(
-            selected_operands.len() >= 3,
-            "lowered closure call should have table index, evidence, and env operands"
-        );
-        assert_eq!(
-            selected_operands[1],
-            entry_evidence_arg(&ctx, selected),
-            "lowered closure call should pass the enclosing function's evidence argument immediately after table index"
-        );
-
-        let untouched = func_by_name(&ctx, module, "untouched");
-        let untouched_ir = print_module(&ctx, untouched.op_ref());
-        assert!(
-            untouched_ir.contains("closure.new") && untouched_ir.contains("func.call_indirect"),
-            "function-local pass should not rewrite other functions:\n{untouched_ir}"
-        );
-    }
-
-    #[test]
     fn module_entrypoint_still_prepares_and_lowers_all_functions() {
         let mut ctx = IrContext::new();
         let module = closure_test_module(&mut ctx);
@@ -1040,6 +988,13 @@ mod tests {
         assert!(
             !inner_ir.contains("closure.func") && !inner_ir.contains("closure.env"),
             "nested closure accessors must be fully lowered:\n{inner_ir}"
+        );
+        let inner_calls = call_indirect_operands_in_func(&ctx, inner);
+        assert_eq!(inner_calls.len(), 1);
+        assert_eq!(
+            inner_calls[0][1],
+            entry_evidence_arg(&ctx, inner),
+            "nested function must use its own evidence argument"
         );
     }
 
@@ -1123,15 +1078,11 @@ mod tests {
                 assert!(print_module(&ctx, invalid.op_ref()).contains("signature"));
                 continue;
             }
-            for error in [
-                lower_closures_in_func(&mut ctx, invalid).unwrap_err(),
-                lower_prepared_closures(&mut ctx, module).unwrap_err(),
-            ] {
-                assert_eq!(
-                    error.to_string(),
-                    "closure lowering: exact caller/callee/indirect result contract mismatch"
-                );
-            }
+            let error = lower_prepared_closures(&mut ctx, module).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "closure lowering: exact caller/callee/indirect result contract mismatch"
+            );
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
@@ -1222,32 +1173,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn function_pass_leaves_nested_func_for_own_evidence_processing() {
-        let mut ctx = IrContext::new();
-        let module = nested_closure_test_module(&mut ctx);
-        let outer = func_by_name_recursive(&ctx, module, "outer");
-
-        lower_closures_in_func(&mut ctx, outer).unwrap();
-
-        let inner = func_by_name_recursive(&ctx, module, "inner");
-        let inner_after_outer = print_module(&ctx, inner.op_ref());
-        assert!(
-            inner_after_outer.contains("closure.new"),
-            "outer function pass should not lower nested function body:\n{inner_after_outer}"
-        );
-
-        lower_closures_in_func(&mut ctx, inner).unwrap();
-
-        let inner_calls = call_indirect_operands_in_func(&ctx, inner);
-        assert_eq!(inner_calls.len(), 1);
-        assert_eq!(
-            inner_calls[0][1],
-            entry_evidence_arg(&ctx, inner),
-            "nested function pass should use the nested function's own evidence argument"
-        );
-    }
-
     fn check_tagged_dispatch_tail(physical: bool) {
         let mut ctx = IrContext::new();
         let ev = evidence_type_str();
@@ -1272,7 +1197,7 @@ mod tests {
         let dispatch = entry_args[3];
         let value = entry_args[4];
 
-        lower_closures_in_func(&mut ctx, run).unwrap();
+        lower_prepared_closures(&mut ctx, module).unwrap();
 
         let tail = ctx
             .block(ctx.region(run.body(&ctx)).blocks[0])
@@ -1334,10 +1259,9 @@ mod tests {
 }}"#
             ),
         );
-        let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        assert!(lower_closures_in_func(&mut ctx, run).is_err());
+        assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1351,10 +1275,9 @@ mod tests {
   func.func @external(%value: core.i32) -> core.i32
 }"#,
         );
-        let external = func_by_name(&ctx, module, "external");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, external).unwrap();
+        lower_prepared_closures(&mut ctx, module).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1373,10 +1296,9 @@ mod tests {
   }
 }"#,
         );
-        let caller = func_by_name(&ctx, module, "caller");
         let before = print_module(&ctx, module.op());
 
-        lower_closures_in_func(&mut ctx, caller).unwrap();
+        lower_prepared_closures(&mut ctx, module).unwrap();
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }
@@ -1406,10 +1328,9 @@ mod tests {
 }}"#
             ),
         );
-        let run = func_by_name(&ctx, module, "run");
         let before = print_module(&ctx, module.op());
 
-        assert!(lower_closures_in_func(&mut ctx, run).is_err());
+        assert!(lower_prepared_closures(&mut ctx, module).is_err());
 
         assert_eq!(print_module(&ctx, module.op()), before);
     }

@@ -651,7 +651,10 @@ fn test_higher_order_function_ir() {
 fn test_closure_lowering() {
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() {}");
-        let (ctx, module) = tribute::pipeline::run_through_closure_lower(db, source).unwrap().unwrap();
+        let (mut ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
+            .unwrap()
+            .unwrap();
+        tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let apply = named_function(&ctx, module, "apply");
         let call = only_indirect_call(&ctx, apply);
         assert_indirect_signature(&ctx, apply, call);

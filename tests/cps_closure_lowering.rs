@@ -3,7 +3,7 @@
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_with_diagnostics, run_through_closure_lower};
+use tribute::pipeline::{compile_with_diagnostics, run_through_cps_lowering};
 use tribute_front::SourceCst;
 use trunk_ir::printer::print_module;
 use trunk_ir::validation::validate_value_integrity;
@@ -21,9 +21,11 @@ fn assert_cps_closures_lower(db: &dyn salsa::Database, source: SourceCst) {
         "frontend must accept CPS closure source: {:?}",
         diagnostics.diagnostics
     );
-    let (ctx, module) = run_through_closure_lower(db, source)
-        .expect("closure lowering should accept frontend CPS output")
+    let (mut ctx, module) = run_through_cps_lowering(db, source)
+        .expect("shared CPS lowering should accept frontend output")
         .expect("frontend should produce a module");
+    tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module)
+        .expect("closure lowering should accept shared CPS output");
     let validation = validate_value_integrity(&ctx, module);
     assert!(
         validation.is_ok(),

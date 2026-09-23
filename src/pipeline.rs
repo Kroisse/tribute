@@ -48,7 +48,7 @@
 //!     ▼ lower_handle_dispatch
 //! Module (ability.handle_dispatch lowered)
 //!     │
-//!     ▼ target ABI validation ─► lower_closures_in_func
+//!     ▼ target ABI validation ─► lower-prepared-closures
 //! Module (target closure storage selected)
 //!     │
 //!     ├─► [wasm]   compile_to_wasm (includes evidence_to_wasm)
@@ -827,26 +827,6 @@ pub fn run_through_cps_lowering(
     )
     .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
-    pm.run(&mut ctx, core_module)?;
-    Ok(Some((ctx, m)))
-}
-
-/// Run pipeline through closure lower (for testing).
-///
-/// Runs frontend + source-logical CPS + `lower_closure_lambda` + `lower_closures`
-/// in a single arena session.
-pub fn run_through_closure_lower(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> PassResult<Option<(IrContext, Module)>> {
-    let Some((mut ctx, m)) = run_through_cps_lowering(db, source)? else {
-        return Ok(None);
-    };
-    let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("shared output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
