@@ -81,13 +81,10 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
-        return ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build(),
-        );
+        return ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
     }
     if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref") {
-        return ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        return ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
     }
     ty
 }

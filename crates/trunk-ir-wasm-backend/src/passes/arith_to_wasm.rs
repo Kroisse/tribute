@@ -581,25 +581,25 @@ fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
 /// Intern a core.i32 type.
 pub(crate) fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 /// Intern a core.i64 type.
 pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
 }
 
 /// Intern a core.f32 type.
 pub(crate) fn intern_f32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "f32").build())
 }
 
 /// Intern a core.f64 type.
 pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "f64").build())
 }
 
 #[cfg(test)]

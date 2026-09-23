@@ -255,10 +255,9 @@ fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
 
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    let i64_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
+    let mut builder = TypeDataBuilder::new("adt", "struct");
     builder = builder.param(i64_ty).param(ptr_ty);
     builder = builder.attr(
         "name",
@@ -286,7 +285,7 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 
 fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
 }
 
 /// Pattern: `func.func` -> `clif.func`
@@ -695,9 +694,7 @@ mod tests {
             );
             let op = module.ops(&ctx)[0];
             if malformed {
-                let ty = ctx.intern_type(
-                    TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig")).build(),
-                );
+                let ty = ctx.intern_type(TypeDataBuilder::new("func", "func_sig").build());
                 ctx.op_mut(op)
                     .attributes
                     .insert(Symbol::new("type"), trunk_ir::Attribute::Type(ty));
@@ -740,9 +737,7 @@ mod tests {
   }
 }"#,
         );
-        let anyref_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
-        );
+        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
@@ -761,10 +756,8 @@ mod tests {
     #[test]
     fn nested_callable_metadata_uses_the_native_owned_signature() {
         let mut ctx = IrContext::new();
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i64_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 

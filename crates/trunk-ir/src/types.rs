@@ -466,10 +466,10 @@ pub struct TypeDataBuilder {
 }
 
 impl TypeDataBuilder {
-    pub fn new(dialect: Symbol, name: Symbol) -> Self {
+    pub fn new(dialect: impl Into<Symbol>, name: impl Into<Symbol>) -> Self {
         Self {
-            dialect,
-            name,
+            dialect: dialect.into(),
+            name: name.into(),
             params: SmallVec::new(),
             attrs: AttributeMap::new(),
         }

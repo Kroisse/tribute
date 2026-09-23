@@ -663,8 +663,8 @@ fn gen_type_constructor(
         ) -> #sname {
             #[allow(unused_mut)]
             let mut __builder = #crate_path::TypeDataBuilder::new(
-                #crate_path::Symbol::new(#dialect),
-                #crate_path::Symbol::new(#type_name),
+                #dialect,
+                #type_name,
             );
             #(#body_stmts)*
             let __data = __builder.build();

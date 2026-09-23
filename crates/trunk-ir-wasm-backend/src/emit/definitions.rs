@@ -315,9 +315,7 @@ mod tests {
     fn import_function_requires_valid_func_sig_counts() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let malformed = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("func_sig")).build(),
-        );
+        let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
         let import = wasm_dialect::import_func(
             &mut ctx,
             location,

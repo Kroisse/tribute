@@ -269,8 +269,7 @@ impl RewritePattern for ArithCmpPattern {
         // Cranelift's icmp/fcmp always return i8, so emit the comparison with
         // core.i8 result, then uextend to the converted result type (core.i32)
         // so downstream consumers get the expected width.
-        let i8_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);

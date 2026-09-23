@@ -570,13 +570,8 @@ mod tests {
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let array_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i32_ty)
-                .build(),
-        );
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
 
         assert_eq!(
             type_to_valtype(&ctx, array_ty, &HashMap::new()).expect("core.array is supported"),
@@ -593,8 +588,7 @@ mod tests {
     #[test]
     fn func_sig_uses_nullable_funcref_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(

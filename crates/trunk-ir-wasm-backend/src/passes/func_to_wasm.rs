@@ -738,7 +738,7 @@ impl RewritePattern for FuncConstantPattern {
 
 /// Intern a core.i32 type.
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 /// Intern a wasm.funcref type.
@@ -1056,10 +1056,8 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
-        let f64_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
@@ -1115,10 +1113,8 @@ mod tests {
 }"#,
         );
 
-        let anyref_ty = ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
-        let f64_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
@@ -1201,9 +1197,7 @@ mod tests {
 }"#,
         );
 
-        let structref_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build(),
-        );
+        let structref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()

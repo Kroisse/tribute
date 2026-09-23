@@ -101,7 +101,7 @@ mod tests {
     }
 
     fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
+        ctx.intern_type(TypeDataBuilder::new("core", name).build())
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -314,9 +314,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
-        let malformed = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("func_sig")).build(),
-        );
+        let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
         let func = make_bodyless_wasm_func(&mut ctx, loc, Symbol::new("bad"), malformed);
         let module = make_module(&mut ctx, loc, vec![func]);
         let before = trunk_ir::printer::print_module(&ctx, module.op());

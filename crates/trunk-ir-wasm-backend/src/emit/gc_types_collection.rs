@@ -193,9 +193,7 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
     if helpers::is_type(ctx, ty, "core", "i1") {
-        return ctx.intern_type(
-            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
-        );
+        return ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
     }
     let data = ctx.get_type(ty);
 
@@ -944,8 +942,7 @@ wasm.return
     fn record_struct_field_widens_concrete_to_anyref() {
         let mut ctx = IrContext::new();
         let concrete = intern_wasm_structref(&mut ctx);
-        let anyref = ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let anyref = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
         let mut builder = GcTypeBuilder::new();
 
         record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, concrete)
@@ -960,12 +957,12 @@ wasm.return
     fn variant_types_normalize_to_wasm_structref() {
         let mut ctx = IrContext::new();
         let enum_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            TypeDataBuilder::new("adt", "enum")
                 .attr("name", Attribute::Symbol(Symbol::new("List")))
                 .build(),
         );
         let variant_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("List$Cons"))
+            TypeDataBuilder::new("adt", "List$Cons")
                 .attr("is_variant", Attribute::Bool(true))
                 .attr("base_enum", Attribute::Type(enum_ty))
                 .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
@@ -981,17 +978,17 @@ wasm.return
     fn record_struct_field_canonicalizes_typeref_and_variant_to_structref() {
         let mut ctx = IrContext::new();
         let enum_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            TypeDataBuilder::new("adt", "enum")
                 .attr("name", Attribute::Symbol(Symbol::new("List")))
                 .build(),
         );
         let typeref_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+            TypeDataBuilder::new("adt", "typeref")
                 .attr("name", Attribute::Symbol(Symbol::new("List")))
                 .build(),
         );
         let variant_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("List$Cons"))
+            TypeDataBuilder::new("adt", "List$Cons")
                 .attr("is_variant", Attribute::Bool(true))
                 .attr("base_enum", Attribute::Type(enum_ty))
                 .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
@@ -1013,13 +1010,13 @@ wasm.return
     fn same_named_adt_layouts_are_not_gc_equivalent() {
         let mut ctx = IrContext::new();
         let canonical = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            TypeDataBuilder::new("adt", "enum")
                 .attr("name", Attribute::Symbol(Symbol::new("String")))
                 .attr("layout", Attribute::Bool(true))
                 .build(),
         );
         let unrelated = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
+            TypeDataBuilder::new("adt", "enum")
                 .attr("name", Attribute::Symbol(Symbol::new("String")))
                 .attr("layout", Attribute::Bool(false))
                 .build(),
