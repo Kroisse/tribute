@@ -820,13 +820,7 @@ pub fn run_through_cps_lowering(
     let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(
-        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
-            .with_compiler_intrinsics(compiler_intrinsics),
-    )
-    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
@@ -834,6 +828,25 @@ pub fn run_through_cps_lowering(
 // =============================================================================
 // Full Pipeline (Orchestration)
 // =============================================================================
+
+/// Build the shared structural pass pipeline that legalizes source-logical
+/// callable/control IR into CPS with explicit evidence.
+fn structural_pass_pipeline(
+    operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
+    compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
+) -> PassManager {
+    let mut pm = PassManager::new();
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+            .with_compiler_intrinsics(compiler_intrinsics),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+    .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
+    .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
+    install_debug_use_chain_verifier(&mut pm);
+    pm
+}
 
 /// Run the shared middle-end pipeline (backend-independent) in an arena session.
 ///
@@ -861,19 +874,7 @@ fn run_shared_pipeline(
     // Registration order == execution order.
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut structural_pm = PassManager::new();
-    structural_pm
-        .add_pass(
-            tribute_passes::tribute_control_to_cps::TributeControlToCps::new(
-                operation_declarations,
-            )
-            .with_compiler_intrinsics(compiler_intrinsics),
-        )
-        .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-        .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
-        .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
-    install_debug_use_chain_verifier(&mut structural_pm);
+    let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module)?;
 
     // CPS effect handling, function-local phase: lower_ability_perform produces
