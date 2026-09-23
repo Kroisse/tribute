@@ -86,7 +86,7 @@ fn register_type(
     // An operation index identifies its layout, not every value of an abstract
     // reference type elsewhere in the module. Builtin ABI mappings are seeded
     // separately and must not be inferred from individual operations.
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("wasm")
         && [
             "anyref",
@@ -109,7 +109,7 @@ fn register_type(
 /// The nominal builtin lookup selects the layout; it does not validate fields.
 fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
     use trunk_ir::Attribute;
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let invalid = || CompilationError::type_error("Marker declaration differs from builtin layout");
     if data.name != Symbol::new("struct") || !data.params.is_empty() {
         return Err(invalid());
@@ -139,7 +139,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         let [Attribute::Symbol(name), Attribute::Type(ty)] = parts.as_slice() else {
             return Err(invalid());
         };
-        let field_type = ctx.types().get(*ty);
+        let field_type = ctx.get_type(*ty);
         if *name != Symbol::new(role)
             || !field_type.params.is_empty()
             || !field_type.attrs.is_empty()
@@ -178,7 +178,7 @@ fn register_builtin_evidence_type(
         let marker = if index == MARKER_IDX {
             ty
         } else {
-            ctx.types().get(ty).params[0]
+            ctx.get_type(ty).params[0]
         };
         validate_marker_layout(ctx, marker)?;
         register_type(ctx, map, index, ty);
@@ -197,7 +197,7 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
     }
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
 
     // `_closure` is the target-private builtin closure layout. Logical closure
     // references and its materialized struct declaration must share this one
@@ -243,7 +243,7 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
         // Accept if the other type is an ADT reference (adt.struct, adt.enum)
         // or a wasm heap type that is a subtype of anyref.
         // Note: funcref and externref are NOT subtypes of anyref.
-        let other_data = ctx.types().get(other);
+        let other_data = ctx.get_type(other);
         let adt_dialect = Symbol::new("adt");
         if other_data.dialect == adt_dialect {
             return true;
@@ -283,8 +283,8 @@ fn record_struct_field(
     if let Some(existing) = builder.fields[idx] {
         // Check if types are semantically equivalent
         if !types_equivalent_for_gc(ctx, existing, ty) {
-            let existing_data = ctx.types().get(existing);
-            let new_data = ctx.types().get(ty);
+            let existing_data = ctx.get_type(existing);
+            let new_data = ctx.get_type(ty);
             return Err(CompilationError::type_error(format!(
                 "struct type index {type_idx} field {field_idx} type mismatch: existing={:?} ({}.{}), new={:?} ({}.{})",
                 existing,
@@ -500,7 +500,7 @@ pub(crate) fn collect_gc_types(
                 }
                 for (field_idx, &value) in operands.iter().enumerate() {
                     let ty = helpers::value_type(ctx, value);
-                    let ty_data = ctx.types().get(ty);
+                    let ty_data = ctx.get_type(ty);
                     let field_idx_u32 = u32::try_from(field_idx).map_err(|_| {
                         CompilationError::invalid_module("struct field index out of u32 range")
                     })?;
@@ -544,7 +544,7 @@ pub(crate) fn collect_gc_types(
                 // Note: type variables should be resolved to concrete types before emit
                 let result_types = ctx.op_result_types(op).to_vec();
                 if let Some(&result_ty) = result_types.first() {
-                    let result_data = ctx.types().get(result_ty);
+                    let result_data = ctx.get_type(result_ty);
                     debug!(
                         "GC: struct_get type_idx={} recording field {} with result_ty {}.{}",
                         type_idx, field_idx, result_data.dialect, result_data.name

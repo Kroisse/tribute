@@ -66,7 +66,7 @@ pub(crate) fn handle_call_indirect(
 
     // All call_indirect operations must use i32 table index
     if !helpers::is_type(ctx, first_operand_ty, "core", "i32") {
-        let data = ctx.types().get(first_operand_ty);
+        let data = ctx.get_type(first_operand_ty);
         return Err(CompilationError::invalid_module(format!(
             "call_indirect first operand must be i32 table index, got {}.{}",
             data.dialect, data.name

@@ -101,7 +101,7 @@ fn convert_nested_callable_type(
     if func::FuncSig::from_type_ref(ctx, ty).is_some() {
         return convert_type_to_clif(ctx, ty, converter);
     }
-    let data = ctx.types().get(ty).clone();
+    let data = ctx.get_type(ty).clone();
     let params = data
         .params
         .iter()
@@ -175,7 +175,7 @@ fn convert_type_to_clif(
     if converted != ty {
         return convert_type_to_clif(ctx, converted, converter);
     }
-    let data = ctx.types().get(ty).clone();
+    let data = ctx.get_type(ty).clone();
     let params = data
         .params
         .iter()
@@ -247,7 +247,7 @@ fn adapt_closure_structs(ctx: &mut IrContext, module: Module) -> Vec<TypeRewrite
 const CLOSURE_STRUCT_NAME_STR: &str = "_closure";
 
 fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.attrs
         .get_symbol("name")
         .is_some_and(|name| name == Symbol::new(CLOSURE_STRUCT_NAME_STR))

@@ -522,10 +522,10 @@ fn gen_type_impl_block(crate_path: &TokenStream, td: &TypeDefData) -> TokenStrea
         }
     };
 
-    // Param accessors: each param is accessed by index in ctx.types().get(self.0).params
+    // Param accessors: each param is accessed by index in ctx.get_type(self.0).params
     let param_accessors = gen_type_param_accessors(crate_path, &td.params);
 
-    // Attr accessors: same pattern as op attrs, but via ctx.types().get(self.0).attrs
+    // Attr accessors: same pattern as op attrs, but via ctx.get_type(self.0).attrs
     let attr_accessors: Vec<TokenStream> = td
         .attrs
         .iter()
@@ -554,7 +554,7 @@ fn gen_type_param_accessors(
         let name = format_ident!("r#{}", params[0].raw_ident.to_string().to_snake_case());
         return quote! {
             pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
-                &ctx.types().get(self.0).params
+                &ctx.get_type(self.0).params
             }
         };
     }
@@ -569,13 +569,13 @@ fn gen_type_param_accessors(
             if idx > 0 {
                 methods.push(quote! {
                     pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
-                        &ctx.types().get(self.0).params[#idx..]
+                        &ctx.get_type(self.0).params[#idx..]
                     }
                 });
             } else {
                 methods.push(quote! {
                     pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
-                        &ctx.types().get(self.0).params
+                        &ctx.get_type(self.0).params
                     }
                 });
             }
@@ -583,7 +583,7 @@ fn gen_type_param_accessors(
             let idx = fixed_count;
             methods.push(quote! {
                 pub fn #name(&self, ctx: &#crate_path::IrContext) -> #crate_path::TypeRef {
-                    ctx.types().get(self.0).params[#idx]
+                    ctx.get_type(self.0).params[#idx]
                 }
             });
             fixed_count += 1;
@@ -594,7 +594,7 @@ fn gen_type_param_accessors(
 }
 
 fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
-    gen_map_attr_accessor(crate_path, attr, quote!(ctx.types().get(self.0).attrs))
+    gen_map_attr_accessor(crate_path, attr, quote!(ctx.get_type(self.0).attrs))
 }
 
 fn gen_type_constructor(

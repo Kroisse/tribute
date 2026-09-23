@@ -17,31 +17,31 @@ use crate::gc_types::{
 };
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("adt")
         && data.attrs.get_symbol("name") == Some(Symbol::new(expected))
 }
 
 fn is_bytes_array(ctx: &IrContext, ty: TypeRef) -> bool {
-    let reference = ctx.types().get(ty);
+    let reference = ctx.get_type(ty);
     if reference.dialect != Symbol::new("core")
         || reference.name != Symbol::new("ref")
         || reference.params.len() != 1
     {
         return false;
     }
-    let array = ctx.types().get(reference.params[0]);
+    let array = ctx.get_type(reference.params[0]);
     array.dialect == Symbol::new("core")
         && array.name == Symbol::new("array")
         && array.params.len() == 1
         && {
-            let element = ctx.types().get(array.params[0]);
+            let element = ctx.get_type(array.params[0]);
             element.dialect == Symbol::new("core") && element.name == Symbol::new("i8")
         }
 }
 
 fn is_evidence_array(ctx: &IrContext, ty: TypeRef) -> bool {
-    let array = ctx.types().get(ty);
+    let array = ctx.get_type(ty);
     array.dialect == Symbol::new("core")
         && array.name == Symbol::new("array")
         && array.params.len() == 1
@@ -49,7 +49,7 @@ fn is_evidence_array(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
         Some(BYTES_STRUCT_IDX)
     } else if is_bytes_array(ctx, ty) {
@@ -68,7 +68,7 @@ pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
 }
 
 fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("wasm")
         && [
             "anyref",
@@ -287,7 +287,7 @@ impl RewritePattern for LowerTypedGcPattern {
                 ctx,
                 loc,
                 old.result_ty(ctx),
-                ctx.types().get(target).name,
+                ctx.get_type(target).name,
                 self.index(target),
             );
             rewriter.replace_op(new.op_ref());

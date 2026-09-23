@@ -543,7 +543,7 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str 
 fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
     match ty {
         Some(t) => {
-            let data = ctx.types().get(t);
+            let data = ctx.get_type(t);
             let name = data.name;
             if name == Symbol::new("i32") {
                 "i32"

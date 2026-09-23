@@ -279,7 +279,7 @@ fn convert_nested_callable_type(
     if func::FuncSig::from_type_ref(ctx, ty).is_some() {
         return convert_type_to_wasm(ctx, ty, converter);
     }
-    let data = ctx.types().get(ty).clone();
+    let data = ctx.get_type(ty).clone();
     let params = data
         .params
         .iter()
@@ -378,7 +378,7 @@ fn convert_type_to_wasm(
         return Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref());
     }
 
-    let data = ctx.types().get(ty).clone();
+    let data = ctx.get_type(ty).clone();
     let params = data
         .params
         .iter()

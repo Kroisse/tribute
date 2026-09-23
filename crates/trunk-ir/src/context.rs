@@ -145,6 +145,11 @@ impl IrContext {
         &self.types
     }
 
+    /// Read the data for an interned type.
+    pub fn get_type(&self, ty: TypeRef) -> &TypeData {
+        self.types.get(ty)
+    }
+
     /// Read interned paths through the context API.
     pub fn paths(&self) -> &PathInterner {
         &self.paths

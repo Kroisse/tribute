@@ -82,7 +82,7 @@ pub(crate) fn handle_if(
         "wasm.if: then_has_result_value={}, result_ty={:?}",
         then_has_result_value,
         result_ty.map(|ty| {
-            let data = ctx.types().get(ty);
+            let data = ctx.get_type(ty);
             format!("{}.{}", data.dialect, data.name)
         })
     );
@@ -165,8 +165,8 @@ fn compute_block_type(
 
     debug!(
         "block_type: converting {}.{} with canonical value-type rules",
-        ctx.types().get(ty).dialect,
-        ctx.types().get(ty).name
+        ctx.get_type(ty).dialect,
+        ctx.get_type(ty).name
     );
     Ok(BlockType::Result(helpers::type_to_valtype(
         ctx,

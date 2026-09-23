@@ -103,7 +103,7 @@ pub(crate) fn extract_function_def(
     })?;
 
     if let Some(result_ty) = function.single_result(ctx) {
-        let result_data = ctx.types().get(result_ty);
+        let result_data = ctx.get_type(result_ty);
         debug!(
             "extract_function_def: {} fn_params={:?}, result={}.{}",
             name,
@@ -111,7 +111,7 @@ pub(crate) fn extract_function_def(
                 .inputs(ctx)
                 .iter()
                 .map(|p| {
-                    let d = ctx.types().get(*p);
+                    let d = ctx.get_type(*p);
                     format!("{}.{}", d.dialect, d.name)
                 })
                 .collect::<Vec<_>>(),

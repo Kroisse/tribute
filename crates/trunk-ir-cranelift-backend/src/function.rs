@@ -43,7 +43,7 @@ fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
 }
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let ty = ctx.types().get(ty);
+    let ty = ctx.get_type(ty);
     ty.dialect == Symbol::new("core") && ty.name == Symbol::new("nil") && ty.params.is_empty()
 }
 
@@ -112,7 +112,7 @@ pub(crate) fn translate_type(
     ty: TypeRef,
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_types::Type> {
-    let td = ctx.types().get(ty);
+    let td = ctx.get_type(ty);
     let core_dialect = Symbol::new("core");
     if td.dialect == core_dialect {
         return td.name.with_str(|n| match n {
@@ -216,7 +216,7 @@ impl<'a> FunctionTranslator<'a> {
         self.values.get(&ir_val).copied().ok_or_else(|| {
             let val_def = self.ctx.value_def(ir_val);
             let val_ty = self.ctx.value_ty(ir_val);
-            let ty_data = self.ctx.types().get(val_ty);
+            let ty_data = self.ctx.get_type(val_ty);
             // Check if the defining op is in any of the blocks we know about
             let def_info = match val_def {
                 trunk_ir::refs::ValueDef::OpResult(op, idx) => {
@@ -290,7 +290,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(c) = clif::Iconst::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             // Nil constants have no runtime representation — skip emission.
-            let td = ctx.types().get(result_ty);
+            let td = ctx.get_type(result_ty);
             if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
                 return Ok(());
             }
@@ -460,7 +460,7 @@ impl<'a> FunctionTranslator<'a> {
         // === Memory ===
         if let Ok(load) = clif::Load::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
-            let td = ctx.types().get(result_ty);
+            let td = ctx.get_type(result_ty);
             if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
                 return Ok(());
             }

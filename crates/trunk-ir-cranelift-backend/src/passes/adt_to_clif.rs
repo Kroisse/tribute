@@ -373,7 +373,7 @@ impl RewritePattern for RefIsNullPattern {
         let result_ty = rewriter
             .type_converter()
             .convert_type_or_identity(ctx, result_ty);
-        let result_data = ctx.types().get(result_ty);
+        let result_data = ctx.get_type(result_ty);
         let can_hold_i8 = result_data.dialect == Symbol::new("core")
             && matches!(
                 result_data.name.to_string().as_str(),
