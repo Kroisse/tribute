@@ -95,14 +95,13 @@ mod tests {
 
     fn test_ctx() -> (IrContext, trunk_ir::types::Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         let loc = trunk_ir::types::Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn type_ref(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
     }
 
     fn make_module(ctx: &mut IrContext, loc: trunk_ir::types::Location, ops: Vec<OpRef>) -> Module {
@@ -225,7 +224,7 @@ mod tests {
                 ])),
             );
             assert_eq!(attrs.get_symbol("tag"), Some(Symbol::new("keep")),);
-            assert_eq!(ctx.types.get(function.r#type(&ctx)).attrs.len(), 4);
+            assert_eq!(ctx.types().get(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),
                 Some(&Attribute::Int(7))
@@ -315,9 +314,9 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
-        let malformed = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("func_sig")).build());
+        let malformed = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("func_sig")).build(),
+        );
         let func = make_bodyless_wasm_func(&mut ctx, loc, Symbol::new("bad"), malformed);
         let module = make_module(&mut ctx, loc, vec![func]);
         let before = trunk_ir::printer::print_module(&ctx, module.op());

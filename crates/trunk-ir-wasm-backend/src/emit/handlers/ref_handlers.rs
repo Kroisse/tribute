@@ -139,11 +139,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let anyref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
         let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
         let null =
             wasm_dialect::ref_null(&mut ctx, location, anyref_ty, Symbol::new("anyref"), None);
         let null_result = null.result(&ctx);

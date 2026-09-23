@@ -543,7 +543,7 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str 
 fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
     match ty {
         Some(t) => {
-            let data = ctx.types.get(t);
+            let data = ctx.types().get(t);
             let name = data.name;
             if name == Symbol::new("i32") {
                 "i32"
@@ -581,29 +581,25 @@ fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
 /// Intern a core.i32 type.
 pub(crate) fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
 /// Intern a core.i64 type.
 pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
 }
 
 /// Intern a core.f32 type.
 pub(crate) fn intern_f32_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f32")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f32")).build())
 }
 
 /// Intern a core.f64 type.
 pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
 }
 
 #[cfg(test)]

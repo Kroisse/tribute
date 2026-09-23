@@ -581,16 +581,16 @@ fn emit_module_impl(
                         .iter()
                         .map(|&a| {
                             let ty = ctx.value_ty(a);
-                            let td = ctx.types.get(ty);
+                            let td = ctx.types().get(ty);
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
-                    let func_ty_data = ctx.types.get(func_type_ref);
+                    let func_ty_data = ctx.types().get(func_type_ref);
                     let func_ty_params: Vec<String> = func_ty_data
                         .params
                         .iter()
                         .map(|&p| {
-                            let td = ctx.types.get(p);
+                            let td = ctx.types().get(p);
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();

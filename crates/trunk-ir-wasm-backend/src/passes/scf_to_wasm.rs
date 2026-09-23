@@ -115,7 +115,7 @@ fn validate_structured_control(
     let result = walk_op(ctx, module.op(), &mut |op| {
         let has_never = (scf::If::matches(ctx, op) || scf::Loop::matches(ctx, op))
             && ctx.op_results(op).iter().any(|&value| {
-                let ty = ctx.types.get(ctx.value_ty(value));
+                let ty = ctx.types().get(ctx.value_ty(value));
                 ty.dialect == "core" && ty.name == "never"
             });
         if has_never {
@@ -214,7 +214,7 @@ impl std::fmt::Display for SwitchLoweringReason {
 }
 
 fn is_i32(ctx: &IrContext, value: ValueRef) -> bool {
-    let ty = ctx.types.get(ctx.value_ty(value));
+    let ty = ctx.types().get(ctx.value_ty(value));
     ty.dialect == core::DIALECT_NAME() && ty.name == "i32"
 }
 
@@ -278,7 +278,7 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
 fn switch_arms(ctx: &IrContext, op: OpRef) -> Result<ScfSwitchArms, SwitchLoweringReason> {
     let shape = switch_shape(ctx, op).ok_or(SwitchLoweringReason::MalformedShape)?;
     if !is_i32(ctx, shape.discriminant) {
-        let ty = ctx.types.get(ctx.value_ty(shape.discriminant));
+        let ty = ctx.types().get(ctx.value_ty(shape.discriminant));
         return Err(SwitchLoweringReason::UnsupportedDiscriminantType(format!(
             "{}.{}",
             ty.dialect, ty.name
@@ -1126,13 +1126,14 @@ mod tests {
                 }
                 for &ty in ctx.op_result_types(op) {
                     assert!(
-                        !(ctx.types.get(ty).dialect == "core" && ctx.types.get(ty).name == "never")
+                        !(ctx.types().get(ty).dialect == "core"
+                            && ctx.types().get(ty).name == "never")
                     );
                 }
                 for &region in &data.regions {
                     for &block in &ctx.region(region).blocks {
                         for &arg in ctx.block_args(block) {
-                            let ty = ctx.types.get(ctx.value_ty(arg));
+                            let ty = ctx.types().get(ctx.value_ty(arg));
                             assert!(!(ty.dialect == "core" && ty.name == "never"));
                         }
                     }
@@ -1275,7 +1276,7 @@ mod tests {
                         && (data.name == "if" || data.name == "block" || data.name == "loop")
                     {
                         assert_eq!(ctx.op_result_types(op).len(), 1);
-                        let result = ctx.types.get(ctx.op_result_types(op)[0]);
+                        let result = ctx.types().get(ctx.op_result_types(op)[0]);
                         assert_eq!(format!("{}.{}", result.dialect, result.name), ty);
                     }
                     std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
@@ -1287,7 +1288,7 @@ mod tests {
 
     /// Convert `core.array` to the abstract `wasm.arrayref` type.
     fn array_to_arrayref_converter(ctx: &mut IrContext) -> TypeConverter {
-        let arrayref_ty = ctx.types.intern(
+        let arrayref_ty = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(
                 trunk_ir::Symbol::new("wasm"),
                 trunk_ir::Symbol::new("arrayref"),
@@ -1296,7 +1297,7 @@ mod tests {
         );
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            ctx.types
+            ctx.types()
                 .is_dialect(
                     ty,
                     trunk_ir::Symbol::new("core"),

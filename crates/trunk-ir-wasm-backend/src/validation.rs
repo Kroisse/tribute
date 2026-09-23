@@ -142,7 +142,7 @@ fn resolve_wasm_callee(
 }
 
 fn is_nil(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("nil")
 }
 
@@ -174,8 +174,8 @@ fn is_wasm_physical_result_assignable(
     produced: TypeRef,
     received: TypeRef,
 ) -> bool {
-    let produced_data = ctx.types.get(produced);
-    let received_data = ctx.types.get(received);
+    let produced_data = ctx.types().get(produced);
+    let received_data = ctx.types().get(received);
     (produced_data.dialect == Symbol::new("wasm")
         && produced_data.name == Symbol::new("arrayref")
         && received_data.dialect == Symbol::new("core")
@@ -277,8 +277,8 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
                 ctx.value_ty(operand),
                 input,
             ) {
-                let actual = ctx.types.get(ctx.value_ty(operand));
-                let expected = ctx.types.get(input);
+                let actual = ctx.types().get(ctx.value_ty(operand));
+                let expected = ctx.types().get(input);
                 errors.push(format!(
                     "wasm.{} call argument #{index} type mismatch: found {}.{}, expected {}.{}",
                     ctx.op(op).name,
@@ -303,7 +303,7 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
             types
                 .iter()
                 .map(|&ty| {
-                    let data = ctx.types.get(ty);
+                    let data = ctx.types().get(ty);
                     format!("{}.{}", data.dialect, data.name)
                 })
                 .collect::<Vec<_>>()

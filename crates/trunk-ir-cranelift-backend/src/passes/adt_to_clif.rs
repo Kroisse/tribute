@@ -81,13 +81,11 @@ fn adt_to_clif_target() -> ConversionTarget {
 }
 
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
 fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
 }
 
 struct StructGetPattern;
@@ -375,7 +373,7 @@ impl RewritePattern for RefIsNullPattern {
         let result_ty = rewriter
             .type_converter()
             .convert_type_or_identity(ctx, result_ty);
-        let result_data = ctx.types.get(result_ty);
+        let result_data = ctx.types().get(result_ty);
         let can_hold_i8 = result_data.dialect == Symbol::new("core")
             && matches!(
                 result_data.name.to_string().as_str(),
@@ -384,9 +382,8 @@ impl RewritePattern for RefIsNullPattern {
         if !can_hold_i8 {
             return false;
         }
-        let i8_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let i8_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
         let ref_val = ref_is_null.r#ref(ctx);
 
         let null_op = clif::iconst(ctx, loc, ptr_ty, 0);

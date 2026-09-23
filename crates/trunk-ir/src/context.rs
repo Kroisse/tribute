@@ -140,6 +140,36 @@ impl IrContext {
         }
     }
 
+    /// Read interned types through the context API.
+    pub fn types(&self) -> &TypeInterner {
+        &self.types
+    }
+
+    /// Read interned paths through the context API.
+    pub fn paths(&self) -> &PathInterner {
+        &self.paths
+    }
+
+    /// Intern a type through the context API.
+    pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
+        self.types.intern(data)
+    }
+
+    /// Intern a path through the context API.
+    pub fn intern_path(&mut self, path: String) -> PathRef {
+        self.paths.intern(path)
+    }
+
+    /// Return mutable type interner access for callers migrating to the context API.
+    pub fn types_mut(&mut self) -> &mut TypeInterner {
+        &mut self.types
+    }
+
+    /// Return mutable path interner access for callers migrating to the context API.
+    pub fn paths_mut(&mut self) -> &mut PathInterner {
+        &mut self.paths
+    }
+
     // ========================================================================
     // Diagnostics
     // ========================================================================

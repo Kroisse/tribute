@@ -279,7 +279,7 @@ fn convert_nested_callable_type(
     if func::FuncSig::from_type_ref(ctx, ty).is_some() {
         return convert_type_to_wasm(ctx, ty, converter);
     }
-    let data = ctx.types.get(ty).clone();
+    let data = ctx.types().get(ty).clone();
     let params = data
         .params
         .iter()
@@ -301,7 +301,7 @@ fn convert_nested_callable_type(
     let mut converted_data = data;
     converted_data.params = params.into();
     converted_data.attrs = attrs;
-    Some(ctx.types.intern(converted_data))
+    Some(ctx.intern_type(converted_data))
 }
 
 fn convert_nested_callable_attribute(
@@ -378,7 +378,7 @@ fn convert_type_to_wasm(
         return Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref());
     }
 
-    let data = ctx.types.get(ty).clone();
+    let data = ctx.types().get(ty).clone();
     let params = data
         .params
         .iter()
@@ -400,7 +400,7 @@ fn convert_type_to_wasm(
     let mut converted_data = data;
     converted_data.params = params.into();
     converted_data.attrs = attrs;
-    Some(ctx.types.intern(converted_data))
+    Some(ctx.intern_type(converted_data))
 }
 
 fn convert_to_wasm_func_type(
@@ -738,8 +738,7 @@ impl RewritePattern for FuncConstantPattern {
 
 /// Intern a core.i32 type.
 fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
 /// Intern a wasm.funcref type.
@@ -1058,19 +1057,17 @@ mod tests {
         );
 
         let anyref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let f64_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types
+            (ctx.types()
                 .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
             .then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types
+            (ctx.types()
                 .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
             .then_some(f64_ty)
         });
@@ -1119,19 +1116,17 @@ mod tests {
         );
 
         let anyref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        let f64_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types
+            (ctx.types()
                 .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
             .then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types
+            (ctx.types()
                 .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
             .then_some(f64_ty)
         });
@@ -1206,12 +1201,12 @@ mod tests {
 }"#,
         );
 
-        let structref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build());
+        let structref_ty = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build(),
+        );
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            ctx.types
+            ctx.types()
                 .is_dialect(ty, Symbol::new("adt"), Symbol::new("typeref"))
                 .then_some(structref_ty)
         });

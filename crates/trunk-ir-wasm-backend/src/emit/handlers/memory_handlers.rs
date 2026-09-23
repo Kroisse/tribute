@@ -574,9 +574,8 @@ mod tests {
     fn i32_memory_handlers_emit_with_mapped_operands_and_result() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let address = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
         let value = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 42);
         let address_result = address.result(&ctx);

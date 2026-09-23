@@ -101,7 +101,7 @@ fn convert_nested_callable_type(
     if func::FuncSig::from_type_ref(ctx, ty).is_some() {
         return convert_type_to_clif(ctx, ty, converter);
     }
-    let data = ctx.types.get(ty).clone();
+    let data = ctx.types().get(ty).clone();
     let params = data
         .params
         .iter()
@@ -123,7 +123,7 @@ fn convert_nested_callable_type(
     let mut converted_data = data;
     converted_data.params = params.into();
     converted_data.attrs = attrs;
-    Some(ctx.types.intern(converted_data))
+    Some(ctx.intern_type(converted_data))
 }
 
 fn convert_nested_callable_attribute(
@@ -175,7 +175,7 @@ fn convert_type_to_clif(
     if converted != ty {
         return convert_type_to_clif(ctx, converted, converter);
     }
-    let data = ctx.types.get(ty).clone();
+    let data = ctx.types().get(ty).clone();
     let params = data
         .params
         .iter()
@@ -197,7 +197,7 @@ fn convert_type_to_clif(
     let mut converted_data = data;
     converted_data.params = params.into();
     converted_data.attrs = attrs;
-    Some(ctx.types.intern(converted_data))
+    Some(ctx.intern_type(converted_data))
 }
 
 fn convert_to_clif_func_type(
@@ -247,7 +247,7 @@ fn adapt_closure_structs(ctx: &mut IrContext, module: Module) -> Vec<TypeRewrite
 const CLOSURE_STRUCT_NAME_STR: &str = "_closure";
 
 fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     data.attrs
         .get_symbol("name")
         .is_some_and(|name| name == Symbol::new(CLOSURE_STRUCT_NAME_STR))
@@ -255,9 +255,8 @@ fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
 
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i64_ty =
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
     builder = builder.param(i64_ty).param(ptr_ty);
@@ -278,7 +277,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
             ]),
         ]),
     );
-    ctx.types.intern(builder.build())
+    ctx.intern_type(builder.build())
 }
 
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
@@ -287,8 +286,7 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 
 fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
 }
 
 /// Pattern: `func.func` -> `clif.func`
@@ -697,7 +695,7 @@ mod tests {
             );
             let op = module.ops(&ctx)[0];
             if malformed {
-                let ty = ctx.types.intern(
+                let ty = ctx.intern_type(
                     TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig")).build(),
                 );
                 ctx.op_mut(op)
@@ -742,9 +740,9 @@ mod tests {
   }
 }"#,
         );
-        let anyref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+        let anyref_ty = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
+        );
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
@@ -763,12 +761,10 @@ mod tests {
     #[test]
     fn nested_callable_metadata_uses_the_native_owned_signature() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i64_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
 
@@ -999,7 +995,7 @@ mod tests {
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            ctx.types
+            ctx.types()
                 .is_dialect(ty, Symbol::new("core"), Symbol::new("array"))
                 .then_some(ptr_ty)
         });

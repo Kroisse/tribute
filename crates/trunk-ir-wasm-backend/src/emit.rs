@@ -360,13 +360,17 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
             params_refs
                 .iter()
                 .map(|t| {
-                    let d = ctx.types.get(*t);
+                    let d = ctx.types().get(*t);
                     format!("{}.{}", d.dialect, d.name)
                 })
                 .collect::<Vec<_>>(),
             signature_results
                 .iter()
-                .map(|ty| format!("{}.{}", ctx.types.get(*ty).dialect, ctx.types.get(*ty).name))
+                .map(|ty| format!(
+                    "{}.{}",
+                    ctx.types().get(*ty).dialect,
+                    ctx.types().get(*ty).name
+                ))
                 .collect::<Vec<_>>()
         );
         let params = params_refs
@@ -753,7 +757,7 @@ fn assign_locals_in_region(
             emit_ctx.value_locals.insert(block_arg, local_index);
             emit_ctx.effective_types.insert(block_arg, arg_ty);
             locals.push(val_type);
-            let ty_data = ctx.types.get(arg_ty);
+            let ty_data = ctx.types().get(arg_ty);
             tracing::debug!(
                 "Allocated local {} for block arg type {}.{}",
                 local_index,
@@ -902,7 +906,7 @@ fn emit_op_nested(
     // Handle wasm.nop
     if wasm_dialect::Nop::matches(ctx, op) {
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
-            let ty_data = ctx.types.get(result_ty);
+            let ty_data = ctx.types().get(result_ty);
             debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
             if is_type(ctx, result_ty, "wasm", "func_sig")
                 || is_type(ctx, result_ty, "wasm", "funcref")
@@ -1420,9 +1424,9 @@ mod tests {
         let Some((params, result)) = helpers::func_type_parts(&ctx, *signature) else {
             panic!("expected wasm.func_sig signature")
         };
-        assert_eq!(ctx.types.get(params[0]).name, Symbol::new("anyref"));
+        assert_eq!(ctx.types().get(params[0]).name, Symbol::new("anyref"));
         assert_eq!(result.len(), 1);
-        assert_eq!(ctx.types.get(result[0]).name, Symbol::new("i32"));
+        assert_eq!(ctx.types().get(result[0]).name, Symbol::new("i32"));
 
         let bytes = crate::emit_module_to_wasm(&mut ctx, module)
             .expect("exact ordinary indirect call must emit")
