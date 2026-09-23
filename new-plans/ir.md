@@ -160,8 +160,8 @@ fail-closed로 거부하고 실패를 캐시하지 않는다.
 
 이 사실은 `NativeOwnershipPlanOptions`와 무관하게 동일하다. Borrow elision,
 entry ownership 같은 정책 선택은 사실을 소비하는 planner가 적용하며 사실의
-identity나 계산에 참여하지 않는다. 따라서 정책-중립 사실과 그 위의 정책
-결정은 phase 범위 캐시에서 각각 재사용된다.
+identity나 계산에 참여하지 않는다. 따라서 phase 범위 캐시는 정책-중립 사실만
+재사용하며, planner는 호출마다 그 사실 위에 정책 결정을 새로 적용한다.
 
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
