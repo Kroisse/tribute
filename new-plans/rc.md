@@ -222,6 +222,16 @@ Module 범위 분석이 function 정의와 검증된 managed nominal layout을, 
 무관하며 borrow elision과 entry ownership 정책은 사실을 소비하는 planner와
 action planner가 적용한다.
 
+Block별 `defs`, `live_in`, `live_out`은 function ownership facts에 의존하는
+`NativeManagedLiveness` 분석의 두 view가 제공한다. 보수적 view는 managed
+value의 일반 use만 반영하고, owner-extended view는 검증된 managed projection
+borrow의 use를 owner의 use로도 반영한다. `elide_proven_field_borrows`만 view를
+선택하며 borrowed-parameter 정책은 선택에 관여하지 않는다. 각 view의 고정점은
+최초 질의 때만 계산되어 사용하지 않는 고정점 계산을 피하고, action planner는
+선택된 결과를 그대로 소비한다. 런타임 정책 값은 분석 캐시의 identity에
+참여하지 않는다. 선행 facts 분석 실패는 그대로 전파되고 실패한 liveness
+결과는 캐시되지 않는다.
+
 **Algorithm:**
 
 1. Exact semantic type과 callable contract로 managed value, field와 parameter

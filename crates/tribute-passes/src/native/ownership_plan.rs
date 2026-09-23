@@ -25,9 +25,14 @@ use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 mod actions;
 mod cfg;
 mod facts;
-use actions::{exact_into_raw_transfers, plan_function_actions, validate_result_contract};
+mod liveness;
+use actions::{
+    ActionInputs, exact_into_raw_transfers, plan_function_actions, validate_result_contract,
+};
 use cfg::ValidatedFlatCfg;
 pub use facts::{NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts};
+use liveness::BlockLiveness;
+pub use liveness::NativeManagedLiveness;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
@@ -414,13 +419,19 @@ pub fn build_native_ownership_plan_with_analyses(
         let facts = analyses
             .get::<NativeOwnershipFunctionFacts>(ctx, op)
             .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
+        let liveness = analyses
+            .get::<NativeManagedLiveness>(ctx, op)
+            .map_err(|error| OwnershipPlanError::new(error.to_string()))?;
         let entries = entry_contracts
             .get(&symbol)
             .cloned()
             .ok_or_else(|| OwnershipPlanError::new("defined function has no entry contract"))?;
         let actions = plan_function_actions(
             ctx,
-            &facts,
+            ActionInputs {
+                facts: &facts,
+                liveness: liveness.view(options.elide_proven_field_borrows),
+            },
             &entries,
             &entry_contracts,
             definitions,
@@ -1330,6 +1341,9 @@ fn walk_module(ctx: &IrContext, module: Module, mut visit: impl FnMut(OpRef)) {
 
 #[cfg(test)]
 mod facts_tests;
+
+#[cfg(test)]
+mod liveness_tests;
 
 #[cfg(test)]
 mod tests;

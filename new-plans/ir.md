@@ -181,6 +181,18 @@ entry ownership 같은 정책 선택은 사실을 소비하는 planner가 적용
 identity나 계산에 참여하지 않는다. 따라서 phase 범위 캐시는 정책-중립 사실만
 재사용하며, planner는 호출마다 그 사실 위에 정책 결정을 새로 적용한다.
 
+Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도의 의존
+분석이다. 분석 결과는 같은 function ownership facts를 캐시에서 조회하고,
+보수적 managed liveness와 검증된 managed projection borrow의 owner 수명을
+연장하는 liveness를 질의 view로 제공한다. 두 view는 각각 block별 `defs`,
+`live_in`, `live_out`을 제공하고 기존 역순 고정점 계산을 사용한다. 각 view의
+고정점은 최초 질의 때 계산하여 결과 안에 보관하므로 사용하지 않는 view는
+계산하지 않는다. 런타임 정책 값은 분석 캐시의 identity에 참여하지 않는다.
+선행 facts 조회 실패는 원래 분석 오류를 그대로 전파하며 liveness 결과를
+캐시하지 않는다. `elide_proven_field_borrows`만 view를 선택하고
+`elide_proven_borrowed_parameters`는 선택에 관여하지 않는다. Action planner는
+선택된 결과를 소비한다.
+
 `wasm.if`, `wasm.block`, `wasm.loop`의 typed builder는 명시적인 결과 타입 목록을
 받는다. 빈 목록은 SSA 결과가 없는 제어 연산이며 `core.nil` 결과 하나와 다르다.
 SCF lowering이 지원하는 기존 단일 값 결과의 개수와 타입 변환은 유지한다.
