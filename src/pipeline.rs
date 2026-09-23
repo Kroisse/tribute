@@ -1008,19 +1008,18 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
     .accumulate(db);
 }
 
-/// Lower continuation ops and run cleanup passes shared by both backends.
+/// Debug-only value-integrity check at a pipeline boundary.
 ///
-/// Effects are handled via tail-call CPS through handler_dispatch closures.
-fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    // Validation runs in debug mode.
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
-        if !result.is_ok() {
-            tracing::warn!("Value integrity errors after lowering: {:?}", result.errors);
-        }
+/// The shared pipeline owns control legalization; the target pipelines only
+/// verify its output before their own lowering runs.
+fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
+    if !cfg!(debug_assertions) {
+        return;
     }
-
-    Ok(())
+    let result = trunk_ir::validation::validate_value_integrity(ctx, m);
+    if !result.is_ok() {
+        tracing::warn!("Value integrity errors {boundary}: {:?}", result.errors);
+    }
 }
 
 /// Run inlining + DCE + resolve_casts (shared cleanup after all lowering).
@@ -1047,7 +1046,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 
 /// Run the WASM target pipeline: lowering + cleanup.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    run_lowering_pipeline(ctx, m)?;
+    debug_validate_value_integrity(ctx, m, "before Wasm target lowering");
 
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
@@ -1064,7 +1063,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    run_lowering_pipeline(ctx, m)?;
+    debug_validate_value_integrity(ctx, m, "before native target lowering");
 
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That
@@ -1087,15 +1086,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
-        if !result.is_ok() {
-            tracing::warn!(
-                "Value integrity errors after evidence_to_native: {:?}",
-                result.errors
-            );
-        }
-    }
+    debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
     run_cleanup_passes(ctx, m);
     Ok(())
