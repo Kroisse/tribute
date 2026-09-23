@@ -115,7 +115,7 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Inference-time types for ability-operation callees. This is deliberately
     /// separate from `node_types`: conversion revisits the callee and must be
     /// constrained to the same instantiated operation without changing the
-    /// concrete node-type table consumed by legacy lowering.
+    /// concrete expression node-type table.
     ability_op_callee_types: HashMap<NodeId, Type<'db>>,
 
     /// Source-logical callable signatures for lambda nodes.

@@ -72,6 +72,11 @@ fn validate_operation(ctx: &IrContext, op: OpRef, depth: usize, errors: &mut Vec
     if !is_allowed_dialect(ctx, op, depth) {
         errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
     }
+    if wasm_dialect::CallIndirect::matches(ctx, op)
+        && let Err(error) = crate::emit::helpers::exact_call_indirect_signature(ctx, op)
+    {
+        errors.push(error.to_string());
+    }
     validate_return_call_indirect(ctx, op, errors);
     validate_direct_callable_contracts(ctx, op, errors);
 

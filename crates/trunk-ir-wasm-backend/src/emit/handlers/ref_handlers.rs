@@ -159,7 +159,6 @@ mod tests {
         let emit_ctx = FunctionEmitContext {
             value_locals: HashMap::from([(null_result, 0), (cast_result, 1)]),
             effective_types: HashMap::new(),
-            func_return_type: None,
         };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(2, ValType::Ref(RefType::ANYREF))]);

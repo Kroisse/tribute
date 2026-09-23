@@ -59,9 +59,8 @@ pub struct InstantiatedHandlerOperation<'db> {
 }
 
 /// Exact, monomorphic semantic signature selected for an ability-operation
-/// call. This is distinct from the concrete node-type table used by legacy
-/// physical lowering, so preserving a logical effect instance cannot change
-/// legacy value representation.
+/// call. This records the operation instance independently of expression node
+/// types so lowering never reconstructs a declaration from an erased value.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct InstantiatedPerformOperation<'db> {
     pub ability: AbilityId<'db>,
@@ -74,8 +73,7 @@ pub struct InstantiatedPerformOperation<'db> {
 /// Fully solved callable signature for a lambda expression.
 ///
 /// Lambdas are expressions, but their source-logical callable signature must
-/// not be recovered from their body or from the concrete node-type table used
-/// by legacy lowering.
+/// not be recovered from their body or from a concrete expression node type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct LambdaSignature<'db> {
     /// The solved full source function type.  Retaining its effect row avoids

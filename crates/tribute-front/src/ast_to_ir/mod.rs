@@ -1,14 +1,14 @@
 //! AST to TrunkIR lowering.
 //!
 //! This module transforms a type-checked AST (`Module<TypedRef<'db>>`) into TrunkIR.
-//! Unlike tirgen which works directly from CST, this pass has access to:
+//! Lowering consumes:
 //! - Resolved names (all references point to their definitions)
 //! - Type information (every expression has a known type)
 //!
 //! ## Pipeline Position
 //!
 //! ```text
-//! CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR (arena)
+//! CST → AST → resolve → typecheck → tdnr → ast_to_ir → source-logical TrunkIR
 //! ```
 //!
 //! ## Output Format
@@ -20,18 +20,12 @@
 //! - `scf`: Structured control flow (if, case)
 //! - `list`: Source list values and observations
 //!
-//! The old physical `func`/continuation/closure route is kept only through the
-//! explicit temporary legacy entry below until shared CPS composition moves to
-//! the driver.
-//!
 //! ## Arena IR
 //!
-//! This module emits arena-based IR (`IrContext` + `Module`) directly,
-//! bypassing the Salsa-interned IR layer.
+//! This module emits arena-based IR (`IrContext` + `Module`) directly.
 
 mod context;
 mod lower;
-mod normalize;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -174,41 +168,6 @@ where
     }
 }
 
-/// Policy for compiler-generated identity done continuations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub enum DoneContinuationPolicy {
-    /// Emit a separate helper function at every use site.
-    PerUse,
-    /// Share one helper function across the compilation unit.
-    PerCompilationUnit,
-}
-
-/// Independently selectable AST-to-IR policies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub struct AstToIrOptions {
-    pub done_continuation: DoneContinuationPolicy,
-}
-
-impl AstToIrOptions {
-    pub const fn production() -> Self {
-        Self {
-            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
-        }
-    }
-
-    pub const fn baseline() -> Self {
-        Self {
-            done_continuation: DoneContinuationPolicy::PerUse,
-        }
-    }
-}
-
-impl Default for AstToIrOptions {
-    fn default() -> Self {
-        Self::production()
-    }
-}
-
 /// A type-checked module and the metadata required to lower it to TrunkIR.
 ///
 /// This models the boundary between the typed frontend and IR lowering as one
@@ -246,23 +205,6 @@ impl<'db> TypedModule<'db> {
     ) -> FrontendIrModule {
         let path = ir.paths.intern(source_uri.to_owned());
         self.lower_module(db, ir, path)
-    }
-
-    /// Temporary compatibility entry for the pre-#825 driver routing.
-    ///
-    /// New frontend consumers must use [`Self::lower_to_ir`].  This explicit
-    /// legacy entry is configured by `AstToIrOptions`, which apply only to
-    /// that physical compatibility route, until the driver composes shared CPS.
-    #[doc(hidden)]
-    pub fn lower_to_legacy_ir_with_options(
-        self,
-        db: &'db dyn salsa::Database,
-        ir: &mut IrContext,
-        source_uri: &str,
-        options: AstToIrOptions,
-    ) -> IrModule {
-        let path = ir.paths.intern(source_uri.to_owned());
-        self.lower_module_legacy(db, ir, path, options)
     }
 }
 
@@ -396,34 +338,6 @@ mod tests {
 
         // Binding must be cleaned up despite early return
         assert!(ctx.lookup(local_id).is_none());
-    }
-
-    #[test]
-    fn test_prompt_tag_guard_cleanup() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let mut ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-
-        // No active prompt tag initially
-        assert_eq!(ctx.active_prompt_tag(), None);
-
-        // Prompt tag is active inside guard
-        {
-            let prompt = ctx.prompt_tag_scope();
-            assert_eq!(prompt.active_prompt_tag(), Some(prompt.tag()));
-        }
-
-        // Prompt tag is cleaned up after guard drops
-        assert_eq!(ctx.active_prompt_tag(), None);
     }
 
     #[test]

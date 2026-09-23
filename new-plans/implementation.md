@@ -112,7 +112,8 @@ tribute        -> tribute-front + tribute-passes
   verifier와 Tribute-specific whole-IR verifier를 소유한다.
 - `tribute-passes`는
   [atomic callable/control conversion](cps-effects.md#pre-cps-callable-shape)과
-  post-CPS legality, generic `func.tail_call_indirect`를 소유한다. 이 변환은
+  post-CPS legality와 generic `func.tail_call_indirect`를 사용한 control legalization을
+  소유한다. 이 변환은
   Cps 정의, lambda, adapter, call, return, suffix, resume, handle에
   Evidence와 ContinuationFrame을 같은 callable contract로 전달한다.
 - Root `tribute` crate는 frontend emission과 shared conversion을 조합한다.
@@ -129,10 +130,9 @@ tribute        -> tribute-front + tribute-passes
   함께 호출한다. 세부 검증 계약은 [ir.md](ir.md#direct-style-control)를 따른다.
 - Whole-IR verifier는 static affine path를, converted resumption runtime은
   closure 재호출에 대한 dynamic one-shot enforcement를 소유한다.
-- 최종 코드 생성의 안전성은 목표 계약이다. 대상별 최종 경계는 보존된
+- 대상별 최종 경계는 보존된
   메타데이터를 실제로 생성되는 값 및 함수 시그니처의 입출력 항목과 구분해야 한다.
-  또한 코드 생성 전에 남아 있는 논리적 제어 표현을 거부해야 한다. 이 경계를
-  만족한다고 선언하는 컴파일 경로는 해당 검증을 코드 생성 전에 수행해야 한다.
+  또한 코드 생성 전에 남아 있는 논리적 제어 표현을 거부해야 한다. Native/Wasm pipeline은 해당 검증을 코드 생성 전에 수행한다.
 - Wasm `verify_wasm_backend_ready` 검사는 중간 단계의 부분 검증이다.
   남아 있는 `ability.*`와 `effect.*`는 거부하지만, 알 수 없는 이후 단계 연산은
   허용한다. 이는 최종 코드 생성 계약이 아니다.
@@ -157,11 +157,15 @@ result를 fresh owned transfer로 취급한다. Shared 단계의 허용은 targe
 따른다. 그 밖의 미등록 bodyless external과 private target runtime helper는 managed
 logical parameter/result를 사용할 수 없다.
 
-기존 source-visible bytes/runtime bridge는 새 semantic callable origin을 만들지 않고
-현재의 conservative barrier로 남긴다. 이 경계가 별도 typed representation을 갖기
-전까지 새 bridge symbol이나 managed signature를 추가하지 않는다.
+Source-visible bytes/runtime FFI bridge는 위의 `extern "C"` 계약을 따른다.
+Private target runtime helper는 source callable origin이 아니며 physical ABI를 가진다.
 
 논리 CPS 결과는 `core.never`이고, 최종 물리적 CPS ABI의 결과 목록은 비어 있다.
+Frontend 진입점은 source-logical IR만 생성하며 physical CPS 생성 옵션이나
+별도의 호환 lowering 경로를 제공하지 않는다. 프론트엔드의 worker convention
+계산은 typechecked callable/effect metadata를 소비하며 continuation을 생성하거나
+ability operation kind를 재분류하지 않는다. Continuation 생성과 제어 이전의
+적법화는 shared CPS conversion만 소유한다.
 모든 CPS 제어 이전은 직접 또는 간접 꼬리 호출로 이루어진다. 최종 backend-ready
 IR의 계약은 CPS 제어 결과로 쓰이는 `anyref`, 비공개 제어 열거형, `Step`,
 트램펄린을 거부한다. 박싱된 소스 값, 이펙트 페이로드, 클로저 환경의
@@ -169,10 +173,6 @@ IR의 계약은 CPS 제어 결과로 쓰이는 `anyref`, 비공개 제어 열거
 canonical `core.never`와 typed
 zero-capture `func.unreachable` adapter를 포함한 conversion 세부는
 [cps-effects.md](cps-effects.md#direct-style-control-boundary)를 따른다.
-
-Source syntax, effect-row semantics, `Direct < EvidenceDirect < Cps` 순서, ability
-optimization 정책, multi-file compilation은 변경하지 않으며 Tribute semantics를
-generic `trunk-ir`로 옮기지 않는다.
 
 ---
 
@@ -353,218 +353,72 @@ resumption을 만들지 않으며 `resume_token` block argument도 받지 않는
 
 ## Evidence Passing
 
-### 설계 원칙
+### Evidence와 dispatch의 소유권
 
-Evidence는 **포인터로 전달**한다. 함수 호출마다 8B 포인터 하나만 전달:
+Evidence는 ability identity를 key로 하는 불변 Marker 배열이다. Shared effect ABI는
+명시적 evidence operand와 `effect.extend`, `effect.dispatch_tail`,
+`effect.dispatch_cps`만 사용하며 concrete marker field나 runtime layout을 선택하지
+않는다. Native는 runtime pointer를, WasmGC는 GC array/struct reference를 사용한다.
+Target별 field layout, runtime 함수와 dispatch signature는
+[cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)가 정의한다.
 
-```rust
-// 모든 effectful 함수는 Evidence 포인터를 받음
-fn foo(ev: *const Evidence) -> a { ... }
-```
+Handler 설치는 새 evidence 값을 만든다. 같은 ability instance의 nested handler는
+기존 marker를 대체하므로 lookup이 가장 가까운 handler를 선택한다. 각 handler
+인스턴스의 `prompt_tag`는 runtime에 생성하며, 한 handle의 모든 ability marker가
+같은 prompt를 공유한다. 그 밖의 호출은 같은 evidence 값을 전달한다.
 
-- 대부분의 호출: 같은 포인터를 그대로 전달
-- Handler 설치 시에만: 새 Evidence 할당 (GC 관리)
-
-### Evidence 구조
-
-Evidence는 힙에 할당되고 GC가 관리한다. 정렬된 Marker 배열로 단순하게 구현하며,
-별도의 opaque 타입 대신 기존 ADT 시스템(struct/array)을 재사용한다:
-
-```rust
-// Evidence: 정렬된 Marker 배열 (ability_id 기준, 고정 크기)
-type Evidence = Array(Marker)
-
-// Marker: 각 ability에 대한 handler 정보
-struct Marker {
-    ability_id: i32,      // ability 식별자 (컴파일 타임 결정)
-    prompt_tag: i32,      // 런타임 prompt 식별자
-    tr_dispatch_fn: ptr,  // fn operation용 tail-resumptive dispatch closure
-    handler_dispatch: ptr // op operation용 CPS handler dispatch closure
-}
-```
-
-**설계 결정:**
-
-- `ability_id`와 `prompt_tag`는 `i32`로 통일한다.
-- dispatch field는 target별 closure/function reference 표현으로 lowering한다.
-  Native marker는 closure pointer를 저장하고, WasmGC marker는
-  `(table_idx: i32, env: anyref)` closure struct reference를 `anyref`로 저장한다.
-- 별도의 opaque 타입(`ability.evidence_ptr`, `ability.marker`) 대신 struct/array 사용
-- 기존 `adt.array_get`, `adt.struct_get` 연산 재사용 가능
-- Markers는 ability_id 기준 정렬 → binary search 가능 O(log n)
-- 배열은 고정 크기: `evidence_extend`는 새 배열을 할당하여 반환
-
-### Handler Dispatch Closures
-
-Operation table 대신 handler boundary에서 두 종류의 dispatch closure를 만든다:
-
-- `tr_dispatch_fn`: `fn` operation 전용. `(op_idx, value) -> anyref`
-- `handler_dispatch`: `op` operation 전용 대상 proper-tail closure.
-  `(evidence, env, continuation, op_idx, payload) -> empty result`
-
-`op_idx`는 ability 이름과 operation 이름의 stable hash로 계산한다. 호출 지점과
-handler dispatch closure가 같은 hash 함수를 사용하므로, handler arm 등록 순서에
-의존하지 않는다.
-
-### 조회
-
-Evidence에서 marker를 찾는 것은 런타임 함수 + ADT 연산의 조합으로 구현:
-
-```rust
-// ability operation 호출 시
-// Marker 필드 순서는 tribute-ir ability::MarkerField가 단일 정의다.
-let marker = evidence_lookup(ev, STATE_ID)  // high-level IR: Marker 반환
-let tag = adt.struct_get(marker, MarkerField::PromptTag)
-let handler = adt.struct_get(marker, MarkerField::HandlerDispatch)
-func.call_indirect(handler, ...)
-```
-
-Shared lowering은 concrete marker 접근을 직접 만들지 않고 `effect.*` ABI
-operation을 생성한다. Native lowering에서는 이를 `__tribute_evidence_*` C ABI와
-native closure pointer 호출로 대체한다. Wasm lowering은 같은 ability id와 marker
-field 순서를 사용해 binary search helper를 생성하고, marker에 저장된 `anyref`
-closure를 `(table_idx, env)`로 풀어 `wasm.call_indirect`를 emit한다.
-
-### Handler 설치
-
-Handler 설치 시 `evidence_extend` 런타임 함수로 새 Evidence를 생성:
-
-```rust
-fn run_state(comp: fn(Evidence) -> a, init: s, ev: Evidence) -> a {
-    let tag = fresh_prompt()
-    let marker = Marker {
-        ability_id: STATE_ID,
-        prompt_tag: tag,
-        tr_dispatch_fn: state_tr_dispatch,
-        handler_dispatch: state_handler_dispatch,
-    }
-
-    // evidence_extend: 정렬 유지하며 marker 삽입, 새 배열 반환
-    let new_ev = evidence_extend(ev, marker)
-
-    push_prompt(tag, || comp(new_ev))
-}
-```
-
-### Ability Operation
-
-```rust
-fn state_get(ev: Evidence) -> s {
-    let marker = evidence_lookup(ev, STATE_ID)
-    let tag = adt.struct_get(marker, MarkerField::PromptTag)
-    let handler = adt.struct_get(marker, MarkerField::HandlerDispatch)
-    let op_idx = hash(State, get)
-    handler(k, op_idx, Nil)
-}
-```
-
-### 시나리오별 동작
-
-| 상황 | 동작 | 비용 |
-| ---- | ---- | ---- |
-| 일반 함수 호출 | 같은 배열 참조 전달 | 4B (WASM) / 8B (native) |
-| Handler 설치 | 새 Evidence 배열 할당 | GC alloc + O(n) 복사 |
-| Operation 조회 | Binary search | O(log n) |
-
-**대부분의 호출에서 Evidence는 변경되지 않으므로**, 참조만 전달하면 충분하다.
-
-### 향후 최적화 가능성
-
-- 스레딩 모델이 정해지면 append-only 버퍼 공유 방식 검토
-- 핫 패스에서 자주 쓰이는 ability는 전용 레지스터 할당 고려
+Source-logical `handle`은 shared legalization에서 explicit evidence 입력과 dispatch
+closure를 가진 `ability.handle_dispatch`가 된다. `resolve_evidence`는
+`effect.extend`로 확장한 evidence를 body에 전달하고, `lower_handle_dispatch`는
+사용이 치환된 body를 바깥 block으로 옮긴다. Runtime prompt stack이나 반환된
+suspended-operation 값을 검사하는 loop를 생성하지 않는다.
 
 ### Evidence 전달 규칙
 
 1. **Direct 함수**는 evidence를 전달받지 않는다. 명시적인 닫힌 빈 row `->{}`는
    Direct다. Effect annotation을 생략한 `fn(a) -> b`의 semantic type은
-   `fn(a) ->{e} b`이지만, 정의에서 발견된 concrete residual effect가 없다면
-   worker 자체도 Direct일 수 있다
-2. **EvidenceDirect 함수**는 evidence를 받지만 `done_k` 없이 source result를 직접 반환한다
-3. **CPS 함수**는 evidence와 `ContinuationFrame<R>`를 받고 source result를 직접 반환하지 않는다
-4. **Handler 설치** 시 새 evidence를 할당한다
-5. **Handled ability operation** 시 evidence에서 marker를 조회한다
-
-호출 규약은 effect requirement의 상한으로 합성한다:
+   `fn(a) ->{e} b`이지만 concrete residual effect가 없는 definition의 worker는
+   Direct일 수 있다.
+2. **EvidenceDirect 함수**는 evidence를 받고 source result를 직접 반환한다.
+3. **Cps 함수**는 evidence와 exact `ContinuationFrame<R>`를 받고 source result를
+   frame의 `Done<R>`으로 이전한다.
 
 ```text
 Direct < EvidenceDirect < Cps
 ```
 
-Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 현재
-`EvidenceDirect`다. `Io`는 operation dispatch를 위해 전달된 evidence를 lookup하지
-않는다. Evidence의 concrete representation은 source semantics가 아니라 backend
-구현 세부사항이다.
-`Io`와 `Throw(std::io::Error)`가 함께 있으면 `Throw` 때문에 `Cps`로 승격된다.
-자세한 표준 I/O 계약은 [io.md](io.md)를 따른다.
+Compiler-owned ambient ability `std::io::Io`만 요구하는 함수는 `EvidenceDirect`다.
+`Io`는 handler lookup을 수행하지 않는다. `Io`와 `Throw(std::io::Error)`가 함께
+있으면 `Throw` 때문에 `Cps`가 된다. I/O의 shared `tribute_io.write`와
+`tribute_io.read_line`, target runtime/host 경계는 [io.md](io.md)를 따른다.
+
+### Root entry
 
 Root `main`은 CPS delimiter이지만 `Cps` backend entry ABI가 아니다. Valid source
-residual contract는 pure 또는 `Io`이며 residual general effect는 backend
-entrypoint 전에 거부한다. Frontend는 root body도 direct-style control로 emit하고
-shared conversion은 typed completion cell과 `core.never` root `done_k`의 추상
-계약을 만든다. 최종 계약에서는 atomic physical CPS switch 이후 target signature
-lowering이 CPS entry를 empty result로 바꾼 뒤에만 Direct/EvidenceDirect export
-wrapper의 결과 없는 ordinary call을 합성한다. Wrapper는
-completion cell을 소유하고 이를 capture한 terminal `Done<R>`와 terminal
-`Dispatch<R>`를 exact nominal `ContinuationFrame<R>`에 materialize해 worker에
-전달한다. `done_k`가 cell을 쓴 뒤 target call이 돌아오면 wrapper가 cell을 읽는다.
-worker frame 계약은 명시적 frame result/layout provenance로 검사하며 closure 이름,
-arity, raw storage, `anyref`에서 추론하지 않는다.
-공통 `func.call`은 CPS 여부와 독립적으로 0개 또는 1개 결과를 지원한다.
-Nested-module `main`은 일반 함수로 유지한다.
+residual contract는 pure 또는 `Io`이며 residual general effect는 frontend가
+거부한다. Frontend는 root body도 source-logical control로 emit한다. Shared
+conversion은 root worker가 Cps일 때 completion cell과 terminal
+`Done<R>`/`Dispatch<R>`를 담는 exact nominal `ContinuationFrame<R>`의 조합 계약을
+만든다.
 
-기본 I/O의 embedded `std::io` source wrapper는 target ABI를 직접 호출하지 않는다.
-Frontend shared lowering은 private runtime bridge stub을 `tribute_io.write`와
-`tribute_io.read_line` operation으로 바꾼다. 이 boundary는 rope 표현 대신 `Bytes`와
-target-independent `ReadLineResult`를 사용한다. Native와 Wasm pipeline은 이후 각자의
-runtime ABI 또는 host import로 operation을 완전히 lower해야 한다.
+Target signature lowering이 worker의 `[core.never]`를 `[]`로 바꾼 뒤에만
+Direct/EvidenceDirect export wrapper를 합성한다. Wrapper는 completion cell을
+소유하고 이를 capture한 frame으로 worker를 결과 없는 ordinary call로 호출한다.
+`Done<R>`가 cell을 쓴 뒤 proper-tail chain이 끝나면 wrapper는 cell의 source result를
+읽는다. Frame contract는 명시적 result/layout provenance로 검사하며 closure 이름,
+arity 또는 erased storage에서 추론하지 않는다. Nested-module `main`은 일반 함수다.
 
-논리적인 CPS ABI에서 함수와 ContinuationFrame의 `Done<R>` transfer의 control result는
-`Never`다:
+논리적 CPS signature와 target physical signature는 구별한다:
 
 ```text
-fn cps(ev: Evidence, frame: ContinuationFrame<R>, args...) -> Never
+logical:  (Evidence, ContinuationFrame<R>, source arguments...) -> core.never
+physical: (target Evidence, target Frame, target arguments...) -> ()
 ```
 
-최종 physical ABI는 empty result를 쓰고 direct transfer는 `func.tail_call`,
-closure/continuation/ContinuationFrame의 `Done<R>` transfer는
-`func.tail_call_indirect`를 쓴다. CPS control carrier로 `anyref`를 사용할 수 없다.
-Boxed source value, payload, closure environment 같은 일반 reference erasure에는
-`anyref`를 사용할 수 있다.
-
-### 런타임 함수
-
-Evidence 조작을 위한 런타임 함수들:
-
-| 함수 | 시그니처 (WASM) | 설명 |
-| ---- | -------------- | ---- |
-| `evidence_lookup` | `(ev: i32, ability_id: i32) -> i32` | Binary search로 marker 인덱스 반환 |
-| `evidence_extend` | `(ev: i32, marker: i32) -> i32` | 정렬 유지하며 새 배열 반환 |
-
-**설계 결정:**
-
-- `marker_prompt`, `marker_op_table` 함수는 제거 → `adt.struct_get`으로 대체
-- `ability_id`는 `i32`로 단순화 (8비트 제한 불필요, 실제 ability 수는 적음)
-- WASM에서 모든 참조 타입은 i32 인덱스로 표현
-
-### 변환 예시
-
-```rust
-// 원본
-fn fetch_all(urls: List(Text)) ->{Http, Async} List(Response) {
-    urls.map(fn(url) url.get.await)
-}
-
-// 변환 후 (개념적)
-fn fetch_all(urls: List(Text), ev: Evidence) -> List(Response) {
-    urls.map(
-        fn(url, ev_inner) {
-            let response = http_get(url, ev_inner)
-            async_await(response, ev_inner)
-        },
-        ev
-    )
-}
-```
+Direct transfer는 `func.tail_call`, dynamic continuation transfer는
+`func.tail_call_indirect`다. 두 operation은 결과가 없으며 caller/callee의 전체 결과
+목록이 같아야 한다. `anyref`는 boxed source value, effect payload, closure environment
+같은 일반 reference erasure에만 사용한다.
 
 ---
 
@@ -622,43 +476,14 @@ Operation 종류를 source effect row에 기록하는 대안은 채택하지 않
 모두 관여해야 한다. 내부 calling-convention 정보로만 operation 집합을 추적하면
 간접 호출에서 실제 callee가 더 강한 convention을 요구할 수 있으므로 sound하지 않다.
 
-#### 다른 언어와의 비교
-
-- **Koka**는 effect label 단위의 row를 사용하고, selective CPS 판정을 row의 각
-  label이 요구하는 변환의 join으로 계산한다. 열린 effect variable은 보수적으로
-  CPS가 필요하다고 판정한다. 최신 Koka의 `fun` operation과 linear effect는
-  tail-resumptive 호출을 evidence lookup 뒤 직접 실행하여 일반 control 변환을
-  피한다. Tribute의 ability 단위 상한과 `fn` fast path에 가장 가까운 선례다.
-  ([Type Directed Compilation of Row-Typed Algebraic Effects](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/12/algeff.pdf),
-  [Koka Language Book](https://koka-lang.github.io/koka/doc/book.html),
-  [Generalized Evidence Passing for Effect Handlers](https://xnning.github.io/papers/multip-tr.pdf))
-- **Eff**는 computation type의 dirt에 호출 가능한 operation 집합을 기록한다.
-  이 정밀도는 effect subtyping, 집합 포함 관계를 나타내는 coercion, elaboration과
-  함께 타입 시스템의 일부가 된다. 이는 operation 단위 설계가 가능함을 보여 주지만,
-  단순한 ABI 분석 속성으로 추가할 수 있는 기능은 아님을 보여 주는 대안이다.
-  ([Eff handlers tutorial](https://www.eff-lang.org/handlers-tutorial.pdf),
-  [Explicit Effect Subtyping](https://arxiv.org/abs/2005.13814))
-- **Unison**은 함수 타입에 ability 집합을 기록한다. Handler는 ability request의
-  operation별로 match하고 각 branch에서 continuation을 받으므로, ability-level
-  effect typing의 선례이지만 Tribute의 정적인 `fn`/`op` 구분에는 대응하지 않는다.
-  ([Abilities and ability handlers](https://www.unison-lang.org/docs/language-reference/abilities-and-ability-handlers/),
-  [Writing your own abilities](https://www.unison-lang.org/docs/fundamentals/abilities/writing-abilities/))
-- **Effekt**는 effect를 computation이 요구하는 capability로 해석하고 explicit
-  capability passing으로 내린다. Second-class block과 contextual effect
-  polymorphism을 사용하므로 Tribute의 first-class function ABI와 직접 같지는 않지만,
-  effect 정보를 capability-passing representation으로 lowering하는 비교 사례다.
-  ([Effects as Capabilities](https://ps.informatik.uni-tuebingen.de/publications/brachthaeuser20effekt/))
-
-이 비교에 따라 source effect row의 ability 단위 표현은 유지한다. Operation 단위
-정밀도가 실제로 필요해지면 숨은 최적화 메타데이터가 아니라 타입 시스템 기능으로
-별도 설계해야 한다. 열린 row의 간접 호출은 보수적인 `Cps`를 유지하되, named
-definition에는 semantic type과 분리된 worker convention을 사용한다. 추가적인
-plain/CPS worker 복제나 specialization은 후속 최적화로 검토한다.
+Source effect row는 ability 단위로 유지한다. Operation별 precision을 숨은 ABI
+metadata로 도입하지 않는다. Open-row indirect call은 보수적인 `Cps`를 사용하고,
+named definition의 worker convention은 검사된 metadata에서 별도로 계산한다.
 
 ### 변환 범위
 
-모든 코드를 CPS로 변환하지 않는다. Ability operation 중 typechecked
-`operation_kind = @op` 지점에서만 continuation 캡처가 필요하다:
+모든 함수를 Cps convention으로 바꾸지는 않는다. `Cps` callable 호출과
+typechecked `operation_kind = @op` 지점은 남은 계산을 continuation으로 전달한다:
 
 ```text
 생략 annotation의 semantic type       → open row, indirect call은 Cps
@@ -678,72 +503,23 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 1. **열린 row는 Cps**: 구체화 전에는 더 강한 convention을 요구할 가능성을
    배제할 수 없으므로 `ContinuationFrame<R>`를 포함하는 ABI를 사용한다
-2. **Evidence는 항상 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다
-3. **Tail-resumptive 최적화**: 구체적인 `fn` operation call-site에서는 실제 shift가
-   필요 없다
-4. **Inlining/specialization**: row가 구체화되면 더 약한 convention의 worker로
-   최적화할 수 있다
+2. **Evidence 전달**: effectful polymorphic 호출은 동일한 evidence를 전달한다.
+3. **Operation kind 보존**: 구체적인 `fn` operation call-site는 continuation을
+   capture하지 않고 `ability.call`을 사용한다.
 
-### Tail-Resumptive Optimization
+### Operation kind와 dispatch
 
-두 가지 레벨에서 tail-resumptive 최적화가 적용된다:
+`fn` operation은 pre-CPS frontend IR에서
+`tribute_control.perform { operation_kind = @fn }`이다. Shared CPS conversion은
+continuation을 capture하지 않고 `ability.call`을 만든다. Shared dispatch lowering이
+이를 `effect.dispatch_tail`로 바꾸고 target이 evidence lookup과 ordinary indirect
+call로 내린다. 이것은 선언된 operation kind의 의미이며 body-shape optimization이
+아니다.
 
-#### 1. 선언 수준 보장 (`fn` operation)
-
-`fn`으로 선언된 operation도 pre-CPS frontend IR에서는
-`tribute_control.perform { operation_kind = @fn }`이다.
-`tribute_control_to_cps`는 보존된 kind를 보고 continuation 캡처 코드를 생성하지
-않으며, evidence에서 handler 함수를 조회하여 직접 호출하는 경로로 내린다:
-
-```rust
-// fn operation 호출 → shift 없이 직접 호출
-fn logger_log(msg: String, ev: Evidence) -> Nil {
-    let marker = evidence_lookup(ev, LOGGER_ID)
-    let tr_dispatch = adt.struct_get(marker, MarkerField::TrDispatchFn)
-    let op_idx = hash(Logger, log)
-    tr_dispatch(op_idx, msg)  // 직접 호출, shift 없음
-}
-```
-
-Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언되므로,
-이 최적화가 큰 효과를 낸다.
-
-`Io` 함수도 continuation을 받지 않는다는 점에서는 `fn` operation과 같지만,
-handler dispatch가 없으므로 marker lookup도 수행하지 않는다. Uniform
-`EvidenceDirect` ABI를 위해 evidence를 계속 전달한다. `Io`-only entrypoint의
-empty evidence 표현은 backend 구현 세부사항이다.
-
-#### 2. Handler 수준 분석 (`op` operation)
-
-`op`로 선언된 operation이라도, 특정 handler가 `resume`을 항상 tail position에서
-1회 호출하면 컴파일러가 감지하여 최적화할 수 있다:
-
-```rust
-// 원본: 재귀적 handler 재설치
-op State::get() { run_state(fn() resume state, state) }
-op State::set(v) { run_state(fn() resume Nil, v) }
-
-// 컴파일러 변환 (개념적): 루프 + mutable state
-fn run_state_optimized(comp, init_state) {
-    var state = init_state              // 컴파일러 내부 mutable
-    loop {
-        match next_suspended_op {
-            Done(result) -> return result
-            Get(resume) -> resume(state)        // shift 없이 직접 반환
-            Set(v, resume) -> {
-                state = v
-                resume(Nil)
-            }
-        }
-    }
-}
-```
-
-이 분석은 표준 `operation_kind = @op` semantic lowering 이후에만 실행할 수 있는
-별도 best-effort IR optimization이다. `tribute_control_to_cps`는 handler body를
-분석하여 `op`을 `fn`으로 재분류하거나 이 최적화를 semantic legalization과
-결합하지 않는다. 복잡한 handler에서는 적용되지 않을 수 있으며, 적용 여부가
-source meaning이나 pre-CPS IR을 바꾸지 않는다.
+`op` operation은 handler body의 resume 위치와 무관하게 CPS로 legalize한다.
+Frontend와 shared legalization은 `op`을 `fn`으로 재분류하지 않는다. 후속 IR
+optimization도 exact callable contract, affine resume와 source operation kind를
+보존해야 한다.
 
 #### `op -> Never` 의미
 
@@ -772,8 +548,10 @@ region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부�
 ─────────────────────
 ```
 
-`State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의
-prompt(P3)까지만 continuation을 캡처한다.
+`State::get()`은 evidence에서 가장 가까운 State marker를 조회한다. Shared CPS
+conversion이 만든 suffix continuation과 frame의 어휘적 dispatcher는 그 marker의
+prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
+논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
 
 ### ability_id와 prompt_tag의 관계
 
@@ -809,26 +587,13 @@ fn nested_state_example() -> Int {
 
 1. `State::get()` 호출
 2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 가장 안쪽 handler의 marker 반환
-3. 반환된 marker의 `prompt_tag`(P2)로 shift 수행
-4. P2까지의 continuation만 캡처되어 inner handler로 전달
+3. Marker의 `prompt_tag`(P2)와 ability/operation identity를 frame의 dispatcher에 전달
+4. Dispatcher가 이미 생성된 suffix continuation과 inner handler를 연결
 
-이 설계로 같은 ability를 중첩해도 각 handler가 자신의 영역만 처리할 수 있다.
-
-### shift/reset 의미론
-
-```rust
-// reset: prompt 설치
-push_prompt(tag, body)
-
-// shift: continuation 캡처
-shift(tag, fn(k) handler_body)
-```
-
-`shift(tag, f)`는:
-
-1. 현재 지점부터 `tag`가 설치된 지점까지의 continuation을 `k`로 캡처
-2. `f(k)`를 실행
-3. `k`는 one-shot linear 타입 (한 번만 사용 또는 명시적 drop)
+Shared legalization은 각 executable region의 suffix와 exit continuation을
+명시적으로 구성한다. `resume`은 exact frame으로 capture된 suffix를 실행한 뒤
+handle answer를 arm-local continuation에 전달한다. Resume하지 않는 arm은 handle
+exit로 직접 이전하여 body completion과 포기된 suffix를 건너뛴다.
 
 ### `resume` 규칙
 
@@ -869,8 +634,9 @@ Effect handling은 tail-call CPS로 구현한다.
 `lower_ability_perform`이 `ability.perform`과 `ability.call`을 target-independent
 `effect.dispatch_cps` / `effect.dispatch_tail` ABI operation으로 변환한다.
 `resolve_evidence`는 handler 설치를 `effect.extend`로 표현한다.
-`lower_handle_dispatch`는 runtime dispatch loop가 아니라 body result에 `done`
-handler를 적용하는 정리 pass이다. Backend-specific lowering이 이후 `effect.*`를
+`lower_handle_dispatch`는 evidence 인자의 모든 사용이 치환된 resultless body를
+바깥 block에 옮기고 delimiter를 제거한다. 정상 완료와 resume하지 않는 handler exit의
+transfer는 shared CPS legalization이 구성한다. Backend-specific lowering이 이후 `effect.*`를
 native runtime call 또는 Wasm evidence helper와 indirect call로 제거한다.
 
 내부 ContinuationFrame dispatcher와 resultless `effect.dispatch_cps`, target handler
@@ -880,16 +646,16 @@ tail ABI의 구분과 순서는 [cps-effects.md](cps-effects.md#dispatch-layers)
 
 **파이프라인 분기:**
 
-아래 target-side closure storage 순서는 exact root contract가 있는 source-logical
-CPS route에 적용한다. Compatibility route는 그 contract를 만들지 않는 동안 기존
-closure-lowering 순서를 유지한다.
+모든 source 함수는 아래 target-side closure storage 순서를 따른다. Root wrapper만
+exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 두지 않는다.
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → tribute_control_to_cps
-      → lower_closure_lambda → prepare_closure_lowering
-      → lower_ability_perform → resolve_evidence → lower_handle_dispatch
+      → lower_closure_lambda → lower_ability_perform
+      → resolve_evidence → lower_handle_dispatch
       → effect ABI verification → target ABI validation
+      → CPS signature physicalization → root entry bridge composition
 
 WASM:   → lower_closures_in_func → finalize_closure_storage_layout
         → lower_to_wasm [includes evidence_to_wasm]
@@ -953,36 +719,19 @@ managed-field bitmap을 함께 결정한다. Plan 생성은 IR을 변경하지 �
 
 ### 아키텍처 원칙
 
-Tribute 컴파일러 파이프라인은 다음 원칙을 따른다:
+Frontend의 Salsa query와 arena IR 변환은 수명이 다르다. Parse, resolve,
+typecheck는 source와 선언 환경을 입력으로 하는 모듈 단위 query이며, IR pass는
+`IrContext`를 명시적으로 변경한다. Pass 연결과 target 분기는 `src/pipeline.rs`가
+소유하고 각 pass는 자신이 선언한 입력·출력 invariant를 검증한다. 변환 전에 검증하는
+계약과 실패 시 mutation 보장도 pass 경계에 명시한다.
 
-1. **순수 변환 (Pure Transformations)**: 각 패스는 `Module → Module` 순수 함수로 구현
-2. **중앙 오케스트레이션**: 패스 연결은 `pipeline.rs`에서 관리
-3. **선택적 캐싱**: 비용이 큰 패스만 `#[salsa::tracked]`로 캐싱
-4. **관심사 분리**: 패스 구현과 파이프라인 조합을 분리
-
-Prelude가 정의하는 well-known type은 type checking 결과의 별도 metadata로
-보존한다. 최소 metadata 집합인 `WellKnownTypes`는 prelude `String`의 semantic
-type과 stable declaration identity를 `TypedModule` 경계까지 전달하고,
-AST-to-IR lowering은 declaration identity를 직접 비교해 이를 정확한
-TrunkIR `TypeRef`로 변환해 root module의 `tribute.type.string` attribute에
-기록한다. Native/Wasm constant lowering은 이 attribute만 사용하며 이름이나
-layout scan으로 복구하지 않는다. Textual IR에서 attribute가 유실된 경우
-string constant lowering은 보수적으로 실패한다.
-
-```rust
-// 패스 구현 (tribute-passes): 순수 변환만 담당
-pub fn typecheck(db: &dyn Database, module: Module) -> Module { ... }
-pub fn lambda_lift(db: &dyn Database, module: Module) -> Module { ... }
-
-// 파이프라인 (src/pipeline.rs): 오케스트레이션만 담당
-pub fn compile(db, source: SourceCst) -> Module {
-    let module = parse_and_lower(db, source);
-    let module = resolve(db, module);
-    let module = typecheck(db, module);
-    let module = lambda_lift(db, module);
-    // ...
-}
-```
+Prelude의 well-known type은 typechecking 결과의 별도 metadata로 보존한다.
+`WellKnownTypes`는 prelude `String`의 semantic type과 stable declaration identity를
+frontend 경계까지 전달한다. AST-to-IR은 declaration identity로 exact TrunkIR
+`TypeRef`를 구해 root module의 `tribute.type.string` attribute에 기록한다.
+Native/Wasm constant lowering은 이 attribute만 사용하며 이름이나 layout으로
+복구하지 않는다. Textual IR에서 attribute가 유실되면 string constant lowering은
+실패한다.
 
 ### 파이프라인 구조
 
@@ -1003,13 +752,14 @@ flowchart TB
     subgraph shared["Shared legalization과 lowering"]
         cps["atomic tribute_control_to_cps"]
         physical["physical func/closure + logical ability dispatch"]
-        closure["closure lowering"]
+        closure["lambda extraction"]
         ability["ability/evidence lowering"]
         effect["target-independent effect ABI"]
     end
 
     subgraph targets["Proper tail-call lowering"]
-        native_tail["Native direct/indirect return_call"]
+        target_abi["exact ABI validation + CPS physicalization\nroot bridge + closure storage lowering"]
+        native_tail["Native effect ABI + direct/indirect return_call"]
         wasm_tail["Wasm return_call/return_call_indirect"]
     end
 
@@ -1031,8 +781,9 @@ flowchart TB
     physical --> closure
     closure --> ability
     ability --> effect
-    effect --> native_tail
-    effect --> wasm_tail
+    effect --> target_abi
+    target_abi --> native_tail
+    target_abi --> wasm_tail
     native_tail --> native_ready
     wasm_tail --> wasm_ready
     native_ready --> native_bin
@@ -1041,36 +792,26 @@ flowchart TB
 
 ### 패스 분류
 
-| 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
-| -------- | ---- | ---- | ---- | ---- |
-| **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
-| | `inline_constants` | const refs | inlined values | |
-| | `typecheck` | type.var | solved or generalized typed AST | ✓ |
-| | `lambda_lift` | lambdas | top-level funcs | |
-| | `tdnr` | x.method() | Type::method(x) | |
-| **직접형 제어** | `ast_to_ir` | typed AST | 검증된 `tribute_control` callable/control + 일반 value IR | frontend |
-| | `tribute_control_to_cps` | logical callable/control + typechecked metadata | physical func/closure/tail-call + logical `ability.*`; `effect.*` 없음 | shared |
-| **Closure (공유 후속)** | `lower_closure_lambda` | closure.lambda | func.func + closure.new | module-wide |
-| | `prepare_closure_lowering` | func.func_sig params | closure signatures | module-wide |
-| **Closure (target storage)** | `lower_closures_in_func` | closure.new/func/env after target ABI validation | indirect transfer + `_closure` storage ops | function-anchored |
-| | `finalize_closure_storage_layout` | remaining closure type surfaces | canonical `_closure` layout in aliases, signatures, values, and type attributes | module-wide |
-| **Ability/evidence (공유 후속)** | `lower_ability_perform` | ability.perform/call | effect.dispatch_* + evidence lookup | function-anchored |
-| | `resolve_evidence` | handler evidence setup | effect.extend | module-wide setup before function-local lowering |
-| | `lower_handle_dispatch` | ability.handle_dispatch | final handler result | function-anchored |
-| **Backend effect ABI** | `native/evidence runtime decls` | evidence runtime stubs | native extern declarations | module-wide |
-| | `native/evidence` | effect.* | native runtime + func tail transfer | function-anchored |
-| | `func_to_clif` | func.tail_call / indirect | clif.return_call / indirect | function-anchored |
-| | `wasm/evidence runtime funcs` | evidence runtime stubs | wasm evidence helpers | module-wide |
-| | `wasm/evidence_to_wasm` | effect.* | wasm helpers + indirect return_call | function-anchored |
-| | `func_to_wasm` | func.tail_call / indirect | wasm.return_call / indirect | function-anchored |
-| **Lowering** | `ast_to_ir case lowering` | tribute.case | scf.if | frontend lowering, not a pass |
-| | `canonicalize`, local `dce`, `scf_to_cf` | func.func body | canonical body / cf blocks | function-anchored |
-| | `global_dce` | module symbols | reachable funcs | module-wide |
+| 경계 | 입력 | 출력과 소유권 |
+| ---- | ---- | ---- |
+| `parse`, `resolve`, `typecheck`, `tdnr` | source와 선언 환경 | 해석·검사된 AST와 callable/operation metadata; frontend query |
+| `monomorphize`, lowering preparation | checked generic AST | 구체 AST instance와 함께 치환된 metadata |
+| `ast_to_ir` | prepared typed AST | source-logical `tribute_control`과 일반 value IR; frontend |
+| `tribute_control_to_cps` | validated source-logical callable/control | `func`/`closure`, proper tail transfer, explicit `ability.*`; atomic module conversion |
+| `lower_closure_lambda` | exact physical lambda contract | `func.func` + `closure.new`; module-wide extraction |
+| `lower_ability_perform` | `ability.perform`/`call` | packed payload + `effect.dispatch_*`; function-anchored |
+| `resolve_evidence` | explicit handler delimiter | `effect.extend`와 body evidence 사용 치환 |
+| `lower_handle_dispatch` | evidence 사용이 치환된 resultless body | body splice와 delimiter 제거; function-anchored |
+| target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |
+| `lower_closures_in_func` | validated `closure.new`/`func`/`env` | closure storage와 exact indirect calls; function-anchored |
+| `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 canonical `_closure` layout |
+| target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch |
+| target dialect lowering | shared value/control/runtime IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
+| local cleanup | `func.func` body | canonicalization, DCE; function-anchored |
+| `global_dce` | module symbols | reachable symbols; module-wide |
 
-`ast_to_ir case lowering` is listed as a pipeline stage for design clarity, but
-it is part of frontend IR construction rather than a standalone pass. The
-function-anchored lowering point after case construction is `scf_to_cf_pass()`,
-which runs under `PassManager::nest::<func.func>()`.
+Case pattern lowering은 `ast_to_ir`의 일부이며 별도 pass가 아니다. Native의
+structured-to-CFG 변환은 `func.func`에 nested된 `scf_to_cf_pass()`가 소유한다.
 
 `typecheck` solves function-local unification variables where constraints make
 them concrete and generalizes remaining polymorphic variables into stable
@@ -1165,174 +906,41 @@ query는 모듈 결과에서 해당 함수를 선택한다. 함수 이름으로 
 입력에 대한 모듈 결과 재사용과, 입력 변경 후 함수별 재검사 생략은 서로
 다른 보장이다.
 
-### 점진적 개선 방향: Fine-Grained Queries
-
-현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로
-rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
-
-#### 현재 (Coarse-Grained)
-
-```rust
-// 모듈 전체를 처리
-fn typecheck(db, module: Module) -> Module
-fn resolve(db, module: Module) -> Module
-```
-
-#### 목표 (Fine-Grained, rust-analyzer 스타일)
-
-```rust
-// 개별 항목 단위로 쿼리
-fn type_of_function(db, func_id: FunctionId) -> Type
-fn body_of_function(db, func_id: FunctionId) -> Body
-fn signature_of_function(db, func_id: FunctionId) -> Signature
-fn infer_function(db, func_id: FunctionId) -> InferenceResult
-
-// 의존성 기반 재계산
-// 함수 A 수정 시 → A의 body만 재파싱
-//                → A를 호출하는 함수들만 재검사
-```
-
-#### rust-analyzer 아키텍처 참고점
-
-- `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
-- `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
-- `hir_ty`: 타입 추론 및 검사
-- ItemTree: 함수 본문 변경에 영향받지 않는 요약 구조
-
-**전환 시 고려사항:**
-
-- `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
-- 모듈 구조와 개별 항목 분리
-
-이를 통해 "함수 하나 수정 시 해당 함수만 재처리"하는 진정한 incremental compilation이 가능해진다.
-
 ---
 
 ## Type System for Evidence
 
-### Evidence 타입
+### Logical representation
 
-런타임 수준에서 Evidence는 단순한 `Array(Marker)`이다:
+Shared IR의 Evidence는 `Array(Marker)`이고 Marker의 field identity는
+`ability::MarkerField`가 정의한다. Typechecked effect row는 실행에 필요한 ability
+instance를 결정한다. Evidence 배열 자체에 source effect-row parameter를 붙이지
+않으며 exact target callable contract로 전달한다.
 
-```rust
-type Evidence = Array(Marker)
+Native와 Wasm의 concrete array/marker 표현 및 lookup helper 반환형은 서로 다르다.
+Shared pass는 `effect.*`를 사용하고 [target evidence ABI](cps-effects.md)를 직접
+구성하지 않는다. Native lookup은 runtime pointer와 marker index/helper를, Wasm
+lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
 
-struct Marker {
-    ability_id: i32,
-    prompt_tag: i32,
-    tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
-}
-```
+### Runtime identity와 ordering
 
-위 `ptr` 표기는 high-level/native 설명이다. WasmGC의 concrete `_Marker` GC type은
-같은 field order를 유지하되 dispatch closure field를 `anyref` closure reference로
-저장한다.
+`ability::compute_ability_id`는 canonical ability name과 구체 type parameter의
+구조적 hash로 `u32` runtime key를 만든다. Marker의 `i32` slot에 같은 bit pattern을
+저장하며, call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
+ability instance는 별도 key를 가진다. Runtime array는 이 key로 정렬하고 binary
+search로 가장 가까운 설치된 handler를 선택한다. 표준 ability와 사용자 ability에
+별도 연속 번호 대역을 예약하지 않는다.
 
-타입 시스템 수준에서는 ability row에 대해 parameterized된다:
+`Io`의 canonical builtin identity는 frontend/type system의 ambient semantics를
+판정한다. `Io`는 runtime handler lookup이나 dispatch를 요구하지 않는다.
 
-```text
-fn foo() ->{State(Int), Logger} Nil
+## Source Origin
 
-// 타입 검사 시 Evidence가 포함해야 할 ability:
-Evidence({State(Int), Logger | ρ})
-```
-
-Row polymorphism으로 ability 합성을 표현하되, 런타임 표현은 단순 배열이다.
-
-### Evidence 조작
-
-```rust
-// Evidence 확장 (런타임 함수)
-evidence_extend(ev, marker) : Evidence → Evidence
-
-// Evidence 조회 (런타임 함수 + ADT 연산)
-let idx = evidence_lookup(ev, ability_id)  // 런타임: binary search
-let marker = adt.array_get(ev, idx)        // ADT 연산
-```
-
-### Canonical Ordering
-
-각 ability에 전역적인 ID (i32)를 부여한다:
-
-```text
-State    → 0
-Logger   → 1
-Http     → 2
-Async    → 3
-...
-```
-
-Evidence 배열은 ability_id 기준으로 정렬된다. `evidence_lookup`이 binary search로 O(log n) 탐색:
-
-```rust
-// {Logger, State} 든 {State, Logger} 이든
-// markers 배열은 항상 [State(id=0), Logger(id=1)] 순서
-let idx = evidence_lookup(ev, STATE_ID)  // binary search
-```
-
-**설계 결정:**
-
-- Ability ID: `i32` (실용적인 ability 개수는 수십 개 수준)
-- runtime dispatch가 필요한 compiler/표준 라이브러리 ability (State, Http 등): 0-63 예약
-- 사용자 정의 ability: 64+
-
-`Io`의 canonical builtin identity는 frontend와 type system에서 ambient semantics를
-판정하기 위한 identity다. 이것이 runtime `ability_id` 할당이나 특정 Evidence 배열
-표현을 요구하지는 않는다. 보장되는 계약은 `Io`가 handler lookup이나 dispatch를
-요구하지 않는다는 점뿐이다. 향후 runtime capability를 evidence에 저장할지는 backend
-구현 선택으로 남긴다.
-
----
-
-## Open Questions
-
-1. **Tail-Resumptive 분석 범위**: 어디까지 분석할지?
-   - 함수 내부만 vs 호출 그래프 전체
-
-2. **디버깅 지원**: 스택 트레이스 복원
-   - Source map 생성
-   - Continuation 내부 프레임 표시
-
-3. **User-defined Linear Types**: FFI 안전성을 위해 필요
-   - 문법 설계
-   - Continuation과의 상호작용
-
-4. **Fine-Grained Query 아키텍처**: 장기적 incremental compilation 개선
-   - rust-analyzer 스타일의 ID 기반 쿼리 시스템 도입 시점
-   - 기존 Module 기반 패스와의 공존 전략
-   - LSP 성능 요구사항에 따른 우선순위 결정
-
-5. **Operation Identity와 Origin Tracking**
-
-   Pass를 거치면서 변환된 operation 사이의 equivalence를 추적하는 방법:
-
-   **현재 상태: Location 기반 추적**
-   - 각 operation은 `location: Location` 필드로 소스 위치 보존
-   - 모든 pass가 location을 잘 보존하고 있음:
-     - `op.modify(db)`: 자동 보존
-     - 새 operation 생성 시: `let location = op.location(db);` 패턴
-     - Region/Block 재생성 시: 원본 location 복사
-   - "같은 소스에서 유래한 operation"은 같은 location을 공유
-
-   **고려했던 대안들**
-
-   | 방식 | 장점 | 단점 |
-   | ---- | ---- | ---- |
-   | `OperationId` (BlockId와 유사) | 명시적 identity | 1:N 변환 시 대표 선택 필요 |
-   | Fractional indexing (42.1.0) | 계층적 추적 가능 | ID 길이 폭발, N:1 여전히 문제 |
-   | Origin tag (중복 허용) | 1:N 자연스럽게 해결 | Location과 기능 중복 |
-
-   **결론**: 당장은 Location 기반으로 충분함
-   - Source-level equivalence ("같은 소스에서 유래"): Location으로 해결
-   - Fine-grained query (함수/타입 단위): 선언 환경에서 해석된 선언 identity로
-     대상을 구별한다. Symbol은 해당 환경의 이름 조회에 사용하며, 서로 다른
-     선언 환경의 이름을 표기가 같다는 이유만으로 동일한 선언으로 취급하지 않는다.
-   - 별도 ID 시스템은 필요성이 구체화될 때 도입 검토
-
-   **주의 사항**
-   - Synthetic operation (helper function 등) 생성 시 의미 있는 location 부여 필요
-   - Pass 추가 시 location 보존 패턴 준수 필요
+각 operation의 `Location`은 진단의 source origin을 보존한다. 새 operation과
+region/block을 생성하는 pass는 원본 source location을 전달하고, synthetic helper도
+의미 있는 origin을 가져야 한다. 같은 location은 source origin 공유를 뜻하며
+operation identity나 callable provenance를 대신하지 않는다. 선언 identity는
+해석된 선언 환경에서 구별하며 같은 symbol spelling만으로 합치지 않는다.
 
 ---
 

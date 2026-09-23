@@ -52,8 +52,8 @@ operations.
 
 | 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
-| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, legacy CPS 구성 operation은 illegal이다. |
-| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Physical `func.*`, `closure.*`, `func.func_sig`, 기존 `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
+| `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, `ability.*`, `effect.*`는 illegal이다. |
+| `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Shared `func.*`, `closure.*`, `func.func_sig`, `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
 | `tribute-backend-ready-native` | 목표 최종 코드 생성 계약 | Native 최종 코드 생성 경계는 남아 있는 논리적 제어 표현을 거부하고 대상 연산/타입 및 물리적 함수 호출 규약을 검증해야 한다. |
 | `tribute-backend-ready-wasm` | 목표 최종 코드 생성 계약 | Wasm 최종 코드 생성 경계는 같은 계약을 강제해야 한다. `verify_wasm_backend_ready`는 별개의 부분 검증이다. |
 
@@ -348,7 +348,7 @@ tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
   attribute는 보존한다.
 - **의미:** source named function의 logical signature와 typechecking이 선택한
-  convention을 정의하며 hidden evidence, environment, `done_k`를 포함하지 않는다.
+  convention을 정의하며 hidden evidence, environment, `ContinuationFrame<R>`를 포함하지 않는다.
 - **검증:** local verifier는 attribute, region, block argument, return type을
   callable type과 맞춘다. Whole-IR verifier는 symbol uniqueness를 검사한다.
 - **소유권과 값 흐름:** body는 isolated-from-above다. Source local과 parameter만
@@ -447,7 +447,7 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 - **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
-  evidence, `done_k`는 없다.
+  evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
 
 #### `tribute_control.return`
@@ -824,8 +824,7 @@ The current specialized textual printer for `core.module` does not serialize
 arbitrary module attributes. Consequently, parsing printed IR conservatively
 drops well-known type metadata. A backend may still process byte constants, but
 must reject `adt.string_const` when `tribute.type.string` is absent rather
-than scanning types for a plausible replacement. A future textual format may
-make these attributes round-trip explicitly.
+than scanning types for a plausible replacement.
 
 ## Mid-Level Dialects
 
@@ -839,7 +838,8 @@ attribute로 erased callee/table index 이전의 exact `func.func_sig` contract�
 symbol, ABI string 또는 storage shape로 signature를 재구성하지 않는다.
 Backend indirect-call operation도 runtime-queried `IndirectCallLike` operation
 interface를 통해 같은 contract를 보존한다. 각 dialect는 attribute spelling과
-accessor를 소유한다 (`func`와 `wasm`은 선택적 `signature`, `clif`는 필수 `sig`).
+accessor를 소유한다 (`func`는 선택적 `signature`, `wasm`은 필수 `signature`,
+`clif`는 필수 `sig`).
 Generic consumer는 다른 dialect의 attribute key 대신 interface를 query한다.
 Interface를 구현하지 않는 operation에는 exact signature가 없으며, erased callee나
 result operand로 이를 추론해서는 안 된다.
@@ -971,13 +971,10 @@ visit the entire flat `params` vector. The canonical printer hides only these
 two reserved attributes and preserves every other type attribute; textual type
 attribute dictionaries may not specify either reserved key.
 
-During the compatibility window the reader also accepts legacy
-`core.func(Return, Params...)`, immediately normalizes it to the new `func.func_sig`
-identity and input-first
-storage, and never interns the legacy layout. The printer always emits the
-canonical form. Production code constructs function types only through the
-validated `func::func_sig` API; direct `TypeData` construction is reserved for
-malformed-type verifier tests.
+함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> result>`만 사용한다.
+Reader는 `core.func(Return, Params...)`를 거부한다. Production code는 검증된
+`func::func_sig` API로 함수 타입을 만들며, 직접 `TypeData`를 만드는 코드는
+malformed-type verifier test에 한정한다.
 
 The three result states have distinct meanings:
 
@@ -1030,8 +1027,10 @@ or an outer function, and does not select a physical CPS ABI.
 동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다.
 
 Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션 수집, 검증 및 코드
-생성은 이 타입을 사용한다. 간접 호출의 명시적 시그니처는 `wasm.func_sig`이며,
-타입 정보가 지워진 테이블 인덱스에서 재구성하지 않는다. 빈 결과 목록만으로
+생성은 이 타입을 사용한다. 모든 간접 호출은 exact `wasm.func_sig`를
+명시해야 하며, 누락된 시그니처는 lowering과 emission에서 오류다. Operand, result,
+상위 함수의 return, `type_idx` 또는 타입 정보가 지워진 테이블 인덱스에서
+시그니처를 재구성하지 않는다. 빈 결과 목록만으로
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
 
@@ -1059,9 +1058,3 @@ lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 
 문자열, symbol, erased representation에서 pointer 동치를 추론하지 않는다. 이 규칙은
 `core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
 호환성 규칙을 만들지 않는다.
-
-## Open Questions
-
-- Final closure environment representation for each backend.
-- Reusable conversion targets for effect ABI lowering boundaries.
-- Debug/source-map representation.

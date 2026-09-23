@@ -26,8 +26,8 @@ use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConver
 
 use super::const_to_wasm::ConstAnalysis;
 use super::io::IoAnalysis;
-use super::type_converter::{self, wasm_type_converter};
-use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, STEP_IDX, STEP_TAG_DONE};
+use super::type_converter::wasm_type_converter;
+use trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX;
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 
@@ -123,7 +123,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
-    // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
+    // Before target lowering so downstream passes use primitive target types.
     {
         let _span = tracing::info_span!("normalize_primitive_types").entered();
         super::normalize_primitive_types::lower(ctx, module);
@@ -173,7 +173,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     }
     debug_func_params(ctx, module, "after adt_to_wasm");
 
-    // Lower evidence runtime function stubs (prepare for inline WASM operations)
+    // Materialize required evidence helpers and lower effect operations.
     {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
         if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {
@@ -336,11 +336,6 @@ fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) 
     wasm_dialect::func_sig(ctx, params, [result]).as_type_ref()
 }
 
-fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
-}
-
 // =============================================================================
 // MainExports (arena version)
 // =============================================================================
@@ -348,7 +343,6 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static s
 /// Tracks whether the `main` function was found and its type info.
 struct MainExports {
     saw_main: bool,
-    main_result_type: Option<TypeRef>,
     main_param_types: Vec<TypeRef>,
     main_convention: CallingConvention,
     main_exported: bool,
@@ -358,7 +352,6 @@ impl MainExports {
     fn new() -> Self {
         Self {
             saw_main: false,
-            main_result_type: None,
             main_param_types: Vec::new(),
             main_convention: CallingConvention::Direct,
             main_exported: false,
@@ -406,7 +399,6 @@ struct WasmLowerer<'a> {
     io_analysis: &'a IoAnalysis,
     memory_plan: ArenaMemoryPlan,
     main_exports: MainExports,
-    has_continuations: bool,
 }
 
 impl<'a> WasmLowerer<'a> {
@@ -416,7 +408,6 @@ impl<'a> WasmLowerer<'a> {
             io_analysis,
             memory_plan: ArenaMemoryPlan::new(),
             main_exports: MainExports::new(),
-            has_continuations: true,
         }
     }
 
@@ -497,7 +488,6 @@ impl<'a> WasmLowerer<'a> {
         if let Some(fn_ty) = data.attributes.get_type("type")
             && let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty)
         {
-            self.main_exports.main_result_type = function.single_result(ctx);
             self.main_exports.main_param_types = function.inputs(ctx).to_vec();
         }
     }
@@ -539,31 +529,6 @@ impl<'a> WasmLowerer<'a> {
             let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
             preamble_ops.push(op.op_ref());
             self.memory_plan.has_memory = true;
-        }
-
-        // Emit yield globals for continuation support
-        if self.has_continuations {
-            // Index 0 ($yield_state): i32
-            let g0 =
-                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
-            preamble_ops.push(g0.op_ref());
-            // Index 1 ($yield_tag): i32
-            let g1 =
-                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
-            preamble_ops.push(g1.op_ref());
-            // Index 2 ($yield_cont): anyref
-            let g2 = wasm_dialect::global(
-                ctx,
-                location,
-                Symbol::new("anyref"),
-                true,
-                Attribute::Int(0),
-            );
-            preamble_ops.push(g2.op_ref());
-            // Index 3 ($yield_op_idx): i32
-            let g3 =
-                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
-            preamble_ops.push(g3.op_ref());
         }
 
         // Insert all preamble ops before the first existing op
@@ -628,12 +593,6 @@ impl<'a> WasmLowerer<'a> {
         let i32_ty = intern_type(ctx, "core", "i32");
         let nil_ty = intern_type(ctx, "core", "nil");
 
-        let main_returns_step = self
-            .main_exports
-            .main_result_type
-            .map(|ty| is_type(ctx, ty, "adt", "struct") && is_step_adt(ctx, ty))
-            .unwrap_or(false);
-
         // Build the body block
         let body_block = ctx.create_block(BlockData {
             location,
@@ -642,11 +601,7 @@ impl<'a> WasmLowerer<'a> {
             parent_region: None,
         });
 
-        if main_returns_step {
-            self.build_start_step_body(ctx, body_block, location, i32_ty, nil_ty);
-        } else {
-            self.build_start_simple_body(ctx, body_block, location, i32_ty, nil_ty);
-        }
+        self.build_start_simple_body(ctx, body_block, location, i32_ty, nil_ty);
 
         let body_region = ctx.create_region(RegionData {
             location,
@@ -658,75 +613,6 @@ impl<'a> WasmLowerer<'a> {
         let func_op =
             wasm_dialect::func(ctx, location, Symbol::new("_start"), func_ty, body_region);
         func_op.op_ref()
-    }
-
-    /// Build _start body for main returning Step type.
-    fn build_start_step_body(
-        &self,
-        ctx: &mut IrContext,
-        body_block: BlockRef,
-        location: Location,
-        i32_ty: TypeRef,
-        nil_ty: TypeRef,
-    ) {
-        let step_ty = type_converter::step_adt_type(ctx);
-
-        // Call main — returns Step
-        let main_args = self.build_main_args(ctx, body_block, location, i32_ty);
-        let call_main =
-            wasm_dialect::call(ctx, location, main_args, vec![step_ty], Symbol::new("main"));
-        ctx.push_op(body_block, call_main.op_ref());
-        let step_result = call_main.results(ctx)[0];
-
-        // Extract tag field (field 0) from Step
-        let get_tag = wasm_dialect::struct_get(ctx, location, step_result, i32_ty, STEP_IDX, 0);
-        ctx.push_op(body_block, get_tag.op_ref());
-        let tag_val = get_tag.result(ctx);
-
-        // Compare tag with DONE (0)
-        let done_const = wasm_dialect::i32_const(ctx, location, i32_ty, STEP_TAG_DONE);
-        ctx.push_op(body_block, done_const.op_ref());
-        let cmp_eq = wasm_dialect::i32_eq(ctx, location, tag_val, done_const.result(ctx), i32_ty);
-        ctx.push_op(body_block, cmp_eq.op_ref());
-        let is_done = cmp_eq.result(ctx);
-
-        // Build then (Done) branch
-        let then_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-
-        let ret_then = wasm_dialect::r#return(ctx, location, vec![]);
-        ctx.push_op(then_block, ret_then.op_ref());
-
-        // Build else (unhandled effect) branch — trap
-        let else_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let trap = wasm_dialect::unreachable(ctx, location);
-        ctx.push_op(else_block, trap.op_ref());
-
-        let then_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![then_block],
-            parent_op: None,
-        });
-        let else_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![else_block],
-            parent_op: None,
-        });
-
-        let if_op = wasm_dialect::r#if(ctx, location, is_done, [nil_ty], then_region, else_region);
-        ctx.push_op(body_block, if_op.op_ref());
-
-        let trap_end = wasm_dialect::unreachable(ctx, location);
-        ctx.push_op(body_block, trap_end.op_ref());
     }
 
     /// Build `_start` for a pure `main`, whose source-level result is always Nil.
@@ -786,12 +672,6 @@ impl<'a> WasmLowerer<'a> {
             }
         }
     }
-}
-
-/// Check if a type is the Step ADT type.
-fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.attrs.get_symbol("name") == Some(Symbol::new("_Step"))
 }
 
 #[cfg(test)]
@@ -901,7 +781,6 @@ mod tests {
         lowerer.scan_wasm_func(&ctx, main);
         let evidence = intern_type(&mut ctx, "wasm", "arrayref");
         assert_eq!(lowerer.main_exports.main_param_types, [evidence]);
-        assert_eq!(lowerer.main_exports.main_result_type, None);
         assert_eq!(
             lowerer.main_exports.main_convention,
             CallingConvention::EvidenceDirect
@@ -930,7 +809,6 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
-        let nil_ty = intern_type(&mut ctx, "core", "nil");
         let const_analysis = ConstAnalysis {
             allocations: vec![],
             string_enum_ty: None,
@@ -944,7 +822,6 @@ mod tests {
         };
         let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
         lowerer.main_exports.saw_main = true;
-        lowerer.main_exports.main_result_type = Some(nil_ty);
         lowerer.main_exports.main_param_types = vec![evidence_ty];
         lowerer.main_exports.main_convention = CallingConvention::EvidenceDirect;
 
@@ -967,45 +844,6 @@ mod tests {
             .expect("_start should call main");
 
         assert_eq!(ctx.op_operands(call_main), &[ctx.op_result(empty, 0)]);
-    }
-
-    #[test]
-    fn wasm_start_checks_step_result_before_returning() {
-        let mut ctx = IrContext::new();
-        let location = Location::new(PathRef::from_u32(0), Span::default());
-        let step_ty = type_converter::step_adt_type(&mut ctx);
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
-        lowerer.main_exports.saw_main = true;
-        lowerer.main_exports.main_result_type = Some(step_ty);
-
-        let start = lowerer.build_start_function(&mut ctx, location);
-        let start = wasm_dialect::Func::from_op(&ctx, start).expect("wasm _start function");
-        let entry = ctx.region(start.body(&ctx)).blocks[0];
-        let names: Vec<_> = ctx
-            .block(entry)
-            .ops
-            .iter()
-            .map(|&op| ctx.op(op).name)
-            .collect();
-
-        assert!(names.contains(&Symbol::new("call")));
-        assert!(names.contains(&Symbol::new("struct_get")));
-        assert!(names.contains(&Symbol::new("i32_eq")));
-        assert!(names.contains(&Symbol::new("if")));
-        assert!(names.contains(&Symbol::new("unreachable")));
-        let i32_ty = intern_type(&mut ctx, "core", "i32");
-        assert!(!is_step_adt(&ctx, i32_ty));
     }
 
     #[test]
@@ -1180,7 +1018,6 @@ mod tests {
         assert!(lowerer.memory_plan.has_exported_memory);
         assert!(lowerer.main_exports.saw_main);
         assert!(lowerer.main_exports.main_exported);
-        assert_eq!(lowerer.main_exports.main_result_type, Some(nil_ty));
         assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
 
         ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
@@ -1190,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn module_lowerer_populates_an_empty_module() {
+    fn module_lowerer_does_not_add_unused_globals_to_an_empty_module() {
         let mut ctx = IrContext::new();
         let module = empty_module_with_block(&mut ctx);
         let const_analysis = ConstAnalysis {
@@ -1208,7 +1045,7 @@ mod tests {
 
         lowerer.lower_module(&mut ctx, module);
 
-        assert!(!module.ops(&ctx).is_empty());
+        assert!(module.ops(&ctx).is_empty());
     }
 
     #[test]

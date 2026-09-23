@@ -441,8 +441,7 @@ mod tests {
         let plan = crate::native::ownership_plan::build_native_ownership_plan(ctx, module)
             .expect("typed ownership plan");
         // Model the representation-only signature rewrite that occurs after
-        // planning in the production pipeline, keeping the historical ADT
-        // lowering snapshot focused on this pass.
+        // planning in the production pipeline to isolate ADT lowering here.
         let ptr_ty = intern_ty(ctx, "core", "ptr");
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();

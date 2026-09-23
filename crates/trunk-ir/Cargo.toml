@@ -27,6 +27,4 @@ winnow.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-proptest.workspace = true
 salsa.workspace = true
-salsa-test-macros = { path = "../salsa-test-macros" }

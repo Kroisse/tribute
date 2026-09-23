@@ -2,23 +2,6 @@
 
 #[trunk_ir::dialect]
 mod ability {
-    #[attr(ability_ref: Type)]
-    fn evidence_lookup(evidence: ()) -> result {}
-
-    #[attr(ability_ref: Type, prompt_tag: any)]
-    fn evidence_extend(evidence: ()) -> result {}
-
-    #[attr(max_ops_per_handler: u32)]
-    fn handler_table() {
-        #[region(entries)]
-        {}
-    }
-
-    #[attr(tag: u32, op_count: u32)]
-    fn handler_entry() {
-        #[region(funcs)]
-        {}
-    }
 
     /// Perform an ability operation with explicit evidence and a
     /// ContinuationFrame-carrying continuation closure.
@@ -34,51 +17,6 @@ mod ability {
     /// This final form is resultless and lowers to `effect.dispatch_cps`.
     #[attr(ability_ref: Type, op_name: Symbol)]
     fn perform(evidence: (), dispatch: (), resume: (), #[rest] values: ()) {}
-
-    /// Legacy frontend form using the carrier pipeline's null-or-single-value
-    /// payload convention until the frontend/pipeline migration is complete.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn legacy_perform(continuation: (), #[rest] values: ()) -> result {}
-
-    /// Legacy carrier-based handler dispatch retained only for the production
-    /// frontend path until that path migrates to `tribute_control`.
-    ///
-    /// Runs the `Normal` path or a matching-owner `Escape` path and forwards
-    /// a foreign `Escape` unchanged through the escape region.
-    ///
-    /// The `owner_tag` operand is the dynamic prompt owner for this handle
-    /// activation. `resolve_evidence` threads the same value into every
-    /// installed Marker.
-    ///
-    /// The `handler_fn` operand is a closure
-    /// `(k, owner_tag, op_idx, value) -> anyref`
-    /// that dispatches to the appropriate handler arm. It is stored in the
-    /// Marker's `handler_dispatch` field by `resolve_evidence` for use by
-    /// the tail-call-based CPS path in `lower_ability_perform`.
-    ///
-    /// The `tr_dispatch_fn` operand is a closure `(op_idx, value) -> anyref`
-    /// for tail-resumptive (`fn`) operations only. It is stored in the
-    /// Marker's `tr_dispatch_fn` field. May be a null constant if there
-    /// are no `fn` handlers.
-    ///
-    /// ```text
-    /// %result = ability.handle_dispatch %yield_result, %owner_tag,
-    ///   %handler_fn, %tr_dispatch_fn
-    ///   { tag: 0, result_type: anyref }
-    ///   body { ... handler arms ... }
-    /// ```
-    #[attr(tag: u32, result_type: Type)]
-    fn legacy_handle_dispatch(
-        value: (),
-        owner_tag: (),
-        handler_fn: (),
-        tr_dispatch_fn: (),
-    ) -> result {
-        #[region(body)]
-        {}
-        #[region(escape)]
-        {}
-    }
 
     /// Resultless proper-tail handler delimiter emitted by
     /// `tribute_control_to_cps`.
@@ -96,26 +34,6 @@ mod ability {
         {}
     }
 
-    fn done() {
-        #[region(body)]
-        {}
-    }
-
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn suspend() {
-        #[region(body)]
-        {}
-    }
-
-    /// Tail-resumptive yield: like `suspend` but guarantees no continuation capture.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn r#yield() {
-        #[region(body)]
-        {}
-    }
-
-    fn resume(continuation: (), value: ()) -> result {}
-
     /// Direct call to a `fn` (tail-resumptive) ability operation.
     ///
     /// Unlike `ability.perform`, this does not take a continuation closure.
@@ -129,11 +47,6 @@ mod ability {
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
     #[attr(ability_ref: Type, op_name: Symbol)]
     fn call(#[rest] values: ()) -> result {}
-
-    /// Legacy frontend form using the carrier pipeline's null-or-single-value
-    /// payload convention until the frontend/pipeline migration is complete.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn legacy_call(#[rest] values: ()) -> result {}
 }
 
 // === Hash-Based Dispatch ===
@@ -305,13 +218,6 @@ impl CallableExitModel for HandleDispatch {
 inventory::submit! { CallableExitOps::register::<Perform>() }
 inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_lookup") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("ability", "evidence_extend") }
-
-// handler_table and handler_entry are isolated (contain regions)
-inventory::submit! { trunk_ir::op_interface::IsolatedFromAboveOps::register("ability", "handler_table") }
-inventory::submit! { trunk_ir::op_interface::IsolatedFromAboveOps::register("ability", "handler_entry") }
-
 // === ADT Type Functions ===
 
 use trunk_ir::Symbol;
@@ -320,47 +226,6 @@ use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-
-/// Compiler-private legacy completion carrier identity.
-///
-/// The carrier remains physically `anyref`; only frontend construction and
-/// `lower_handle_dispatch` may materialize or inspect this type.
-pub const CPS_CONTROL_TYPE_NAME: &str = "__tribute_cps_control";
-pub const CPS_CONTROL_NORMAL_VARIANT: &str = "Normal";
-pub const CPS_CONTROL_ESCAPE_VARIANT: &str = "Escape";
-
-/// Return the canonical private legacy completion-carrier enum.
-///
-/// Keeping this constructor in `tribute-ir` preserves structural interning
-/// identity across frontend and shared-pass lowering without introducing a
-/// frontend-to-passes dependency.
-pub fn cps_control_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let anyref_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let variants = Attribute::List(vec![
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new(CPS_CONTROL_NORMAL_VARIANT)),
-            Attribute::List(vec![Attribute::Type(anyref_ty)]),
-        ]),
-        Attribute::List(vec![
-            Attribute::Symbol(Symbol::new(CPS_CONTROL_ESCAPE_VARIANT)),
-            Attribute::List(vec![Attribute::Type(i32_ty), Attribute::Type(anyref_ty)]),
-        ]),
-    ]);
-    ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-            .attr(
-                "name",
-                Attribute::Symbol(Symbol::new(CPS_CONTROL_TYPE_NAME)),
-            )
-            .attr("variants", variants)
-            .build(),
-    )
-}
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]
@@ -488,14 +353,9 @@ pub fn evidence_runtime_symbols() -> [Symbol; 5] {
 /// }
 /// ```
 ///
-/// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
-/// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
-/// not fully tail-resumptive.
-///
-/// `handler_dispatch` is a pointer to the full CPS handler dispatch closure
-/// `(k: ptr, owner_tag: i32, op_idx: i32, value: ptr) -> ptr`, or null if not
-/// using full CPS. It returns the private `Normal`/`Escape` answer through the
-/// compatibility ABI and is used by the tail-call-based effect handling path.
+/// Dispatch fields store erased closure references. Tail-resumptive operations
+/// return their source result; general CPS dispatch uses the exact resultless
+/// dispatch ABI. Shared lowering installs typed reject closures for missing kinds.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let fields_attr = Attribute::List(
         MARKER_FIELDS

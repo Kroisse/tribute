@@ -17,9 +17,9 @@ use tribute::pipeline::{
     link_native_binary,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
+use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
-use tribute_passes::{Diagnostic, DiagnosticSeverity};
 
 fn main() {
     let cli = Cli::parse();

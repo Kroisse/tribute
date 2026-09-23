@@ -187,7 +187,7 @@ string.split(",")
 이 규칙 덕분에 struct 필드 접근과 함수 호출이 동일한 문법을 사용한다:
 
 ```rust
-struct User { name: Text, age: Int }
+struct User { name: String, age: Int }
 
 // 필드 접근도 UFCS (자동 생성된 getter 함수)
 user.name    // User::name(user)
@@ -216,22 +216,12 @@ UFCS와 pipe는 같은 문제(함수 체이닝)를 해결한다. 둘 다 지원�
 
 `::`을 모듈 구분자로 사용하므로 `.`이 UFCS 전용으로 남아, Gleam처럼 pipe에 의존할 필요가 없다.
 
-### 기존 예제 업데이트
+### UFCS 체이닝
 
-다음 pipe/UFCS 비교는 illustrative collection API를 사용한다.
-`List::filter`, `List::map`, `List::fold`는 별도 public API 절에서 확정되기 전까지
-예시에 불과하다.
+다음 `List::filter`, `List::map`, `List::fold`는 해소 방식을 보여 주는
+illustrative API이며 별도 public API 절에서 확정되기 전까지 예시에 불과하다.
 
 ```rust
-// Before (pipe 스타일, 더 이상 사용하지 않음)
-fn process(data: List(Int)) -> Int {
-    data
-    |> list.filter(fn(x) x > 0)
-    |> list.map(fn(x) x * 2)
-    |> list.fold(0, fn(a, b) a + b)
-}
-
-// After (UFCS 스타일)
 fn process(data: List(Int)) -> Int {
     data
         .filter(fn(x) x > 0)
@@ -254,7 +244,7 @@ fn process(data: List(Int)) -> Int {
 use std::collections::List
 use std::collections::Option
 
-fn example(xs: List(Int), opt: Option(Text)) {
+fn example(xs: List(Int), opt: Option(String)) {
     xs.map(fn(x) x + 1)     // List::map 선택 (xs: List)
     opt.map(fn(s) s.len)    // Option::map 선택 (opt: Option)
 }
@@ -330,7 +320,7 @@ fn sort(xs: List(a), compare: fn(a, a) -> Ordering) -> List(a) { ... }
 
 // 사용
 sort(my_list, Int::compare)
-sort(my_list, Text::compare)
+sort(my_list, String::compare)
 
 // 또는 특화된 함수 제공
 fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(a)
@@ -340,7 +330,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 
 | Typeclass 용도 | Tribute 대안 |
 | -------------- | ------------ |
-| `Show` | `fn show(x: T) -> Text`을 명시적 전달, 또는 type-directed resolution |
+| `Show` | `fn show(x: T) -> String`을 명시적 전달, 또는 type-directed resolution |
 | `Eq` | `fn eq(a: T, b: T) -> Bool` 명시적 전달 |
 | `Ord` | `fn compare(a: T, b: T) -> Ordering` 명시적 전달 |
 | `Functor`/`Monad` | Ability system + type-directed `map`, `flat_map` |
@@ -536,13 +526,13 @@ use pkg::internal::Config
 use super::internal    // 또는 pkg::internal
 
 pub struct Request {
-    path: Text
+    path: String
     config: Config
 }
 
 pub struct Response {
     status: Int
-    body: Text
+    body: String
 }
 
 pub fn handle(req: Request) -> Response {

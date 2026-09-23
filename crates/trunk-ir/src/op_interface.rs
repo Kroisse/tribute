@@ -104,7 +104,6 @@ impl PureOps {
 /// ```
 #[macro_export]
 macro_rules! register_pure_op {
-    // Legacy syntax: dialect.op_name
     ($dialect:ident . $op_name:ident) => {
         $crate::paste::paste! {
             ::inventory::submit! {
@@ -223,7 +222,6 @@ impl IsolatedFromAboveOps {
 /// ```
 #[macro_export]
 macro_rules! register_isolated_op {
-    // Legacy syntax: dialect.op_name
     ($dialect:ident . $op_name:ident) => {
         $crate::paste::paste! {
             ::inventory::submit! {

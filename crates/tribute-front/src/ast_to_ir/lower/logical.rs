@@ -1,6 +1,5 @@
 //! Source-logical AST to TrunkIR lowering.
 //!
-//! This is intentionally separate from the superseded frontend CPS lowering.
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
@@ -462,9 +461,7 @@ fn lower_decl<'db>(
 
 /// Register nominal layouts used exclusively by source-logical lowering.
 ///
-/// Legacy lowering retains `decl::prescan_struct_fields`, whose annotation
-/// converter deliberately erases physical callable representation.  Here the
-/// constructor schemes are the authoritative semantic field types, so records,
+/// Constructor schemes are the authoritative semantic field types, so records,
 /// constructors, accessors, and pattern extraction share the same recursive
 /// `tribute_control` callable layouts.
 fn prescan_logical_nominal_layouts<'db>(

@@ -1,14 +1,14 @@
 //! Compilation pipeline for Tribute.
 //!
 //! This module orchestrates the compilation stages with centralized control flow.
-//! Each pass is a pure `Module → Module` transformation, and this module handles
-//! the sequencing and optional caching of expensive stages.
+//! Tracked queries prepare the typed frontend. Shared and target passes then
+//! mutate one arena session under this module's pass ordering.
 //!
 //! ## Architecture Principles
 //!
-//! 1. **Pure Transformations**: Each pass is a pure function `(db, Module) -> Module`
+//! 1. **Explicit Boundaries**: Verify source-logical, shared CPS, and target contracts
 //! 2. **Centralized Orchestration**: Pass sequencing is managed here, not in passes
-//! 3. **Selective Caching**: Only expensive passes use `#[salsa::tracked]` caching
+//! 3. **Scoped Caching**: Salsa caches frontend queries; arena passes own IR analyses
 //! 4. **Separation of Concerns**: Pass implementation vs pipeline composition
 //!
 //! ## Pipeline Stages
@@ -33,11 +33,11 @@
 //! Module (UFCS resolved)
 //!     │
 //!     ├─── Shared Pipeline (single arena session) ────┤
-//!     ▼ evidence_params (Phase 1)
-//! Module (evidence params added to signatures)
+//!     ▼ ast_to_ir
+//! Module (source-logical callable/control IR)
 //!     │
-//!     ▼ prepare_closure_lowering
-//! Module (semantic closure contracts prepared)
+//!     ▼ tribute_control_to_cps → lower_closure_lambda
+//! Module (physical callable contracts and explicit evidence)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
 //! Module (ability.perform/call lowered to effect.dispatch_*)
@@ -48,7 +48,7 @@
 //!     ▼ lower_handle_dispatch
 //! Module (ability.handle_dispatch lowered)
 //!     │
-//!     ▼ target ABI validation ─► lower_closures_in_func
+//!     ▼ target ABI validation ─► lower-prepared-closures
 //! Module (target closure storage selected)
 //!     │
 //!     ├─► [wasm]   compile_to_wasm (includes evidence_to_wasm)
@@ -66,8 +66,8 @@ use ropey::Rope;
 use salsa::Accumulator;
 use std::path::Path;
 use tree_sitter::Parser;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::source_file::parse_with_rope;
-use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
@@ -115,30 +115,22 @@ pub struct CompilationConfig {
 
 /// Optimization policies for the source-logical production pipeline.
 ///
-/// Only `native` policies affect this route. `ast_to_ir` is retained for legacy
-/// API compatibility and is ignored by both `production()` and `baseline()`
-/// compilation; it cannot enable legacy Done-continuation deduplication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct OptimizationOptions {
-    /// Compatibility-only legacy frontend settings. The source-logical
-    /// production route does not consult these; #826 owns their removal.
-    pub ast_to_ir: ast_to_ir::AstToIrOptions,
     pub native: NativeOptimizationOptions,
 }
 
 impl OptimizationOptions {
     pub const fn production() -> Self {
         Self {
-            ast_to_ir: ast_to_ir::AstToIrOptions::production(),
             native: NativeOptimizationOptions::production(),
         }
     }
 
     /// Disable optional native optimizations. Source-logical legalization is
-    /// unchanged; this does not select the legacy frontend or disable CPS.
+    /// unchanged. Source-logical CPS legalization always runs.
     pub const fn baseline() -> Self {
         Self {
-            ast_to_ir: ast_to_ir::AstToIrOptions::baseline(),
             native: NativeOptimizationOptions::baseline(),
         }
     }
@@ -195,13 +187,6 @@ impl Default for OptimizationOptions {
     fn default() -> Self {
         Self::production()
     }
-}
-
-/// Stable shared-pipeline boundaries available to optimization tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
-pub enum SharedPipelineStage {
-    /// Immediately after AST-to-IR lowering, before shared middle-end passes.
-    AfterFrontend,
 }
 
 /// Stable native-pipeline boundaries available to optimization tests.
@@ -747,12 +732,11 @@ pub struct CompilationResult {
 }
 
 // =============================================================================
-// Pipeline Stages (Pure Transformations)
+// Target Pipeline Entry Points
 // =============================================================================
 //
-// Each stage is a #[salsa::tracked] function that takes a Module as input
-// and returns a transformed Module. Stages do not call other stages directly;
-// orchestration is handled by the compile() function.
+// Target entry points continue the shared arena session and apply backend
+// transformations in the required order.
 
 /// Compile a TrunkIR module to WebAssembly binary (arena-based).
 ///
@@ -820,7 +804,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 ///
 /// Evidence params are introduced by the physical CPS conversion. Keep frontend
 /// metadata in the same arena so the conversion can authenticate declarations.
-pub fn run_through_evidence_params(
+pub fn run_through_cps_lowering(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
@@ -836,47 +820,7 @@ pub fn run_through_evidence_params(
     let mut ctx = context;
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(
-        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
-            .with_compiler_intrinsics(compiler_intrinsics),
-    )
-    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
-    pm.run(&mut ctx, core_module)?;
-    Ok(Some((ctx, m)))
-}
-
-/// Run pipeline through closure lower (for testing).
-///
-/// Runs frontend + source-logical CPS + `lower_closure_lambda` + `lower_closures`
-/// in a single arena session.
-pub fn run_through_closure_lower(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> PassResult<Option<(IrContext, Module)>> {
-    let Some(FrontendCompilation {
-        context,
-        module: m,
-        operation_declarations,
-        compiler_intrinsics,
-    }) = compile_frontend_for_shared_route(db, source)
-    else {
-        return Ok(None);
-    };
-    let mut ctx = context;
-    let core_module =
-        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut pm = PassManager::new();
-    pm.add_pass(
-        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
-            .with_compiler_intrinsics(compiler_intrinsics),
-    )
-    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-    .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
+    let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     pm.run(&mut ctx, core_module)?;
     Ok(Some((ctx, m)))
 }
@@ -884,6 +828,25 @@ pub fn run_through_closure_lower(
 // =============================================================================
 // Full Pipeline (Orchestration)
 // =============================================================================
+
+/// Build the shared structural pass pipeline that legalizes source-logical
+/// callable/control IR into CPS with explicit evidence.
+fn structural_pass_pipeline(
+    operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
+    compiler_intrinsics: Vec<tribute_ir::dialect::tribute_control::CompilerIntrinsicDeclaration>,
+) -> PassManager {
+    let mut pm = PassManager::new();
+    pm.add_pass(
+        tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
+            .with_compiler_intrinsics(compiler_intrinsics),
+    )
+    .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+    .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+    .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
+    .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
+    install_debug_use_chain_verifier(&mut pm);
+    pm
+}
 
 /// Run the shared middle-end pipeline (backend-independent) in an arena session.
 ///
@@ -896,15 +859,6 @@ fn run_shared_pipeline(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    run_shared_pipeline_with_options(db, source, OptimizationOptions::production(), None)
-}
-
-fn run_shared_pipeline_with_options(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    _options: OptimizationOptions,
-    stop_after: Option<SharedPipelineStage>,
-) -> PassResult<Option<(IrContext, Module)>> {
     let Some(FrontendCompilation {
         context,
         module: m,
@@ -916,35 +870,15 @@ fn run_shared_pipeline_with_options(
     };
     let mut ctx = context;
 
-    if stop_after == Some(SharedPipelineStage::AfterFrontend) {
-        return Ok(Some((ctx, m)));
-    }
-
     // Middle-end passes, sequenced through the PassManager (#268).
     // Registration order == execution order.
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
-    let mut structural_pm = PassManager::new();
-    structural_pm
-        .add_pass(
-            tribute_passes::tribute_control_to_cps::TributeControlToCps::new(
-                operation_declarations,
-            )
-            .with_compiler_intrinsics(compiler_intrinsics),
-        )
-        .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
-        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
-        .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
-        .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics)
-        // Evidence params are now inserted directly during ast_to_ir lowering.
-        .add_pass(tribute_passes::closure_lower::PrepareClosureLowering);
-    install_debug_use_chain_verifier(&mut structural_pm);
+    let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module)?;
 
-    lower_legacy_closures_before_target_boundary(&mut ctx, m, core_module)?;
-
     // CPS effect handling, function-local phase: lower_ability_perform produces
-    // ability.evidence_lookup ops that resolve_evidence needs to process.
+    // explicit effect dispatches; evidence resolution then extends handler scopes.
     let mut ability_pm = PassManager::new();
     ability_pm
         .nest::<func_dialect::Func>()
@@ -969,28 +903,10 @@ fn run_shared_pipeline_with_options(
     Ok(Some((ctx, m)))
 }
 
-/// Dump shared IR at a named optimization boundary.
-///
-/// This entry point exists for conformance gates. Production compilation still
-/// runs the complete shared pipeline.
-#[salsa::tracked]
-pub fn dump_shared_ir_at_stage(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-    stage: SharedPipelineStage,
-    options: OptimizationOptions,
-) -> Result<String, DumpIrError> {
-    let Some((ctx, module)) = run_shared_pipeline_with_options(db, source, options, Some(stage))?
-    else {
-        return Ok(String::new());
-    };
-    Ok(trunk_ir::printer::print_module(&ctx, module.op()))
-}
-
 /// Dump native IR at a named RC optimization boundary.
 ///
-/// The same optimization options are used for the shared and native portions
-/// of the pipeline. Native emission is intentionally skipped.
+/// Optimization options apply to the native portion of the pipeline.
+/// Native emission is intentionally skipped.
 #[salsa::tracked]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
@@ -998,8 +914,7 @@ pub fn dump_native_ir_at_stage(
     stage: NativePipelineStage,
     options: OptimizationOptions,
 ) -> Result<String, DumpIrError> {
-    let Some((mut ctx, module)) = run_shared_pipeline_with_options(db, source, options, None)?
-    else {
+    let Some((mut ctx, module)) = run_shared_pipeline(db, source)? else {
         return Ok(String::new());
     };
     validate_and_report_arity(db, &ctx, module);
@@ -1074,19 +989,18 @@ fn report_pass_error(db: &dyn salsa::Database, error: &PassError) {
     .accumulate(db);
 }
 
-/// Lower continuation ops and run cleanup passes shared by both backends.
+/// Debug-only value-integrity check at a pipeline boundary.
 ///
-/// Effects are handled via tail-call CPS through handler_dispatch closures.
-fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    // Validation runs in debug mode.
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
-        if !result.is_ok() {
-            tracing::warn!("Value integrity errors after lowering: {:?}", result.errors);
-        }
+/// The shared pipeline owns control legalization; the target pipelines only
+/// verify its output before their own lowering runs.
+fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
+    if !cfg!(debug_assertions) {
+        return;
     }
-
-    Ok(())
+    let result = trunk_ir::validation::validate_value_integrity(ctx, m);
+    if !result.is_ok() {
+        tracing::warn!("Value integrity errors {boundary}: {:?}", result.errors);
+    }
 }
 
 /// Run inlining + DCE + resolve_casts (shared cleanup after all lowering).
@@ -1113,7 +1027,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 
 /// Run the WASM target pipeline: lowering + cleanup.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    run_lowering_pipeline(ctx, m)?;
+    debug_validate_value_integrity(ctx, m, "before Wasm target lowering");
 
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
@@ -1121,8 +1035,8 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
-    let closure_boundary = enter_target_closure_storage_boundary(ctx, m)?;
-    finalize_target_closure_storage(ctx, m, closure_boundary);
+    enter_target_closure_storage_boundary(ctx, m)?;
+    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
 
     run_cleanup_passes(ctx, m);
     Ok(())
@@ -1130,7 +1044,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
-    run_lowering_pipeline(ctx, m)?;
+    debug_validate_value_integrity(ctx, m, "before native target lowering");
 
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That
@@ -1140,7 +1054,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
     });
 
-    let closure_boundary = enter_target_closure_storage_boundary(ctx, m)?;
+    enter_target_closure_storage_boundary(ctx, m)?;
 
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
@@ -1152,42 +1066,11 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
-    finalize_target_closure_storage(ctx, m, closure_boundary);
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
-        if !result.is_ok() {
-            tracing::warn!(
-                "Value integrity errors after evidence_to_native: {:?}",
-                result.errors
-            );
-        }
-    }
+    tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
+    debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
     run_cleanup_passes(ctx, m);
     Ok(())
-}
-
-/// Keep legacy closure lowering on its established shared path. Source-logical
-/// CPS modules cross the explicit target boundary below instead.
-fn lower_legacy_closures_before_target_boundary(
-    ctx: &mut IrContext,
-    m: Module,
-    core_module: core_dialect::Module,
-) -> PassResult {
-    if tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
-        return Ok(());
-    }
-    let mut pm = PassManager::new();
-    pm.nest::<func_dialect::Func>()
-        .add_pass(tribute_passes::closure_lower::LowerClosuresInFunc);
-    install_debug_use_chain_verifier(&mut pm);
-    pm.run(ctx, core_module)
-}
-
-#[derive(Clone, Copy)]
-enum TargetClosureStorageBoundary {
-    Legacy,
-    SourceLogicalCps,
 }
 
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
@@ -1196,10 +1079,7 @@ enum TargetClosureStorageBoundary {
 fn enter_target_closure_storage_boundary(
     ctx: &mut IrContext,
     m: Module,
-) -> Result<TargetClosureStorageBoundary, DumpIrError> {
-    if !tribute_passes::target_abi::has_root_entry_contract(ctx, m) {
-        return Ok(TargetClosureStorageBoundary::Legacy);
-    }
+) -> Result<(), DumpIrError> {
     tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
     tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
     let core_module = core_dialect::Module::from_op(ctx, m.op())
@@ -1208,17 +1088,7 @@ fn enter_target_closure_storage_boundary(
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     install_debug_use_chain_verifier(&mut pm);
     pm.run(ctx, core_module)?;
-    Ok(TargetClosureStorageBoundary::SourceLogicalCps)
-}
-
-fn finalize_target_closure_storage(
-    ctx: &mut IrContext,
-    m: Module,
-    boundary: TargetClosureStorageBoundary,
-) {
-    if matches!(boundary, TargetClosureStorageBoundary::SourceLogicalCps) {
-        tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
-    }
+    Ok(())
 }
 
 /// Dump IR text after running the pipeline up to the target-specific passes.
@@ -1576,7 +1446,7 @@ pub fn compile_to_native_binary(
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
     let options = config.optimizations(db);
-    let (mut ctx, m) = match run_shared_pipeline_with_options(db, source, options, None) {
+    let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
         Ok(None) => return None,
         Err(error) => {
@@ -1621,7 +1491,6 @@ pub fn compile_to_native_binary(
 // The AST-based pipeline provides better type safety and separation of concerns.
 // It transforms: CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR
 //
-// This replaces the legacy tirgen-based pipeline that worked directly with IR.
 
 /// Parse source and run the frontend pipeline (parse → resolve → typecheck → TDNR).
 ///
@@ -1991,22 +1860,11 @@ mod tests {
     #[test]
     fn source_logical_root_defers_closure_storage_until_target_finalization() {
         let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
-        let core_module = core_dialect::Module::from_op(&ctx, module.op())
-            .expect("test module must be a core.module");
-        let before = trunk_ir::printer::print_module(&ctx, module.op());
-
-        lower_legacy_closures_before_target_boundary(&mut ctx, module, core_module).unwrap();
-
-        assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
-        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
-        assert!(matches!(
-            boundary,
-            TargetClosureStorageBoundary::SourceLogicalCps
-        ));
+        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
         let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
-        finalize_target_closure_storage(&mut ctx, module, boundary);
+        tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
 
         let physical = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(!physical.contains("closure.closure"), "{physical}");
@@ -2101,8 +1959,8 @@ mod tests {
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
         "#,
         );
-        let boundary = enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
-        finalize_target_closure_storage(&mut ctx, module, boundary);
+        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
             panic!(
                 "{error}\n{}",
@@ -2156,9 +2014,9 @@ mod tests {
                             assert_eq!(
                                 signature.params(),
                                 [
-                                    concrete(6),
+                                    concrete(trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX),
                                     ValType::Ref(RefType::ANYREF),
-                                    concrete(4),
+                                    concrete(trunk_ir_wasm_backend::gc_types::CLOSURE_STRUCT_IDX),
                                     ValType::I32,
                                     ValType::I32,
                                     ValType::I32,

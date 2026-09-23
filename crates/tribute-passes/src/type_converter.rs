@@ -220,7 +220,7 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 return None;
             }
 
-            // Note: any → trampoline.resume_wrapper and any → core.array conversions
+            // Note: any → core.array conversions
             // are handled by wasm_type_converter, not here, because they require
             // wasm.ref_cast operations that are only available after WASM lowering.
         }

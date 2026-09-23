@@ -25,7 +25,7 @@ pub enum CallingConvention {
     Direct = 0,
     /// Tail-resumptive effect: evidence parameter, direct source result.
     EvidenceDirect = 1,
-    /// General control effect: evidence and done continuation.
+    /// General control effect: evidence and a typed ContinuationFrame.
     Cps = 2,
 }
 
@@ -46,8 +46,8 @@ impl CallingConvention {
         self >= Self::EvidenceDirect
     }
 
-    /// Whether the convention carries a done continuation.
-    pub fn needs_done_k(self) -> bool {
+    /// Whether the convention carries a typed ContinuationFrame.
+    pub fn needs_continuation_frame(self) -> bool {
         self == Self::Cps
     }
 

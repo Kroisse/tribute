@@ -751,19 +751,6 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
     ValidationResult { errors }
 }
 
-/// Validate operation-level semantic constraints that are independent of
-/// value scope/use-chain integrity.
-///
-/// Deprecated compatibility alias for callers that have not migrated to
-/// [`validate_operation_verifiers`].
-#[deprecated(
-    since = "0.1.0",
-    note = "use validate_operation_verifiers for local operation invariant checks"
-)]
-pub fn validate_operation_semantics(ctx: &IrContext, module: Module) -> ValidationResult {
-    validate_operation_verifiers(ctx, module)
-}
-
 fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
     if data.dialect != Symbol::new("arith") || data.name != Symbol::new("cmpf") {
@@ -2760,24 +2747,6 @@ mod tests {
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
         assert!(operation_errors[0].contains("requires symbol predicate attribute"));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn deprecated_operation_semantics_alias_delegates_to_operation_verifiers() {
-        let input = r#"core.module @test {
-  func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
-    %2 = arith.cmpf %0, %1 {predicate = @ueq} : core.i1
-    func.return %2
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        let result = validate_operation_semantics(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
     }
 
     #[test]

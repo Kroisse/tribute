@@ -45,8 +45,8 @@ enum Result(a, e) {
 
 ```rust
 let box: Box(Int) = Box { value: 42 }
-let pair: Pair(Int, Text) = Pair { first: 1, second: "hello" }
-let result: Result(Int, Text) = Ok { value: 42 }
+let pair: Pair(Int, String) = Pair { first: 1, second: "hello" }
+let result: Result(Int, String) = Ok { value: 42 }
 ```
 
 ### 제네릭 함수
@@ -106,16 +106,16 @@ Nominal 타입의 의존 인스턴스 수집과 확장 한도는 아래의
 ### 파이프라인 위치
 
 ```text
-Stage 4: Type Inference
-    ↓
-Stage 5: TDNR
-    ↓
-Stage 5.5: Monomorphization ← 새로운 단계
-    ↓
-Stage 6: Lower Case
-    ↓
-Stage 7: Codegen (Wasm/Cranelift)
+Type inference + TDNR
+    → checked function instances
+    → frontend preparation + monomorphization
+    → source-logical AST-to-IR lowering
+    → shared CPS legalization
+    → target lowering
 ```
+
+Pattern matching도 frontend의 source-logical IR 생성에 포함한다. 별도 case lowering
+단계를 두거나 monomorphization에서 physical CPS signature를 생성하지 않는다.
 
 ### 이름 맹글링
 
@@ -124,7 +124,7 @@ Tribute 식별자는 숫자로 시작할 수 없으므로 타입 이름과 충�
 
 ```text
 identity + [Int]              → identity$Int
-first + [Int, Text]           → first$Int$Text
+first + [Int, String]           → first$Int$String
 map + [Int, Option(Int)]      → map$Int$Option$0$Int$1
 f + [List(Option(Int))]       → f$List$0$Option$0$Int$1$1
 apply + [fn(Int) -> Bool]     → apply$Fn$0$Int$1$Bool
@@ -154,16 +154,16 @@ fn identity(a)(x: a) -> a { x }
 
 fn main() {
     identity(42)       // identity<Int>
-    identity("hello")  // identity<Text>
+    identity("hello")  // identity<String>
 }
 
 // Monomorphization 후
 fn identity$Int(x: Int) -> Int { x }
-fn identity$Text(x: Text) -> Text { x }
+fn identity$String(x: String) -> String { x }
 
 fn main() {
     identity$Int(42)
-    identity$Text("hello")
+    identity$String("hello")
 }
 ```
 
@@ -224,13 +224,13 @@ fn nest(n: Int, x: anyref) -> anyref {
 ;; Box$Int
 (type $Box$Int (struct (field $value i64)))
 
-;; Box$Text
-(type $Box$Text (struct (field $value (ref $text))))
+;; Box$String
+(type $Box$String (struct (field $value (ref $string))))
 
-;; Pair$Int$Text
-(type $Pair$Int$Text (struct
+;; Pair$Int$String
+(type $Pair$Int$String (struct
   (field $first i64)
-  (field $second (ref $text))))
+  (field $second (ref $string))))
 ```
 
 ### Uniform Representation

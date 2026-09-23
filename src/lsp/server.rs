@@ -516,7 +516,7 @@ impl LspServer {
     fn action_for_diagnostic(
         &self,
         db: &dyn salsa::Database,
-        diag: &tribute_passes::Diagnostic,
+        diag: &tribute_core::diagnostic::Diagnostic,
         rope: &Rope,
         uri: &Uri,
         type_index: Option<&AstTypeIndex<'_>>,
@@ -559,11 +559,13 @@ impl LspServer {
                     diagnostics: Some(vec![Diagnostic {
                         range: span_to_range(rope, diag.inner.span),
                         severity: Some(match diag.inner.severity {
-                            tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
-                            tribute_passes::DiagnosticSeverity::Warning => {
+                            tribute_core::diagnostic::DiagnosticSeverity::Error => {
+                                DiagnosticSeverity::ERROR
+                            }
+                            tribute_core::diagnostic::DiagnosticSeverity::Warning => {
                                 DiagnosticSeverity::WARNING
                             }
-                            tribute_passes::DiagnosticSeverity::Info => {
+                            tribute_core::diagnostic::DiagnosticSeverity::Info => {
                                 DiagnosticSeverity::INFORMATION
                             }
                         }),
@@ -754,9 +756,15 @@ impl LspServer {
                 Diagnostic {
                     range,
                     severity: Some(match d.inner.severity {
-                        tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
-                        tribute_passes::DiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
-                        tribute_passes::DiagnosticSeverity::Info => DiagnosticSeverity::INFORMATION,
+                        tribute_core::diagnostic::DiagnosticSeverity::Error => {
+                            DiagnosticSeverity::ERROR
+                        }
+                        tribute_core::diagnostic::DiagnosticSeverity::Warning => {
+                            DiagnosticSeverity::WARNING
+                        }
+                        tribute_core::diagnostic::DiagnosticSeverity::Info => {
+                            DiagnosticSeverity::INFORMATION
+                        }
                     }),
                     message,
                     source: Some("tribute".to_string()),

@@ -1,507 +1,92 @@
 # Tribute Optimizations
 
-> 이 문서는 Tribute 컴파일러의 최적화 전략을 정의한다.
-
-## Design Decisions
-
-### 결정 사항 요약
-
-| 항목                            | 선택       | 효과                      |
-| ------------------------------- | ---------- | ------------------------- |
-| 타입 monomorphization           | 하이브리드 | 런타임 오버헤드 제거      |
-| Effect call-site specialization | 지원       | Evidence 전달 제거/인라인 |
-| Tail-resumptive optimization    | 지원       | shift/reset 제거          |
-| Handler inlining                | 지원       | 간접 호출 제거            |
-
-### Optimization validation contract
-
-Every optimization must be independently selectable in the compiler pipeline.
-The production profile enables the optimizations that are ready for general
-use, while tests may disable one optimization without changing the rest of the
-pipeline.
-
-An optimization is not ready to be enabled broadly until all of the following
-gates exist:
-
-1. The same source fixture is compiled and executed with the optimization
-   disabled and enabled, and both executions have the same observable result.
-2. Named pipeline boundaries expose focused before/after IR snapshots. A
-   lowering-time optimization compares disabled and enabled output at the same
-   boundary; an IR-to-IR pass captures its immediate input and output.
-3. Structural assertions count the operations expected to disappear and the
-   semantically required operations expected to remain.
-4. Negative fixtures cover cases where the proof is incomplete and the
-   optimization must leave the IR unchanged.
-5. Ability and RC optimizations share fixtures and test helpers rather than
-   defining pass-specific execution models.
-
-The comparison toggles only the optimization under test. Other optimization
-settings, target selection, and sanitizer settings remain identical so that a
-failure is attributable to one transformation.
-
-Lowering-time choices are represented by immutable, stage-specific option
-objects rather than individual boolean fields on the lowering context. When a
-choice controls reuse of compiler-generated helpers, the context keeps that
-mutable reuse state in a dedicated generated-function cache. Policies with
-meaningful modes use named enums—for example, identity done continuations are
-either generated `PerUse` or shared `PerCompilationUnit`—so production and
-conformance profiles remain explicit as more optimizations are added.
-
----
-
-## Optimization Pipeline
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                      최적화 파이프라인                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  1. Type Monomorphization                                   │
-│     - 제네릭 타입/함수 특수화                                  │
-│     - 다형적 재귀만 uniform rep                              │
-│                                                             │
-│  2. Call-Site Effect Specialization                         │
-│     - 순수 call site: evidence 제거                          │
-│     - 구체적 handler: evidence 인라인                         │
-│     - row variable: evidence 유지                           │
-│                                                             │
-│  3. Tail-Resumptive Optimization                            │
-│     - 즉시 resume하는 handler 감지                            │
-│     - shift/reset 제거                                      │
-│                                                             │
-│  4. Handler Inlining                                        │
-│     - 정적으로 알려진 handler 인라인                           │
-│     - 간접 호출 → 직접 호출                                   │
-│                                                             │
-│  5. Standard Optimizations                                  │
-│     - Dead code elimination                                 │
-│     - Constant folding                                      │
-│     - Inlining                                             │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Type Monomorphization
-
-### 기본 원리
-
-제네릭 타입과 함수를 구체적 타입으로 특수화:
-
-```rust
-// 원본
-fn identity(a)(x: a) -> a { x }
-
-identity(42)       // identity<Int>
-identity("hello")  // identity<Text>
-
-// 최적화 후
-fn identity$Int(x: Int) -> Int { x }
-fn identity$Text(x: Text) -> Text { x }
-
-identity$Int(42)
-identity$Text("hello")
-```
-
-### 장점
-
-- 런타임 타입 디스패치 제거
-- 특수화된 기계어 생성 가능
-- 인라이닝 기회 증가
-
-### 다형적 재귀 처리
-
-순수 monomorphization이 불가능한 경우 uniform representation 사용:
-
-```rust
-fn nest(n: Int, x: a) -> ??? {
-    if n == 0 { x }
-    else { nest(n - 1, Pair(x, x)) }
-}
-
-// → uniform representation (anyref)
-fn nest(n: Int, x: anyref) -> anyref { ... }
-```
-
-자세한 내용은 `generics.md` 참조.
-
----
-
-## Call-Site Effect Specialization
-
-### 기본 원리
-
-효과 다형적 함수도 call site에서 효과가 구체적으로 알려지면 특수화 가능:
-
-```rust
-// 정의: 효과 다형적
-fn map(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
-
-// Call site 1: e = {} (순수)
-map(list, fn(x) x * 2)
-// → Evidence 파라미터 완전 제거!
-
-// Call site 2: e = {State(Int)}
-run_state(fn() map(list, fn(x) { State::put(x); x }), 0)
-// → State handler 연산 인라인!
-```
-
-### 특수화 조건
-
-| Call Site 컨텍스트   | `{e}` 값     | 최적화                |
-| -------------------- | ------------ | --------------------- |
-| 순수 컨텍스트        | `{}`         | Evidence 완전 제거    |
-| `handle` 블록 내부   | 구체적       | Handler 인라인        |
-| 효과 다형적 컨텍스트 | row variable | Evidence passing 유지 |
-
-### 예시: 순수 call site
-
-```rust
-// 원본
-fn map(a, b)(xs: List(a), f: fn(a) ->{e} b, ev: *Evidence) ->{e} List(b)
-
-// Call site에서 e = {}
-map(list, fn(x) x * 2)
-
-// 특수화 후: evidence 파라미터 제거
-fn map$Int$Int$pure(xs: List$Int, f: fn(Int) -> Int) -> List$Int {
-    // 순수 버전, evidence 없음
-}
-```
-
-### 예시: 구체적 handler 내부
-
-```rust
-run_state(fn() {
-    map(list, fn(x) { State::put(x); x })
-}, 0)
-
-// 특수화 후: State 연산 인라인
-fn map$Int$Int$State_Int(
-    xs: List$Int,
-    f: fn(Int) -> Int,  // State::put이 인라인됨
-    state_ptr: *Int      // State를 직접 포인터로 전달
-) -> List$Int {
-    // ...
-}
-```
-
----
-
-## Tail-Resumptive Optimization
-
-### 정의
-
-Handler가 **항상 즉시 `k(value)`로 끝나면** (tail-resumptive), continuation 캡처가 불필요:
-
-```rust
-// Tail-resumptive handler 예시
-{ State::get() -> k } -> k(current_state)
-{ State::put(v) -> k } -> k(())
-{ Logger::log(s) -> k } -> { emit_log(s); k(()) }
-```
-
-### 최적화 전
-
-```rust
-fn state_get(ev: *Evidence) -> s {
-    let marker = (*ev).get(STATE_ID)
-    let handler = marker.handler_dispatch
-    let k = capture_continuation()
-    handler(k, hash(State, get), Nil)
-}
-```
-
-### 최적화 후
-
-```rust
-fn state_get_optimized(ev: *Evidence) -> s {
-    let marker = (*ev).get(STATE_ID)
-    let tr_dispatch = marker.tr_dispatch_fn
-    tr_dispatch(hash(State, get), Nil)  // continuation capture 없음
-}
-```
-
-### 감지 알고리즘
-
-Handler의 각 case arm 분석:
-
-1. `-> k` 패턴인지 확인
-2. 본문이 `k(expr)`로만 끝나는지 확인
-3. `k`가 다른 곳에서 사용되지 않는지 확인
-
-```rust
-// Tail-resumptive
-{ A::op() -> k } -> k(value)           // OK
-{ A::op() -> k } -> { stmt; k(value) } // OK
-
-// Non-tail-resumptive
-{ A::op() -> k } -> { k(v1); k(v2) }   // k 두 번 사용
-{ A::op() -> k } -> { save(k); v }     // k 저장
-{ A::op() -> k } -> other_func(k)      // k 전달
-```
-
-### 대부분의 실용적 Ability는 Tail-Resumptive
-
-| Ability   | Tail-Resumptive? | 이유                     |
-| --------- | ---------------- | ------------------------ |
-| State     | Yes              | get/put 모두 즉시 resume |
-| Reader    | Yes              | ask는 즉시 resume        |
-| Writer    | Yes              | tell은 즉시 resume       |
-| Logger    | Yes              | log는 즉시 resume        |
-| Exception | No               | fail은 resume 안 함      |
-| Async     | 조건부           | await 후 resume          |
-| Choice    | No               | 여러 번 resume 가능      |
-
----
-
-## Handler Inlining
-
-### 기본 원리
-
-정적으로 알려진 handler를 인라인:
-
-```rust
-// 원본
-fn program() ->{State(Int)} Int {
-    State::get()
-}
-
-handle program() {
-    { State::get() -> k } -> k(42)
-}
-
-// 최적화 후: handler 인라인
-fn program_inlined() -> Int {
-    42
-}
-```
-
-### 조건
-
-Handler inlining이 가능한 경우:
-
-1. `handle` 블록이 컴파일 타임에 알려짐
-2. 피호출 함수가 인라인 가능
-3. Tail-resumptive optimization이 적용됨
-
-### 복합 예시
-
-```rust
-// 원본
-fn counter() ->{State(Int)} Int {
-    let n = State::get()
-    State::put(n + 1)
-    n
-}
-
-fn main() {
-    run_state(fn() {
-        counter()
-        counter()
-        counter()
-    }, 0)
-}
-
-// 모든 최적화 적용 후
-fn main() {
-    let mut state = 0
-    let r1 = state; state = state + 1
-    let r2 = state; state = state + 1
-    let r3 = state; state = state + 1
-    r3
-}
-```
-
----
-
-## Combined Optimization Example
-
-### 원본 코드
-
-```rust
-fn sum_with_state(xs: List(Int)) ->{State(Int)} Int {
-    xs.fold(0, fn(acc, x) {
-        State::put(State::get() + 1)  // 카운트 증가
-        acc + x
-    })
-}
-
-fn main() {
-    run_state(fn() sum_with_state([1, 2, 3, 4, 5]), 0)
-}
-```
-
-### 최적화 단계
-
-**1. Type Monomorphization:**
-
-```rust
-fn sum_with_state(xs: List$Int) ->{State(Int)} Int {
-    xs.fold$Int$Int(0, fn(acc, x) {
-        State::put(State::get() + 1)
-        acc + x
-    })
-}
-```
-
-**2. Call-Site Effect Specialization:**
-
-```rust
-// run_state 내부이므로 e = {State(Int)}
-fn sum_with_state$State_Int(xs: List$Int, state_ptr: *Int) -> Int {
-    xs.fold$Int$Int$pure(0, fn(acc, x) {
-        *state_ptr = *state_ptr + 1
-        acc + x
-    })
-}
-```
-
-**3. Tail-Resumptive Optimization:**
-
-- State::get/put은 이미 직접 포인터 접근으로 변환됨
-
-**4. Handler Inlining:**
-
-```rust
-fn main() {
-    let mut state = 0
-    let result = sum_with_state_inlined(&mut state, [1, 2, 3, 4, 5])
-    result  // state = 5 (5번 증가)
-}
-```
-
-### 결과
-
-- Evidence 조회: **제거됨**
-- Continuation 캡처: **제거됨**
-- 간접 호출: **제거됨**
-- 런타임 오버헤드: **거의 0**
-
----
-
-## Implementation
-
-### 구현 순서 (개발 순서)
-
-설계상 Monomorphization이 기본 전략이지만, **구현은 반대 순서**로 진행:
-
-```text
-Phase 1: Uniform Representation (기반)
-├─ 모든 제네릭이 동작 (느리지만 정확)
-├─ Int: i31ref + BigInt (이미 anyref 서브타입)
-├─ Float: BoxedF64
-├─ 제네릭 타입/함수: anyref 파라미터
-└─ 의미론 테스트 가능
-
-Phase 2: Monomorphization (최적화 레이어)
-├─ Uniform rep 위에 추가
-├─ 인스턴스화 수집 및 특수화
-├─ 다형적 재귀 감지 → Phase 1로 폴백
-└─ 정확성은 Phase 1과 비교 검증
-```
-
-**이유:**
-
-| 관점         | Uniform Rep 먼저       | Monomorph 먼저     |
-| ------------ | ---------------------- | ------------------ |
-| 완전성       | 모든 케이스 커버       | 다형적 재귀 불가   |
-| 테스트       | 의미론 검증 가능       | 부분적으로만       |
-| 점진적 개발  | 동작 → 최적화          | 최적화부터 시작    |
-| 디버깅       | 기준점 있음            | 기준점 없음        |
-
-### 최적화 패스 순서
-
-```rust
-// src/pipeline.rs
-
-pub fn compile_optimized(db: &dyn Database, source: SourceCst) -> Module {
-    let module = stage_tdnr(db, source);
-
-    // 1. Monomorphization
-    let module = stage_monomorphize(db, module);
-
-    // 2. Effect specialization
-    let module = stage_effect_specialize(db, module);
-
-    // 3. Tail-resumptive analysis & optimization
-    let module = stage_tail_resumptive(db, module);
-
-    // 4. Handler inlining
-    let module = stage_handler_inline(db, module);
-
-    // 5. Standard optimizations
-    let module = stage_dce(db, module);
-    let module = stage_const_fold(db, module);
-
-    module
-}
-```
-
-### 주요 파일
-
-- `crates/tribute-passes/src/monomorphize/` - 타입 monomorphization
-- `crates/tribute-passes/src/effect_specialize/` - 효과 특수화
-- `crates/tribute-passes/src/tail_resumptive/` - Tail-resumptive 분석
-- `crates/tribute-passes/src/inline/` - 인라이닝
-
----
-
-## Benchmarks (예상)
-
-### Ability 오버헤드
-
-| 시나리오               | 최적화 전 | 최적화 후 |
-| ---------------------- | --------- | --------- |
-| State::get (100만 회)  | ~50ms     | ~5ms      |
-| Reader::ask (100만 회) | ~40ms     | ~3ms      |
-| 순수 함수 호출         | 0         | 0         |
-
-### 제네릭 오버헤드
-
-| 시나리오              | Type Erasure | Monomorphization |
-| --------------------- | ------------ | ---------------- |
-| List.map (100만 요소) | ~100ms       | ~20ms            |
-| 정수 산술 (fixnum)    | ~10ms        | ~10ms            |
-| 정수 산술 (bignum)    | ~50ms        | ~50ms            |
-
----
-
-## Future Optimizations
-
-### Escape Analysis
-
-Continuation이 탈출하지 않으면 스택 할당:
-
-```rust
-handle {
-    // k가 이 스코프 내에서만 사용됨
-    // → 힙 대신 스택에 continuation 저장
-}
-```
-
-### Partial Evaluation
-
-컴파일 타임 값이 알려지면 미리 계산:
-
-```rust
-fn factorial(n: Int) -> Int {
-    if n <= 1 { 1 } else { n * factorial(n - 1) }
-}
-
-factorial(5)  // → 120으로 상수 폴딩
-```
-
-### Profile-Guided Optimization
-
-런타임 프로파일 기반 최적화:
-
-- Hot path 인라이닝
-- Bignum 사용 패턴에 따른 특수화
-- Effect handler 호출 패턴 분석
-
----
+이 문서는 source-logical compiler pipeline의 최적화 경계와 검증 계약을 정의한다.
+Callable ABI, operation kind, ownership 의미는 최적화 설정에 따라 달라지지 않는다.
+
+## Legalization과 최적화의 경계
+
+Frontend는 typechecked AST를 source-logical `tribute_control` IR로 내린다.
+Monomorphization은 이 경계 전에 checked function instance와 nominal metadata를
+재작성한다. 자세한 계약은 [generics.md](generics.md)를 따른다.
+
+Shared `tribute_control_to_cps`는 callable graph 전체를 검증한 뒤 CPS를 적법화한다.
+`fn` operation은 선언이 보장한 tail-resumptive 계약에 따라 `ability.call`로,
+`op` operation은 `ability.perform`으로 변환한다. Handler 본문의 마지막 호출이나
+resume 횟수로 operation kind를 재분류하지 않는다. Continuation 구성, 명시적인
+evidence 전달과 target ABI 물리화는 필수 lowering이며 선택적인 최적화가 아니다.
+
+정확한 결과 타입, calling convention과 hidden parameter placement는
+[cps-effects.md](cps-effects.md)를 따른다. `anyref` boxing은 일반적인 값 표현이며,
+특수화나 최적화가 source 결과를 control carrier로 바꾸는 근거가 되지 않는다.
+
+## 적용 위치
+
+| 경계 | 변환 | 보존해야 하는 계약 |
+| ---- | ---- | ----------------- |
+| Frontend preparation | 함수·nominal 타입 monomorphization | 해석된 선언 identity, checked instance와 치환된 semantic metadata |
+| Shared CPS 이후, target closure storage 이전 | 일반 함수 inlining | exact callable ABI, 명시적 evidence·ContinuationFrame, proper-tail control flow |
+| Target cleanup | global DCE, canonicalization, local DCE, conversion cast 해소 | side effect, reachable transfer와 target type legality |
+| Native typed ownership planning | proven borrowed parameter·field temporary elision | managed layout, entry ownership와 사용·탈출 증명 |
+| Native RC lowering 이전 | paired retain/release elimination | alias barrier, 각 reference의 수명과 소유권 |
+
+일반 inlining은 지원되는 single-block, `cf` 없는 함수만 변환한다. 효과 호출을
+인라인해도 operation declaration이나 handler의 의미를 다시 추론하지 않는다.
+선택적인 native RC 정책과 materialization 순서는 [rc.md](rc.md)를 따른다.
+
+## 선택 가능한 native 정책
+
+`OptimizationOptions`는 active native pipeline이 소비하는 정책만 노출한다.
+`production()`과 `baseline()`은 같은 frontend와 shared legalization을 실행한다.
+Baseline은 다음 native 최적화만 끈다.
+
+| 정책 | Baseline | Production |
+| ---- | -------- | ---------- |
+| `PairedRcEliminationPolicy` | `Disabled` | `Enabled` |
+| `BorrowedParameterPolicy` | `Preserve` | `ElideProvenBorrowed` |
+| `TemporaryBorrowPolicy` | `Preserve` | `ElideProvenFieldBorrows` |
+
+Lowering 옵션은 stage별 immutable value로 전달한다. 재사용 가능한 compiler helper를
+생성하는 최적화가 필요하다면 그 mutable cache는 생성 단계가 소유한다. 소비자가 없는
+옵션이나 서로 다른 lowering 경로를 선택하는 compatibility switch는 두지 않는다.
+
+## Optimization validation contract
+
+선택적인 최적화는 production에 켜기 전에 다음 조건을 만족해야 한다.
+
+1. 같은 source fixture를 최적화 비활성/활성 상태로 컴파일하고 실행하여 observable
+   result가 같음을 확인한다.
+2. Named pipeline boundary에서 focused before/after IR을 검사한다. Lowering 내부
+   정책은 같은 경계의 두 결과를 비교하고, IR pass는 변환 직전·직후를 비교한다.
+3. 제거 대상 operation 수와 반드시 남아야 하는 semantic operation을 구조적으로
+   확인한다.
+4. 증명이 불완전하면 IR을 유지하는 negative fixture를 둔다.
+5. Ability와 RC 검증은 공통 실행 fixture/helper를 사용한다.
+
+비교 중에는 검사할 정책 하나만 바꾼다. 다른 최적화 정책, target과 sanitizer 설정은
+동일하게 유지한다. 실행 시간이나 메모리 개선은 재현 가능한 측정으로 보고하며,
+예상 수치를 검증된 성능 결과처럼 문서화하지 않는다.
+
+Production composition과 옵션은 [`src/pipeline.rs`](../src/pipeline.rs), native
+conformance 검증은 [`tests/optimization_conformance.rs`](../tests/optimization_conformance.rs)에
+있다. 필수 legalization 자체의 동등성은 active pipeline·handler execution·target
+검증으로 확인한다.
+
+## 추가 최적화의 계약
+
+다음 최적화는 현재 pipeline의 별도 pass나 지원 주장이 아니다. 도입할 때에도
+source-logical 경계와 위 검증 조건을 유지해야 한다.
+
+- **Effect specialization와 handler inlining:** concrete effect row만으로 handler
+  identity나 구현을 확정하지 않는다. 명시적인 dispatch와 closure provenance가
+  뒷받침할 때만 evidence lookup 또는 간접 호출을 제거한다. Open row는 선언된
+  callable convention을 유지한다.
+- **Continuation allocation elision:** one-shot capability의 수명과 모든 capture의
+  ownership을 증명한 경우에만 heap allocation을 대체한다. Scope 밖으로 탈출하거나
+  증명이 불완전한 continuation은 원래 저장소 계약을 유지한다.
+- **Partial evaluation:** compile-time 입력이 확정되고 effect·trap·평가 순서가
+  보존되는 계산만 미리 수행한다.
+- **Profile-guided optimization:** profile은 후보를 고르는 근거이며 의미 보존
+  증명을 대체하지 않는다.
 
 ## References
 

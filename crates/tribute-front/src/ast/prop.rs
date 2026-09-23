@@ -481,13 +481,7 @@ fn expr_with_env(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unreso
 ///
 /// * `depth` – nesting budget; the generated tree can be up to `depth + 1`
 ///   levels deep (a budget of 0 yields a leaf with depth 1).
-/// * `_desired_size` – kept for API compatibility (unused with manual recursion)
-/// * `_expected_branch_size` – kept for API compatibility (unused)
-pub fn expr(
-    depth: u32,
-    _desired_size: u32,
-    _expected_branch_size: u32,
-) -> impl Strategy<Value = Expr<UnresolvedName>> {
+pub fn expr(depth: u32) -> impl Strategy<Value = Expr<UnresolvedName>> {
     expr_with_env(0, depth as usize)
 }
 
@@ -841,7 +835,7 @@ mod tests {
 
         /// The depth of generated expressions is bounded by the configured maximum.
         #[test]
-        fn depth_is_bounded(expr in expr(3, 32, 3)) {
+        fn depth_is_bounded(expr in expr(3)) {
             let depth = expr_depth(&expr);
             prop_assert!(depth <= 4, "depth {} exceeded maximum 4", depth);
         }

@@ -16,10 +16,7 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::types::TypeData;
 use wasm_encoder::{FieldType, StorageType, ValType};
 
-use crate::gc_types::{
-    self, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX,
-    RESUME_WRAPPER_IDX, STEP_IDX,
-};
+use crate::gc_types::{self, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX};
 use crate::{CompilationError, CompilationResult};
 
 use super::helpers::{self, intern_named_adt_struct};
@@ -58,19 +55,19 @@ impl GcTypeBuilder {
 // Helper functions
 // ============================================================================
 
-/// Returns true if this is a built-in type (0-8) that shouldn't use a builder
+/// Returns true if this is a built-in type (0-5) that shouldn't use a builder
 fn is_builtin_type(idx: u32) -> bool {
     idx < FIRST_USER_TYPE_IDX
 }
 
 /// Get or create a builder for a user-defined type.
-/// Returns None for built-in types (0-8) which are predefined.
+/// Returns None for built-in types (0-5) which are predefined.
 fn try_get_builder(builders: &mut Vec<GcTypeBuilder>, idx: u32) -> Option<&mut GcTypeBuilder> {
-    // Skip built-in types (0-8) as they are predefined
+    // Skip built-in types (0-5) as they are predefined
     if is_builtin_type(idx) {
         return None;
     }
-    // Subtract FIRST_USER_TYPE_IDX because indices 0-8 are reserved for built-in types
+    // Subtract FIRST_USER_TYPE_IDX because indices 0-5 are reserved for built-in types
     // User type indices start at FIRST_USER_TYPE_IDX
     let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
     if builders.len() <= adjusted_idx {
@@ -388,12 +385,6 @@ pub(crate) fn collect_gc_types(
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
 
-    // Register builtin types in type_idx_by_type:
-    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct, 5: Marker,
-    // 6: Evidence, 7: Continuation, 8: ResumeWrapper
-    // Step marker type needs to be registered so wasm.if can use it
-    let step_ty = intern_named_adt_struct(ctx, "_Step");
-    type_idx_by_type.insert(step_ty, STEP_IDX);
     // Abstract wasm.arrayref maps to EVIDENCE_IDX because type_converter lowers
     // all core::Array types to wasm::Arrayref (which erases element type info).
     // Currently the only array in the system is the evidence array, so this is safe.
@@ -414,13 +405,6 @@ pub(crate) fn collect_gc_types(
         })
     };
     type_idx_by_type.insert(evidence_ty, EVIDENCE_IDX);
-    // Continuation ADT type (_Continuation) maps to CONTINUATION_IDX
-    let continuation_ty = intern_named_adt_struct(ctx, "_Continuation");
-    type_idx_by_type.insert(continuation_ty, CONTINUATION_IDX);
-    // ResumeWrapper ADT type (_ResumeWrapper) maps to RESUME_WRAPPER_IDX
-    let resume_wrapper_ty = intern_named_adt_struct(ctx, "_ResumeWrapper");
-    type_idx_by_type.insert(resume_wrapper_ty, RESUME_WRAPPER_IDX);
-
     // Collect all ops to visit in order (we need to borrow ctx immutably)
     let ops_to_visit = {
         let mut ops = Vec::new();
@@ -740,6 +724,7 @@ pub(crate) fn collect_gc_types(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gc_types::CLOSURE_STRUCT_IDX;
     use trunk_ir::types::{Attribute, TypeDataBuilder};
 
     #[test]
@@ -821,9 +806,13 @@ mod tests {
             for evidence in [false, true] {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
-                    "%size = wasm.i32_const {value = 0} : core.i32\n%value = wasm.array_new_default %size {type_idx = 6} : core.array(!Marker)"
+                    format!(
+                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array(!Marker)"
+                    )
                 } else {
-                    "%value = wasm.struct_get %marker {type_idx = 5, field_idx = 0} : core.i32"
+                    format!(
+                        "%value = wasm.struct_get %marker {{type_idx = {MARKER_IDX}, field_idx = 0}} : core.i32"
+                    )
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
@@ -859,7 +848,7 @@ mod tests {
                 &format!(
                     "core.module @test {{
                     wasm.func @test(%marker: {reference}) -> core.i32 {{
-                        %value = wasm.struct_get %marker {{type_idx = 5, field_idx = 0}} : core.i32
+                        %value = wasm.struct_get %marker {{type_idx = {MARKER_IDX}, field_idx = 0}} : core.i32
                         wasm.return %value
                     }}
                 }}"
@@ -881,13 +870,15 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            r#"core.module @test {
-            !Marker = adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}
-            wasm.func @test(%marker: !Marker) -> core.i32 {
-                %value = wasm.struct_get %marker {type_idx = 4, field_idx = 0} : core.i32
+            &format!(
+                r#"core.module @test {{
+            !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}
+            wasm.func @test(%marker: !Marker) -> core.i32 {{
+                %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value
-            }
-        }"#,
+            }}
+        }}"#
+            ),
         );
         let ty = ctx.type_alias_by_name(Symbol::new("Marker")).unwrap();
         let (_, map) = collect_gc_types(&mut ctx, module).unwrap();

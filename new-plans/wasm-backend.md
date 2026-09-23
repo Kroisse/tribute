@@ -99,6 +99,9 @@ emit하여 해당 operation을 제거하는 Wasm 경계다.
 보존한다. 생략되지 않는 각 결과에는 SSA 값과 지역 변수를 할당한다. 다중 결과
 호출 후에는 마지막 결과가 스택 맨 위에 있으므로 지역 변수에 역순으로 저장한다.
 입력이나 값 위치의 `core.nil`은 생략하지 않고 널을 허용하는 참조로 표현한다.
+모든 `wasm.call_indirect`와 `wasm.return_call_indirect`는 exact `wasm.func_sig`를
+명시한다. Signature가 없으면 lowering과 emission이 실패하며 operand/result 타입,
+상위 함수의 return 또는 `type_idx`로 대체 시그니처를 추론하지 않는다.
 Wasm 코드 생성기는 함수 본문이나 테이블 인덱스에서 CPS 여부를 추론하지 않는다.
 
 ### Terminal structured-control 결과
@@ -174,6 +177,15 @@ Shared IR은 completion cell과 `core.never` root `done_k`의 추상 조합 계�
 zero-result 형상을 지원하며, 이 bridge는 trampoline이나 `anyref` control
 carrier가 아니다.
 
+### Fresh prompt 바인딩
+
+새 handler delimiter의 prompt 생성은 `__tribute_next_tag` 호출을 요구한다.
+Wasm backend는 이 allocator의 import나 구현을 합성하지 않는다. Fresh prompt를
+요구하는 module에는 정확한 target signature의 명시적 import 또는 함수 본문이
+필요하다. 바인딩이 없으면 아래의 bodyless 선언 규칙에 따라 emission이 실패한다.
+따라서 shared/native handler 실행 지원만으로 Wasm source handler 지원을 판정하지
+않는다.
+
 ### Tail-resumptive dispatch의 함수 시그니처
 
 `effect.dispatch_tail`의 Wasm lowering은 `(Evidence, env: anyref, op_idx: i32,
@@ -218,19 +230,16 @@ the optional newline there, and invokes `fd_write` with compiler-owned iovec and
 interrupted writes. See [io.md](io.md#wasm-runtime-boundary) for lifetime and
 failure rules.
 
-Wasm output uses only `tribute_io.write`. The former `__print_line` literal
-analysis and its `i32` pointer plus `literal_len` representation are not part of
-the backend boundary; string literals remain canonical `String` values until
-the standard-library I/O wrapper explicitly converts them to `Bytes`.
+Wasm output uses `tribute_io.write`. String literals remain canonical `String`
+values until the standard-library I/O wrapper explicitly converts them to
+`Bytes`.
 
 ### Private List layout
 
 WasmGC must lower the same representation-independent `list.*` sequence
 operations to a target-private GC layout and eliminate them before the
-backend-ready boundary. It is not required to share native's linked-node/null
-layout. Native implementation and shared frontend evidence do not by themselves
-establish Wasm compilation or execution support; capability claims require
-focused Wasm evidence.
+backend-ready boundary. Concrete layout과 메모리 관리는 Wasm target이 소유하며
+native의 RC RRB tree 표현과 독립적이다.
 
 ---
 

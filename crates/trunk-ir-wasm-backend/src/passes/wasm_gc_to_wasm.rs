@@ -12,8 +12,8 @@ use trunk_ir::rewrite::{
 };
 
 use crate::gc_types::{
-    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, CONTINUATION_IDX,
-    EVIDENCE_IDX, FIRST_USER_TYPE_IDX, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
+    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, EVIDENCE_IDX,
+    FIRST_USER_TYPE_IDX, MARKER_IDX,
 };
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
@@ -56,18 +56,12 @@ pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
         Some(BYTES_ARRAY_IDX)
     } else if named_adt(ctx, ty, "_BoxedF64") {
         Some(BOXED_F64_IDX)
-    } else if named_adt(ctx, ty, "_Step") {
-        Some(STEP_IDX)
     } else if named_adt(ctx, ty, "_closure") {
         Some(CLOSURE_STRUCT_IDX)
     } else if named_adt(ctx, ty, "_Marker") {
         Some(MARKER_IDX)
     } else if is_evidence_array(ctx, ty) {
         Some(EVIDENCE_IDX)
-    } else if named_adt(ctx, ty, "_Continuation") {
-        Some(CONTINUATION_IDX)
-    } else if named_adt(ctx, ty, "_ResumeWrapper") {
-        Some(RESUME_WRAPPER_IDX)
     } else {
         None
     }

@@ -187,7 +187,7 @@ fn main() { }
 "#;
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "generic_indirect.trb", code);
-        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+        let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .expect("CPS and lambda lifting").expect("frontend module");
         let mut specializations = Vec::new();
         for (name, scalar) in [("compute_int", "i32"), ("compute_float", "f64")] {
@@ -547,7 +547,7 @@ fn test_lambda_identity() {
             "lambda_identity.trb",
             "fn compute() ->{} Int { let f = fn(x) { x } f(+42) } fn main() {}",
         );
-        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+        let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
             .unwrap();
         let (closure, lifted) = source_closure(&ctx, module, "compute");
@@ -577,7 +577,7 @@ fn test_lambda_identity() {
 fn test_lambda_with_capture() {
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "lambda_capture.trb", "fn test_capture() ->{} Int { let a = +10 let f = fn(x) { x + a } f(+32) } fn main() {}");
-        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source).unwrap().unwrap();
+        let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source).unwrap().unwrap();
         let (closure, lifted) = source_closure(&ctx, module, "test_capture");
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "test_capture"));
         let argument = arith::Const::from_op(&ctx, defining_op(&ctx, *ctx.op_operands(call).last().unwrap())).unwrap();
@@ -611,7 +611,7 @@ fn test_indirect_call_ir_generation() {
             "indirect_call.trb",
             "fn invoke(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn main() {}",
         );
-        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source)
+        let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
             .unwrap();
         let owner = named_function(&ctx, module, "invoke");
@@ -631,7 +631,7 @@ fn test_indirect_call_ir_generation() {
 fn test_higher_order_function_ir() {
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { apply(fn(n) { n + +1 }, +41) } fn main() {}");
-        let (ctx, module) = tribute::pipeline::run_through_evidence_params(db, source).unwrap().unwrap();
+        let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source).unwrap().unwrap();
         let apply = named_function(&ctx, module, "apply");
         assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
         let compute = named_function(&ctx, module, "compute");
@@ -651,7 +651,10 @@ fn test_higher_order_function_ir() {
 fn test_closure_lowering() {
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() {}");
-        let (ctx, module) = tribute::pipeline::run_through_closure_lower(db, source).unwrap().unwrap();
+        let (mut ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
+            .unwrap()
+            .unwrap();
+        tribute_passes::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let apply = named_function(&ctx, module, "apply");
         let call = only_indirect_call(&ctx, apply);
         assert_indirect_signature(&ctx, apply, call);

@@ -529,34 +529,34 @@ impl RewritePattern for FuncCallIndirectPattern {
             .collect::<Vec<_>>();
         let result_types = rewriter.result_types(ctx, op);
 
-        let signature = if let Some(signature) = call.exact_signature(ctx) {
-            let Some(signature) =
-                convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
-            else {
-                return false;
-            };
-            // The candidate declares converted results, so the exact signature
-            // must be validated against that candidate rather than against the
-            // still-unconverted operation.
-            if crate::emit::helpers::exact_call_indirect_signature_with_results(
-                ctx,
-                op,
-                signature,
-                &result_types,
-            )
-            .is_err()
-            {
-                return false;
-            }
-            Some(signature)
-        } else {
-            None
+        let Some(signature) = call.exact_signature(ctx) else {
+            return false;
         };
-
-        // The emit phase resolves the type index and table attributes. An
-        // optional exact signature stays attached for authoritative indexing.
-        let new_op =
-            wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0, signature);
+        let Some(signature) = convert_to_wasm_func_type(ctx, signature, rewriter.type_converter())
+        else {
+            return false;
+        };
+        // Validate the replacement's converted results against the retained
+        // physical contract before mutating the operation.
+        if crate::emit::helpers::exact_call_indirect_signature_with_results(
+            ctx,
+            op,
+            signature,
+            &result_types,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let new_op = wasm_dialect::call_indirect(
+            ctx,
+            loc,
+            all_operands,
+            result_types,
+            0,
+            0,
+            Some(signature),
+        );
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -945,7 +945,7 @@ mod tests {
     func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.nil>}
   }
   func.func @ordinary(%table_index: core.i32, %value: core.i32) -> core.i32 {
-    %result = func.call_indirect %table_index, %value : core.i32
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
     func.return %result
   }
 }"#,
@@ -968,6 +968,24 @@ mod tests {
                 && output.contains("signature = !t0"),
             "{output}"
         );
+    }
+
+    #[test]
+    fn indirect_call_without_exact_signature_is_not_lowered() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%table_index: core.i32, %value: core.i32) -> core.i32 {
+    %result = func.call_indirect %table_index, %value : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        lower(&mut ctx, module, TypeConverter::new());
+        let output = print_module(&ctx, module.op());
+        assert!(output.contains("func.call_indirect"), "{output}");
+        assert!(!output.contains("wasm.call_indirect"), "{output}");
     }
 
     #[test]

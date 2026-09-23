@@ -6,21 +6,17 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
-use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectType as _;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use crate::ast::{
     AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
 };
-
-use super::{AstToIrOptions, DoneContinuationPolicy};
 
 /// Encode a tagged type-shape node without relying on separator characters in
 /// source symbols. Each component carries its byte length, so nested keys are
@@ -50,20 +46,6 @@ fn logical_convention_key(convention: CallingConvention) -> String {
     }
 }
 
-/// Information about a captured variable.
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct CaptureInfo {
-    /// Variable name.
-    pub name: Symbol,
-    /// Variable's LocalId.
-    pub local_id: LocalId,
-    /// Variable type (arena IR type).
-    pub ty: TypeRef,
-    /// The SSA value in the outer scope.
-    pub value: ValueRef,
-}
-
 /// A source-visible callable synthesized by the logical frontend, such as a
 /// struct-field accessor. These signatures are semantic lowering metadata,
 /// not reconstructed by inspecting emitted operations.
@@ -74,25 +56,10 @@ pub(crate) struct LogicalGeneratedSignature {
     pub convention: CallingConvention,
 }
 
-/// Mutable reuse state for helper functions synthesized during lowering.
-#[derive(Default)]
-struct GeneratedFunctionCache {
-    identity_done_k: Option<Symbol>,
-    normal_done_k: Option<Symbol>,
-}
-
-#[derive(Clone, Copy)]
-enum DoneKKind {
-    Identity,
-    Normal,
-}
-
 /// Context for lowering AST to arena TrunkIR.
 pub struct IrLoweringCtx<'db> {
     pub db: &'db dyn salsa::Database,
     pub path: PathRef,
-    /// Immutable policies selected for this lowering invocation.
-    options: AstToIrOptions,
     /// Span map for looking up source locations.
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
@@ -101,9 +68,6 @@ pub struct IrLoweringCtx<'db> {
     /// Scoped tags identifying locals whose SSA value is a suspended handler
     /// continuation rather than a source value.
     resume_scopes: Vec<HashSet<LocalId>>,
-    /// Dynamic prompt owner token in scope while lowering one general handler
-    /// arm. It is an SSA i32 supplied by the selected evidence Marker.
-    handler_owner_scopes: Vec<Option<ValueRef>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
     /// Source-visible generated callables that have no source TypeScheme.
@@ -122,12 +86,6 @@ pub struct IrLoweringCtx<'db> {
     definition_conventions: HashMap<Symbol, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
     module_path: SymbolVec,
-    /// Counter for generating unique lambda names.
-    lambda_counter: u64,
-    /// Compiler-generated helper functions available for reuse.
-    generated_functions: GeneratedFunctionCache,
-    /// Counter for generating unique local IDs (for synthetic bindings like continuations).
-    local_id_counter: u32,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
     module_block: Option<BlockRef>,
     /// Struct field order: CtorId → [field_names in definition order].
@@ -142,29 +100,9 @@ pub struct IrLoweringCtx<'db> {
     logical_nominal_declarations: HashSet<Symbol>,
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
-    /// Counter for generating unique prompt tags (per-module deterministic).
-    prompt_tag_counter: u32,
-    /// Stack of active prompt tags for nested handlers.
-    /// The top of the stack is the currently active prompt tag.
-    active_prompt_tag_stack: Vec<u32>,
-
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
-
-    /// When true, continuation calls in handler arms use `func.call_indirect`
-    /// instead of `ability.resume` (CPS effect handling mode).
-    pub(crate) cps_handler_mode: bool,
-
-    /// Done continuation for effectful functions in CPS mode.
-    /// When set, pure results at the end of continuation chains should call
-    /// this closure instead of `func.return`.
-    pub(crate) done_k: Option<ValueRef>,
-
-    /// Evidence value for the enclosing effectful function.
-    /// Passed as the first parameter to effectful functions and threaded
-    /// through to effectful callees.
-    pub(crate) evidence: Option<ValueRef>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -185,12 +123,10 @@ impl<'db> IrLoweringCtx<'db> {
         Self {
             db,
             path,
-            options: AstToIrOptions::production(),
             span_map,
             scopes: vec![HashMap::new()],
             local_callable_values: vec![HashMap::new()],
             resume_scopes: vec![HashSet::new()],
-            handler_owner_scopes: vec![None],
             function_types,
             logical_generated_signatures: HashMap::new(),
             logical_source_functions: HashSet::new(),
@@ -198,30 +134,14 @@ impl<'db> IrLoweringCtx<'db> {
             ability_conventions,
             definition_conventions: HashMap::new(),
             module_path,
-            lambda_counter: 0,
-            generated_functions: GeneratedFunctionCache::default(),
-            local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             module_block: None,
             struct_fields: HashMap::new(),
             type_map: im::HashMap::new(),
             logical_nominal_declarations: HashSet::new(),
             compiler_intrinsics: HashMap::new(),
-            prompt_tag_counter: 0,
-            active_prompt_tag_stack: Vec::new(),
 
             node_types,
-            cps_handler_mode: false,
-            done_k: None,
-            evidence: None,
         }
-    }
-
-    /// Select immutable policies before lowering begins.
-    pub(crate) fn with_options(mut self, options: AstToIrOptions) -> Self {
-        debug_assert!(self.generated_functions.identity_done_k.is_none());
-        debug_assert!(self.generated_functions.normal_done_k.is_none());
-        self.options = options;
-        self
     }
 
     pub(crate) fn with_compiler_intrinsics(
@@ -283,8 +203,6 @@ impl<'db> IrLoweringCtx<'db> {
         self.scopes.push(HashMap::new());
         self.local_callable_values.push(HashMap::new());
         self.resume_scopes.push(HashSet::new());
-        self.handler_owner_scopes
-            .push(self.handler_owner_scopes.last().copied().flatten());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
@@ -292,7 +210,6 @@ impl<'db> IrLoweringCtx<'db> {
         self.scopes.pop();
         self.local_callable_values.pop();
         self.resume_scopes.pop();
-        self.handler_owner_scopes.pop();
     }
 
     /// Bind a local variable to an SSA value.
@@ -337,16 +254,6 @@ impl<'db> IrLoweringCtx<'db> {
             .any(|scope| scope.contains(&local_id))
             .then(|| self.lookup(local_id))
             .flatten()
-    }
-
-    pub(crate) fn set_handler_owner_tag(&mut self, owner_tag: ValueRef) {
-        if let Some(slot) = self.handler_owner_scopes.last_mut() {
-            *slot = Some(owner_tag);
-        }
-    }
-
-    pub(crate) fn handler_owner_tag(&self) -> Option<ValueRef> {
-        self.handler_owner_scopes.last().copied().flatten()
     }
 
     /// Look up a function's type scheme by name.
@@ -445,57 +352,6 @@ impl<'db> IrLoweringCtx<'db> {
         None
     }
 
-    /// Generate a unique LocalId for synthetic bindings (e.g., continuations).
-    ///
-    /// # Panics
-    /// Panics if the counter would overflow into the UNRESOLVED sentinel value.
-    pub fn next_local_id(&mut self) -> LocalId {
-        let id = self.local_id_counter;
-        // Ensure we don't hit LocalId::UNRESOLVED (u32::MAX)
-        if id == u32::MAX {
-            panic!("ICE: local_id_counter overflow - would produce UNRESOLVED sentinel");
-        }
-        self.local_id_counter = self
-            .local_id_counter
-            .checked_add(1)
-            .expect("ICE: local_id_counter overflow");
-        LocalId::new(id)
-    }
-
-    /// Enter a prompt tag scope, returning a guard that pops the tag on drop.
-    ///
-    /// The guard dereferences to `IrLoweringCtx`, so callers can use it
-    /// in place of `self`/`ctx`. The prompt tag is automatically popped when
-    /// the guard is dropped, even on early returns or `?`.
-    #[must_use]
-    pub fn prompt_tag_scope(&mut self) -> PromptTagGuard<'_, 'db> {
-        let tag = self.push_prompt_tag();
-        PromptTagGuard { ctx: self, tag }
-    }
-
-    /// Generate a fresh prompt tag and push it onto the active stack (internal — use `prompt_tag_scope()` instead).
-    fn push_prompt_tag(&mut self) -> u32 {
-        let tag = self.prompt_tag_counter;
-        self.prompt_tag_counter = self
-            .prompt_tag_counter
-            .checked_add(1)
-            .expect("ICE: prompt_tag_counter overflow");
-        self.active_prompt_tag_stack.push(tag);
-        tag
-    }
-
-    /// Pop the current active prompt tag from the stack (internal — use `prompt_tag_scope()` instead).
-    fn pop_prompt_tag(&mut self) {
-        self.active_prompt_tag_stack.pop();
-    }
-
-    /// Get the currently active prompt tag.
-    ///
-    /// Returns `None` if not inside a handler context.
-    pub fn active_prompt_tag(&self) -> Option<u32> {
-        self.active_prompt_tag_stack.last().copied()
-    }
-
     /// Qualify a name with the current module path.
     ///
     /// Matches resolve::build_env convention: the top-level module name
@@ -529,75 +385,6 @@ impl<'db> IrLoweringCtx<'db> {
         Symbol::from_dynamic(&prefix)
     }
 
-    /// Generate a unique lambda name qualified with module path.
-    pub fn gen_lambda_name(&mut self) -> Symbol {
-        let lambda_name = format!("__lambda_{}", self.lambda_counter);
-        self.lambda_counter += 1;
-
-        if self.module_path.is_empty() {
-            Symbol::from_dynamic(&lambda_name)
-        } else {
-            let path_str = self
-                .module_path
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("::");
-            Symbol::from_dynamic(&format!("{}::{}", path_str, lambda_name))
-        }
-    }
-
-    /// Generate a unique lambda name owned by the compilation root.
-    pub(crate) fn gen_compilation_unit_lambda_name(&mut self) -> Symbol {
-        let lambda_name = format!("__lambda_{}", self.lambda_counter);
-        self.lambda_counter += 1;
-
-        self.module_path.first().map_or_else(
-            || Symbol::from_dynamic(&lambda_name),
-            |root| Symbol::from_dynamic(&format!("{root}::{lambda_name}")),
-        )
-    }
-
-    /// Return the identity `done_k` function selected by the optimization profile.
-    ///
-    /// The symbol is cached only after `init` completes successfully.
-    pub(crate) fn identity_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
-        self.done_k_func(DoneKKind::Identity, init)
-    }
-
-    /// Return a private CPS completion helper selected by the optimization
-    /// profile. These helpers share the ordinary done-continuation cache policy.
-    pub(crate) fn normal_done_k_func(&mut self, init: impl FnOnce(Symbol)) -> Symbol {
-        self.done_k_func(DoneKKind::Normal, init)
-    }
-
-    fn done_k_func(&mut self, kind: DoneKKind, init: impl FnOnce(Symbol)) -> Symbol {
-        match self.options.done_continuation {
-            DoneContinuationPolicy::PerUse => {
-                let name = self.gen_lambda_name();
-                init(name);
-                return name;
-            }
-            DoneContinuationPolicy::PerCompilationUnit => {}
-        }
-
-        let cached = match kind {
-            DoneKKind::Identity => self.generated_functions.identity_done_k,
-            DoneKKind::Normal => self.generated_functions.normal_done_k,
-        };
-        if let Some(name) = cached {
-            return name;
-        }
-
-        let name = self.gen_compilation_unit_lambda_name();
-        init(name);
-        match kind {
-            DoneKKind::Identity => self.generated_functions.identity_done_k = Some(name),
-            DoneKKind::Normal => self.generated_functions.normal_done_k = Some(name),
-        }
-        name
-    }
-
     /// Register struct field order for lowering Record expressions.
     pub fn register_struct_fields(&mut self, ctor_id: CtorId<'db>, field_names: Vec<Symbol>) {
         self.struct_fields.insert(ctor_id, field_names);
@@ -623,10 +410,10 @@ impl<'db> IrLoweringCtx<'db> {
         self.logical_nominal_declarations.insert(name);
     }
 
-    /// Resolve an AST type to its registered ADT IR type (struct or enum).
+    /// Get the type of an AST node by NodeId.
     ///
-    /// For `Named { name, .. }` types, looks up the type_map by name.
-    /// Returns `None` if the type is not a registered ADT type.
+    /// Returns the type assigned during type checking.
+    /// Used to get the effect type of lambda expressions.
     pub fn resolve_adt_type(&self, ty: crate::ast::Type<'db>) -> Option<TypeRef> {
         match ty.kind(self.db) {
             TypeKind::Named { name, .. } => self.get_type(*name),
@@ -634,10 +421,6 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
-    /// Get the type of an AST node by NodeId.
-    ///
-    /// Returns the type assigned during type checking.
-    /// Used to get the effect type of lambda expressions.
     pub fn get_node_type(&self, node_id: NodeId) -> Option<&crate::ast::Type<'db>> {
         self.node_types.get(&node_id)
     }
@@ -661,46 +444,7 @@ impl<'db> IrLoweringCtx<'db> {
     // Arena type conversion
     // =========================================================================
 
-    /// Convert an AST type to an arena TypeRef.
-    pub fn convert_type(&self, ir: &mut IrContext, ty: crate::ast::Type<'db>) -> TypeRef {
-        match ty.kind(self.db) {
-            TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
-            TypeKind::Float => self.f64_type(ir),
-            TypeKind::Bool => self.bool_type(ir),
-            TypeKind::Bytes => self.bytes_type(ir),
-            TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
-            TypeKind::Never => {
-                // Legacy frontend CPS has no logical bottom representation.
-                self.anyref_type(ir)
-            }
-            TypeKind::BoundVar { .. } | TypeKind::LocalBoundVar { .. } => {
-                // Quantified type variable in TypeScheme body → type-erased any
-                self.anyref_type(ir)
-            }
-            TypeKind::UniVar { id } => {
-                // UniVar surviving substitution indicates incomplete constraint solving.
-                tracing::debug!(
-                    "UniVar({:?}) survived substitution — type-erasing to any",
-                    id
-                );
-                self.anyref_type(ir)
-            }
-            TypeKind::Named { .. } => self.anyref_type(ir),
-            TypeKind::Func { params, result, .. } => {
-                let param_refs: Vec<TypeRef> =
-                    params.iter().map(|p| self.convert_type(ir, *p)).collect();
-                let result_ref = self.convert_type(ir, *result);
-                self.func_type(ir, &param_refs, result_ref)
-            }
-            TypeKind::Tuple(_) => self.anyref_type(ir),
-            TypeKind::App { ctor, .. } => self.convert_type(ir, *ctor),
-            TypeKind::Continuation { .. } => self.anyref_type(ir),
-        }
-    }
-
     /// Convert a source type at the source-logical `tribute_control` boundary.
-    /// This is deliberately separate from `convert_type`, which remains the
-    /// physical representation consumed by the explicit pre-#825 legacy path.
     pub fn convert_logical_type(&self, ir: &mut IrContext, ty: crate::ast::Type<'db>) -> TypeRef {
         match ty.kind(self.db) {
             TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
@@ -867,37 +611,6 @@ impl<'db> IrLoweringCtx<'db> {
         logical_key("univar", [source, id.index(self.db).to_string()])
     }
 
-    /// Convert an AST EffectRow to an arena TypeRef.
-    pub fn convert_effect_row(
-        &self,
-        ir: &mut IrContext,
-        row: crate::ast::EffectRow<'db>,
-    ) -> TypeRef {
-        let effects = row.effects(self.db);
-        let rest = row.rest(self.db);
-
-        // Convert each Effect to an AbilityRefType
-        let ability_types: Vec<TypeRef> = effects
-            .iter()
-            .map(|effect| {
-                let ability_sym = effect.ability_id.qualified(self.db);
-
-                // Convert type arguments
-                let params: Vec<TypeRef> = effect
-                    .args
-                    .iter()
-                    .map(|ty| self.convert_type(ir, *ty))
-                    .collect();
-
-                self.ability_ref_type(ir, ability_sym, &params)
-            })
-            .collect();
-
-        // Create EffectRowType with tail variable if present
-        let tail_var_id = rest.map(|v| v.id as u32).unwrap_or(0);
-        self.effect_row_type(ir, &ability_types, tail_var_id)
-    }
-
     // =========================================================================
     // Arena type helpers
     // =========================================================================
@@ -935,13 +648,6 @@ impl<'db> IrLoweringCtx<'db> {
         tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Create a `func.func_sig` type with params and result.
-    ///
-    /// Construct an input-first, one-result `func.func_sig`.
-    pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        func::func_sig(ir, params.iter().copied(), [result]).as_type_ref()
-    }
-
     /// Create a `core.ability_ref` type.
     pub fn ability_ref_type(
         &self,
@@ -954,21 +660,6 @@ impl<'db> IrLoweringCtx<'db> {
         for &p in params {
             builder = builder.param(p);
         }
-        ir.types.intern(builder.build())
-    }
-
-    /// Create a `core.effect_row` type.
-    pub fn effect_row_type(
-        &self,
-        ir: &mut IrContext,
-        abilities: &[TypeRef],
-        tail_var_id: u32,
-    ) -> TypeRef {
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row"));
-        for &a in abilities {
-            builder = builder.param(a);
-        }
-        builder = builder.attr("tail_var_id", Attribute::Int(tail_var_id as i128));
         ir.types.intern(builder.build())
     }
 
@@ -1072,63 +763,6 @@ impl<'db> IrLoweringCtx<'db> {
                 .build(),
         )
     }
-
-    /// Create the `closure.closure` type wrapping a function type.
-    pub fn closure_type(&self, ir: &mut IrContext, func_type: TypeRef) -> TypeRef {
-        closure::closure(ir, func_type).as_type_ref()
-    }
-
-    /// Check if a type is a `closure.closure` type.
-    pub fn is_closure_type(&self, ir: &IrContext, ty: TypeRef) -> bool {
-        ir.types
-            .is_dialect(ty, Symbol::new("closure"), Symbol::new("closure"))
-    }
-
-    /// Create the `@YieldResult` enum type used by CPS effect handling.
-    ///
-    /// Layout: `adt.enum @YieldResult { Done(anyref), Shift(ShiftInfo) }`
-    /// where ShiftInfo is `adt.struct @ShiftInfo { value, prompt, op_idx, continuation }`.
-    ///
-    /// These types must match the definitions used by tribute-passes,
-    /// ensuring type compatibility across the pipeline.
-    pub fn yield_result_type(&self, ir: &mut IrContext) -> TypeRef {
-        let anyref = self.anyref_type(ir);
-        let i32_ty = self.i32_type(ir);
-
-        // ShiftInfo struct
-        let shift_info_ty = self.adt_struct_type(
-            ir,
-            Symbol::new("@ShiftInfo"),
-            &[
-                (Symbol::new("value"), anyref),
-                (Symbol::new("prompt"), i32_ty),
-                (Symbol::new("op_idx"), i32_ty),
-                (Symbol::new("continuation"), anyref),
-            ],
-        );
-
-        // YieldResult enum
-        self.adt_enum_type(
-            ir,
-            Symbol::new("@YieldResult"),
-            &[
-                (Symbol::new("Done"), vec![anyref]),
-                (Symbol::new("Shift"), vec![shift_info_ty]),
-            ],
-        )
-    }
-
-    /// Check if a type is a `func.func_sig` type.
-    pub fn is_func_type(&self, ir: &IrContext, ty: TypeRef) -> bool {
-        func::FuncSig::from_type_ref(ir, ty).is_some()
-    }
-
-    /// Get the input count from a validated `func.func_sig` type.
-    pub fn func_type_param_count(&self, ir: &IrContext, ty: TypeRef) -> usize {
-        func::FuncSig::from_type_ref(ir, ty)
-            .map(|function| function.inputs(ir).len())
-            .unwrap_or(0)
-    }
 }
 
 /// RAII guard that exits a scope on drop.
@@ -1158,41 +792,6 @@ impl Drop for ScopeGuard<'_, '_> {
     }
 }
 
-/// RAII guard that pops a prompt tag on drop.
-///
-/// Created by [`IrLoweringCtx::prompt_tag_scope()`]. Dereferences to
-/// `IrLoweringCtx` so it can be used as a drop-in replacement for `&mut ctx`.
-pub struct PromptTagGuard<'a, 'db> {
-    ctx: &'a mut IrLoweringCtx<'db>,
-    tag: u32,
-}
-
-impl<'db> PromptTagGuard<'_, 'db> {
-    /// Get the prompt tag managed by this guard.
-    pub fn tag(&self) -> u32 {
-        self.tag
-    }
-}
-
-impl<'db> Deref for PromptTagGuard<'_, 'db> {
-    type Target = IrLoweringCtx<'db>;
-    fn deref(&self) -> &Self::Target {
-        self.ctx
-    }
-}
-
-impl<'db> DerefMut for PromptTagGuard<'_, 'db> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.ctx
-    }
-}
-
-impl Drop for PromptTagGuard<'_, '_> {
-    fn drop(&mut self) {
-        self.ctx.pop_prompt_tag();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1204,28 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn resultless_function_param_count_uses_validated_input_list() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-        let i32_ty = ctx.i32_type(&mut ir);
-        let resultless = func::func_sig(&mut ir, [i32_ty, i32_ty], []).as_type_ref();
-
-        assert!(ctx.is_func_type(&ir, resultless));
-        assert_eq!(ctx.func_type_param_count(&ir, resultless), 2);
-    }
-
-    #[test]
-    fn test_convert_type_bound_var_to_any() {
+    fn test_convert_logical_bound_var_to_any() {
         let db = test_db();
         let mut ir = IrContext::new();
         let path = ir.paths.intern("test.trb".to_owned());
@@ -1240,89 +818,7 @@ mod tests {
         );
 
         let ty = AstType::new(&db, TypeKind::BoundVar { index: 0 });
-        let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.anyref_type(&mut ir);
-        assert_eq!(ir_ty, expected);
-    }
-
-    #[test]
-    fn test_convert_type_named_to_any() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-
-        let int_ty = AstType::new(&db, TypeKind::Int);
-        let ty = AstType::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::builtin_list(&db),
-                name: Symbol::new("List"),
-                args: vec![int_ty],
-            },
-        );
-        let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.anyref_type(&mut ir);
-        assert_eq!(ir_ty, expected);
-    }
-
-    #[test]
-    fn test_convert_type_tuple_to_any() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-
-        let int_ty = AstType::new(&db, TypeKind::Int);
-        let bool_ty = AstType::new(&db, TypeKind::Bool);
-        let ty = AstType::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.anyref_type(&mut ir);
-        assert_eq!(ir_ty, expected);
-    }
-
-    #[test]
-    fn test_convert_type_continuation_to_any() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-
-        let int_ty = AstType::new(&db, TypeKind::Int);
-        let effect = crate::ast::EffectRow::pure(&db);
-        let ty = AstType::new(
-            &db,
-            TypeKind::Continuation {
-                arg: int_ty,
-                result: int_ty,
-                effect,
-            },
-        );
-        let ir_ty = ctx.convert_type(&mut ir, ty);
+        let ir_ty = ctx.convert_logical_type(&mut ir, ty);
         let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
     }
@@ -1655,41 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_type_func_with_bound_vars() {
-        let db = test_db();
-        let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(
-            &db,
-            path,
-            crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
-            smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
-        );
-
-        let bound_var = AstType::new(&db, TypeKind::BoundVar { index: 0 });
-        let effect = crate::ast::EffectRow::pure(&db);
-        let ty = AstType::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-                minimum_convention: CallingConvention::Direct,
-            },
-        );
-        let ir_ty = ctx.convert_type(&mut ir, ty);
-
-        // BoundVar params/result → tribute_rt.any, wrapped in func.func_sig
-        let any_ty = ctx.anyref_type(&mut ir);
-        let expected = ctx.func_type(&mut ir, &[any_ty], any_ty);
-        assert_eq!(ir_ty, expected);
-    }
-
-    #[test]
-    fn test_convert_type_primitives() {
+    fn test_convert_logical_primitives() {
         let db = test_db();
         let mut ir = IrContext::new();
         let path = ir.paths.intern("test.trb".to_owned());
@@ -1705,19 +1167,31 @@ mod tests {
 
         // Int → I32
         let int_ty = AstType::new(&db, TypeKind::Int);
-        assert_eq!(ctx.convert_type(&mut ir, int_ty), ctx.i32_type(&mut ir));
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, int_ty),
+            ctx.i32_type(&mut ir)
+        );
 
         // Bool → I1
         let bool_ty = AstType::new(&db, TypeKind::Bool);
-        assert_eq!(ctx.convert_type(&mut ir, bool_ty), ctx.bool_type(&mut ir));
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, bool_ty),
+            ctx.bool_type(&mut ir)
+        );
 
         // Float → F64
         let float_ty = AstType::new(&db, TypeKind::Float);
-        assert_eq!(ctx.convert_type(&mut ir, float_ty), ctx.f64_type(&mut ir));
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, float_ty),
+            ctx.f64_type(&mut ir)
+        );
 
         // Nil → Nil
         let nil_ty = AstType::new(&db, TypeKind::Nil);
-        assert_eq!(ctx.convert_type(&mut ir, nil_ty), ctx.nil_type(&mut ir));
+        assert_eq!(
+            ctx.convert_logical_type(&mut ir, nil_ty),
+            ctx.nil_type(&mut ir)
+        );
     }
 
     #[test]

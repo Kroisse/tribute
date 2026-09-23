@@ -2,7 +2,7 @@
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ropey::Rope;
-use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 use trunk_ir::diagnostic::DiagnosticSeverity;
 
 use tribute::SourceCst;

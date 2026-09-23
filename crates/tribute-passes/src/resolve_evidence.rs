@@ -1,29 +1,21 @@
 //! Evidence-based dispatch resolution pass.
 //!
-//! This pass resolves `ability.evidence_lookup` and `ability.handle_dispatch`
-//! operations into evidence-based dispatch using runtime function calls.
-//!
-//! It extends evidence at handler boundaries and updates function call sites
-//! to propagate evidence correctly through the call graph.
-//!
-//! This pass expects effectful functions to already have evidence as their
-//! first parameter.
+//! Shared CPS legalization has already established callable signatures and
+//! explicit evidence operands. This pass resolves handler prompt identities and
+//! replaces each delimiter body evidence argument with its extended evidence.
 
-use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
-use tribute_ir::dialect::ability::{self, evidence_abi};
+use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -34,20 +26,6 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
-}
-
-fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
-    let result = ctx
-        .op_result_types(call)
-        .first()
-        .copied()
-        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-    let parameters = ctx.op_operands(call)[1..]
-        .iter()
-        .map(|&value| ctx.value_ty(value))
-        .collect::<Vec<_>>();
-    let signature = func::func_sig(ctx, parameters, [result]).as_type_ref();
-    let _ = func::set_indirect_call_signature(ctx, call, signature);
 }
 
 #[derive(Debug)]
@@ -79,7 +57,6 @@ struct FinalHandleDispatchShape {
     evidence: ValueRef,
     prompt_tag: ValueRef,
     dispatcher_pairs: Vec<(TypeRef, ValueRef, ValueRef)>,
-    body: RegionRef,
     body_evidence: ValueRef,
 }
 
@@ -187,7 +164,6 @@ fn final_handle_dispatch_shape(
         evidence,
         prompt_tag,
         dispatcher_pairs,
-        body: *body,
         body_evidence: *body_evidence,
     })
 }
@@ -216,115 +192,16 @@ pub(crate) fn validate_final_handle_dispatches(
 // Analysis helpers
 // ============================================================================
 
-/// Ensure runtime helper functions exist in the module.
-fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
-    let ops = module.ops(ctx);
-
-    let mut has_lookup = false;
-    let mut has_extend = false;
-    let mut has_next_tag = false;
-
-    for op in &ops {
-        if let Ok(func_op) = func::Func::from_op(ctx, *op) {
-            let name = func_op.sym_name(ctx);
-            if name == Symbol::new(evidence_abi::LOOKUP) {
-                has_lookup = true;
-            } else if name == Symbol::new(evidence_abi::EXTEND) {
-                has_extend = true;
-            } else if name == Symbol::new("__tribute_next_tag") {
-                has_next_tag = true;
-            }
-        }
-    }
-
-    if has_lookup && has_extend && has_next_tag {
-        return;
-    }
-
+/// Ensure the runtime prompt allocator is declared.
+fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
+    let has_next_tag = module.ops(ctx).into_iter().any(|op| {
+        func::Func::from_op(ctx, op)
+            .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("__tribute_next_tag"))
+    });
     let Some(module_block) = module.first_block(ctx) else {
         return;
     };
     let loc = ctx.op(module.op()).location;
-
-    let first_existing_op = ctx.block(module_block).ops.first().copied();
-
-    if !has_lookup {
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let i32_ty = i32_type_ref(ctx);
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-
-        // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = func::func_sig(ctx, [evidence_ty, i32_ty], [marker_ty]).as_type_ref();
-
-        // Body with unreachable
-        let body_block = ctx.create_block(trunk_ir::context::BlockData {
-            location: loc,
-            args: vec![
-                trunk_ir::context::BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                trunk_ir::context::BlockArgData {
-                    ty: i32_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let unreachable_op = func::unreachable(ctx, loc);
-        ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::context::RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![body_block],
-            parent_op: None,
-        });
-        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::LOOKUP), func_ty, body);
-        if let Some(first) = first_existing_op {
-            ctx.insert_op_before(module_block, first, func_op.op_ref());
-        } else {
-            ctx.push_op(module_block, func_op.op_ref());
-        }
-    }
-
-    if !has_extend {
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-
-        // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = func::func_sig(ctx, [evidence_ty, marker_ty], [evidence_ty]).as_type_ref();
-
-        let body_block = ctx.create_block(trunk_ir::context::BlockData {
-            location: loc,
-            args: vec![
-                trunk_ir::context::BlockArgData {
-                    ty: evidence_ty,
-                    attrs: Default::default(),
-                },
-                trunk_ir::context::BlockArgData {
-                    ty: marker_ty,
-                    attrs: Default::default(),
-                },
-            ],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let unreachable_op = func::unreachable(ctx, loc);
-        ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::context::RegionData {
-            location: loc,
-            blocks: trunk_ir::smallvec::smallvec![body_block],
-            parent_op: None,
-        });
-        let func_op = func::func(ctx, loc, Symbol::new(evidence_abi::EXTEND), func_ty, body);
-        // Insert at the beginning of the module
-        let first_op = ctx.block(module_block).ops.first().copied();
-        if let Some(first) = first_op {
-            ctx.insert_op_before(module_block, first, func_op.op_ref());
-        } else {
-            ctx.push_op(module_block, func_op.op_ref());
-        }
-    }
 
     if !has_next_tag {
         let i32_ty = i32_type_ref(ctx);
@@ -351,773 +228,74 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// Collect functions with evidence first parameter.
-fn collect_functions_with_evidence(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
-    let mut fns_with_evidence = HashSet::new();
-    for op in module.ops(ctx) {
-        if let Ok(func_op) = func::Func::from_op(ctx, op) {
-            let func_ty = func_op.r#type(ctx);
-            if has_evidence_first_param(ctx, func_ty) {
-                fns_with_evidence.insert(func_op.sym_name(ctx));
-            }
-        }
-    }
-    fns_with_evidence
-}
-
-/// Check if a `func.func_sig` type has evidence as its first parameter.
-fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let Some(func) = func::FuncSig::from_type_ref(ctx, func_ty) else {
-        return false;
-    };
-    let params = func.inputs(ctx);
-    if params.is_empty() {
-        return false;
-    }
-    ability::is_evidence_type_ref(ctx, params[0])
-}
-
-/// Collect handler-root functions (contain push_prompt but no evidence param).
-fn collect_handler_root_functions(
-    ctx: &IrContext,
-    module: Module,
-    fns_with_evidence: &HashSet<Symbol>,
-) -> HashSet<Symbol> {
-    let mut handler_roots = HashSet::new();
-    for op in module.ops(ctx) {
-        if let Ok(func_op) = func::Func::from_op(ctx, op) {
-            let func_name = func_op.sym_name(ctx);
-            if fns_with_evidence.contains(&func_name) {
-                continue;
-            }
-            let Some(body) = func_op.body_if_present(ctx) else {
-                continue;
-            };
-            if region_contains_handle_dispatch(ctx, body) {
-                handler_roots.insert(func_name);
-            }
-        }
-    }
-    handler_roots
-}
-
-/// Check if a region contains `ability.handle_dispatch`.
-fn region_contains_handle_dispatch(ctx: &IrContext, region: RegionRef) -> bool {
-    for &block in ctx.region(region).blocks.iter() {
-        for &op in ctx.block(block).ops.iter() {
-            if ability::LegacyHandleDispatch::from_op(ctx, op).is_ok()
-                || ability::HandleDispatch::from_op(ctx, op).is_ok()
-            {
-                return true;
-            }
-            for &nested in ctx.op(op).regions.iter() {
-                if region_contains_handle_dispatch(ctx, nested) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Collect handled abilities by tag from `ability.handle_dispatch` ops in a block.
-fn collect_handled_abilities_by_tag(
-    ctx: &IrContext,
-    block: BlockRef,
-) -> HashMap<u32, Vec<TypeRef>> {
-    let mut map = HashMap::new();
-    for &op in ctx.block(block).ops.iter() {
-        if let Ok(dispatch_op) = ability::LegacyHandleDispatch::from_op(ctx, op) {
-            let tag = dispatch_op.tag(ctx);
-            let abilities = collect_abilities_from_body_region(ctx, dispatch_op.body(ctx));
-            map.insert(tag, abilities);
-        }
-    }
-    map
-}
-
-/// Extract handled ability types from a handler body region.
-///
-/// Looks for `ability.yield` and `ability.suspend` ops in the body's first block.
-fn collect_abilities_from_body_region(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef> {
-    let mut abilities = Vec::new();
-    let blocks = &ctx.region(body).blocks;
-    if let Some(&first_block) = blocks.first() {
-        for &child_op in ctx.block(first_block).ops.iter() {
-            let ability_ref = if let Ok(yield_op) = ability::Yield::from_op(ctx, child_op) {
-                Some(yield_op.ability_ref(ctx))
-            } else if let Ok(suspend_op) = ability::Suspend::from_op(ctx, child_op) {
-                Some(suspend_op.ability_ref(ctx))
-            } else {
-                None
-            };
-            if let Some(ability_ref) = ability_ref
-                && !abilities.contains(&ability_ref)
-            {
-                abilities.push(ability_ref);
-            }
-        }
-    }
-    abilities
-}
-
-// ============================================================================
-// Transform functions
-// ============================================================================
-
-/// Transform handler-root functions (contain push_prompt but no evidence param).
-///
-/// For effect-polymorphic handler roots (with tail_var_id), an evidence parameter
-/// is added so that outer handler evidence is propagated through nested handlers.
-fn transform_handler_roots(
+/// Resolve each explicit delimiter without changing callable signatures or calls.
+fn resolve_delimiters(
     ctx: &mut IrContext,
     module: Module,
-    handler_root_fns: &HashSet<Symbol>,
-    fns_with_evidence: &mut HashSet<Symbol>,
-) -> Result<HashSet<Symbol>, ResolveEvidenceError> {
-    let func_ops: Vec<OpRef> = module.ops(ctx);
-
-    // Phase 1: Add evidence params to effect-polymorphic handler roots.
-    // Must be done before transforming blocks, so that recursive calls
-    // see the updated signature.
-    let mut polymorphic_roots: HashSet<Symbol> = HashSet::new();
-    for &func_op_ref in &func_ops {
-        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
-            continue;
-        };
-        let func_name = func_op.sym_name(ctx);
-        if !handler_root_fns.contains(&func_name) {
-            continue;
-        }
-
-        let func_ty = func_op.r#type(ctx);
-
-        // Only process handler roots that already have evidence (effectful functions).
-        // Pure handler roots (like main) don't need evidence — their handlers
-        // create evidence internally via adt.ref_null.
-        if !crate::evidence::has_evidence_first_param(ctx, func_ty) {
-            continue;
-        }
-
-        polymorphic_roots.insert(func_name);
-        fns_with_evidence.insert(func_name);
-    }
-
-    // Phase 2: Transform all handler root functions.
-    let func_ops: Vec<OpRef> = module.ops(ctx);
-    for func_op_ref in func_ops {
-        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
-            continue;
-        };
-        let func_name = func_op.sym_name(ctx);
-        if !handler_root_fns.contains(&func_name) {
-            continue;
-        }
-
-        let Some(body) = func_op.body_if_present(ctx) else {
-            continue;
-        };
-        let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
-        let Some(&entry_block) = blocks.first() else {
-            continue;
-        };
-
-        let loc = ctx.op(func_op_ref).location;
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let i32_ty = i32_type_ref(ctx);
-
-        let (ev_value, prepend_evidence) = if polymorphic_roots.contains(&func_name) {
-            // Use evidence parameter from caller (first block arg)
-            let ev = ctx.block_args(entry_block)[0];
-            (ev, true) // evidence param exists but calls haven't been updated yet
-        } else {
-            // Create empty evidence for non-polymorphic handler roots
-            let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
-            let empty_evidence = adt::array_new(
-                ctx,
-                loc,
-                vec![ctx.op_result(zero_const.op_ref(), 0)],
-                evidence_ty,
-                evidence_ty,
-            );
-            let ev = ctx.op_result(empty_evidence.op_ref(), 0);
-
-            let first_op = ctx.block(entry_block).ops.first().copied();
-            if let Some(first) = first_op {
-                ctx.insert_op_before(entry_block, first, zero_const.op_ref());
-                ctx.insert_op_before(entry_block, first, empty_evidence.op_ref());
-            } else {
-                ctx.push_op(entry_block, zero_const.op_ref());
-                ctx.push_op(entry_block, empty_evidence.op_ref());
-            }
-            (ev, true) // prepend evidence to calls
-        };
-
-        let handled_by_tag = collect_handled_abilities_by_tag(ctx, entry_block);
-        transform_shifts_in_block(
-            ctx,
-            entry_block,
-            ev_value,
-            &handled_by_tag,
-            fns_with_evidence,
-            prepend_evidence,
-        )?;
-
-        for &block in blocks.iter().skip(1) {
-            let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
-            transform_shifts_in_block(
-                ctx,
-                block,
-                ev_value,
-                &handled_by_tag,
-                fns_with_evidence,
-                prepend_evidence,
-            )?;
-        }
-    }
-
-    Ok(polymorphic_roots)
-}
-
-/// Update call sites across the module to pass evidence to newly-evidenced
-/// handler root functions.
-///
-/// For callers with evidence (first block arg), uses that evidence.
-/// For callers without evidence (pure functions), creates empty evidence.
-fn update_calls_to_newly_evidenced(
-    ctx: &mut IrContext,
-    module: Module,
-    newly_evidenced: &HashSet<Symbol>,
-    handler_root_fns: &HashSet<Symbol>,
-) {
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    let i32_ty = i32_type_ref(ctx);
-
-    let func_ops: Vec<OpRef> = module.ops(ctx);
-    for func_op_ref in func_ops {
-        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
-            continue;
-        };
-        let func_name = func_op.sym_name(ctx);
-        // Handler roots already handle their own calls via transform_handler_roots.
-        if handler_root_fns.contains(&func_name) {
-            continue;
-        }
-
-        let Some(body) = func_op.body_if_present(ctx) else {
-            continue;
-        };
-        update_calls_in_region(ctx, body, newly_evidenced, evidence_ty, i32_ty);
-    }
-}
-
-fn update_calls_in_region(
-    ctx: &mut IrContext,
     region: RegionRef,
-    newly_evidenced: &HashSet<Symbol>,
-    evidence_ty: TypeRef,
-    i32_ty: TypeRef,
-) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+) -> Result<(), ResolveEvidenceError> {
+    let blocks = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.to_vec();
         for op in ops {
-            // Recurse into nested regions first
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-            for r in regions {
-                update_calls_in_region(ctx, r, newly_evidenced, evidence_ty, i32_ty);
-            }
-
-            let Ok(call_op) = func::Call::from_op(ctx, op) else {
-                continue;
-            };
-            let callee = call_op.callee(ctx);
-            if !newly_evidenced.contains(&callee) {
-                continue;
-            }
-
-            // Check if evidence is already the first argument
-            let operands = ctx.op_operands(op).to_vec();
-            if !operands.is_empty() && ability::is_evidence_type_ref(ctx, ctx.value_ty(operands[0]))
-            {
-                continue;
-            }
-
-            let loc = ctx.op(op).location;
-
-            // Use enclosing evidence if available, otherwise create empty
-            let ev = if let Some(enclosing) = crate::evidence::find_enclosing_evidence(ctx, op) {
-                enclosing
-            } else {
-                let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
-                let empty = adt::array_new(
-                    ctx,
-                    loc,
-                    vec![ctx.op_result(zero.op_ref(), 0)],
-                    evidence_ty,
-                    evidence_ty,
-                );
-                ctx.insert_op_before(block, op, zero.op_ref());
-                ctx.insert_op_before(block, op, empty.op_ref());
-                ctx.op_result(empty.op_ref(), 0)
-            };
-
-            // Build new call with evidence prepended
-            let mut new_args = vec![ev];
-            new_args.extend(operands.iter().copied());
-
-            let result_ty = ctx
-                .op_result_types(op)
-                .first()
-                .copied()
-                .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-
-            let new_call = func::call(ctx, loc, new_args, [result_ty], callee);
-
-            if !ctx.op_results(op).is_empty() {
-                let old_result = ctx.op_result(op, 0);
-                let new_result = ctx.op_result(new_call.op_ref(), 0);
-                ctx.replace_all_uses(old_result, new_result);
-            }
-
-            ctx.insert_op_before(block, op, new_call.op_ref());
-            erase_op(ctx, op);
-        }
-    }
-}
-
-/// Transform shifts in all functions that have evidence.
-fn transform_shifts_in_module(
-    ctx: &mut IrContext,
-    module: Module,
-    fns_with_evidence: &HashSet<Symbol>,
-) -> Result<(), ResolveEvidenceError> {
-    let func_ops: Vec<OpRef> = module.ops(ctx);
-    for func_op_ref in func_ops {
-        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
-            continue;
-        };
-        let func_name = func_op.sym_name(ctx);
-        if !fns_with_evidence.contains(&func_name) {
-            continue;
-        }
-
-        let Some(body) = func_op.body_if_present(ctx) else {
-            continue;
-        };
-        let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
-        let Some(&entry_block) = blocks.first() else {
-            continue;
-        };
-
-        // Get evidence from first block argument
-        let args = ctx.block_args(entry_block);
-        if args.is_empty() {
-            continue;
-        }
-        let ev_value = args[0];
-
-        // Pass fns_with_evidence so that inside push_prompt bodies (where evidence
-        // changes via evidence_extend), func.call evidence arguments get updated.
-        // At the top level, evidence is already correct (evidence_calls added it),
-        // so the first_arg == ev_value check prevents unnecessary changes.
-        // prepend_evidence=false: evidence_calls already added evidence as first arg.
-        for &block in blocks.iter() {
-            let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
-            transform_shifts_in_block(
-                ctx,
-                block,
-                ev_value,
-                &handled_by_tag,
-                fns_with_evidence,
-                false, // replace evidence (already present as first arg)
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Transform shifts in a single block.
-///
-/// This is the core transformation function. It processes operations in order,
-/// handling push_prompt, shift, func.call, and func.call_indirect.
-///
-/// `ev_value` is the current evidence value in scope. For push_prompt bodies,
-/// this is the extended evidence (after evidence_extend calls).
-///
-/// `prepend_evidence`: when true, evidence is PREPENDED to call args (for handler root
-/// functions where evidence_calls couldn't add evidence). When false, evidence REPLACES
-/// the first arg (for functions where evidence_calls already added it).
-#[allow(clippy::too_many_arguments)]
-fn transform_shifts_in_block(
-    ctx: &mut IrContext,
-    block: BlockRef,
-    ev_value: ValueRef,
-    handled_by_tag: &HashMap<u32, Vec<TypeRef>>,
-    fns_with_evidence: &HashSet<Symbol>,
-    prepend_evidence: bool,
-) -> Result<(), ResolveEvidenceError> {
-    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-
-    for op in ops {
-        // Final resultless delimiter. Its operands are explicit and typed:
-        // [evidence, tr_dispatch_0, handler_dispatch_0, ...].
-        // The ability_refs list has exactly one entry per dispatch pair.
-        if ability::HandleDispatch::from_op(ctx, op).is_ok() {
-            let location = ctx.op(op).location;
-            let shape = final_handle_dispatch_shape(ctx, op)?;
-            let mut current_ev = shape.evidence;
-            let mut prompt_tag = shape.prompt_tag;
-            if let ValueDef::OpResult(prompt_op, _) = ctx.value_def(prompt_tag)
-                && effect::FreshPromptTag::from_op(ctx, prompt_op).is_ok()
-            {
-                let i32_ty = i32_type_ref(ctx);
-                let prompt = func::call(
-                    ctx,
-                    location,
-                    std::iter::empty::<ValueRef>(),
-                    [i32_ty],
-                    Symbol::new("__tribute_next_tag"),
-                );
-                let resolved = prompt.result(ctx);
-                ctx.insert_op_before(block, op, prompt.op_ref());
-                ctx.replace_all_uses(prompt_tag, resolved);
-                erase_op(ctx, prompt_op);
-                prompt_tag = resolved;
-            }
-            let evidence_ty = ability::evidence_adt_type_ref(ctx);
-            for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
-                let extend = effect::extend(
-                    ctx,
-                    location,
-                    current_ev,
-                    prompt_tag,
-                    tr_dispatch,
-                    handler_dispatch,
-                    evidence_ty,
-                    ability_ref,
-                );
-                current_ev = extend.result(ctx);
-                ctx.insert_op_before(block, op, extend.op_ref());
-            }
-
-            ctx.replace_all_uses(shape.body_evidence, current_ev);
-            transform_shifts_in_region(
-                ctx,
-                shape.body,
-                current_ev,
-                fns_with_evidence,
-                prepend_evidence,
-            )?;
-            continue;
-        }
-
-        // Handle ability.handle_dispatch — extend evidence before
-        // the body closure call and transform the handler body region.
-        if let Ok(dispatch_op) = ability::LegacyHandleDispatch::from_op(ctx, op) {
-            let loc = ctx.op(op).location;
-            let tag = dispatch_op.tag(ctx);
-            let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
-
-            // The frontend emits a target-independent fresh-token request at
-            // every handle. Resolve it here, before either backend and before
-            // lower_handle_dispatch consume the handle boundary.
-            let owner_request = dispatch_op.owner_tag(ctx);
-            let owner_tag = match ctx.value_def(owner_request) {
-                ValueDef::OpResult(owner_op, _)
-                    if effect::FreshPromptTag::from_op(ctx, owner_op).is_ok() =>
+            if ability::HandleDispatch::from_op(ctx, op).is_ok() {
+                let location = ctx.op(op).location;
+                let shape = final_handle_dispatch_shape(ctx, op)?;
+                let mut current_ev = shape.evidence;
+                let mut prompt_tag = shape.prompt_tag;
+                if let ValueDef::OpResult(prompt_op, _) = ctx.value_def(prompt_tag)
+                    && effect::FreshPromptTag::from_op(ctx, prompt_op).is_ok()
                 {
+                    ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
-                    let tag_call = func::call(
+                    let prompt = func::call(
                         ctx,
-                        loc,
+                        location,
                         std::iter::empty::<ValueRef>(),
                         [i32_ty],
                         Symbol::new("__tribute_next_tag"),
                     );
-                    let tag_val = tag_call.result(ctx);
-                    ctx.insert_op_before(block, op, tag_call.op_ref());
-                    ctx.replace_all_uses(owner_request, tag_val);
-                    erase_op(ctx, owner_op);
-                    tag_val
+                    let resolved = prompt.result(ctx);
+                    ctx.insert_op_before(block, op, prompt.op_ref());
+                    ctx.replace_all_uses(prompt_tag, resolved);
+                    erase_op(ctx, prompt_op);
+                    prompt_tag = resolved;
                 }
-                _ => owner_request,
-            };
-
-            let mut current_ev = ev_value;
-
-            if !abilities.is_empty() {
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
-
-                // All evidence extension ops are inserted before handle_dispatch.
-                // The body closure call (which needs extended evidence) is moved
-                // to after the extension, also before handle_dispatch.
-
-                // Extract handler_fn and tr_dispatch_fn from handle_dispatch operands.
-                // Keep them as semantic closure values; backend-specific lowering
-                // chooses the concrete function/environment representation.
-                let operands = ctx.op_operands(op).to_vec();
-
-                let tr_dispatch_fn_val = *operands
-                    .get(3)
-                    .expect("handle_dispatch must have operand[3] (tr_dispatch_fn)");
-                let handler_dispatch_val = *operands
-                    .get(2)
-                    .expect("handle_dispatch must have operand[2] (handler closure)");
-
-                // Extend evidence for each ability
-                for &ability_ref in &abilities {
-                    let extend_op = effect::extend(
+                for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
+                    let extend = effect::extend(
                         ctx,
-                        loc,
+                        location,
                         current_ev,
-                        owner_tag,
-                        tr_dispatch_fn_val,
-                        handler_dispatch_val,
+                        prompt_tag,
+                        tr_dispatch,
+                        handler_dispatch,
                         evidence_ty,
                         ability_ref,
                     );
-                    current_ev = extend_op.result(ctx);
-                    ctx.insert_op_before(block, op, extend_op.op_ref());
+                    current_ev = extend.result(ctx);
+                    ctx.insert_op_before(block, op, extend.op_ref());
                 }
 
-                // Find the body closure call and move it after evidence extension.
-                // The body call produces handle_dispatch's operand[0] and originally
-                // appears before handle_dispatch. We remove it, create a new call
-                // with extended evidence, and insert it just before handle_dispatch
-                // (after all evidence extension ops).
-                let yr_operand = ctx.op_operands(op)[0];
-                let block_ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-                for &candidate in &block_ops {
-                    let results = ctx.op_results(candidate);
-                    if !results.is_empty()
-                        && results[0] == yr_operand
-                        && func::CallIndirect::from_op(ctx, candidate).is_ok()
-                    {
-                        let operands = ctx.op_operands(candidate).to_vec();
-                        // Replace evidence arg (index 1: [table_idx, evidence, ...rest])
-                        if operands.len() >= 2 {
-                            let new_call = func::call_indirect(
-                                ctx,
-                                loc,
-                                operands[0],
-                                std::iter::once(current_ev)
-                                    .chain(operands[2..].iter().copied())
-                                    .collect::<Vec<_>>(),
-                                [ctx.op_result_types(candidate)[0]],
-                                None,
-                            );
-                            attach_exact_indirect_signature(ctx, new_call.op_ref());
-                            let old_result = ctx.op_result(candidate, 0);
-                            let new_result = ctx.op_result(new_call.op_ref(), 0);
-                            ctx.replace_all_uses(old_result, new_result);
-                            // Insert new call before handle_dispatch (after evidence extension)
-                            ctx.insert_op_before(block, op, new_call.op_ref());
-                            erase_op(ctx, candidate);
-                        }
-                        break;
-                    }
-                }
+                ctx.replace_all_uses(shape.body_evidence, current_ev);
             }
-
-            // Always transform handler body region, even when abilities is
-            // empty, so that any shifts inside are properly resolved.
-            let handler_body = dispatch_op.body(ctx);
-            transform_shifts_in_region(
-                ctx,
-                handler_body,
-                current_ev,
-                fns_with_evidence,
-                prepend_evidence,
-            )?;
-            continue;
-        }
-
-        // Handle func.call to effectful functions: update evidence argument.
-        if let Ok(call_op) = func::Call::from_op(ctx, op) {
-            let callee = call_op.callee(ctx);
-            if fns_with_evidence.contains(&callee) {
-                let current_operands = ctx.op_operands(op).to_vec();
-                let first_arg = current_operands.first().copied();
-                if first_arg != Some(ev_value) {
-                    let loc = ctx.op(op).location;
-                    let result_ty = ctx
-                        .op_result_types(op)
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-
-                    let new_args = if prepend_evidence {
-                        // Handler root: evidence_calls couldn't add evidence,
-                        // so PREPEND it before all existing args.
-                        let mut args = vec![ev_value];
-                        args.extend(current_operands.iter().copied());
-                        args
-                    } else {
-                        // Functions with evidence: evidence_calls already added
-                        // evidence as first arg. REPLACE old evidence with current.
-                        let mut args = vec![ev_value];
-                        args.extend(current_operands[1..].iter().copied());
-                        args
-                    };
-
-                    let new_call = func::call(ctx, loc, new_args, [result_ty], callee);
-
-                    if !ctx.op_results(op).is_empty() {
-                        let old_result = ctx.op_result(op, 0);
-                        let new_result = ctx.op_result(new_call.op_ref(), 0);
-                        ctx.replace_all_uses(old_result, new_result);
-                    }
-
-                    ctx.insert_op_before(block, op, new_call.op_ref());
-                    erase_op(ctx, op);
-                    continue;
-                }
+            let regions = ctx.op(op).regions.to_vec();
+            for region in regions {
+                resolve_delimiters(ctx, module, region)?;
             }
-        }
-
-        // Handle func.call_indirect: replace evidence argument (index 1)
-        if func::CallIndirect::from_op(ctx, op).is_ok() {
-            let current_operands = ctx.op_operands(op).to_vec();
-            if current_operands.len() >= 2 {
-                let current_ev = current_operands[1];
-                if current_ev != ev_value {
-                    let loc = ctx.op(op).location;
-                    let result_ty = ctx
-                        .op_result_types(op)
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-                    let table_idx = current_operands[0];
-                    let mut new_args = vec![ev_value];
-                    new_args.extend(current_operands[2..].iter().copied());
-
-                    let new_call =
-                        func::call_indirect(ctx, loc, table_idx, new_args, [result_ty], None);
-                    attach_exact_indirect_signature(ctx, new_call.op_ref());
-
-                    if !ctx.op_results(op).is_empty() {
-                        let old_result = ctx.op_result(op, 0);
-                        let new_result = ctx.op_result(new_call.op_ref(), 0);
-                        ctx.replace_all_uses(old_result, new_result);
-                    }
-
-                    ctx.insert_op_before(block, op, new_call.op_ref());
-                    erase_op(ctx, op);
-                    continue;
-                }
-            }
-        }
-
-        // Handle ability.evidence_lookup (from CPS lower_ability_perform pass).
-        // Replace with: func.call @__tribute_evidence_lookup(%ev, %ability_id)
-        if let Ok(lookup_op) = ability::EvidenceLookup::from_op(ctx, op) {
-            let loc = ctx.op(op).location;
-            let ability_ref = lookup_op.ability_ref(ctx);
-            let marker_ty = ability::marker_adt_type_ref(ctx);
-            let i32_ty = i32_type_ref(ctx);
-
-            // %ability_id_const = arith.const ability_id
-            let ability_id_const = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-            let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
-            ctx.insert_op_before(block, op, ability_id_const.op_ref());
-
-            // %marker = func.call @__tribute_evidence_lookup(%ev, %ability_id)
-            let lookup_call = func::call(
-                ctx,
-                loc,
-                vec![ev_value, ability_id_val],
-                [marker_ty],
-                Symbol::new(evidence_abi::LOOKUP),
-            );
-            let new_marker = ctx.op_result(lookup_call.op_ref(), 0);
-            ctx.insert_op_before(block, op, lookup_call.op_ref());
-
-            // Replace uses of old result with new marker
-            let old_result = ctx.op_result(op, 0);
-            ctx.replace_all_uses(old_result, new_marker);
-            erase_op(ctx, op);
-            continue;
-        }
-
-        // Recursively transform nested regions
-        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-        for region in regions {
-            transform_shifts_in_region(ctx, region, ev_value, fns_with_evidence, prepend_evidence)?;
         }
     }
     Ok(())
 }
 
-/// Transform shifts in a region.
-fn transform_shifts_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    ev_value: ValueRef,
-    fns_with_evidence: &HashSet<Symbol>,
-    prepend_evidence: bool,
-) -> Result<(), ResolveEvidenceError> {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
-        transform_shifts_in_block(
-            ctx,
-            block,
-            ev_value,
-            &handled_by_tag,
-            fns_with_evidence,
-            prepend_evidence,
-        )?;
-    }
-    Ok(())
-}
-
-// ============================================================================
-// Entry point
-// ============================================================================
-
-/// Resolve evidence-based dispatch for ability operations.
-///
-/// Transforms `ability.evidence_lookup` and `ability.handle_dispatch`
-/// into evidence-based dispatch using runtime function calls. This enables
-/// proper handler dispatch at runtime.
+/// Resolve runtime prompt identities and explicit handler evidence extensions.
 pub(crate) fn resolve_evidence_dispatch(
     ctx: &mut IrContext,
     module: Module,
 ) -> Result<(), ResolveEvidenceError> {
     validate_final_handle_dispatches(ctx, module)?;
-
-    // Ensure runtime helpers exist
-    ensure_runtime_functions(ctx, module);
-
-    // Collect functions with evidence
-    let mut fns_with_evidence = collect_functions_with_evidence(ctx, module);
-
-    // Transform handler-root functions first
-    let handler_root_fns = collect_handler_root_functions(ctx, module, &fns_with_evidence);
-    let newly_evidenced = if !handler_root_fns.is_empty() {
-        transform_handler_roots(ctx, module, &handler_root_fns, &mut fns_with_evidence)?
-    } else {
-        HashSet::new()
-    };
-
-    // For newly-evidenced handler roots, update call sites across the module
-    // (e.g., main calling run_reader, lambda_3 calling run_state).
-    if !newly_evidenced.is_empty() {
-        update_calls_to_newly_evidenced(ctx, module, &newly_evidenced, &handler_root_fns);
-    }
-
-    // Transform shifts in functions with evidence (excluding handler roots
-    // which were already transformed above).
-    if !fns_with_evidence.is_empty() {
-        let non_root_evidence_fns: HashSet<Symbol> = fns_with_evidence
-            .iter()
-            .filter(|name| !handler_root_fns.contains(name))
-            .copied()
-            .collect();
-        if !non_root_evidence_fns.is_empty() {
-            transform_shifts_in_module(ctx, module, &non_root_evidence_fns)?;
-        }
+    if let Some(body) = module.body(ctx) {
+        resolve_delimiters(ctx, module, body)?;
     }
     Ok(())
 }
@@ -1234,21 +412,16 @@ mod tests {
         resolve_evidence_dispatch(&mut ctx, module).unwrap();
         let resolved = print_module(&ctx, module.op());
         assert_eq!(resolved.matches("effect.extend").count(), 2);
+        for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
+            assert!(
+                module.ops(&ctx).into_iter().all(|op| {
+                    ctx.op(op).attributes.get_symbol("sym_name") != Some(Symbol::new(name))
+                }),
+                "shared resolution must not fabricate target helper {name}"
+            );
+        }
         assert_eq!(resolved.matches("func.call").count(), 0);
-        let next_tag = module
-            .ops(&ctx)
-            .iter()
-            .copied()
-            .find(|&op| {
-                ctx.op(op).attributes.get_symbol("sym_name")
-                    == Some(Symbol::new("__tribute_next_tag"))
-            })
-            .expect("runtime tag declaration");
-        assert_eq!(
-            trunk_ir::callable::classify_callable_body(&ctx, next_tag),
-            Ok(trunk_ir::callable::CallableBody::Declaration)
-        );
-        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
+        assert!(!resolved.contains("__tribute_next_tag"));
         assert!(resolved.contains("ability.handle_dispatch"));
         let mut extensions = Vec::new();
         let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
@@ -1296,6 +469,20 @@ mod tests {
             1,
             "{resolved}"
         );
+        let next_tag = module
+            .ops(&ctx)
+            .iter()
+            .copied()
+            .find(|&op| {
+                ctx.op(op).attributes.get_symbol("sym_name")
+                    == Some(Symbol::new("__tribute_next_tag"))
+            })
+            .expect("runtime tag declaration");
+        assert_eq!(
+            trunk_ir::callable::classify_callable_body(&ctx, next_tag),
+            Ok(trunk_ir::callable::CallableBody::Declaration)
+        );
+        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
         assert_eq!(resolved.matches("func.call").count(), 1, "{resolved}");
     }
 
@@ -1457,9 +644,11 @@ mod tests {
   !evidence = core.array(!marker)
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
-  func.func @body(%ev: !evidence) -> !marker {
-    %marker = ability.evidence_lookup %ev {ability_ref = core.ability_ref() {name = @State}} : !marker
-    func.return %marker
+  func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {
+    ability.handle_dispatch %ev, %prompt {ability_refs = []} {
+      ^body(%inner: !evidence):
+        func.tail_call %inner {callee = @finish}
+    }
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -1476,17 +665,16 @@ mod tests {
             resolved.contains("func.func @evidence_external(%arg0: !evidence) -> !marker\n"),
             "evidence-bearing external declaration changed or disappeared:\n{resolved}"
         );
-        assert!(
-            !resolved.contains("ability.evidence_lookup"),
-            "body-bearing function was not processed:\n{resolved}"
-        );
-        assert!(
-            resolved.contains("func.call") && resolved.contains("__tribute_evidence_lookup"),
-            "body-bearing evidence lookup was not resolved:\n{resolved}"
-        );
+        let body = module
+            .ops(&ctx)
+            .into_iter()
+            .find(|&op| ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("body")))
+            .unwrap();
+        let entry = ctx.region(ctx.op(body).regions[0]).blocks[0];
+        let outer_evidence = ctx.block_args(entry)[0];
+        let delimiter = ctx.block(entry).ops[0];
+        let inner = ctx.region(ctx.op(delimiter).regions[0]).blocks[0];
+        let tail = ctx.block(inner).ops[0];
+        assert_eq!(ctx.op_operands(tail), &[outer_evidence]);
     }
-
-    // Note: CPS-specific evidence resolution (ability.evidence_lookup,
-    // ability.handle_dispatch evidence extension) requires full pipeline
-    // context. These paths are covered by e2e_ability_core integration tests.
 }

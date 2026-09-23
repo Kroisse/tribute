@@ -1,66 +1,34 @@
-# Tribute Development Plans
+# Tribute Feature Proposals
 
-This directory contains implementation plans for major features.
+언어와 compiler phase의 authoritative contract는 [`new-plans/`](../new-plans/)에
+있다. 현재 target 지원과 실행 증거는
+[`capabilities.md`](../new-plans/capabilities.md)를 따른다. 구현 작업과 진행 상황은
+GitHub Issues에서 추적한다.
 
-> **Important**: The source of truth for language and compiler design is **[../new-plans/](../new-plans/)**.
-> This directory is for implementation plans and work tracking.
+## Compiler Design
 
-## Language Design (Source of Truth)
+| 문서 | 범위 |
+| ---- | ---- |
+| [design.md](../new-plans/design.md) | 언어와 source-logical compiler 구조 |
+| [syntax.md](../new-plans/syntax.md) | Source syntax |
+| [types.md](../new-plans/types.md) | 타입과 nominal identity |
+| [abilities.md](../new-plans/abilities.md) | Ability와 affine resume |
+| [modules.md](../new-plans/modules.md) | Module과 이름 해석 |
+| [type-inference.md](../new-plans/type-inference.md) | 타입 추론과 effect row |
+| [ir.md](../new-plans/ir.md) | IR dialect와 legality |
+| [cps-effects.md](../new-plans/cps-effects.md) | Shared CPS와 callable ABI |
+| [implementation.md](../new-plans/implementation.md) | Compiler phase 책임 |
+| [cranelift-backend.md](../new-plans/cranelift-backend.md) | Native backend와 RC |
+| [wasm-backend.md](../new-plans/wasm-backend.md) | WasmGC backend |
 
-See **[../new-plans/](../new-plans/)** directory:
+## Feature Proposals
 
-| Document | Description |
-| -------- | ----------- |
-| [design.md](../new-plans/design.md) | Language design overview |
-| [syntax.md](../new-plans/syntax.md) | Syntax definition |
-| [types.md](../new-plans/types.md) | Type system (struct/enum, UFCS) |
-| [abilities.md](../new-plans/abilities.md) | Ability (algebraic effects) system |
-| [modules.md](../new-plans/modules.md) | Module system and name resolution |
-| [type-inference.md](../new-plans/type-inference.md) | Type inference and effect rows |
-| [ir.md](../new-plans/ir.md) | TrunkIR multi-level dialect IR |
-| [implementation.md](../new-plans/implementation.md) | Ability implementation strategy |
-| [cranelift-backend.md](../new-plans/cranelift-backend.md) | Cranelift native backend architecture |
-| [wasm-backend.md](../new-plans/wasm-backend.md) | WasmGC backend architecture |
+아래 문서는 추가 library·tooling 기능의 제안이며 현재 지원이나 compiler 실행 순서를
+정의하지 않는다. Source 예제는 `new-plans/`의 syntax와 ability 계약을 따른다.
 
----
-
-## Implementation Plans
-
-### Active
-
-| Plan | Description | Priority |
-| ---- | ----------- | -------- |
-| Wasm backend | Shared tail-call CPS to WasmGC (see [wasm-backend.md](../new-plans/wasm-backend.md)) | High |
-| Cranelift backend | Native tail-call CPS backend with RC (see [cranelift-backend.md](../new-plans/cranelift-backend.md)) | High |
-
-### Future
-
-| Plan | Description | Priority |
-| ---- | ----------- | -------- |
-| [05-standard-library.md](05-standard-library.md) | Standard library (ability-based) | Medium |
-| [06-package-manager.md](06-package-manager.md) | Package manager | Medium |
-| [07-testing-framework.md](07-testing-framework.md) | Testing framework | Medium |
-| [08-documentation-system.md](08-documentation-system.md) | Documentation system | Low |
-
-### Research
-
-| Document | Description |
-| -------- | ----------- |
-| [02.03-wasm-runtime-research.md](02.03-wasm-runtime-research.md) | WebAssembly runtime research (WasmGC + WASI) |
-| [02.04-wasm-translation.md](02.04-wasm-translation.md) | Superseded Wasm implementation plan |
-
----
-
-## Implementation Roadmap
-
-### Current Focus
-
-1. **TrunkIR Pipeline** - Compiler implementation based on `new-plans/ir.md`
-2. **Type Inference** - Bidirectional typing based on `new-plans/type-inference.md`
-
-### Future Phases
-
-1. **Ability System**: Algebraic effects via evidence passing and tail-call CPS
-2. **Cranelift Backend**: Native lowering with reference counting
-3. **Wasm Backend**: Emit the shared tail-call CPS representation
-4. **Developer Tools**: LSP (see #31-37), package manager, documentation
+| 문서 | 범위 |
+| ---- | ---- |
+| [05-standard-library.md](05-standard-library.md) | 표준 library 확장 방향 |
+| [06-package-manager.md](06-package-manager.md) | Package manager와 registry |
+| [07-testing-framework.md](07-testing-framework.md) | Source test runner와 effect mocking |
+| [08-documentation-system.md](08-documentation-system.md) | API 문서 생성과 example testing |

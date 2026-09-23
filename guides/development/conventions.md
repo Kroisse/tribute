@@ -1,22 +1,15 @@
 # Code Conventions
 
-## Salsa Database Pattern
+## Frontend Queries and IR Passes
 
-All compilation stages use Salsa for incremental compilation:
+Use Salsa tracked queries for source-dependent frontend computations and cached
+artifact boundaries. Inputs and queries take `&dyn salsa::Database`; diagnostics
+use the `Accumulator` trait from inside an active tracked query.
 
-```rust
-#[salsa::tracked]
-pub fn insert_boxing<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    // ...
-}
-```
-
-- Functions marked with `#[salsa::tracked]` are memoized
-- Database tracks dependencies automatically
-- Use `Accumulator` trait for collecting diagnostics
+Shared and target lowering mutate an arena `IrContext` in one compilation
+session. They use `PassManager`, typed pass targets, and explicit analysis-cache
+invalidation. They do not wrap each IR mutation in a Salsa query. See
+[the Salsa guide](../salsa.md) and [TrunkIR](ir.md).
 
 ## Error Handling
 
@@ -67,12 +60,11 @@ for joining; keep collections needed for sorting or reuse.
 
 ### Row-Polymorphic Effects
 
-Function types include effect information:
-
-```rust
-// Function type: fn(params) ->{effects} return_type
-let func_ty = func::Fn::new(db, params, return_ty, effect_row);
-```
+Typechecked source callable metadata includes its parameter/result types and
+effect row. Source-logical IR preserves that signature and the checked calling
+convention. Shared CPS legalization alone adds hidden callable parameters.
+Do not infer operation kind, ownership, or callable ABI from symbol spelling,
+body shape, or an erased pointer type.
 
 ### Bidirectional Type Checking
 
@@ -93,15 +85,11 @@ Two-phase resolution:
 
 ### Creating Operations
 
-Always use typed helper functions to create dialect operations:
+Use generated typed builders and wrappers with the arena context:
 
 ```rust
-// ✅ Use typed helper functions
-let yield_op = wasm::r#yield(db, location, value);
-let call_op = func::call(db, location, callee, args, result_ty);
-
-// ❌ Never use manual operation construction
-// Operation::of_name has been removed to enforce type safety at compile time
+let value = arith::r#const(ctx, location, i32_ty, Attribute::Int(42));
+let result = value.result(ctx);
 ```
 
 ### Matching Operations
@@ -110,18 +98,11 @@ When matching dialect operations, prefer typed wrappers over manual
 dialect/name comparison:
 
 ```rust
-// ✅ Preferred: Use from_operation for type-safe matching
-if let Ok(call_op) = func::Call::from_operation(db, op) {
-    let callee = call_op.callee(db);
+if let Ok(call_op) = func::Call::from_op(ctx, op) {
+    let callee = call_op.callee(ctx);
     // ...
 }
 
-// ❌ Avoid: Manual dialect and name comparison
-let dialect = op.dialect(db);
-let op_name = op.name(db);
-if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
-    // ...
-}
 ```
 
 ## Rewrite Patterns
@@ -130,15 +111,15 @@ if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
 
 Patterns implement `RewritePattern` with `match_and_rewrite`:
 
-- `op`: Original operation (for matching via
-  `from_operation`, attribute/region access)
-- `rewriter`: `PatternRewriter` for operand access
-  and mutations
+- `ctx`: Mutable arena context for querying and building IR
+- `op`: The matched `OpRef`, inspected through typed `from_op` wrappers
+- `rewriter`: `PatternRewriter` that records structural mutations
 
 ### Operand Access
 
-Always use `rewriter.operand(i)` for operands —
-never `op.operands(db)` (original, possibly stale).
+Read current operands through typed wrappers or the arena context. The rewriter
+records edits for the applicator; preserve SSA use chains and the conversion
+target when constructing replacements.
 
 ### Mutation Methods
 
@@ -152,3 +133,7 @@ never `op.operands(db)` (original, possibly stale).
 ### Return Value
 
 Return `true` if the pattern matched and recorded mutations, `false` otherwise.
+
+Use full conversion where a phase boundary must reject every residual illegal
+operation. Bodyless external functions have no body region; inspect optional
+regions before using a body accessor.

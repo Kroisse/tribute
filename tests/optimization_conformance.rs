@@ -7,22 +7,17 @@ use std::fmt::Write as _;
 use common::{
     compile_and_run_native, compile_and_run_native_asan,
     compile_and_run_native_with_borrowed_parameters,
-    compile_and_run_native_with_done_continuation_dedup,
     compile_and_run_native_with_paired_rc_elimination,
     compile_and_run_native_with_temporary_borrows,
 };
-use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::{
     BorrowedParameterPolicy, NativeOptimizationOptions, NativePipelineStage, OptimizationOptions,
-    PairedRcEliminationPolicy, SharedPipelineStage, TemporaryBorrowPolicy, dump_native_ir_at_stage,
-    dump_shared_ir_at_stage,
+    PairedRcEliminationPolicy, TemporaryBorrowPolicy, dump_native_ir_at_stage,
 };
 use tribute_front::SourceCst;
-use tribute_front::ast_to_ir::DoneContinuationPolicy;
 
-const DONE_CONTINUATION_DEDUP_STATE: &str =
-    include_str!("fixtures/optimizations/done_continuation_dedup_state.trb");
+const STATE_HANDLERS: &str = include_str!("fixtures/optimizations/state_handlers.trb");
 const PAIRED_RC_ELIMINATION: &str =
     include_str!("fixtures/optimizations/paired_rc_elimination.trb");
 const BORROWED_PARAMETERS: &str = include_str!("fixtures/optimizations/borrowed_parameters.trb");
@@ -52,7 +47,6 @@ fn native_optimization_options(
             borrowed_parameters,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
         },
-        ..OptimizationOptions::production()
     }
 }
 
@@ -63,7 +57,6 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows,
         },
-        ..OptimizationOptions::production()
     }
 }
 
@@ -129,95 +122,6 @@ fn generated_rtti_field_releases(ir: &str) -> String {
         write!(&mut releases, "{function}={count}").expect("writing to a String cannot fail");
     }
     releases
-}
-
-fn identity_done_symbols(ir: &str) -> Vec<&str> {
-    let lines: Vec<_> = ir.lines().collect();
-    lines
-        .windows(2)
-        .filter_map(|pair| {
-            let header = pair[0].trim_start();
-            (header.starts_with("func.func ")
-                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
-                && pair[1].trim() == "func.return %2")
-                .then(|| {
-                    header
-                        .strip_prefix("func.func ")
-                        .expect("checked prefix")
-                        .split('(')
-                        .next()
-                        .expect("function header has parameters")
-                })
-        })
-        .collect()
-}
-
-fn focused_identity_done_ir(ir: &str) -> String {
-    let symbols = identity_done_symbols(ir);
-    ir.lines()
-        .filter(|line| symbols.iter().any(|symbol| line.contains(symbol)))
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn normal_done_symbols(ir: &str) -> Vec<&str> {
-    let lines: Vec<_> = ir.lines().collect();
-    lines
-        .windows(3)
-        .filter_map(|window| {
-            let header = window[0].trim_start();
-            (header.starts_with("func.func ")
-                && header.contains("%2: tribute_rt.anyref) -> tribute_rt.anyref")
-                && window[1].trim()
-                    == "%3 = adt.variant_new %2 {tag = @Normal, type = !__tribute_cps_control} : tribute_rt.anyref"
-                && window[2].trim() == "func.return %3")
-                .then(|| {
-                    header
-                        .strip_prefix("func.func ")
-                        .expect("checked prefix")
-                        .split('(')
-                        .next()
-                        .expect("function header has parameters")
-                })
-        })
-        .collect()
-}
-
-fn lambda_function_count(ir: &str) -> usize {
-    ir.lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            line.starts_with("func.func ") && line.contains("::__lambda_")
-        })
-        .count()
-}
-
-#[test]
-fn done_continuation_dedup_preserves_native_execution() {
-    let disabled = compile_and_run_native_with_done_continuation_dedup(
-        "done_continuation_dedup_disabled.trb",
-        DONE_CONTINUATION_DEDUP_STATE,
-        DoneContinuationPolicy::PerUse,
-    );
-    let enabled = compile_and_run_native_with_done_continuation_dedup(
-        "done_continuation_dedup_enabled.trb",
-        DONE_CONTINUATION_DEDUP_STATE,
-        DoneContinuationPolicy::PerCompilationUnit,
-    );
-
-    assert!(
-        disabled.status.success(),
-        "disabled pipeline failed: {}",
-        String::from_utf8_lossy(&disabled.stderr)
-    );
-    assert!(
-        enabled.status.success(),
-        "enabled pipeline failed: {}",
-        String::from_utf8_lossy(&enabled.stderr)
-    );
-    assert_eq!(disabled.stdout, enabled.stdout);
-    assert_eq!(String::from_utf8_lossy(&enabled.stdout).trim(), "10");
 }
 
 #[test]
@@ -675,73 +579,13 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     assert_eq!(before_retain - after_retain, before_release - after_release);
 }
 
-#[ignore = "the source-logical route generates identity Done continuations after AfterFrontend, so this effectiveness fixture no longer observes them; re-enable with #981"]
-#[salsa_test]
-fn done_continuation_dedup_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "done_continuation_dedup_snapshot.trb",
-        DONE_CONTINUATION_DEDUP_STATE,
-    );
-    let before = dump_shared_ir_at_stage(
-        db,
-        source,
-        SharedPipelineStage::AfterFrontend,
-        OptimizationOptions::baseline(),
-    )
-    .expect("unoptimized frontend IR should be available");
-    let after = dump_shared_ir_at_stage(
-        db,
-        source,
-        SharedPipelineStage::AfterFrontend,
-        OptimizationOptions::production(),
-    )
-    .expect("optimized frontend IR should be available");
-
-    let before_symbols = identity_done_symbols(&before);
-    let after_symbols = identity_done_symbols(&after);
-    let before_normal_symbols = normal_done_symbols(&before);
-    let after_normal_symbols = normal_done_symbols(&after);
+#[test]
+fn state_handlers_preserve_native_execution() {
+    let output = compile_and_run_native("state_handlers.trb", STATE_HANDLERS);
     assert!(
-        before_symbols.len() > 1,
-        "fixture must generate duplicate identity done continuations"
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(after_symbols.len(), 1);
-    assert!(
-        before_normal_symbols.len() > 1,
-        "fixture must generate duplicate Normal done continuations"
-    );
-    assert_eq!(after_normal_symbols.len(), 1);
-    assert_eq!(
-        lambda_function_count(&before) - before_symbols.len() - before_normal_symbols.len(),
-        lambda_function_count(&after) - after_symbols.len() - after_normal_symbols.len(),
-        "capturing and user-authored lambdas must remain distinct"
-    );
-
-    let before_references: usize = before_symbols
-        .iter()
-        .map(|symbol| before.matches(&format!("func_ref = {symbol}")).count())
-        .sum();
-    let after_references = after
-        .matches(&format!("func_ref = {}", after_symbols[0]))
-        .count();
-    assert_eq!(before_references, after_references);
-
-    let before_normal_references: usize = before_normal_symbols
-        .iter()
-        .map(|symbol| before.matches(&format!("func_ref = {symbol}")).count())
-        .sum();
-    let after_normal_references = after
-        .matches(&format!("func_ref = {}", after_normal_symbols[0]))
-        .count();
-    assert_eq!(before_normal_references, after_normal_references);
-
-    assert_snapshot!(
-        "done_continuation_dedup_before",
-        focused_identity_done_ir(&before)
-    );
-    assert_snapshot!(
-        "done_continuation_dedup_after",
-        focused_identity_done_ir(&after)
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "10");
 }

@@ -10,9 +10,8 @@ use tribute::pipeline::{
     BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
     PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary, link_native_binary,
 };
+use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
-use tribute_front::ast_to_ir::{AstToIrOptions, DoneContinuationPolicy};
-use tribute_passes::Diagnostic;
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -77,25 +76,6 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
     )
 }
 
-/// Compile and run with explicit done-continuation deduplication selection.
-#[allow(dead_code)]
-pub fn compile_and_run_native_with_done_continuation_dedup(
-    source_name: &str,
-    source_code: &str,
-    policy: DoneContinuationPolicy,
-) -> Output {
-    compile_and_run_native_impl(
-        source_name,
-        source_code,
-        false,
-        NativeTestOptimizations {
-            done_continuation: policy,
-            ..NativeTestOptimizations::production()
-        },
-        NativeStdin::Null,
-    )
-}
-
 /// Compile and run with explicit paired RC elimination selection.
 #[allow(dead_code)]
 pub fn compile_and_run_native_with_paired_rc_elimination(
@@ -111,7 +91,6 @@ pub fn compile_and_run_native_with_paired_rc_elimination(
             paired_rc_elimination: policy,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
@@ -133,7 +112,6 @@ pub fn compile_and_run_native_with_borrowed_parameters(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: policy,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
@@ -155,7 +133,6 @@ pub fn compile_and_run_native_with_temporary_borrows(
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: policy,
-            ..NativeTestOptimizations::production()
         },
         NativeStdin::Null,
     )
@@ -346,7 +323,6 @@ enum NativeStdin<'a> {
 }
 #[derive(Clone, Copy)]
 struct NativeTestOptimizations {
-    done_continuation: DoneContinuationPolicy,
     paired_rc_elimination: PairedRcEliminationPolicy,
     borrowed_parameters: BorrowedParameterPolicy,
     temporary_borrows: TemporaryBorrowPolicy,
@@ -354,7 +330,6 @@ struct NativeTestOptimizations {
 impl NativeTestOptimizations {
     const fn baseline() -> Self {
         Self {
-            done_continuation: DoneContinuationPolicy::PerUse,
             paired_rc_elimination: PairedRcEliminationPolicy::Disabled,
             borrowed_parameters: BorrowedParameterPolicy::Preserve,
             temporary_borrows: TemporaryBorrowPolicy::Preserve,
@@ -363,7 +338,6 @@ impl NativeTestOptimizations {
 
     const fn production() -> Self {
         Self {
-            done_continuation: DoneContinuationPolicy::PerCompilationUnit,
             paired_rc_elimination: PairedRcEliminationPolicy::Enabled,
             borrowed_parameters: BorrowedParameterPolicy::ElideProvenBorrowed,
             temporary_borrows: TemporaryBorrowPolicy::ElideProvenFieldBorrows,
@@ -401,9 +375,6 @@ fn compile_native_test_binary_impl(
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
         let optimizations = OptimizationOptions {
-            ast_to_ir: AstToIrOptions {
-                done_continuation: test_optimizations.done_continuation,
-            },
             native: NativeOptimizationOptions {
                 paired_rc_elimination: test_optimizations.paired_rc_elimination,
                 borrowed_parameters: test_optimizations.borrowed_parameters,

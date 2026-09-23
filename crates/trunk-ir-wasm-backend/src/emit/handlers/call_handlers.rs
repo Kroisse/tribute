@@ -5,12 +5,11 @@
 //! - wasm.call_indirect (indirect function call via i32 table index)
 //! - wasm.return_call / wasm.return_call_indirect (tail calls)
 
-use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::op_interface::IndirectCallLikeOps;
-use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
+use trunk_ir::refs::OpRef;
 use wasm_encoder::{Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};
@@ -74,203 +73,31 @@ pub(crate) fn handle_call_indirect(
         )));
     }
 
-    if IndirectCallLikeOps::exact_signature(ctx, op).is_some() {
-        let signature = helpers::exact_call_indirect_signature(ctx, op)?;
-        let type_index = module_info
-            .type_idx_by_type
-            .get(&signature)
-            .copied()
-            .ok_or_else(|| {
-                CompilationError::invalid_module(
-                    "wasm.call_indirect function type not registered in type section",
-                )
-            })?;
-        let attrs = &ctx.op(op).attributes;
-        let table_index = attrs
-            .get("table")
-            .map(|_| attr_u32(attrs, Symbol::new("table")))
-            .transpose()?
-            .unwrap_or(0);
-
-        for &arg in args {
-            emit_value(ctx, arg, emit_ctx, function)?;
-        }
-        emit_value(ctx, first_operand, emit_ctx, function)?;
-        function.instruction(&Instruction::CallIndirect {
-            type_index,
-            table_index,
-        });
-        set_result_local(ctx, op, emit_ctx, function)?;
-        return Ok(());
-    }
-
-    debug!(
-        "call_indirect: first_operand_ty={}.{}",
-        ctx.types.get(first_operand_ty).dialect,
-        ctx.types.get(first_operand_ty).name
-    );
-
-    // Debug: trace the value definition
-    match ctx.value_def(first_operand) {
-        ValueDef::OpResult(def_op, _) => {
-            let op_data = ctx.op(def_op);
-            let result_types = ctx.op_result_types(def_op);
-            debug!(
-                "call_indirect: first_operand defined by {}.{}, results={:?}",
-                op_data.dialect,
-                op_data.name,
-                result_types
-                    .iter()
-                    .map(|t| {
-                        let td = ctx.types.get(*t);
-                        format!("{}.{}", td.dialect, td.name)
-                    })
-                    .collect::<Vec<_>>()
-            );
-        }
-        ValueDef::BlockArg(block_id, idx) => {
-            debug!(
-                "call_indirect: first_operand is block arg from block {:?} idx {}",
-                block_id, idx
-            );
-        }
-    }
-
-    // Build parameter types (all operands except first which is funcref/table_idx)
-    // After normalize_primitive_types pass, anyref types are already wasm.anyref.
-    // Note: core::Nil is NOT normalized - it uses (ref null none) which is
-    // a subtype of anyref, so it can be passed without boxing.
-    let anyref_ty = module_info
-        .common_types
-        .anyref
-        .ok_or_else(|| CompilationError::invalid_module("anyref type not pre-interned"))?;
-    let normalize_param_type = |ty: TypeRef| -> TypeRef {
-        // After normalize_primitive_types pass:
-        // - tribute_rt.any → wasm.anyref
-        // So we only need to check for wasm.anyref
-        if helpers::is_type(ctx, ty, "wasm", "anyref") {
-            anyref_ty
-        } else {
-            ty
-        }
-    };
-    let param_types: Vec<TypeRef> = args
-        .iter()
-        .map(|v| {
-            let ty = helpers::value_type(ctx, *v);
-            normalize_param_type(ty)
-        })
-        .collect();
-
-    // The legacy inference path is scalar-only. Exact `wasm.func_sig`
-    // contracts own zero and multiple results.
-    let result_types = ctx.op_result_types(op);
-    let [result_ty] = result_types else {
-        return Err(CompilationError::invalid_module(
-            "legacy wasm.call_indirect requires exactly one result; attach an exact wasm.func_sig for zero or multiple results",
-        ));
-    };
-    let mut result_ty = *result_ty;
-
-    // Get result type - use enclosing function's return type if it's funcref
-    // and the call_indirect has anyref result. This is needed because
-    // WebAssembly GC has separate type hierarchies for anyref and funcref,
-    // so we can't cast between them.
-    // If result type is anyref but enclosing function returns funcref or Step,
-    // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
-    // type hierarchies, and effectful functions return Step for yield bubbling.
-    // Note: type variables are resolved at AST level before IR generation.
-    let funcref_ty = module_info
-        .common_types
-        .funcref
-        .ok_or_else(|| CompilationError::invalid_module("funcref type not pre-interned"))?;
-    if let Some(func_ret_ty) = emit_ctx.func_return_type {
-        let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
-        let func_returns_funcref = helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
-            || helpers::is_type(ctx, func_ret_ty, "wasm", "func_sig");
-        // Check for Step type (trampoline-based effect system)
-        let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
-        if is_anyref_result && func_returns_funcref {
-            debug!("call_indirect emit: upgrading anyref result to funcref for enclosing function");
-            result_ty = funcref_ty;
-        } else if is_anyref_result && func_returns_step {
-            debug!("call_indirect emit: upgrading anyref result to Step for enclosing function");
-            result_ty = module_info
-                .common_types
-                .step
-                .ok_or_else(|| CompilationError::invalid_module("step type not pre-interned"))?;
-        }
-    }
-
-    // Normalize result type: anyref stays as anyref for polymorphic dispatch
-    // This must match the normalization done in collect_call_indirect_types
-    if helpers::should_normalize_to_anyref(ctx, result_ty) {
-        debug!(
-            "call_indirect emit: normalizing result {}.{} to anyref",
-            ctx.types.get(result_ty).dialect,
-            ctx.types.get(result_ty).name
-        );
-        result_ty = anyref_ty;
-    }
-
-    // Look up type index for the function type.
-    // The type must have been pre-registered by collect_call_indirect_types.
-    // We construct a lookup key by building param+result TypeRef list.
-    let func_type = find_func_type_in_registry(ctx, &param_types, result_ty, module_info)?;
-
-    debug!(
-        "call_indirect emit: looking up func_type with result={}.{}",
-        ctx.types.get(result_ty).dialect,
-        ctx.types.get(result_ty).name
-    );
-
-    // Get or compute type_idx
+    let signature = helpers::exact_call_indirect_signature(ctx, op)?;
+    let type_index = module_info
+        .type_idx_by_type
+        .get(&signature)
+        .copied()
+        .ok_or_else(|| {
+            CompilationError::invalid_module(
+                "wasm.call_indirect function type not registered in type section",
+            )
+        })?;
     let attrs = &ctx.op(op).attributes;
-    let type_idx = match attr_u32(attrs, Symbol::new("type_idx")) {
-        Ok(idx) => {
-            debug!("call_indirect emit: using type_idx from attribute: {}", idx);
-            idx
-        }
-        Err(_) => {
-            // Look up type index
-            let idx = module_info
-                .type_idx_by_type
-                .get(&func_type)
-                .copied()
-                .ok_or_else(|| {
-                    debug!(
-                        "call_indirect emit: func_type not found in type_idx_by_type! func_type={:?}",
-                        func_type
-                    );
-                    CompilationError::invalid_module(
-                        "wasm.call_indirect function type not registered in type section",
-                    )
-                })?;
-            debug!("call_indirect emit: looked up type_idx: {}", idx);
-            idx
-        }
-    };
+    let table_index = attrs
+        .get("table")
+        .map(|_| attr_u32(attrs, Symbol::new("table")))
+        .transpose()?
+        .unwrap_or(0);
 
-    // call_indirect with i32 table index
-    // IR operand order: [table_idx, arg1, arg2, ...]
-    // WebAssembly stack order: [arg1, arg2, ..., table_idx]
-    let table = match attrs.get("table") {
-        Some(_) => attr_u32(attrs, Symbol::new("table"))?,
-        None => 0,
-    };
-
-    // Emit arguments before the runtime table index.
-    for &operand in args {
-        emit_value(ctx, operand, emit_ctx, function)?;
+    for &arg in args {
+        emit_value(ctx, arg, emit_ctx, function)?;
     }
-
     emit_value(ctx, first_operand, emit_ctx, function)?;
-
     function.instruction(&Instruction::CallIndirect {
-        type_index: type_idx,
-        table_index: table,
+        type_index,
+        table_index,
     });
-
     set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
@@ -343,41 +170,3 @@ pub(crate) fn handle_return_call_indirect(
 // ============================================================================
 
 use super::super::helpers::attr_u32;
-
-/// Find a scalar `wasm.func_sig` type in the `type_idx_by_type` / `func_types` registries by
-/// matching params and result.
-///
-/// `wasm.func_sig` stores inputs followed by its single result in `TypeData.params`;
-/// callers use the validated accessor rather than depending on that flat layout.
-///
-/// This performs a linear O(n) scan over the registries to avoid requiring
-/// `&mut IrContext` for interning a new type. The trade-off is O(n) per
-/// `call_indirect` emission, which is acceptable for current module sizes.
-/// If this becomes a bottleneck, a dedicated index keyed by (params, result)
-/// could be built during `collect_module_info`.
-fn find_func_type_in_registry(
-    ctx: &IrContext,
-    params: &[TypeRef],
-    result: TypeRef,
-    module_info: &ModuleInfo,
-) -> CompilationResult<TypeRef> {
-    // Search through registered func types (from imports, funcs, and call_indirect collection)
-    for &ty_ref in module_info.type_idx_by_type.keys() {
-        if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
-        {
-            return Ok(ty_ref);
-        }
-    }
-    // Also check func_types map
-    for &ty_ref in module_info.func_types.values() {
-        if helpers::func_type_parts(ctx, ty_ref)
-            .is_some_and(|(ty_params, ty_results)| ty_results == [result] && ty_params == params)
-        {
-            return Ok(ty_ref);
-        }
-    }
-    Err(CompilationError::invalid_module(
-        "wasm.call_indirect function type not registered in type section",
-    ))
-}

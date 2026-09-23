@@ -1549,7 +1549,6 @@ dependencies = [
  "inventory",
  "itertools",
  "rustc-hash",
- "tracing",
  "tribute-rc",
  "trunk-ir",
  "winnow",
@@ -1559,9 +1558,7 @@ dependencies = [
 name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
- "im",
  "insta",
- "rustc-hash",
  "tracing",
  "tribute-core",
  "tribute-ir",
@@ -1597,9 +1594,7 @@ dependencies = [
  "lasso",
  "parking_lot",
  "paste",
- "proptest",
  "salsa",
- "salsa-test-macros",
  "serde",
  "smallvec",
  "tracing",
@@ -1640,7 +1635,6 @@ name = "trunk-ir-wasm-backend"
 version = "0.1.0"
 dependencies = [
  "derive_more",
- "insta",
  "tempfile",
  "tracing",
  "trunk-ir",

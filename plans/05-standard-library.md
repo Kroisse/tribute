@@ -1,218 +1,68 @@
-# Standard Library Plan
+# Standard Library Extensions
 
-## Overview
+표준 library는 source의 ability와 immutable value 계약을 따른다. 현재 public API와
+추가 기능 제안을 구분하며, 실제 지원 범위는
+[`capabilities.md`](../new-plans/capabilities.md)를 따른다.
 
-Development plan for Tribute's standard library. Designed around the ability
-system for I/O and error handling.
+## Canonical Surface
 
-## Priority: Medium (5/8)
+- 수치 타입과 변환은 [`numeric-types.md`](../new-plans/numeric-types.md)를 따른다.
+- `String`과 `Bytes`의 표현과 public API는
+  [`string.md`](../new-plans/string.md)를 따른다.
+- Compiler-owned opaque `List(a)`는 literal, sequence-view pattern과
+  `std::collections::List::prepend`를 제공한다. RRB node constructor는 source에
+  노출하지 않는다. Public namespace 계약은
+  [`modules.md`](../new-plans/modules.md)를 따른다.
+- Prelude는 `Option(a)`와 `Result(a, e)`, non-resumptive
+  `abilities::Abort`와 `abilities::Throw(e)`를 제공한다.
 
-Essential for language usability, can be developed incrementally alongside
-other features.
+## I/O와 오류 처리
 
-## Core Modules
-
-### Primitive Types
-
-```rust
-// Built-in types (runtime intrinsics)
-Nat          // Natural numbers (0, 1, 2, ...)
-Int          // Integers
-Float        // Floating point
-String       // UTF-8 strings
-Bytes        // Raw byte sequences
-Bool         // True, False
-Nil          // Unit type
-```
-
-### Collections
+`std::io::Io`는 compiler-owned ambient ability다. 사용자 handler로 구현하거나
+제거하지 않는다. Public `print_line`과 `read_line`은 일반 source 함수이며,
+`read_line` 실패는 `Throw(std::io::Error)`로 처리한다. 전체 API, effect와 target
+계약은 [`io.md`](../new-plans/io.md)를 따른다.
 
 ```rust
-// Built-in collections
-Array(a)             // Contiguous memory array
-List(a)              // RRB tree (efficient concat, slice, index)
-Dict(k, v)           // HAMT, literal: #{k: v, ...}, pattern: #{k: v, ..rest}
-Set(a)               // HAMT-based set, literal: #{v, ...}, pattern: #{v, ..rest}
-```
+use abilities::Throw
+use std::io::{Io, print_line, read_line}
 
-### Option and Result
-
-```rust
-enum Option(a) {
-    None
-    Some(a)
-}
-
-enum Result(a, e) {
-    Ok(a)
-    Error(e)
-}
-```
-
-## Core Abilities
-
-### IO Ability
-
-A unified ability for all I/O operations (console, file, network, etc.):
-
-```rust
-ability IO {
-    // Console
-    fn print(msg: String) -> Nil
-    fn read_line() -> String
-    
-    // File system, network, etc. - TBD
-}
-
-// Usage example
-fn greet() ->{IO} Nil {
-    IO::print("What is your name? ")
-    let name = IO::read_line()
-    IO::print("Hello, \{name}!")
-}
-```
-
-### Abort Ability
-
-Corresponds to `Option` - computation that may fail without an error value:
-
-```rust
-ability Abort {
-    fn abort() -> !
-}
-
-// Handler converts to Option
-fn maybe(f: fn() ->{Abort, e} a) ->{e} Option(a) {
-    handle f() {
-        { value } -> Some(value)
-        { Abort::abort() -> _ } -> None
+fn greet() ->{Io} Nil {
+    print_line("What is your name?")
+    handle read_line() {
+        do name { print_line("Hello, " <> name) }
+        op Throw::throw(error) { print_line("Input failed") }
     }
 }
 ```
 
-### Exception Ability
+`Abort`와 `Throw` operation의 결과는 `Never`다. Handler는 대체 결과를 반환하며
+resume capability를 받지 않는다. 일반 resumptive operation은 `op`으로 선언하고
+handler에서 `resume value`를 최대 한 번 사용한다.
 
-General-purpose failure (no specific error type):
+## 추가 Collection API
 
-```rust
-ability Exception {
-    fn raise(msg: String) -> a
-}
-```
+`List::map`, `filter`, `fold`, concat, slice, index와 추가 collection 타입은 별도
+public API 계약과 검증을 갖추어 도입한다. Source API는 node layout 대신 sequence
+의미를 표현하고, native와 Wasm은 같은 관찰 가능한 결과를 보장해야 한다.
 
-### Throw Ability
+Higher-order operation은 callback의 effect row를 전파한다. Source에 raw pointer나
+mutable backend storage를 노출하여 effect 또는 ownership 계약을 우회하지 않는다.
 
-Corresponds to `Result` - computation that may fail with a typed error value:
+## Stream과 Async
 
-```rust
-ability Throw(e) {
-    fn throw(error: e) -> a
-}
+Stream과 Async는 추가 library 설계 대상이다. Generator는 명시적인 affine
+`resume`과 immutable accumulator를 사용하며 multi-shot continuation을 요구하지
+않아야 한다. Promise, scheduling, cancellation의 ownership와 effect row는 public
+API를 확정할 때 함께 정의한다.
 
-// Handler converts to Result
-fn catch(f: fn() ->{Throw(e), r} a) ->{r} Result(a, e) {
-    handle f() {
-        { value } -> Ok(value)
-        { Throw::throw(e) -> _ } -> Error(e)
-    }
-}
-```
+Console 외의 file·network API도 concrete operation별 오류 타입, `Io` effect와
+native/Wasm 지원 경계를 명시해야 한다. 별도의 resumptive user ability를 통한
+의존성 주입은 가능하지만 ambient `Io` 자체를 mock handler로 제거하지 않는다.
 
-### Stream Ability
+## 검증 조건
 
-Generator-style ability for producing sequences of values:
-
-```rust
-ability Stream(a) {
-    fn emit(a) -> Nil
-}
-
-// Handler collects to List (uses push_back, O(1) amortized for RRB tree)
-fn collect(f: fn() ->{Stream(a), e} Nil) ->{e} List(a) {
-    fn go(acc: List(a)) ->{e} List(a) {
-        handle f() {
-            { Nil } -> acc
-            { Stream::emit(x) -> k } -> go(acc.push_back(x))
-        }
-    }
-    go([])
-}
-```
-
-### Async Ability
-
-```rust
-ability Async {
-    fn await(promise: Promise(a)) -> a
-    fn spawn(f: fn() ->{e} a) -> Promise(a)
-}
-```
-
-## Utilities
-
-### String Operations
-
-```rust
-mod String {
-    fn len(s: String) -> Nat
-    fn concat(a: String, b: String) -> String
-    fn split(s: String, delimiter: String) -> List(String)
-    fn join(parts: List(String), separator: String) -> String
-    fn trim(s: String) -> String
-    fn contains(s: String, substr: String) -> Bool
-}
-```
-
-### List Operations
-
-```rust
-mod List {
-    fn empty() -> List(a)
-    fn len(xs: List(a)) -> Nat
-    
-    // RRB tree operations (O(1) amortized)
-    fn push_front(xs: List(a), x: a) -> List(a)  // Also available as [a, ..rest]
-    fn push_back(xs: List(a), x: a) -> List(a)  // Aslo available as [..init, a]
-    fn concat(xs: List(a), ys: List(a)) -> List(a)  // Also available as [..xs, ..ys]
-    // Destructuring via pattern matching: [a, b, ..rest] or [..init, x, y]
-    
-    // Higher-order functions
-    fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
-    fn filter(xs: List(a), p: fn(a) ->{e} Bool) ->{e} List(a)
-    fn fold(xs: List(a), init: b, f: fn(b, a) ->{e} b) ->{e} b
-}
-```
-
-## Implementation Strategy
-
-### Phase 1: Core Foundation
-
-1. Primitive types (Int, String, Bool, etc.)
-2. Basic collections (List, Option)
-3. IO ability (console operations)
-
-### Phase 2: Error Handling
-
-1. Exception ability
-2. Result type and conversion functions
-
-### Phase 3: Advanced Features
-
-1. Async ability
-2. Extended IO operations
-3. Additional utilities as needed
-
-## Design Principles
-
-1. **Ability-first**: I/O and errors expressed as abilities
-2. **Explicit effects**: Effects visible in types
-3. **Handler composability**: Various execution strategies via handler composition
-4. **Compiler-managed memory**: No explicit source-level memory management required
-5. **Persistent by default**: Collections use persistent data structures
-
-## Success Criteria
-
-- Complete implementation of core collections
-- Working IO and Exception abilities
-- Basic string/number operations provided
-- Documentation and example code available
+- Public API는 source syntax, type/effect checking과 backend 실행 검증을 갖춘다.
+- Collection은 immutable value 의미와 persistent sharing의 ownership을 보존한다.
+- 오류·abort·resume 경로를 포함한 handler 조합을 검증한다.
+- API 예제는 공개 namespace만 사용하며 compile-only와 runtime 증거를 구별한다.

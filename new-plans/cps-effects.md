@@ -72,12 +72,12 @@ type과 source parameter/result만 사용하며 evidence, environment, `Continua
 | `EvidenceDirect` | evidence 뒤 소스 parameter | 소스 result |
 | `Cps` | evidence, `ContinuationFrame<R>`, source parameter 순서 | logical `core.never`, physical empty result |
 
-Parameter 순서는 기존 `CallableAbi` 순서다. `ContinuationFrame<R>`는 CPS callable이
+Parameter 순서는 `CallableAbi`가 정의한다. `ContinuationFrame<R>`는 CPS callable이
 전달하는 continuation/control frame이며 `Done<R>`와 내부의 어휘적 `Dispatch<R>`를
 함께 보존한다. `Completion<X, R>`와 `ResumeExact<I, R>`는 각각
 `(Evidence, ContinuationFrame<R>, X)`와 `(Evidence, ContinuationFrame<R>, I)`를 받아
-logical `core.never`로 끝난다. Control lowering
-뒤 worker와 continuation은 result vector가 비어 있으며 제어 값을 반환하지 않는다.
+logical `core.never`로 끝난다. Target signature physicalization 뒤 worker와
+continuation은 result vector가 비어 있으며 제어 값을 반환하지 않는다.
 
 Conversion은 먼저 모든 logical callable type, definition, lambda, `func_ref`,
 direct/indirect call, return의 대응 관계를 검증하고 physical symbol과 type을
@@ -233,32 +233,32 @@ continuation을 만들지 않는다. 기존 ABI에는 capture가 없고 body가
 
 `tribute-control-pre-cps` named boundary는 검증된 `tribute_control.*`과 일반
 value/structured dialect만 허용한다. Frontend 적합성 검사는 `func.*`,
-`closure.*`, `func.func_sig`, `closure.closure`, 기존 `ability.*`, `effect.*`,
-legacy CPS-dispatch operation을 모두 거부한다. Partial rewrite
-도중에는 logical/physical operation이 일시적으로 공존할 수 있지만 이 상태는
+`closure.*`, `func.func_sig`, `closure.closure`, `ability.*`, `effect.*`를 모두 거부한다.
+Partial rewrite 도중에는 logical/physical operation이 일시적으로 공존할 수 있지만 이 상태는
 named pre-CPS boundary가 아니다.
 
 성공한 shared conversion은 defining rule이
 `illegal_dialect("tribute_control")`인 partial
 `tribute-control-post-cps` target과 Tribute type walk를 검증한다. 남은
-`tribute_control` operation 또는 `callable`/`resume_token` type은 source
+`tribute_control` operation 또는 `func_sig`/`resume_token` type은 source
 location에서 conversion failure가 된다. 이 경계에는 일관된 physical
 `func.*`/`closure.*`/`func.func_sig` graph와 logical `ability.*` dispatch 표면만
-남는다. `lower_closure_lambda`와 `prepare_closure_lowering`은 이 shared graph를
-준비하지만 `closure.new`, `closure.func`, `closure.env`와 convention-proven closure
-type은 target ABI validation까지 유지한다. `lower_ability_perform`,
+남는다. `lower_closure_lambda`는 이 shared graph의 lambda를 추출하지만
+`closure.new`, `closure.func`, `closure.env`와 convention-proven closure type은
+target ABI validation까지 유지한다. `lower_ability_perform`,
 `resolve_evidence`, `lower_handle_dispatch`가 `ability.*`를 `effect.*`까지 낮춘 뒤,
 target pipeline의 closure storage finalization과 Native/Wasm evidence pass가
 backend ABI로 제거한다.
+Shared evidence resolution은 lookup/extend용 가짜 함수 정의를 만들지 않는다.
+Native extern 선언과 Wasm helper 구현은 각 target evidence pass가 생성한다.
 Backend-ready Tribute boundary는 남은 `tribute_control.*`, `ability.*`,
 `effect.*`를 각각 독립적으로 거부한다.
 
 논리적 CPS 함수는 source result를 직접 반환하지 않는다. 완료 값은 ContinuationFrame의
 `Done<R>`에만 전달되고 logical control result는 `core.never`다. Physical control
 lowering은 이를 empty-result 함수와 proper tail transfer로 바꾸며 반환되는
-control value를 만들지 않는다. Resume하지 않는 handler arm도
-`Escape`를 반환하는 대신 해당 handle의 exit continuation으로 직접 tail
-transfer하므로 completion region과 포기한 suffix를 구조적으로 건너뛴다.
+control value를 만들지 않는다. Resume하지 않는 handler arm은 해당 handle의
+exit continuation으로 직접 tail transfer하므로 completion region과 포기한 suffix를 구조적으로 건너뛴다.
 
 물리화는 전체 callable과 dispatch/frame/R 계약을 검증하고 변환을 계획한 뒤 적용한다.
 실패하면 기존 operation, 타입 참조, attribute와 alias를 변경하지 않는다. Alias,
@@ -288,11 +288,22 @@ payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`
   { ability_ref = @Logger, op_name = @log }
 ```
 
+`lower_ability_perform`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
+convention과 `CallableAbi`가 정한 첫 evidence parameter를 확인한다. Evidence와
+같은 타입인 다른 parameter를 찾거나 본문에서 hidden input을 추론하지 않는다.
+Convention이 없거나 slot/type이 잘못되면 lower하지 않고 ability boundary에서
+거부한다. Source argument를 canonical payload로 pack한 뒤 이 evidence를 명시적으로
+받는 `effect.dispatch_tail`을 만든다. Backend는 marker에서 `tr_dispatch_fn`을
+선택해 일반 indirect call을 수행한다. 반환된 값은 erased source result다.
+
+### `op` operation: continuation dispatch
+
 공통 lowering은 payload packing 전에 exact resume의 frame 입력과 frame metadata에서
 답 타입 `R`을 구하고 evidence·dispatch·resume의 연결을 검증한다.
 
 ```text
-%payload = cast %arg to anyref
+%product = pack %args into the canonical operation payload product
+%payload = cast %product to anyref
 effect.dispatch_cps %ev, %dispatch, %resume, %payload
   { ability_ref = @State, op_name = @get, answer_type = R }
 ```
@@ -337,7 +348,8 @@ layout이 아니다. Payload 슬롯만 [물리적 참조 할당 가능성](wasm-
 lowering은 실제 operand와 독립적으로 고정 signature를 구성하고 operand를 대조한다.
 서로 다른 유효한 `R`도 동일한 물리 ABI를 가지며 resume의 frame은 별도 dispatch
 입력이 아니다. `answer_type`은 일반 재귀 타입 변환에 참여하고 effect operation 제거
-시 소비한다. Raw target call에 복제하지 않으며 legacy dispatch 계약은 유지한다.
+시 소비한다. Raw target call에 복제하지 않으며 결과를 반환하는 별도 dispatch
+호환 경로를 두지 않는다.
 
 정의, lambda, adapter, direct/indirect call, return, suffix, resume, handle은
 ContinuationFrame을 같은 callable provenance로 전달한다. 내부 Dispatch를 effect operation이나
@@ -365,10 +377,9 @@ CPS entry와 `done_k`의 result는 `core.never`이며,
 `func.tail_call`과 `func.tail_call_indirect` verifier도 caller/callee의
 `core.never` 일치를 검사한다.
 
-최종 계약에서는 atomic physical CPS switch 이후 target signature lowering이
-이 CPS signature를 native/Wasm empty-result signature로 바꾼 뒤 실제 wrapper와
-결과 없는 ordinary call을 합성한다. Root `done_k`는 source result를
-cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
+Target signature lowering이 CPS signature를 native/Wasm empty-result signature로
+바꾼 뒤 실제 wrapper와 결과 없는 ordinary call을 합성한다. Root `done_k`는 source
+result를 cell에 정확히 한 번 쓰고 terminal dispatch는 root 밖 general operation transfer를
 끝내며, wrapper는 이 둘을 immutable `ContinuationFrame<R>`로 materialize해 worker에
 전달한 뒤 proper-tail-call chain이 끝나면 cell을 읽어 source result로 반환한다.
 공통 `func.func_sig`와 `func.call`은 0개 또는 1개 결과를 지원한다. 논리 CPS
@@ -378,29 +389,28 @@ control carrier가 아니다.
 
 ### `handle`: evidence extension + handler closures
 
-`handle` lowering은 두 종류의 dispatch closure를 만든다.
+`handle` lowering은 두 종류의 dispatch closure를 만든다. Environment를 포함한
+물리적 입력은 다음과 같다:
 
-- `handler_dispatch`: `(k, op_idx, value) -> ()`
-  - general `op` handlers용
-  - closure environment가 handle exit를 소유하며 `resume`과 non-resuming exit는
-    각 continuation으로 indirect tail transfer한다.
-- `tr_dispatch_fn`: `(op_idx, value) -> anyref`
-  - `fn` handlers용
-  - `anyref`는 erased source result이며 CPS control carrier가 아니다.
+- `handler_dispatch`: `(Evidence, Environment, Resume, Prompt, AbilityId,
+  OperationIndex, Payload) -> ()`. General `op` handler용이며 closure environment가
+  handle exit를 소유한다. `resume`과 non-resuming exit는 각각의 continuation으로
+  indirect tail transfer한다.
+- `tr_dispatch_fn`: `(Evidence, Environment, OperationIndex, Payload) -> anyref`.
+  `fn` handler용이며 `anyref`는 erased source result다.
 
-`resolve_evidence`는 handler boundary에서 새 marker를 만들어 evidence를
-확장한다.
-
-Shared evidence resolution represents handler installation with the same effect
-ABI instead of constructing the concrete Marker layout directly:
+`resolve_evidence`는 explicit handler delimiter의 prompt와 dispatch closure를
+소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
+한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
+이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
 %ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %handler_dispatch
   { ability_ref = @State }
 ```
 
-Backends lower `effect.extend` to their own evidence representation. The native
-backend maps it to the `__tribute_evidence_extend` ABI.
+Concrete Marker layout은 backend가 소유한다. Native는
+`__tribute_evidence_extend` ABI를 사용한다.
 
 ```text
 struct Marker {
@@ -431,7 +441,8 @@ GC marker type stores the dispatch closures as `anyref` closure references
 instead of native `ptr` values. Wasm effect ABI lowering therefore expands
 `effect.dispatch_tail` and `effect.dispatch_cps` into evidence lookup,
 `wasm.struct_get` of the selected marker closure, closure table-index/env
-decomposition, and `wasm.call_indirect`.
+decomposition, and ordinary `wasm.call_indirect` or proper-tail
+`wasm.return_call_indirect`.
 
 Empty evidence is represented in high-level IR as an empty `core.array(Marker)`
 or null evidence placeholder, and backend lowering turns that into the target
@@ -460,7 +471,9 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 
 `ability.handle_dispatch`는 runtime dispatch loop가 아니다. Effect 발생 시점에서
 이미 handler closure로 tail-call되므로,
-`lower_handle_dispatch`는 body result에 `done` handler를 적용하는 역할만 한다.
+`resolve_evidence`가 body의 evidence 인자를 명시적인 extended evidence로 대체한 뒤,
+`lower_handle_dispatch`는 resultless body를 바깥 block에 옮기고 delimiter를 제거한다.
+정상 완료와 resume하지 않는 handler exit의 transfer는 shared CPS legalization이 구성한다.
 
 <!-- markdownlint-disable-next-line MD033 -->
 <a id="shared-middle-end-pipeline"></a>
@@ -469,20 +482,19 @@ __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 
 Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 
-이 순서는 exact root contract가 있는 source-logical CPS route의 contract다.
-Compatibility route는 그 metadata 없이 기존 closure-lowering 순서를 유지하며,
-이를 이 target ABI boundary에 진입시키지 않는다.
+모든 source 함수는 이 shared route와 target ABI boundary를 통과한다. Root wrapper의
+생성은 exact root contract에 따르며, 별도의 호환 closure-lowering 경로는 두지 않는다.
 
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR)
 → tribute_control_to_cps
 → lower_closure_lambda
-→ prepare_closure_lowering
 → lower_ability_perform
 → resolve_evidence
 → lower_handle_dispatch
 → effect ABI verification
 → target ABI validation and CPS signature physicalization
+→ root entry bridge composition
 → lower_closures_in_func
 → native evidence lowering → finalize_closure_storage_layout → native tail-call lowering
   or finalize_closure_storage_layout → integrated Wasm evidence/tail-call lowering
@@ -503,7 +515,7 @@ semantic type equivalence를 만들지 않는다.
 The `effect` dialect is the target-independent boundary between language
 semantics and concrete runtime layout.
 
-Initial operations:
+Operations:
 
 - `effect.extend(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
   { ability_ref } -> evidence`
@@ -522,10 +534,11 @@ Rules:
 - Backend-ready conversion targets must reject residual `effect.*` operations.
 - Shared passes must not inspect Marker field numbers, handler-table storage
   layout, closure field positions, or backend function-pointer representation.
-- Payload value는 shared lowering에서 이미 single value로 pack한다. 직접형 frontend는
-  source-logical `tribute_control.perform` operand를 유지하며 dispatch 전략에
-  맞춰 pack하지 않는다. 누락된 payload는 `effect.*`에 도달하기 전에
-  target-independent null/empty value로 명시적으로 표현한다.
+- Payload value는 shared dispatch lowering에서 canonical operation product 하나로
+  pack한다. Zero/one argument도 같은 product contract를 사용하며 null 또는 in-band
+  sentinel로 대체하지 않는다. 각 field를 dynamic storage에 맞춘 뒤 product 전체를
+  `anyref`로 erase한다. Frontend는 source-logical `tribute_control.perform`의
+  개별 operand를 유지한다. Handler unpacking은 같은 exact product layout을 쓴다.
 
 ## Backend Implications
 

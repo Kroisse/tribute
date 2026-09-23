@@ -22,6 +22,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
+use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -86,7 +87,7 @@ fn make_adt_struct_type(
 /// Layout: (table_idx: i32, env: anyref)
 ///
 /// IMPORTANT: Must use wasm.anyref (not tribute_rt.anyref) to ensure consistent
-/// type identity for emit lookups. This matches the pattern used by step_adt_type.
+/// type identity for emit lookups.
 pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
@@ -101,9 +102,6 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     )
 }
 
-// Re-export marker_adt_type_ref from ability module for backward compatibility
-pub use tribute_ir::dialect::ability::marker_adt_type_ref as marker_adt_type;
-
 /// Get the canonical Evidence ADT type for WASM representation (arena version).
 ///
 /// At the WASM level, evidence is represented as `wasm.arrayref`.
@@ -111,67 +109,6 @@ pub use tribute_ir::dialect::ability::marker_adt_type_ref as marker_adt_type;
 /// `core.array(Marker)` for high-level IR representation.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
     intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"))
-}
-
-/// Get the canonical Step ADT type (arena version).
-///
-/// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
-///
-/// IMPORTANT: Must use wasm.anyref to match step_marker_type in gc_types.rs.
-pub fn step_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-
-    make_adt_struct_type(
-        ctx,
-        Symbol::new("_Step"),
-        vec![
-            (Symbol::new("tag"), i32_ty),
-            (Symbol::new("value"), anyref_ty),
-            (Symbol::new("prompt"), i32_ty),
-            (Symbol::new("op_idx"), i32_ty),
-        ],
-    )
-}
-
-/// Get the canonical Continuation ADT type (arena version).
-///
-/// Layout: (resume_fn: i32, state: anyref, tag: i32, shift_value: anyref)
-///
-/// resume_fn is stored as i32 (function table index), same as closures.
-/// Uses wasm.anyref for consistency with step_adt_type.
-pub fn continuation_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-
-    make_adt_struct_type(
-        ctx,
-        Symbol::new("_Continuation"),
-        vec![
-            (Symbol::new("resume_fn"), i32_ty),
-            (Symbol::new("state"), anyref_ty),
-            (Symbol::new("tag"), i32_ty),
-            (Symbol::new("shift_value"), anyref_ty),
-        ],
-    )
-}
-
-/// Get the canonical ResumeWrapper ADT type (arena version).
-///
-/// Layout: (state: anyref, resume_value: anyref)
-///
-/// Uses wasm.anyref for consistency with step_adt_type.
-pub fn resume_wrapper_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
-
-    make_adt_struct_type(
-        ctx,
-        Symbol::new("_ResumeWrapper"),
-        vec![
-            (Symbol::new("state"), anyref_ty),
-            (Symbol::new("resume_value"), anyref_ty),
-        ],
-    )
 }
 
 // =============================================================================
@@ -196,7 +133,7 @@ fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Check if a type is a struct-like reference type.
 ///
 /// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
-/// variant instance types, and trampoline types that get lowered to ADT structs.
+/// and variant instance types.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     if is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")) {
         return true;
@@ -214,31 +151,13 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
         return true;
     }
 
-    // adt.struct (concrete struct types like _ResumeWrapper, _Continuation, _Step)
+    // Concrete ADT structs
     if is_adt_struct_type(ctx, ty) {
         return true;
     }
 
     // Check for variant instance types (have is_variant attribute)
     if is_variant_instance_type(ctx, ty) {
-        return true;
-    }
-
-    // trampoline types that get lowered to ADT structs
-    if is_type(ctx, ty, Symbol::new("trampoline"), Symbol::new("step"))
-        || is_type(
-            ctx,
-            ty,
-            Symbol::new("trampoline"),
-            Symbol::new("continuation"),
-        )
-        || is_type(
-            ctx,
-            ty,
-            Symbol::new("trampoline"),
-            Symbol::new("resume_wrapper"),
-        )
-    {
         return true;
     }
 
@@ -296,7 +215,7 @@ fn box_via_i31(
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
 ///
 /// This is used when converting anyref-typed values back to i32, such as
-/// extracting values from Step structs which store all values as anyref.
+/// extracting boxed source values from fields with erased reference types.
 fn unbox_via_i31(
     ctx: &mut IrContext,
     loc: Location,
@@ -347,11 +266,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let arrayref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"));
     let closure_ty = closure_adt_type(ctx);
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let step_ty = step_adt_type(ctx);
-    let cont_ty = continuation_adt_type(ctx);
-    let rw_ty = resume_wrapper_adt_type(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
-    let marker_ty = marker_adt_type(ctx);
+    let marker_ty = marker_adt_type_ref(ctx);
 
     let mut tc = TypeConverter::new();
 
@@ -422,43 +338,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert trampoline.step -> _Step ADT
-    tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, Symbol::new("trampoline"), Symbol::new("step")) {
-            Some(step_ty)
-        } else {
-            None
-        }
-    });
-
-    // Convert trampoline.continuation -> _Continuation ADT
-    tc.add_conversion(move |ctx, ty| {
-        if is_type(
-            ctx,
-            ty,
-            Symbol::new("trampoline"),
-            Symbol::new("continuation"),
-        ) {
-            Some(cont_ty)
-        } else {
-            None
-        }
-    });
-
-    // Convert trampoline.resume_wrapper -> _ResumeWrapper ADT
-    tc.add_conversion(move |ctx, ty| {
-        if is_type(
-            ctx,
-            ty,
-            Symbol::new("trampoline"),
-            Symbol::new("resume_wrapper"),
-        ) {
-            Some(rw_ty)
-        } else {
-            None
-        }
-    });
-
     // Convert adt.typeref -> wasm.structref (generic struct reference)
     tc.add_conversion(move |ctx, ty| {
         if is_adt_typeref(ctx, ty) {
@@ -502,7 +381,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     });
 
     // Convert marker ADT type -> pass through (already standard ADT struct)
-    // This conversion is a no-op since marker_adt_type() returns a standard adt.struct
+    // This conversion is a no-op since marker_adt_type_ref() returns a standard adt.struct
     tc.add_conversion(move |ctx, ty| {
         if is_marker_type_ref(ctx, ty) {
             Some(marker_ty)
@@ -563,8 +442,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // anyref -> concrete struct type: use ref_cast
-        // This handles cases like closure env or resume wrapper parameters
-        // that are passed as anyref for uniform calling convention.
+        // This handles erased struct slots such as closure environments that are
+        // passed as anyref for a uniform calling convention.
         // We EXCLUDE wasm.anyref as target since that's handled by primitive equivalence.
         let from_is_anyref = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
             || is_type(
@@ -575,24 +454,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             );
         let to_is_abstract_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
         if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
-            // Trampoline types must already be converted to ADT types by add_conversion
-            // rules before materialization runs (convert_type is applied to to_ty in
-            // resolve_unrealized_casts before calling materialize).
-            assert!(
-                !is_type(
-                    ctx,
-                    to_ty,
-                    Symbol::new("trampoline"),
-                    Symbol::new("resume_wrapper")
-                ) && !is_type(ctx, to_ty, Symbol::new("trampoline"), Symbol::new("step"))
-                    && !is_type(
-                        ctx,
-                        to_ty,
-                        Symbol::new("trampoline"),
-                        Symbol::new("continuation")
-                    ),
-                "ICE: trampoline type reached materialization without conversion"
-            );
             let cast_op = wasm_gc_dialect::ref_cast(ctx, location, value, to_ty, to_ty);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
@@ -796,36 +657,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             Symbol::new("tribute_rt"),
             Symbol::new("anyref"),
         ) && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("nil"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-
-        // -----------------------------------------------------------------
-        // Trampoline type equivalences
-        // -----------------------------------------------------------------
-
-        // trampoline.step -> _Step ADT (same representation after conversion)
-        if is_type(ctx, from_ty, Symbol::new("trampoline"), Symbol::new("step")) && to_ty == step_ty
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // trampoline.continuation -> _Continuation ADT (same representation)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("trampoline"),
-            Symbol::new("continuation"),
-        ) && to_ty == cont_ty
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // trampoline.resume_wrapper -> _ResumeWrapper ADT (same representation)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("trampoline"),
-            Symbol::new("resume_wrapper"),
-        ) && to_ty == rw_ty
         {
             return Some(MaterializeResult { value, ops: vec![] });
         }
