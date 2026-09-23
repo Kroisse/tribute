@@ -193,18 +193,6 @@ impl IrContext {
         self.paths.intern(path)
     }
 
-    /// Conservatively mark the IR changed before returning mutable type access.
-    pub fn types_mut(&mut self) -> &mut TypeInterner {
-        self.bump_revision();
-        &mut self.types
-    }
-
-    /// Conservatively mark the IR changed before returning mutable path access.
-    pub fn paths_mut(&mut self) -> &mut PathInterner {
-        self.bump_revision();
-        &mut self.paths
-    }
-
     // ========================================================================
     // Diagnostics
     // ========================================================================

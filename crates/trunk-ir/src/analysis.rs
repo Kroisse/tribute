@@ -841,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn interning_and_raw_mutable_access_follow_revision_contract() {
+    fn interning_follows_revision_contract() {
         let (mut ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         let initial = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
@@ -883,12 +883,6 @@ mod tests {
         let unchanged = ctx.analysis_stamp();
         ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
         assert_eq!(ctx.analysis_stamp(), unchanged);
-
-        let _ = ctx.types_mut();
-        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
-        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
-        let _ = ctx.paths_mut();
-        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
     }
 
     #[test]

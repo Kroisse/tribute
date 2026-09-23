@@ -283,26 +283,28 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
-    use trunk_ir::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
+    use trunk_ir::{Attribute, IrContext, TypeDataBuilder};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
-    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_closure_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure")).build())
+    fn make_closure_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
+        ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure")).build(),
+        )
     }
 
     #[test]
     fn test_closure_new_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
-        let closure_ty = make_closure_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
+        let closure_ty = make_closure_type(&mut ctx);
 
         // Create an env value via arith.const
         let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
@@ -331,8 +333,8 @@ mod tests {
     fn test_closure_func_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
-        let closure_ty = make_closure_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
+        let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
         let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
@@ -364,8 +366,8 @@ mod tests {
     fn test_closure_env_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
-        let closure_ty = make_closure_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
+        let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
         let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
@@ -400,8 +402,8 @@ mod tests {
 
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
-        let closure_ty = make_closure_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
+        let closure_ty = make_closure_type(&mut ctx);
 
         // Create a capture value
         let cap_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(7));
@@ -465,7 +467,7 @@ mod tests {
     fn test_closure_from_op_wrong_dialect() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match closure ops
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
@@ -478,8 +480,8 @@ mod tests {
     fn test_closure_matches() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(ctx.types_mut());
-        let closure_ty = make_closure_type(ctx.types_mut());
+        let i32_ty = make_i32_type(&mut ctx);
+        let closure_ty = make_closure_type(&mut ctx);
 
         let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let env_val = env_op.result(&ctx);
