@@ -140,6 +140,31 @@ impl IrContext {
         }
     }
 
+    /// Read interned types through the context API.
+    pub fn types(&self) -> &TypeInterner {
+        &self.types
+    }
+
+    /// Read the data for an interned type.
+    pub fn get_type(&self, ty: TypeRef) -> &TypeData {
+        self.types.get(ty)
+    }
+
+    /// Read interned paths through the context API.
+    pub fn paths(&self) -> &PathInterner {
+        &self.paths
+    }
+
+    /// Intern a type through the context API.
+    pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
+        self.types.intern(data)
+    }
+
+    /// Intern a path through the context API.
+    pub fn intern_path(&mut self, path: String) -> PathRef {
+        self.paths.intern(path)
+    }
+
     // ========================================================================
     // Diagnostics
     // ========================================================================
@@ -982,7 +1007,7 @@ mod tests {
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
         ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+            .intern(TypeDataBuilder::new("core", "i32").build())
     }
 
     #[test]
@@ -1247,7 +1272,7 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let f64_ty = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+            .intern(TypeDataBuilder::new("core", "f64").build());
 
         // Create a block with 2 args of type i32
         let block = ctx.create_block(BlockData {
@@ -1333,7 +1358,7 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let f64_ty = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+            .intern(TypeDataBuilder::new("core", "f64").build());
 
         let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
             .result(i32_ty)
@@ -1362,7 +1387,7 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
         let f64_ty = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+            .intern(TypeDataBuilder::new("core", "f64").build());
 
         let block = ctx.create_block(BlockData {
             location: loc,

@@ -29,7 +29,7 @@ pub(crate) fn is_type(
     dialect: &'static str,
     name: &'static str,
 ) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn is_type(
 pub(crate) fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.types.intern(trunk_ir::types::TypeData {
+    ctx.intern_type(trunk_ir::types::TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
         params: Default::default(),
@@ -70,7 +70,7 @@ pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type is an adt.struct with the given name.
 fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
@@ -104,7 +104,7 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
         return crate::gc_types::is_builtin_struct_index(index);
     }
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("adt")
         && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
 }
@@ -336,7 +336,7 @@ pub(crate) fn type_to_valtype(
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
     } else if is_bytes_array_ref(ctx, ty) {
-        let nullable = ctx.types.get(ty).attrs.get_bool("nullable") == Some(true);
+        let nullable = ctx.get_type(ty).attrs.get_bool("nullable") == Some(true);
         Ok(ValType::Ref(RefType {
             nullable,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
@@ -350,8 +350,8 @@ pub(crate) fn type_to_valtype(
         }))
     } else if is_type(ctx, ty, "wasm", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if ctx.types.get(ty).dialect == Symbol::new("wasm") {
-        let name = ctx.types.get(ty).name;
+    } else if ctx.get_type(ty).dialect == Symbol::new("wasm") {
+        let name = ctx.get_type(ty).name;
         if name == Symbol::new("structref") {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -407,7 +407,7 @@ pub(crate) fn type_to_valtype(
                 ty: AbstractHeapType::Struct,
             },
         }))
-    } else if ctx.types.get(ty).dialect == Symbol::new("adt") {
+    } else if ctx.get_type(ty).dialect == Symbol::new("adt") {
         Ok(ValType::Ref(RefType::ANYREF))
     } else if is_nil_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
@@ -418,7 +418,7 @@ pub(crate) fn type_to_valtype(
             },
         }))
     } else {
-        let data = ctx.types.get(ty);
+        let data = ctx.get_type(ty);
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
             data.dialect, data.name
@@ -427,14 +427,14 @@ pub(crate) fn type_to_valtype(
 }
 
 fn is_bytes_array_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let reference = ctx.types.get(ty);
+    let reference = ctx.get_type(ty);
     if reference.dialect != Symbol::new("core")
         || reference.name != Symbol::new("ref")
         || reference.params.len() != 1
     {
         return false;
     }
-    let array = ctx.types.get(reference.params[0]);
+    let array = ctx.get_type(reference.params[0]);
     array.dialect == Symbol::new("core")
         && array.name == Symbol::new("array")
         && array.params.len() == 1
@@ -479,7 +479,7 @@ pub(crate) fn attr_heap_type(
         }
         Some(Attribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
         Some(Attribute::Type(ty)) => {
-            let data = ctx.types.get(*ty);
+            let data = ctx.get_type(*ty);
             if data.dialect == Symbol::new("wasm") {
                 let name = data.name;
                 name.with_str(symbol_to_abstract_heap_type)
@@ -570,14 +570,8 @@ mod tests {
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let array_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i32_ty)
-                .build(),
-        );
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
 
         assert_eq!(
             type_to_valtype(&ctx, array_ty, &HashMap::new()).expect("core.array is supported"),
@@ -594,9 +588,7 @@ mod tests {
     #[test]
     fn func_sig_uses_nullable_funcref_value_type() {
         let mut ctx = IrContext::new();
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(

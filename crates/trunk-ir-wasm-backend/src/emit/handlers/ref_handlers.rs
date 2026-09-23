@@ -138,12 +138,8 @@ mod tests {
     fn ref_cast_uses_non_null_instruction_for_non_null_result() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let anyref_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
-        let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
+        let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
         let null =
             wasm_dialect::ref_null(&mut ctx, location, anyref_ty, Symbol::new("anyref"), None);
         let null_result = null.result(&ctx);

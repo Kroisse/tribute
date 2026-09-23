@@ -67,7 +67,7 @@ fn canonical_enum_type(ctx: &IrContext, attr_ty: TypeRef) -> Option<TypeRef> {
 /// layout. A typeref's `name` attribute is its nominal declaration link; do
 /// not fall back to structural or same-name equivalence here.
 fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
         return None;
     }
@@ -79,16 +79,12 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
 /// Convert logical enum field types that remain in enum attributes to their
 /// existing Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
-    let data = ctx.types.get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
-        return ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build());
+        return ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
     }
     if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref") {
-        return ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build());
+        return ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
     }
     ty
 }
@@ -259,7 +255,7 @@ impl RewritePattern for VariantNewPattern {
 /// - `variant_tag = Symbol` - the variant tag (e.g., `Add`, `Num`)
 /// - `base_enum = Type` - the base enum type
 fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> TypeRef {
-    let base_data = ctx.types.get(base_type);
+    let base_data = ctx.get_type(base_type);
     let dialect = base_data.dialect;
 
     // For adt.typeref types, extract the actual type name from the name attribute
@@ -286,7 +282,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
         .attr(Symbol::new("base_enum"), Attribute::Type(base_type))
         .attr(Symbol::new("variant_tag"), Attribute::Symbol(tag));
 
-    ctx.types.intern(builder.build())
+    ctx.intern_type(builder.build())
 }
 
 /// Pattern for `adt.variant_is` -> `wasm.ref_test`
@@ -399,7 +395,7 @@ impl RewritePattern for VariantGetPattern {
         // pattern extraction is temporarily erased to wasm.anyref. All other
         // variant_get results must agree with their declared enum field type.
         let declared_is_bytes = {
-            let data = ctx.types.get(declared_field_ty);
+            let data = ctx.get_type(declared_field_ty);
             data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
         };
         let is_bytes_anyref_erasure =
@@ -409,8 +405,8 @@ impl RewritePattern for VariantGetPattern {
         }
         let result_ty = declared_field_ty;
         let operand_ty = ctx.value_ty(ref_val);
-        let variant_type = if ctx.types.get(operand_ty).attrs.get_bool("is_variant") == Some(true) {
-            let operand_attrs = &ctx.types.get(operand_ty).attrs;
+        let variant_type = if ctx.get_type(operand_ty).attrs.get_bool("is_variant") == Some(true) {
+            let operand_attrs = &ctx.get_type(operand_ty).attrs;
             if operand_attrs.get_type("base_enum") != Some(enum_type)
                 || operand_attrs.get_symbol("variant_tag") != Some(tag)
             {
@@ -418,7 +414,7 @@ impl RewritePattern for VariantGetPattern {
             }
             operand_ty
         } else {
-            let operand_data = ctx.types.get(operand_ty);
+            let operand_data = ctx.get_type(operand_ty);
             if operand_data.dialect == Symbol::new("adt")
                 && operand_data.name == Symbol::new("typeref")
                 && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
@@ -739,7 +735,7 @@ mod tests {
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
                     && data.name == "struct_get"
-                    && ctx.types.get(ty).attrs.get_bool("is_variant") == Some(true)
+                    && ctx.get_type(ty).attrs.get_bool("is_variant") == Some(true)
             })
             .expect("lowered variant_get");
         let variant_ty = ctx
@@ -809,7 +805,7 @@ mod tests {
         assert_eq!(variant_types[0], empty);
         assert_ne!(variant_types[0], cons);
         assert!(variant_types.iter().skip(1).all(|ty| *ty == cons));
-        assert_eq!(ctx.types.get(cons).attrs.get_type("base_enum"), Some(list));
+        assert_eq!(ctx.get_type(cons).attrs.get_type("base_enum"), Some(list));
 
         crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
         let indexed_variant_ops: Vec<_> = ctx
@@ -938,15 +934,15 @@ mod tests {
             .collect();
         assert_eq!(lowered_result_types.len(), 3);
         assert!(lowered_result_types.iter().any(|&ty| {
-            let data = ctx.types.get(ty);
+            let data = ctx.get_type(ty);
             data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
         }));
         assert!(lowered_result_types.iter().any(|&ty| {
-            let data = ctx.types.get(ty);
+            let data = ctx.get_type(ty);
             data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
         }));
         assert!(lowered_result_types.iter().any(|&ty| {
-            let data = ctx.types.get(ty);
+            let data = ctx.get_type(ty);
             data.dialect == Symbol::new("wasm") && data.name == Symbol::new("structref")
         }));
         assert_eq!(

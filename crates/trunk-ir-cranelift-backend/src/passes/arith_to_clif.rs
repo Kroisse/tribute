@@ -49,7 +49,7 @@ fn arith_to_clif_target() -> ConversionTarget {
 fn type_category(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
     match ty {
         Some(t) => {
-            let name = ctx.types.get(t).name;
+            let name = ctx.get_type(t).name;
             if name == Symbol::new("i1")
                 || name == Symbol::new("i8")
                 || name == Symbol::new("i16")
@@ -77,7 +77,7 @@ fn type_category(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
 fn is_unsigned_int(ctx: &IrContext, ty: Option<TypeRef>) -> bool {
     match ty {
         Some(t) => {
-            let name = ctx.types.get(t).name;
+            let name = ctx.get_type(t).name;
             name == Symbol::new("nat") || name == Symbol::new("bool")
         }
         None => false,
@@ -86,7 +86,7 @@ fn is_unsigned_int(ctx: &IrContext, ty: Option<TypeRef>) -> bool {
 
 fn is_wider_int(ctx: &IrContext, dst: TypeRef, src: Option<TypeRef>) -> bool {
     let width = |t: TypeRef| -> u8 {
-        let name = ctx.types.get(t).name;
+        let name = ctx.get_type(t).name;
         if name == Symbol::new("i64") {
             64
         } else if name == Symbol::new("i32")
@@ -269,9 +269,7 @@ impl RewritePattern for ArithCmpPattern {
         // Cranelift's icmp/fcmp always return i8, so emit the comparison with
         // core.i8 result, then uextend to the converted result type (core.i32)
         // so downstream consumers get the expected width.
-        let i8_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
