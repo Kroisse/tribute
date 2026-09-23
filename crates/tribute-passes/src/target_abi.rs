@@ -724,7 +724,7 @@ fn validate_root_continuation_frame(
     evidence: TypeRef,
     physical_results: &[TypeRef],
 ) -> Result<RootFrameContract, TargetAbiError> {
-    let reference_data = ctx.types().get(frame);
+    let reference_data = ctx.get_type(frame);
     if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
     {
         return Err(TargetAbiError::new(
@@ -742,7 +742,7 @@ fn validate_root_continuation_frame(
     let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
-    let layout_data = ctx.types().get(layout);
+    let layout_data = ctx.get_type(layout);
     if layout_data.dialect != Symbol::new("adt")
         || layout_data.name != Symbol::new("struct")
         || layout_data.attrs.get_symbol("name") != Some(name)
@@ -925,8 +925,8 @@ fn is_parameterless_dialect_type(
     name: Symbol,
 ) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
-        && ctx.types().get(ty).params.is_empty()
-        && ctx.types().get(ty).attrs.is_empty()
+        && ctx.get_type(ty).params.is_empty()
+        && ctx.get_type(ty).attrs.is_empty()
 }
 
 fn root_export_convention(
@@ -1438,7 +1438,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         if let Some(&converted) = self.embedded.get(&ty) {
             return Ok(converted);
         }
-        let data = self.ctx.types().get(ty).clone();
+        let data = self.ctx.get_type(ty).clone();
         if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
             let [function] = data.params.as_slice() else {
                 return Err(TargetAbiError::new(
@@ -1530,7 +1530,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     }
 
     fn intern_if_changed(&mut self, original: TypeRef, data: TypeData) -> TypeRef {
-        if data == *self.ctx.types().get(original) {
+        if data == *self.ctx.get_type(original) {
             original
         } else {
             self.ctx.intern_type(data)
@@ -1645,7 +1645,7 @@ mod tests {
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
                     let value = ctx.op_operands(dispatch)[index];
-                    let mut ty = ctx.types().get(ctx.value_ty(value)).clone();
+                    let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
                         ty.attrs.insert(
                             Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
@@ -1975,18 +1975,17 @@ mod tests {
         };
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[0]), *worker_evidence);
         assert_eq!(ctx.value_ty(ctx.op_operands(call)[1]), *worker_frame);
-        assert_eq!(ctx.types().get(*worker_frame).dialect, Symbol::new("adt"));
-        assert_eq!(ctx.types().get(*worker_frame).name, Symbol::new("typeref"));
+        assert_eq!(ctx.get_type(*worker_frame).dialect, Symbol::new("adt"));
+        assert_eq!(ctx.get_type(*worker_frame).name, Symbol::new("typeref"));
         let frame_name = ctx
-            .types()
-            .get(*worker_frame)
+            .get_type(*worker_frame)
             .attrs
             .get_symbol("name")
             .unwrap();
         let frame_layout = ctx
             .type_alias_by_name(frame_name)
             .expect("worker frame must retain its exact nominal layout");
-        let fields = ctx.types().get(frame_layout).attrs.get("fields");
+        let fields = ctx.get_type(frame_layout).attrs.get("fields");
         let Attribute::List(fields) = fields.expect("frame fields") else {
             panic!("frame fields must be a list");
         };
@@ -2026,7 +2025,7 @@ mod tests {
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
                 && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.types().get(*ty).attrs.get_symbol("name")
+                    ctx.get_type(*ty).attrs.get_symbol("name")
                         == Some(Symbol::new(ROOT_COMPLETION_CELL_NAME))
                 })
         }));

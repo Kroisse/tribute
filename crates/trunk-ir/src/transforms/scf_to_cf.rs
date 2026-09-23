@@ -1229,7 +1229,7 @@ mod tests {
             .skip(1)
             .flat_map(|&block| ctx.block_args(block))
             .any(|&arg| {
-                let ty = ctx.types().get(ctx.value_ty(arg));
+                let ty = ctx.get_type(ctx.value_ty(arg));
                 ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
             });
         assert!(

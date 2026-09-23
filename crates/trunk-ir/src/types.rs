@@ -720,7 +720,7 @@ mod tests {
         let r2 = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]).as_type_ref();
         assert_eq!(r1, r2);
 
-        let data = ctx.types().get(r1);
+        let data = ctx.get_type(r1);
         assert_eq!(data.params.len(), 2);
         assert_eq!(data.params[0], i32_ref);
     }

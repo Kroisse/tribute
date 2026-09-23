@@ -395,7 +395,7 @@ fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Vali
         ));
         return;
     };
-    let callee_ty = ctx.types().get(ctx.value_ty(callee));
+    let callee_ty = ctx.get_type(ctx.value_ty(callee));
     let func_ty = if callee_ty.dialect == Symbol::new("closure")
         && callee_ty.name == Symbol::new("closure")
     {
@@ -566,7 +566,7 @@ fn typed_callee_signature(
     value: ValueRef,
 ) -> Option<crate::dialect::func::FuncSig> {
     let ty = ctx.value_ty(value);
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
         let [ty] = data.params.as_slice() else {
             return None;
@@ -1222,7 +1222,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
             let never_result = match ctx.op_result_types(op) {
                 [ty] => {
-                    let ty = ctx.types().get(*ty);
+                    let ty = ctx.get_type(*ty);
                     ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
                 }
                 _ => false,

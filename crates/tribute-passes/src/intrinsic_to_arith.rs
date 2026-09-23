@@ -357,8 +357,8 @@ fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &Arith
     if left != right {
         return false;
     }
-    let operand = ctx.types().get(*left);
-    let result = ctx.types().get(result);
+    let operand = ctx.get_type(*left);
+    let result = ctx.get_type(result);
     let operand_is_i32 =
         operand.dialect == Symbol::new("core") && operand.name == Symbol::new("i32");
     let operand_is_f64 =

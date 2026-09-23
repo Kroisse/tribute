@@ -252,8 +252,8 @@ fn build_aliases(
             };
             let input_managed = is_managed_value(ctx, *input, managed_layouts);
             let output_managed = is_managed_value(ctx, *output, managed_layouts);
-            let input_data = ctx.types().get(ctx.value_ty(*input));
-            let output_data = ctx.types().get(ctx.value_ty(*output));
+            let input_data = ctx.get_type(ctx.value_ty(*input));
+            let output_data = ctx.get_type(ctx.value_ty(*output));
             if input_data.dialect == Symbol::new("core")
                 && input_data.name == Symbol::new("ptr")
                 && output_data.dialect == Symbol::new("adt")
@@ -328,12 +328,12 @@ pub(super) fn is_internal_closure_layout(
 }
 
 pub(super) fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
 }
 
 fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
 }
 
@@ -420,7 +420,7 @@ fn validate_projection_contract(
         (get.r#type(ctx), *field_ty)
     };
     let source_ty = ctx.value_ty(source);
-    let source_data = ctx.types().get(source_ty);
+    let source_data = ctx.get_type(source_ty);
     let raw_source =
         source_data.dialect == Symbol::new("core") && source_data.name == Symbol::new("ptr");
     let result_managed = is_managed_value(ctx, result, managed_layouts);

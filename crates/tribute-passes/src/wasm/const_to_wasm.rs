@@ -175,7 +175,7 @@ pub fn validate_for_wasm(
             });
             return;
         };
-        let ty = ctx.types().get(result_ty);
+        let ty = ctx.get_type(result_ty);
         if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != Symbol::new("anyref") {
             result = Err(ConstValidationError::InvalidStringResultType {
                 actual: format!("{}.{}", ty.dialect, ty.name),

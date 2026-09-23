@@ -2298,8 +2298,8 @@ fn lower_handler<'db>(
         operation_result,
     );
     declarations.record(declaration, location, ctx.db);
-    let is_never = ir.types().get(operation_result).dialect == Symbol::new("core")
-        && ir.types().get(operation_result).name == Symbol::new("never");
+    let is_never = ir.get_type(operation_result).dialect == Symbol::new("core")
+        && ir.get_type(operation_result).name == Symbol::new("never");
     let mut block_args: Vec<_> = parameter_types
         .iter()
         .map(|ty| BlockArgData {

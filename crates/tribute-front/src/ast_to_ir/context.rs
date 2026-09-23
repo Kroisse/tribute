@@ -875,7 +875,7 @@ mod tests {
             },
         );
         let resume = ctx.convert_logical_type(&mut ir, resume);
-        let resume_data = ir.types().get(resume);
+        let resume_data = ir.get_type(resume);
         assert_eq!(resume_data.dialect, Symbol::new("tribute_control"));
         assert_eq!(resume_data.name, Symbol::new("resume_token"));
 

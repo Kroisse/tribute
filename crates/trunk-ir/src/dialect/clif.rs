@@ -171,7 +171,7 @@ impl FuncSig {
         ctx: &crate::IrContext,
         ty: crate::TypeRef,
     ) -> Result<Self, FuncSigTypeError> {
-        let data = ctx.types().get(ty);
+        let data = ctx.get_type(ty);
         debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
         let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
         let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)?;
@@ -189,7 +189,7 @@ impl FuncSig {
     }
 
     fn counts(self, ctx: &crate::IrContext) -> (usize, usize) {
-        let data = ctx.types().get(self.0);
+        let data = ctx.get_type(self.0);
         let inputs = usize::try_from(
             read_count(&data.attrs, NUM_INPUTS_ATTR)
                 .expect("validated clif.func_sig must retain num_inputs"),
@@ -205,12 +205,12 @@ impl FuncSig {
 
     pub fn inputs(self, ctx: &crate::IrContext) -> &[crate::TypeRef] {
         let (inputs, _) = self.counts(ctx);
-        &ctx.types().get(self.0).params[..inputs]
+        &ctx.get_type(self.0).params[..inputs]
     }
 
     pub fn results(self, ctx: &crate::IrContext) -> &[crate::TypeRef] {
         let (inputs, results) = self.counts(ctx);
-        &ctx.types().get(self.0).params[inputs..inputs + results]
+        &ctx.get_type(self.0).params[inputs..inputs + results]
     }
 
     pub fn is_resultless(self, ctx: &crate::IrContext) -> bool {
@@ -226,7 +226,7 @@ impl FuncSig {
         self,
         ctx: &crate::IrContext,
     ) -> impl Iterator<Item = (&crate::Symbol, &Attribute)> {
-        ctx.types().get(self.0).attrs.iter().filter(|(key, _)| {
+        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
             **key != crate::Symbol::new(NUM_INPUTS_ATTR)
                 && **key != crate::Symbol::new(NUM_RESULTS_ATTR)
         })

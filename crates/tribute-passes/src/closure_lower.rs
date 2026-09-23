@@ -72,7 +72,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
 
 /// Check if a TypeRef is an adt.struct with name "_closure".
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return false;
     }
@@ -417,7 +417,7 @@ fn exact_physical_call_contract(
     }
     let mut params = callable.inputs(ctx).to_vec();
     params.insert(environment_index, environment);
-    let mut type_attrs = ctx.types().get(function).attrs.clone();
+    let mut type_attrs = ctx.get_type(function).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
@@ -745,7 +745,7 @@ impl<'a> ClosureTypePhysicalizer<'a> {
             return ty;
         }
 
-        let data = self.ctx.types().get(ty).clone();
+        let data = self.ctx.get_type(ty).clone();
         let mut converted = data.clone();
         for parameter in &mut converted.params {
             *parameter = self.convert_type(*parameter);

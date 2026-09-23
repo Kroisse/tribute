@@ -1229,7 +1229,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
         .rtti_types()
         .iter()
         .find(|entry| {
-            ctx.types().get(entry.ty).attrs.get_symbol("name") == Some(Symbol::new("Choice"))
+            ctx.get_type(entry.ty).attrs.get_symbol("name") == Some(Symbol::new("Choice"))
         })
         .unwrap();
     assert!(matches!(

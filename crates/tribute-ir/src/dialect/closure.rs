@@ -79,7 +79,7 @@ fn print_closure_lambda(
     // Decompose: result type = closure.closure<func.func_sig<(inputs...) -> result>>
     let return_ty = {
         let result_ty = h.ctx().op_result_types(op)[0];
-        let closure_ty_data = h.ctx().types().get(result_ty);
+        let closure_ty_data = h.ctx().get_type(result_ty);
         if !closure_ty_data.params.is_empty() {
             let func_ty = closure_ty_data.params[0];
             trunk_ir::dialect::func::FuncSig::from_type_ref(h.ctx(), func_ty)
@@ -268,7 +268,7 @@ impl trunk_ir::op_interface::CallableOwnerModel for Lambda {
             return None;
         };
         let closure = Closure::from_type_ref(ctx, *result)?;
-        let [function] = ctx.types().get(closure.as_type_ref()).params.as_slice() else {
+        let [function] = ctx.get_type(closure.as_type_ref()).params.as_slice() else {
             return None;
         };
         trunk_ir::dialect::func::FuncSig::from_type_ref(ctx, *function)
@@ -539,7 +539,7 @@ mod tests {
             assert_eq!(signature.results(&ctx).len(), usize::from(result.is_some()));
             if let Some(name) = result {
                 assert_eq!(
-                    ctx.types().get(signature.results(&ctx)[0]).name.to_string(),
+                    ctx.get_type(signature.results(&ctx)[0]).name.to_string(),
                     name.strip_prefix("core.").unwrap()
                 );
             }

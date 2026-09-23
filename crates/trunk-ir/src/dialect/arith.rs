@@ -371,7 +371,7 @@ pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> 
 /// widths outside `[1, 128]` (the upper bound is what
 /// `wrap_signed_to_width` can represent in i128).
 pub(crate) fn core_int_width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
         return None;
     }

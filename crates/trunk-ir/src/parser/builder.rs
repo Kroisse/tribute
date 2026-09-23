@@ -523,11 +523,11 @@ impl<'a> ArenaIrBuilder<'a> {
             let pt = self.build_type(param_ty)?;
             if bt != pt {
                 let (bd, bn) = {
-                    let d = self.ctx.types().get(bt);
+                    let d = self.ctx.get_type(bt);
                     (d.dialect, d.name)
                 };
                 let (pd, pn) = {
-                    let d = self.ctx.types().get(pt);
+                    let d = self.ctx.get_type(pt);
                     (d.dialect, d.name)
                 };
                 return Err(ParseError {

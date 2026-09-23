@@ -54,7 +54,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 
 /// Check if a type is a tribute_rt primitive type or closure type.
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 

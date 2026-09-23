@@ -90,7 +90,7 @@ pub struct VariantFieldLayout {
 /// After type conversion, all types should be one of the core types.
 /// Unknown types default to pointer size (8 bytes) for safety.
 pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("core") {
         return (8, 8);
     }
@@ -115,7 +115,7 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 ///
 /// Returns `None` if the type is not `adt.struct`.
 pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return None;
     }
@@ -157,7 +157,7 @@ pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Ty
 ///
 /// Returns `None` if the type is not `adt.enum`.
 pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
         return None;
     }

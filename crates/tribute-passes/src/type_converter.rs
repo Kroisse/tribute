@@ -302,7 +302,7 @@ mod tests {
                 let target = crate::wasm::type_converter::closure_adt_type(&mut ctx);
                 assert_eq!(ctx.value_ty(arg), target);
                 let signature = ctx.op(tail).attributes.get_type("signature").unwrap();
-                assert_eq!(ctx.types().get(signature).params[0], target);
+                assert_eq!(ctx.get_type(signature).params[0], target);
             } else {
                 assert!(
                     func::TailCallIndirect::matches(&ctx, tail),
@@ -324,7 +324,7 @@ mod tests {
         let value = ctx.block_args(block)[0];
         let anyref = ctx.value_ty(value);
         let canonical = crate::closure_lower::closure_struct_type_ref(&mut ctx);
-        let mut near = ctx.types().get(canonical).clone();
+        let mut near = ctx.get_type(canonical).clone();
         near.attrs
             .insert(Symbol::new("unrelated"), Attribute::Bool(true));
         let near = ctx.intern_type(near);

@@ -111,7 +111,7 @@ pub fn cps_continuation_frame_ref_type(
 
 /// Read result-index metadata only from an explicit continuation-frame type.
 pub fn cps_continuation_frame_result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
-    let data = ctx.types().get(frame);
+    let data = ctx.get_type(frame);
     (data.dialect == Symbol::new("adt")
         && matches!(data.name, name if name == Symbol::new("typeref") || name == Symbol::new("struct")))
     .then(|| data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR))
@@ -220,7 +220,7 @@ pub fn physical_closure_function_type(
     if get_physical_closure_convention(ctx, closure) != Some(convention) {
         return None;
     }
-    let [function] = ctx.types().get(closure).params.as_slice() else {
+    let [function] = ctx.get_type(closure).params.as_slice() else {
         return None;
     };
     let callable = func::FuncSig::from_type_ref(ctx, *function)?;
@@ -288,7 +288,7 @@ pub fn get_physical_closure_convention(
     ctx: &IrContext,
     closure: TypeRef,
 ) -> Option<CallingConvention> {
-    let data = ctx.types().get(closure);
+    let data = ctx.get_type(closure);
     if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
         return None;
     }
@@ -301,7 +301,7 @@ pub fn get_physical_closure_convention(
 
 /// Read the exact environment slot from a convention-proven closure type.
 pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
-    let data = ctx.types().get(closure);
+    let data = ctx.get_type(closure);
     if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
         return None;
     }
@@ -393,7 +393,7 @@ mod tests {
             Some(i32_ty)
         );
         assert_eq!(
-            ctx.types().get(layout).attrs.get("fields"),
+            ctx.get_type(layout).attrs.get("fields"),
             Some(&Attribute::List(vec![
                 Attribute::List(vec![
                     Attribute::Symbol(Symbol::new("done")),
@@ -419,7 +419,7 @@ mod tests {
         ] {
             let function = cps_closure_function_type(&ctx, closure).expect("exact CPS closure");
             assert_eq!(
-                ctx.types().get(function).params.as_slice(),
+                ctx.get_type(function).params.as_slice(),
                 expected.as_slice()
             );
             assert_eq!(

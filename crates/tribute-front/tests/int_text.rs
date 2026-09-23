@@ -462,8 +462,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     );
     for declaration in declarations.iter().take(2) {
         assert_eq!(declaration.parameter_types.len(), 1);
-        let parameter = ir.types().get(declaration.parameter_types[0]);
-        let result = ir.types().get(declaration.result_type);
+        let parameter = ir.get_type(declaration.parameter_types[0]);
+        let result = ir.get_type(declaration.result_type);
         assert_eq!(
             (parameter.dialect, parameter.name),
             (Symbol::new("core"), Symbol::new("i32"))
@@ -473,7 +473,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             (Symbol::new("core"), Symbol::new("i32"))
         );
     }
-    let ability = ir.types().get(declarations[0].ability_ref);
+    let ability = ir.get_type(declarations[0].ability_ref);
     assert_eq!(
         (ability.dialect, ability.name),
         (Symbol::new("core"), Symbol::new("ability_ref"))
@@ -481,24 +481,24 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     assert_eq!(ability.params.len(), 1);
     assert_eq!(
         (
-            ir.types().get(ability.params[0]).dialect,
-            ir.types().get(ability.params[0]).name
+            ir.get_type(ability.params[0]).dialect,
+            ir.get_type(ability.params[0]).name
         ),
         (Symbol::new("core"), Symbol::new("i32"))
     );
-    let bool_ability = ir.types().get(declarations[2].ability_ref);
+    let bool_ability = ir.get_type(declarations[2].ability_ref);
     assert_eq!(bool_ability.params.len(), 1);
     assert_eq!(
         (
-            ir.types().get(bool_ability.params[0]).dialect,
-            ir.types().get(bool_ability.params[0]).name
+            ir.get_type(bool_ability.params[0]).dialect,
+            ir.get_type(bool_ability.params[0]).name
         ),
         (Symbol::new("core"), Symbol::new("i1"))
     );
     for declaration in declarations.iter().skip(2) {
         assert_eq!(declaration.parameter_types.len(), 1);
-        let parameter = ir.types().get(declaration.parameter_types[0]);
-        let result = ir.types().get(declaration.result_type);
+        let parameter = ir.get_type(declaration.parameter_types[0]);
+        let result = ir.get_type(declaration.result_type);
         assert_eq!(
             (parameter.dialect, parameter.name),
             (Symbol::new("core"), Symbol::new("i1"))
@@ -628,11 +628,8 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);
-        assert_eq!(ir.types().get(data_type).dialect, Symbol::new("core"));
-        assert_eq!(
-            ir.types().get(data_type).name,
-            Symbol::from_dynamic(primitive)
-        );
+        assert_eq!(ir.get_type(data_type).dialect, Symbol::new("core"));
+        assert_eq!(ir.get_type(data_type).name, Symbol::from_dynamic(primitive));
         let mut lambdas = Vec::new();
         let mut calls = Vec::new();
         let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {

@@ -126,7 +126,7 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type has the `is_variant` attribute set to true.
 fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    ctx.types().get(ty).attrs.get_bool("is_variant") == Some(true)
+    ctx.get_type(ty).attrs.get_bool("is_variant") == Some(true)
 }
 
 /// Check if a type is a struct-like reference type.
@@ -745,7 +745,7 @@ mod tests {
         let shared = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let target = closure_adt_type(&mut ctx);
         let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
-        let mut near = ctx.types().get(shared).clone();
+        let mut near = ctx.get_type(shared).clone();
         near.attrs
             .insert(Symbol::new("unrelated"), Attribute::Bool(true));
         let near = ctx.intern_type(near);
@@ -753,7 +753,7 @@ mod tests {
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let data = ctx.types().get(target);
+        let data = ctx.get_type(target);
         let Attribute::List(fields) = data.attrs.get("fields").unwrap() else {
             panic!("fields")
         };
@@ -763,7 +763,7 @@ mod tests {
         let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
         let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
         assert_eq!(
-            ctx.types().get(target).attrs.get("fields"),
+            ctx.get_type(target).attrs.get("fields"),
             Some(&Attribute::List(vec![
                 Attribute::List(vec![
                     Attribute::Symbol(Symbol::new("table_idx")),

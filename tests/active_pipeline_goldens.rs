@@ -111,7 +111,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
     use trunk_ir::{IrContext, TypeRef};
 
     fn type_shape(ctx: &IrContext, ty: TypeRef) -> String {
-        let data = ctx.types().get(ty);
+        let data = ctx.get_type(ty);
         if let Some(result) = data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR) {
             return format!("Frame<{}>", type_shape(ctx, result));
         }

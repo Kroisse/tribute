@@ -148,7 +148,7 @@ impl RewritePattern for StructNewPattern {
                 "adt_rc_header: missing RTTI entry for struct type {:?}; \
                      ensure generate_rtti runs before this pass; layout = {:?}",
                 struct_ty,
-                ctx.types().get(struct_ty)
+                ctx.get_type(struct_ty)
             )
         }) as i64;
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);

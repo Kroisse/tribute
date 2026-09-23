@@ -110,7 +110,7 @@ impl<'a> PrintState<'a> {
         if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
-        let data = self.ctx.types().get(ty);
+        let data = self.ctx.get_type(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
         if !data.params.is_empty() {
             f.write_char('(')?;
@@ -145,7 +145,7 @@ impl<'a> PrintState<'a> {
         inputs: &[TypeRef],
         results: &[TypeRef],
     ) -> fmt::Result {
-        let data = self.ctx.types().get(ty);
+        let data = self.ctx.get_type(ty);
         write!(f, "{}.{}<(", data.dialect, data.name)?;
         for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
@@ -233,7 +233,7 @@ impl<'a> PrintState<'a> {
 /// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
 /// Other types, including malformed count-shaped data, retain concrete printing.
 fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     if data.name != crate::Symbol::new("func_sig") {
         return None;
     }
@@ -688,7 +688,7 @@ fn collect_type_deps(
     alias_set: &HashSet<TypeRef>,
     deps: &mut HashSet<TypeRef>,
 ) {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     for &param in &data.params {
         if alias_set.contains(&param) {
             deps.insert(param);

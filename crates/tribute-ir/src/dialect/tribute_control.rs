@@ -159,7 +159,7 @@ impl From<FuncSig> for TypeRef {
 
 impl FuncSig {
     fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
-        let data = ctx.types().get(ty);
+        let data = ctx.get_type(ty);
         let inputs = read_count(&data.attrs, trunk_ir::dialect::func::NUM_INPUTS_ATTR)?;
         let results = read_count(&data.attrs, trunk_ir::dialect::func::NUM_RESULTS_ATTR)?;
         if results != 1 {
@@ -190,22 +190,21 @@ impl FuncSig {
 
     pub fn inputs(self, ctx: &IrContext) -> &[TypeRef] {
         let count = read_count(
-            &ctx.types().get(self.0).attrs,
+            &ctx.get_type(self.0).attrs,
             trunk_ir::dialect::func::NUM_INPUTS_ATTR,
         )
         .expect("validated source func_sig retains input count") as usize;
-        &ctx.types().get(self.0).params[..count]
+        &ctx.get_type(self.0).params[..count]
     }
 
     pub fn results(self, ctx: &IrContext) -> &[TypeRef] {
         let inputs = self.inputs(ctx).len();
-        &ctx.types().get(self.0).params[inputs..]
+        &ctx.get_type(self.0).params[inputs..]
     }
 
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {
         CallingConvention::try_from(
-            ctx.types()
-                .get(self.0)
+            ctx.get_type(self.0)
                 .attrs
                 .get_i128(CALLING_CONVENTION_ATTR)
                 .expect("validated source func_sig retains convention"),
@@ -226,7 +225,7 @@ impl FuncSig {
     /// Whether this signature carries type-owned metadata beyond storage and
     /// source convention fields.
     pub(crate) fn has_nonreserved_attrs(self, ctx: &IrContext) -> bool {
-        let mut attrs = ctx.types().get(self.0).attrs.clone();
+        let mut attrs = ctx.get_type(self.0).attrs.clone();
         Self::remove_reserved_attrs(&mut attrs);
         !attrs.is_empty()
     }
@@ -300,7 +299,7 @@ pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Type
     if !ResumeToken::matches(ctx, ty) {
         return None;
     }
-    let [input, answer] = ctx.types().get(ty).params.as_slice() else {
+    let [input, answer] = ctx.get_type(ty).params.as_slice() else {
         return None;
     };
     Some((*input, *answer))
@@ -883,12 +882,12 @@ fn parent_region(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
 }
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("never")
 }
 
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let unresolved_name = data.name == Symbol::new("var")
         || data.name == Symbol::new("infer")
         || data.name == Symbol::new("unresolved");
@@ -900,7 +899,7 @@ fn contains_unresolved_type(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet
     if !visiting.insert(ty) {
         return false;
     }
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let unresolved = is_unresolved_type(ctx, ty)
         || data
             .params
@@ -919,7 +918,7 @@ fn contains_forbidden_logical_component(
     if !visiting.insert(ty) {
         return true;
     }
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let forbidden = (data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig"))
         || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
         || ResumeToken::matches(ctx, ty)
@@ -2096,7 +2095,7 @@ fn declaration_map<'a>(
 }
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref")
 }
 
@@ -2104,7 +2103,7 @@ fn contains_adt_typeref(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<Typ
     if !visiting.insert(ty) {
         return false;
     }
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     let contains = is_adt_typeref(ctx, ty)
         || data
             .params
@@ -2134,7 +2133,7 @@ fn attribute_contains_adt_typeref(
 }
 
 fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     (data.dialect == Symbol::new("adt")
         && matches!(
             data.name,
@@ -2156,7 +2155,7 @@ fn canonical_nominal_layouts(
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
-        let data = ctx.types().get(ty);
+        let data = ctx.get_type(ty);
         if is_adt_typeref(ctx, ty) {
             if let Some(name) = data.attrs.get_symbol("name") {
                 referenced_names.insert(name);
@@ -2211,7 +2210,7 @@ fn canonical_nominal_layouts(
 }
 
 fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
 }
 
@@ -2231,7 +2230,7 @@ fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<Type
     if !types.insert(ty) {
         return;
     }
-    let data = ctx.types().get(ty);
+    let data = ctx.get_type(ty);
     for parameter in data.params.iter().copied() {
         collect_reachable_type(ctx, parameter, types);
     }
@@ -2308,7 +2307,7 @@ fn validate_managed_reference_boundaries(
         if !is_adt_typeref(ctx, ty) {
             continue;
         }
-        let data = ctx.types().get(ty);
+        let data = ctx.get_type(ty);
         let Some(name) = data.attrs.get_symbol("name") else {
             push_type_error(
                 errors,
@@ -2468,7 +2467,7 @@ fn projection_source_matches_layout(
 }
 
 fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    let data = ctx.types().get(layout);
+    let data = ctx.get_type(layout);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return None;
     }
@@ -2490,7 +2489,7 @@ fn variant_field_type(
     tag: Symbol,
     field: u32,
 ) -> Option<TypeRef> {
-    let data = ctx.types().get(layout);
+    let data = ctx.get_type(layout);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
         return None;
     }
@@ -3665,8 +3664,7 @@ mod tests {
             assert_eq!(ty.result(&ctx), i32_ty);
             assert_eq!(ty.inputs(&ctx), &[i32_ty]);
             assert_eq!(
-                ctx.types()
-                    .get(ty.as_type_ref())
+                ctx.get_type(ty.as_type_ref())
                     .attrs
                     .get_i128(CALLING_CONVENTION_ATTR),
                 Some(code)
@@ -3879,7 +3877,7 @@ mod tests {
             .unwrap();
         assert_ne!(shared, distinct);
         assert!(matches!(
-            ctx.types().get(shared).attrs.get("metadata"),
+            ctx.get_type(shared).attrs.get("metadata"),
             Some(Attribute::List(_))
         ));
         assert_eq!(
@@ -5143,7 +5141,7 @@ mod tests {
         let wrong_signature = CompilerIntrinsicDeclaration::new(
             exact.symbol,
             exact.identity,
-            ctx.types().get(func_sig_type).params[0],
+            ctx.get_type(func_sig_type).params[0],
         );
         let result = validate(&ctx, module, &[], &[wrong_signature]);
         assert!(messages(&result).contains("complete signature"), "{result}");

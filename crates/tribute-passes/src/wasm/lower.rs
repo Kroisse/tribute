@@ -267,7 +267,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .inputs(ctx)
                         .iter()
                         .map(|t| {
-                            let td = ctx.types().get(*t);
+                            let td = ctx.get_type(*t);
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
@@ -289,7 +289,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .inputs(ctx)
                     .iter()
                     .map(|t| {
-                        let td = ctx.types().get(*t);
+                        let td = ctx.get_type(*t);
                         format!("{}.{}", td.dialect, td.name)
                     })
                     .collect();
@@ -732,8 +732,7 @@ mod tests {
         assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), arrayref);
         assert_eq!(struct_get.result_ty(&ctx), arrayref);
         assert_eq!(
-            ctx.types()
-                .get(struct_get.r#type(&ctx))
+            ctx.get_type(struct_get.r#type(&ctx))
                 .attrs
                 .get_symbol("name"),
             Some(Symbol::new("Env"))

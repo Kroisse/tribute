@@ -211,7 +211,7 @@ fn lower_single_lambda(
 
     let mut all_param_tys = orig_param_types.clone();
     all_param_tys.insert(environment_index, anyref_ty);
-    let mut type_attrs = ctx.types().get(function_ty).attrs.clone();
+    let mut type_attrs = ctx.get_type(function_ty).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     let func_ty = func::func_sig_with_attrs(

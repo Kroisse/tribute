@@ -210,7 +210,7 @@ fn main() { }
                 Some(tribute_core::CallingConvention::Direct)
             );
             let args = &ctx.op_operands(indirect)[1..];
-            assert_eq!(ctx.types().get(ctx.value_ty(*args.last().unwrap())).name, scalar);
+            assert_eq!(ctx.get_type(ctx.value_ty(*args.last().unwrap())).name, scalar);
             specializations.push(target.op_ref());
         }
         assert_ne!(specializations[0], specializations[1], "Int and Float must instantiate distinct callable contracts");
@@ -513,14 +513,12 @@ fn source_closure(ctx: &IrContext, module: Module, name: &str) -> (closure::New,
         .collect();
     assert_eq!(entry_types, lifted_signature.inputs(ctx));
     assert_eq!(
-        ctx.types()
-            .get(lifted_signature.inputs(ctx)[environment_index])
+        ctx.get_type(lifted_signature.inputs(ctx)[environment_index])
             .dialect,
         "tribute_rt"
     );
     assert_eq!(
-        ctx.types()
-            .get(lifted_signature.inputs(ctx)[environment_index])
+        ctx.get_type(lifted_signature.inputs(ctx)[environment_index])
             .name,
         "anyref"
     );
@@ -557,12 +555,12 @@ fn test_lambda_identity() {
         ));
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "compute"));
         let boxed = *ctx.op_operands(call).last().unwrap();
-        assert_eq!(ctx.types().get(ctx.value_ty(boxed)).name, "anyref");
+        assert_eq!(ctx.get_type(ctx.value_ty(boxed)).name, "anyref");
         let cast = defining_op(&ctx, boxed);
         assert!(core::UnrealizedConversionCast::matches(&ctx, cast));
         let input = ctx.op_operands(cast);
         assert_eq!(input.len(), 1);
-        assert_eq!(ctx.types().get(ctx.value_ty(input[0])).name, "i32");
+        assert_eq!(ctx.get_type(ctx.value_ty(input[0])).name, "i32");
         let argument = arith::Const::from_op(&ctx, defining_op(&ctx, input[0])).unwrap();
         assert_eq!(argument.value(&ctx), Attribute::Int(42));
         let entry = ctx.region(lifted.body(&ctx)).blocks[0];

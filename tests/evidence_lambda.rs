@@ -69,7 +69,7 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
     let hidden_count = usize::from(has_evidence) + usize::from(has_evidence && is_cps);
     let has_done_k = is_cps;
     let returns_anyref = function.single_result(ctx).is_some_and(|result| {
-        let result = ctx.types().get(result);
+        let result = ctx.get_type(result);
         result.dialect == trunk_ir::Symbol::new("tribute_rt")
             && result.name == trunk_ir::Symbol::new("anyref")
     });
@@ -97,18 +97,17 @@ fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<t
 }
 
 fn is_anyref(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    let ty = ctx.types().get(ty);
+    let ty = ctx.get_type(ty);
     ty.dialect == trunk_ir::Symbol::new("tribute_rt") && ty.name == trunk_ir::Symbol::new("anyref")
 }
 
 fn is_i32(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    let ty = ctx.types().get(ty);
+    let ty = ctx.get_type(ty);
     ty.dialect == trunk_ir::Symbol::new("core") && ty.name == trunk_ir::Symbol::new("i32")
 }
 
 fn is_continuation_frame(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
-    ctx.types()
-        .get(ty)
+    ctx.get_type(ty)
         .attrs
         .contains_key("tribute.cps_continuation_frame_result")
 }

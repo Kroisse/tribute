@@ -566,11 +566,11 @@ mod tests {
 
         assert_ne!(one_input.as_type_ref(), one_result.as_type_ref());
         assert_eq!(
-            ctx.types().get(one_input.as_type_ref()).params.as_slice(),
+            ctx.get_type(one_input.as_type_ref()).params.as_slice(),
             [i32_ty]
         );
         assert_eq!(
-            ctx.types().get(one_result.as_type_ref()).params.as_slice(),
+            ctx.get_type(one_result.as_type_ref()).params.as_slice(),
             [i32_ty]
         );
         assert_eq!(one_input.inputs(&ctx), [i32_ty]);

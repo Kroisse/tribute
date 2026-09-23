@@ -90,7 +90,7 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch requires a prompt-tag operand".into(),
         ));
     };
-    let prompt_ty = ctx.types().get(ctx.value_ty(prompt_tag));
+    let prompt_ty = ctx.get_type(ctx.value_ty(prompt_tag));
     if prompt_ty.dialect != Symbol::new("core") || prompt_ty.name != Symbol::new("i32") {
         return Err(error(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
@@ -118,7 +118,7 @@ fn final_handle_dispatch_shape(
         let Attribute::Type(ability_ref) = ability_ref else {
             return Err(error("every ability_refs entry must be a type".into()));
         };
-        let ty = ctx.types().get(*ability_ref);
+        let ty = ctx.get_type(*ability_ref);
         if ty.dialect != Symbol::new("core") || ty.name != Symbol::new("ability_ref") {
             return Err(error(
                 "every ability_refs entry must be a core.ability_ref type".into(),
