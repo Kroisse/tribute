@@ -160,16 +160,6 @@ impl IrContext {
         self.paths.intern(path)
     }
 
-    /// Return mutable type interner access for callers migrating to the context API.
-    pub fn types_mut(&mut self) -> &mut TypeInterner {
-        &mut self.types
-    }
-
-    /// Return mutable path interner access for callers migrating to the context API.
-    pub fn paths_mut(&mut self) -> &mut PathInterner {
-        &mut self.paths
-    }
-
     // ========================================================================
     // Diagnostics
     // ========================================================================
