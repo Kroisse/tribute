@@ -143,6 +143,48 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
 }
 
 #[test]
+fn ir_revision_change_recomputes_function_and_module_facts() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, BORROW_FIXTURE);
+    let op = function_op(&ctx, module, "load");
+    let mut cache = AnalysisCache::new();
+    let old_function = cache
+        .get::<NativeOwnershipFunctionFacts>(&ctx, op)
+        .expect("function facts");
+    let old_module = cache
+        .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+        .expect("module prerequisite");
+
+    ctx.op_mut(module.op()).attributes.insert(
+        Symbol::new("revision_probe"),
+        trunk_ir::types::Attribute::Unit,
+    );
+    assert!(
+        cache
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
+            .is_none()
+    );
+    assert!(
+        cache
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+            .is_none()
+    );
+
+    let fresh_function = cache
+        .get::<NativeOwnershipFunctionFacts>(&ctx, op)
+        .expect("recomputed function facts");
+    let fresh_module = cache
+        .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
+        .expect("recomputed module prerequisite");
+    assert!(!Arc::ptr_eq(&old_function, &fresh_function));
+    assert!(!Arc::ptr_eq(&old_module, &fresh_module));
+    assert_eq!(
+        old_function.managed_values(),
+        fresh_function.managed_values()
+    );
+}
+
+#[test]
 fn malformed_projection_fails_closed_without_publishing_facts() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(

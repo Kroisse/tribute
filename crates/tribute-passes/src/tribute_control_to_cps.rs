@@ -4075,7 +4075,7 @@ mod tests {
         operations: &[(&str, &str)],
     ) -> Vec<tribute_control::OperationDeclaration> {
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -4086,7 +4086,7 @@ mod tests {
             .iter()
             .map(|&(ability_name, op_name)| {
                 let ability_ref = ctx
-                    .types
+                    .types()
                     .iter()
                     .find_map(|(ty, data)| {
                         (data.dialect == Symbol::new("core")
@@ -4619,7 +4619,7 @@ mod tests {
 }"#,
             );
             let i32_ty = ctx
-                .types
+                .types()
                 .iter()
                 .find_map(|(ty, data)| {
                     (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5174,7 +5174,7 @@ mod tests {
         }
         find_ability(&ctx, module.body(&ctx).unwrap(), &mut ability_ref);
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5308,7 +5308,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5316,7 +5316,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5415,7 +5415,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5423,7 +5423,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5475,7 +5475,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5483,7 +5483,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -5642,7 +5642,7 @@ mod tests {
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -5650,7 +5650,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -6005,7 +6005,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6013,7 +6013,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -6021,7 +6021,7 @@ mod tests {
             })
             .unwrap();
         let never_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
@@ -6139,7 +6139,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6147,7 +6147,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -6218,7 +6218,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref"))
@@ -6226,7 +6226,7 @@ mod tests {
             })
             .unwrap();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))

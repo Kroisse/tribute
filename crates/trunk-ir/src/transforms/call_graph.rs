@@ -499,6 +499,38 @@ mod tests {
     }
 
     #[test]
+    fn cached_call_graph_recomputes_after_call_target_changes() {
+        use crate::analysis::AnalysisCache;
+
+        let (mut ctx, loc) = test_ctx();
+        let leaf = simple_func(&mut ctx, loc, "leaf");
+        let other = simple_func(&mut ctx, loc, "other");
+        let caller = func_that_calls(&mut ctx, loc, "caller", &["leaf"]);
+        let module = build_module(&mut ctx, loc, vec![leaf, other, caller]);
+        let mut analyses = AnalysisCache::new();
+        let old = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+
+        let body = ctx.op(caller).regions[0];
+        let block = ctx.region(body).blocks[0];
+        let call = ctx.block(block).ops[0];
+        ctx.op_mut(call).attributes.insert(
+            Symbol::new("callee"),
+            Attribute::Symbol(Symbol::new("other")),
+        );
+        assert!(
+            analyses
+                .get_cached::<CallGraph>(&ctx, module.op())
+                .is_none()
+        );
+        let fresh = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        assert_eq!(fresh.call_site_count.get(&Symbol::new("leaf")), None);
+        assert_eq!(fresh.call_site_count.get(&Symbol::new("other")), Some(&1));
+        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+        assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
+    }
+
+    #[test]
     fn tarjan_detects_self_recursion() {
         let (mut ctx, loc) = test_ctx();
         let f = func_that_calls(&mut ctx, loc, "f", &["f"]);

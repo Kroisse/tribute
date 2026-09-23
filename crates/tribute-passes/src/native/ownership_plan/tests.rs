@@ -1794,7 +1794,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
     });
     let allocation = allocation.unwrap();
     let candidates = ctx
-        .types
+        .types()
         .iter()
         .filter_map(|(ty, data)| {
             (data.dialect == Symbol::new("adt")

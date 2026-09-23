@@ -544,6 +544,21 @@ mod tests {
     }
 
     #[derive(Debug)]
+    struct MarkerAnalysis(Option<i128>);
+
+    impl Analysis for MarkerAnalysis {
+        fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+            let marker = ctx
+                .ir()
+                .op(target)
+                .attributes
+                .get("marker")
+                .and_then(|a| a.as_i128());
+            Ok(Self(marker))
+        }
+    }
+
+    #[derive(Debug)]
     struct LeafAnalysis;
 
     impl Analysis for LeafAnalysis {
@@ -705,6 +720,236 @@ mod tests {
         assert!(Arc::ptr_eq(&a1, &a2));
         assert_eq!(COUNTED_COMPUTES.load(Ordering::SeqCst), 1);
         assert_eq!(analyses.len(), 1);
+    }
+
+    #[test]
+    fn mutation_invalidates_every_result_and_preserves_old_arc_snapshot() {
+        let _counters = lock_counters();
+        let (mut ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        let old = analyses.get::<MarkerAnalysis>(&ctx, op).unwrap();
+        let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
+        let _ = analyses.get::<OtherAnalysis>(&ctx, op).unwrap();
+        assert_eq!(analyses.len(), 5);
+
+        ctx.op_mut(op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(7));
+        assert!(analyses.get_cached::<MarkerAnalysis>(&ctx, op).is_none());
+        assert!(analyses.cache.is_empty());
+        assert!(analyses.dependencies.is_empty());
+        assert!(analyses.dependents.is_empty());
+
+        let fresh = analyses.get::<MarkerAnalysis>(&ctx, op).unwrap();
+        assert_eq!(old.0, None);
+        assert_eq!(fresh.0, Some(7));
+        assert!(!Arc::ptr_eq(&old, &fresh));
+        assert!(Arc::ptr_eq(
+            &fresh,
+            &analyses.get::<MarkerAnalysis>(&ctx, op).unwrap()
+        ));
+    }
+
+    #[test]
+    fn operand_and_type_setters_invalidate_only_on_changes() {
+        use crate::context::{BlockArgData, BlockData, OperationDataBuilder};
+        use crate::symbol::Symbol;
+        use crate::types::TypeDataBuilder;
+
+        let (mut ctx, module) = test_ctx();
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let f64_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let location = ctx.op(module).location;
+        let source_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let source_a = ctx.create_op(source_data);
+        let source_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let source_b = ctx.create_op(source_data);
+        let consumer_data =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("consumer"))
+                .operand(ctx.op_result(source_a, 0))
+                .result(i32_ty)
+                .build(&mut ctx);
+        let consumer = ctx.create_op(consumer_data);
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: smallvec::SmallVec::new(),
+            parent_region: None,
+        });
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+
+        let unchanged = ctx.analysis_stamp();
+        ctx.set_op_operand(consumer, 0, ctx.op_result(source_a, 0));
+        ctx.set_op_result_type(consumer, 0, i32_ty);
+        ctx.set_block_arg_type(block, 0, i32_ty);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_some());
+
+        ctx.set_op_operand(consumer, 0, ctx.op_result(source_b, 0));
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+        ctx.set_op_result_type(consumer, 0, f64_ty);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, module).unwrap();
+        ctx.set_block_arg_type(block, 0, f64_ty);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_none());
+    }
+
+    #[test]
+    fn cache_rebinds_even_when_contexts_have_equal_revisions_and_op_refs() {
+        let (mut first_ctx, first_op) = test_ctx();
+        let (mut second_ctx, second_op) = test_ctx();
+        first_ctx
+            .op_mut(first_op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(1));
+        second_ctx
+            .op_mut(second_op)
+            .attributes
+            .insert("marker".into(), crate::types::Attribute::Int(2));
+        assert_eq!(first_op, second_op);
+        assert_eq!(first_ctx.analysis_stamp().1, second_ctx.analysis_stamp().1);
+        assert_ne!(first_ctx.analysis_stamp().0, second_ctx.analysis_stamp().0);
+
+        let mut analyses = AnalysisCache::new();
+        let first = analyses
+            .get::<MarkerAnalysis>(&first_ctx, first_op)
+            .unwrap();
+        assert_eq!(first.0, Some(1));
+        assert!(
+            analyses
+                .get_cached::<MarkerAnalysis>(&second_ctx, second_op)
+                .is_none()
+        );
+        let second = analyses
+            .get::<MarkerAnalysis>(&second_ctx, second_op)
+            .unwrap();
+        assert_eq!(second.0, Some(2));
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn interning_and_raw_mutable_access_follow_revision_contract() {
+        let (mut ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        let initial = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let stamp = ctx.analysis_stamp();
+
+        let path = ctx.intern_path("file:///same.trb".to_owned());
+        assert_ne!(ctx.analysis_stamp(), stamp);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_path = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        assert!(!Arc::ptr_eq(&initial, &after_path));
+
+        let unchanged = ctx.analysis_stamp();
+        assert_eq!(ctx.intern_path("file:///same.trb".to_owned()), path);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(Arc::ptr_eq(
+            &after_path,
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
+        ));
+
+        let ty = crate::types::TypeDataBuilder::new(
+            crate::symbol::Symbol::new("test"),
+            crate::symbol::Symbol::new("fresh"),
+        )
+        .build();
+        let interned = ctx.intern_type(ty.clone());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let after_type = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let unchanged = ctx.analysis_stamp();
+        assert_eq!(ctx.intern_type(ty), interned);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+        assert!(Arc::ptr_eq(
+            &after_type,
+            &analyses.get::<DummyAnalysis>(&ctx, op).unwrap()
+        ));
+
+        ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let unchanged = ctx.analysis_stamp();
+        ctx.register_type_alias(crate::symbol::Symbol::new("Alias"), interned);
+        assert_eq!(ctx.analysis_stamp(), unchanged);
+
+        let _ = ctx.types_mut();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let _ = ctx.paths_mut();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+    }
+
+    #[test]
+    fn detached_builder_is_not_ir_but_raw_entity_access_invalidates() {
+        use crate::context::{BlockData, OperationDataBuilder, RegionData};
+        use crate::symbol::Symbol;
+
+        let (mut ctx, op) = test_ctx();
+        let location = ctx.op(op).location;
+        let stamp = ctx.analysis_stamp();
+        let _detached =
+            OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("unused"))
+                .build(&mut ctx);
+        assert_eq!(ctx.analysis_stamp(), stamp);
+
+        let block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: smallvec::SmallVec::new(),
+            parent_region: None,
+        });
+        let region = ctx.create_region(RegionData {
+            location,
+            blocks: smallvec::smallvec![block],
+            parent_op: None,
+        });
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+
+        let _ = ctx.op_mut(op);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let _ = ctx.block_mut(block);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
+        let _ = ctx.region_mut(region);
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+    }
+
+    #[test]
+    fn same_pass_mutation_and_failed_pass_cannot_reuse_old_result() {
+        let (mut ctx, op) = test_ctx();
+        AnalysisCache::scope(&mut ctx, |ctx, analyses| {
+            let before = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
+            ctx.op_mut(op)
+                .attributes
+                .insert("marker".into(), crate::types::Attribute::Int(3));
+            let after = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
+            assert_eq!(before.0, None);
+            assert_eq!(after.0, Some(3));
+
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ctx.op_mut(op)
+                    .attributes
+                    .insert("marker".into(), crate::types::Attribute::Int(4));
+                panic!("pass failed after partial mutation");
+            }));
+            assert!(failed.is_err());
+            assert!(analyses.get_cached::<MarkerAnalysis>(ctx, op).is_none());
+            assert_eq!(analyses.get::<MarkerAnalysis>(ctx, op).unwrap().0, Some(4));
+        });
     }
 
     #[test]
