@@ -93,7 +93,7 @@ smallest layer that can state an invariant precisely.
 | Operation verifier | Local invariants of one operation: operand/result counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
-| Operation interface | Shared behavior queried generically across dialects, including dialect-registered queries whose subject is a type. | At the consumer that needs dialect-independent behavior. Interfaces should be introduced only for multiple concrete consumers or one generic transform. | `PureOps` for DCE removability; `IsolatedFromAboveOps` for nested pass-manager anchoring; `IntegerLike` for integer-category type queries. |
+| Operation interface | Shared behavior queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces should be introduced only for multiple concrete consumers or one generic transform. | `PureOps` for DCE removability; `IsolatedFromAboveOps` for nested pass-manager anchoring. |
 
 Local operation verifiers must not depend on conversion state or pass ordering.
 Conversion targets must not duplicate local semantic checks. Pass-manager
@@ -129,8 +129,10 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   monomorphization을 뜻하지 않는다.
 - Bound는 교집합이다. Exact bound는 하나의 dialect 타입과 그 wrapper의 내부
   invariant를 요구하며, 한 변수에 서로 다른 exact bound를 둘 수 없다.
-  Interface bound는 `IntegerLike`처럼 dialect가 등록한 타입 질의를 요구하며
-  여러 개를 함께 둘 수 있다.
+  Category bound는 `IntegerLike`, `BoolLike`, `FloatLike`처럼 타입 범주를
+  요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
+  닫힌 판별이다. 다른 dialect의 타입까지 포함해야 하는 실제 소비자가 생기기
+  전에는 dialect 등록형 범주를 두지 않는다.
 - 파생 타입은 투영으로 참조한다. `S::Type`은 변수 자체를 타입 attribute
   값으로 쓰는 투영이다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
   타입 목록)를 선언한다. 예를 들어 signature 타입은 `Inputs`/`Results`
