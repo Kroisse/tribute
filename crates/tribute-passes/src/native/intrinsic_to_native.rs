@@ -100,10 +100,8 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let bytes = operands[0];
         let index = operands[1];
 
-        let ptr_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-        let i8_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
+        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
         // Load data pointer from TributeBytes (offset 0)
         let data_ptr = mem::load(ctx, loc, bytes, ptr_ty, 0);

@@ -757,10 +757,8 @@ mod tests {
         use crate::types::TypeDataBuilder;
 
         let (mut ctx, module) = test_ctx();
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let f64_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let location = ctx.op(module).location;
         let source_data =
             OperationDataBuilder::new(location, Symbol::new("test"), Symbol::new("source"))

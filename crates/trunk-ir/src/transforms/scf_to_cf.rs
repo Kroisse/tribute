@@ -752,11 +752,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn i1_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i1").build())
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {

@@ -360,14 +360,9 @@ mod tests {
     #[test]
     fn result_indexed_continuation_frame_builders_preserve_exact_types_and_provenance() {
         let mut ctx = IrContext::new();
-        let evidence = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("ability"), Symbol::new("evidence")).build(),
-        );
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let anyref = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
-        );
+        let evidence = ctx.intern_type(TypeDataBuilder::new("ability", "evidence").build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let anyref = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
         let frame =
             cps_continuation_frame_ref_type(&mut ctx, Symbol::new("ContinuationFrameI32"), i32_ty);
         let done = cps_done_type(&mut ctx, i32_ty);

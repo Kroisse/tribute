@@ -516,7 +516,7 @@ mod tests {
     }
 
     fn make_i32_ty(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     #[test]

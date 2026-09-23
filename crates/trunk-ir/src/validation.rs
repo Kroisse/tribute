@@ -1453,7 +1453,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> super::super::refs::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn make_func_type(
@@ -1607,8 +1607,7 @@ mod tests {
     fn retired_raw_core_func_identity_is_rejected_by_whole_ir_validation() {
         let mut ctx = IrContext::new();
         let module = empty_module(&mut ctx);
-        let legacy =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+        let legacy = ctx.intern_type(TypeDataBuilder::new("core", "func").build());
 
         assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
         for result in [
@@ -1965,8 +1964,7 @@ mod tests {
         });
 
         // Create a bool condition
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
         let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(entry, cond.op_ref());
         let cond_val = cond.result(&ctx);
@@ -2173,8 +2171,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3464,8 +3461,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3501,8 +3497,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -3532,8 +3527,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
         let entry = ctx.create_block(BlockData {
             location: loc,

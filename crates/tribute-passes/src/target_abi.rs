@@ -547,8 +547,7 @@ pub fn compose_root_entry_bridge(
     let evidence = if export_convention == CallingConvention::EvidenceDirect {
         ctx.block_args(wrapper_entry)[0]
     } else {
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let zero = arith::r#const(ctx, location, i32_ty, Attribute::Int(0));
         ctx.push_op(wrapper_entry, zero.op_ref());
         let empty = adt::array_new(ctx, location, [zero.result(ctx)], evidence_ty, evidence_ty);
@@ -1883,8 +1882,7 @@ mod tests {
             &mut ctx, frame_name, nil,
         );
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
@@ -2107,8 +2105,7 @@ mod tests {
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = Symbol::new("__tribute_malformed_root_frame");
-            let i32_ty = ctx
-                .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
             let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
                 &mut ctx,
                 frame_name,

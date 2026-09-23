@@ -24,7 +24,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 // ============================================================================
 
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 #[derive(Debug)]
@@ -362,8 +362,7 @@ mod tests {
     fn test_compute_ability_id_with_type_params() {
         let mut ctx = IrContext::new();
 
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let state_i32 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))

@@ -93,7 +93,7 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 }
 
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
 struct NativeWritePattern;

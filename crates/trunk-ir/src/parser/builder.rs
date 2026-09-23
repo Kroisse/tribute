@@ -829,7 +829,7 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -946,8 +946,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
 
         // Entry block with param

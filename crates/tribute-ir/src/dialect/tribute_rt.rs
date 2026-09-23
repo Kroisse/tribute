@@ -62,11 +62,11 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn make_ptr_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "ptr").build())
     }
 
     #[test]
@@ -215,8 +215,7 @@ mod tests {
     fn test_box_float_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let f64_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::Int(0));
@@ -234,8 +233,7 @@ mod tests {
     fn test_box_bool_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let bool_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
+        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "bool").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::Int(1));

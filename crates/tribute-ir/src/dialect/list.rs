@@ -29,7 +29,7 @@ mod tests {
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-    use trunk_ir::{IrContext, Span, Symbol};
+    use trunk_ir::{IrContext, Span};
 
     fn location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
@@ -39,13 +39,9 @@ mod tests {
     fn sequence_ops_round_trip() {
         let mut ctx = IrContext::new();
         let loc = location();
-        let element_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let list_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
-        );
-        let bool_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let element_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
+        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
         let element =
             trunk_ir::dialect::arith::r#const(&mut ctx, loc, element_ty, Attribute::Int(1))
                 .result(&ctx);

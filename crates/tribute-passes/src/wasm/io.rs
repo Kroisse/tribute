@@ -483,7 +483,7 @@ fn i32_const(
 }
 
 fn simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
 fn block_arg(ty: TypeRef) -> BlockArgData {

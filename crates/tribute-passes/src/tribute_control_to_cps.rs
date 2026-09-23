@@ -902,7 +902,7 @@ impl<'a> Converter<'a> {
 
     fn i32_type(&mut self) -> TypeRef {
         self.ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+            .intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn frame_types(&mut self, answer: TypeRef) -> FrameTypes {
@@ -2523,7 +2523,7 @@ impl<'a> Converter<'a> {
         let switch_block = self.make_block(location, &[]);
         let i1_type = self
             .ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+            .intern_type(TypeDataBuilder::new("core", "i1").build());
         for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
             let case_block = self.make_block(location, &[]);
             let same_prompt = arith::cmpi(
@@ -2636,7 +2636,7 @@ impl<'a> Converter<'a> {
     ) -> Result<(Vec<OpRef>, ValueRef), TributeControlToCpsError> {
         let i1_type = self
             .ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+            .intern_type(TypeDataBuilder::new("core", "i1").build());
         let state_name = self.fresh_helper("one_shot_state");
         let state_type = self.ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
@@ -3062,7 +3062,7 @@ impl<'a> Converter<'a> {
         let anyref = self.anyref_type();
         let i32_type = self
             .ctx
-            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+            .intern_type(TypeDataBuilder::new("core", "i32").build());
         let params = if general {
             vec![evidence_type, anyref, i32_type, anyref]
         } else {
@@ -4610,9 +4610,7 @@ mod tests {
                         .then_some(ty)
                 })
                 .unwrap();
-            let mut builder =
-                TypeDataBuilder::new(Symbol::new("tribute_control"), Symbol::new(name))
-                    .params([i32_ty]);
+            let mut builder = TypeDataBuilder::new("tribute_control", name).params([i32_ty]);
             for (key, value) in attrs {
                 builder = builder.attr(key, value);
             }
@@ -4847,8 +4845,7 @@ mod tests {
         let before = print_module(&ctx, candidate.op());
         let source_aliases = ctx.type_aliases().to_vec();
         let (alias_name, source_type) = source_aliases[0];
-        let converted_type =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         ctx.register_type_alias(alias_name, converted_type);
 
         let error =

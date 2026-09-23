@@ -712,8 +712,7 @@ mod tests {
     #[test]
     fn type_interner_with_params() {
         let mut ctx = IrContext::new();
-        let i32_ref =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ref = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let tup = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]);
         let r1 = tup.as_type_ref();
         // Interning the same tuple again should return the same ref

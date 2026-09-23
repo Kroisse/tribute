@@ -93,8 +93,7 @@ mod tests {
         let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
 
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let block = ctx.create_block(context::BlockData {
             location: loc,
@@ -118,8 +117,7 @@ mod tests {
         let path = ctx.intern_path("test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
 
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let block1 = ctx.create_block(context::BlockData {
             location: loc,

@@ -290,13 +290,11 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn make_closure_type(ctx: &mut IrContext) -> trunk_ir::TypeRef {
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure")).build(),
-        )
+        ctx.intern_type(TypeDataBuilder::new("closure", "closure").build())
     }
 
     #[test]

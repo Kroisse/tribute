@@ -526,8 +526,7 @@ mod tests {
         assert!(!is_marker_type_ref(&ctx, other_struct));
 
         // Non-struct type should return false
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         assert!(!is_marker_type_ref(&ctx, i32_ty));
     }
 
@@ -536,8 +535,7 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Array of non-marker should return false
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let other_array = core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 

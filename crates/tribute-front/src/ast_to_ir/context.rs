@@ -617,7 +617,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i32` type.
     pub fn i32_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ir.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     /// Get the `core.nil` type.
@@ -627,12 +627,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i1` (bool) type.
     pub fn bool_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+        ir.intern_type(TypeDataBuilder::new("core", "i1").build())
     }
 
     /// Get the `core.f64` type.
     pub fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+        ir.intern_type(TypeDataBuilder::new("core", "f64").build())
     }
 
     /// Get the `core.bytes` type.

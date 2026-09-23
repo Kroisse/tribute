@@ -328,7 +328,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
 // =============================================================================
 
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {

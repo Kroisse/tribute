@@ -1569,8 +1569,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let i64_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
     let stale = ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", trunk_ir::Attribute::Symbol(Symbol::new("R")))

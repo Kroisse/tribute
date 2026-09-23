@@ -100,7 +100,6 @@ impl Default for TypeConverter {
 mod tests {
     use super::*;
     use crate::location::Span;
-    use crate::symbol::Symbol;
     use crate::*;
 
     fn test_ctx() -> (IrContext, Location) {
@@ -111,11 +110,11 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
     }
 
     #[test]

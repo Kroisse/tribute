@@ -93,10 +93,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         return;
     };
     let loc = ctx.op(module.op()).location;
-    let ptr_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-    let i32_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     for (name, params, result) in [
         (evidence_abi::EMPTY, &[][..], ptr_ty),
         (evidence_abi::LOOKUP, &[ptr_ty, i32_ty][..], i32_ty),
@@ -223,11 +221,11 @@ fn op_idx_const(
 }
 
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "ptr").build())
 }
 
 fn core_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 fn lower_evidence_dispatch_operand(
@@ -473,8 +471,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
 }
 
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRunResult {
-    let ptr_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
 

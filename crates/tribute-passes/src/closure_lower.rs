@@ -47,8 +47,7 @@ use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty =
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
@@ -181,8 +180,7 @@ impl RewritePattern for LowerClosureCallArena {
             return false;
         };
 
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(convention) = get_calling_convention(ctx, op) else {
             return false;
@@ -263,8 +261,7 @@ impl RewritePattern for LowerClosureTailCallArena {
         }
 
         let location = ctx.op(op).location;
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
         let Some(results) = exact_tail_results(ctx, op, callee) else {
             return false;
@@ -444,8 +441,7 @@ impl RewritePattern for LowerClosureFuncArena {
 
         let loc = ctx.op(op).location;
         let closure_value = ctx.op_operands(op)[0];
-        let i32_ty =
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);

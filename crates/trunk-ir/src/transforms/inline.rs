@@ -468,7 +468,7 @@ mod mechanics {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     /// Build `func.func @name(params) -> ret_ty { body_builder }`.
@@ -836,7 +836,7 @@ mod pass {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     fn build_func<F>(

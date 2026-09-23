@@ -211,11 +211,11 @@ mod tests {
         }
 
         fn i32_type(ctx: &mut IrContext) -> TypeRef {
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+            ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
         }
 
         fn i64_type(ctx: &mut IrContext) -> TypeRef {
-            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+            ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
         }
 
         fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
