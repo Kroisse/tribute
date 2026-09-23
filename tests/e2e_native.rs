@@ -52,7 +52,6 @@ fn test_native_simple_literal() {
 }
 
 #[test]
-#[ignore = "requires source-logical production route (#825); legacy named-alias adaptation is unsupported"]
 fn named_local_operator_prints_three() {
     let source = format!(
         r#"{}
