@@ -31,8 +31,8 @@ use actions::{
 };
 use cfg::ValidatedFlatCfg;
 pub use facts::{NativeOwnershipFunctionFacts, NativeOwnershipModuleFacts};
-use liveness::Liveness;
-pub use liveness::{NativeManagedLiveness, NativeOwnerExtendedLiveness};
+use liveness::BlockLiveness;
+pub use liveness::{Conservative, Liveness, NativeOwnershipExtended};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnershipPlanError(String);
@@ -422,13 +422,13 @@ pub fn build_native_ownership_plan_with_analyses(
         let liveness = if options.elide_proven_field_borrows {
             SelectedLiveness::OwnerExtended(
                 analyses
-                    .get::<NativeOwnerExtendedLiveness>(ctx, op)
+                    .get::<Liveness<NativeOwnershipExtended>>(ctx, op)
                     .map_err(|error| OwnershipPlanError::new(error.to_string()))?,
             )
         } else {
             SelectedLiveness::Conservative(
                 analyses
-                    .get::<NativeManagedLiveness>(ctx, op)
+                    .get::<Liveness<Conservative>>(ctx, op)
                     .map_err(|error| OwnershipPlanError::new(error.to_string()))?,
             )
         };
@@ -472,8 +472,8 @@ pub fn build_native_ownership_plan_with_analyses(
 }
 
 enum SelectedLiveness {
-    Conservative(std::sync::Arc<NativeManagedLiveness>),
-    OwnerExtended(std::sync::Arc<NativeOwnerExtendedLiveness>),
+    Conservative(std::sync::Arc<Liveness<Conservative>>),
+    OwnerExtended(std::sync::Arc<Liveness<NativeOwnershipExtended>>),
 }
 
 fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, OwnershipPlanError> {

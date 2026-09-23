@@ -223,9 +223,9 @@ Module 범위 분석이 function 정의와 검증된 managed nominal layout을, 
 action planner가 적용한다.
 
 Block별 `defs`, `live_in`, `live_out`은 function ownership facts에 의존하는
-두 cached liveness 분석이 제공한다. 보수적 분석은 managed value의 일반
-use만 반영하고, owner-extended 분석은 검증된 managed projection borrow의
-use를 owner의 use로도 반영한다. `elide_proven_field_borrows`만 둘 중 하나를
+`Liveness<Conservative>`와 `Liveness<NativeOwnershipExtended>`가 제공한다.
+전자는 managed value의 일반 use만 반영하고, 후자는 검증된 managed projection
+borrow의 use를 owner의 use로도 반영한다. `elide_proven_field_borrows`만 둘 중 하나를
 선택하며 borrowed-parameter 정책은 liveness view를 바꾸지 않는다. 두 view는
 독립적으로 계산되어 사용하지 않는 고정점 계산을 피하고, action planner는
 선택된 결과를 그대로 소비한다. 선행 facts 분석 실패는 그대로 전파되고 실패한

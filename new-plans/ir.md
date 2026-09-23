@@ -182,11 +182,13 @@ identity나 계산에 참여하지 않는다. 따라서 phase 범위 캐시는 �
 재사용하며, planner는 호출마다 그 사실 위에 정책 결정을 새로 적용한다.
 
 Native managed liveness는 정의된 `func.func`를 대상으로 하는 별도의 의존
-분석이다. 보수적 view와 검증된 managed projection borrow의 owner 수명을
-연장하는 view는 각각 독립된 분석 타입이며, 둘 다 같은 function ownership
-facts를 캐시에서 조회한다. 각 view는 block별 `defs`, `live_in`, `live_out`을
-제공하고 기존 역순 고정점 계산을 사용한다. 선행 facts 조회 실패는 원래 분석
-오류를 그대로 전파하며 liveness 결과를 캐시하지 않는다. `elide_proven_field_borrows`만
+분석이다. `Liveness<Conservative>`와 검증된 managed projection borrow의
+owner 수명을 연장하는 `Liveness<NativeOwnershipExtended>`는 서로 다른
+분석 타입이며, 둘 다 같은 function ownership facts를 캐시에서 조회한다.
+허용된 두 policy marker만 type-level cache identity로 사용한다. 각 view는
+block별 `defs`, `live_in`, `live_out`을 제공하고 기존 역순 고정점 계산을 사용한다.
+선행 facts 조회 실패는 원래 분석 오류를 그대로 전파하며 liveness 결과를
+캐시하지 않는다. `elide_proven_field_borrows`만
 view를 선택하고 `elide_proven_borrowed_parameters`는 선택에 관여하지 않는다.
 Action planner는 선택된 결과를 소비하며, 사용하지 않는 view는 계산하지 않는다.
 

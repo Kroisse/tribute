@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) struct ActionInputs<'a> {
     pub facts: &'a NativeOwnershipFunctionFacts,
-    pub liveness: &'a Liveness,
+    pub liveness: &'a BlockLiveness,
 }
 
 pub(super) fn plan_function_actions(
@@ -39,7 +39,7 @@ struct ActionPlanner<'a> {
     managed_layouts: &'a HashSet<TypeRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
-    liveness: &'a Liveness,
+    liveness: &'a BlockLiveness,
     actions: Vec<OwnershipAction>,
 }
 
