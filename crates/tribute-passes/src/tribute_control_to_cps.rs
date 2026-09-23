@@ -4876,7 +4876,12 @@ mod tests {
 }"#;
         let (ctx, module) = parse(core_input);
         let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[]).unwrap_err();
-        assert!(error.to_string().contains("requires a callee"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("expected at least 1 operand(s), found 0"),
+            "{error}"
+        );
 
         let post_input = r#"core.module @test {
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
@@ -4885,7 +4890,12 @@ mod tests {
 }"#;
         let (ctx, module) = parse(post_input);
         let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
-        assert!(error.to_string().contains("requires a callee"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("expected at least 1 operand(s), found 0"),
+            "{error}"
+        );
 
         let malformed_delimiter = r#"core.module @test {
   !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
@@ -5645,9 +5655,11 @@ mod tests {
             i32_type,
         )];
         let error = tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap_err();
-        assert_eq!(error.boundary, POST_CPS_BOUNDARY);
+        assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
-            error.to_string().contains("requires zero or one result"),
+            error
+                .to_string()
+                .contains("scf.if (op3): expected 0 to 1 result(s), found 2"),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);

@@ -87,10 +87,16 @@ pub enum ResultDef {
     Single(String),
     Multi(Vec<String>),
     Variadic(String),
+    /// Zero or one result, declared as `-> Option<result>`.
+    Optional(String),
 }
 
 pub enum RegionOrSuccessor {
-    Region(String),
+    /// A region; `optional` regions are declared as `#[region(name?)]`.
+    Region {
+        name: String,
+        optional: bool,
+    },
     Successor(String),
 }
 
@@ -464,9 +470,16 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
         return Ok(ResultDef::Multi(names));
     }
 
-    // Single result
+    // Single result, or `Option<name>` for zero or one result
     let name_ident: Ident =
         Ident::parser(iter).map_err(|e| format!("expected result name: {e}"))?;
+    if name_ident == "Option" && peek_punct(iter, '<') {
+        consume_punct(iter)?;
+        let inner: Ident = Ident::parser(iter)
+            .map_err(|e| format!("expected result name in `Option<..>`: {e}"))?;
+        expect_punct(iter, '>')?;
+        return Ok(ResultDef::Optional(ident_str(&inner)));
+    }
     Ok(ResultDef::Single(ident_str(&name_ident)))
 }
 
@@ -490,6 +503,12 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
         let name_ident: Ident = Ident::parser(&mut name_iter)
             .map_err(|e| format!("expected region/successor name: {e}"))?;
         let name = ident_str(&name_ident);
+        let optional = if peek_punct(&name_iter, '?') {
+            consume_punct(&mut name_iter)?;
+            true
+        } else {
+            false
+        };
         expect_consumed(&name_iter, "region/successor name")?;
 
         if !seen_names.insert(name.clone()) {
@@ -499,9 +518,18 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
         match kw.to_string().as_str() {
             "region" => {
                 let _body = expect_group(&mut iter, Delimiter::Brace)?;
-                items.push(RegionOrSuccessor::Region(name));
+                if items
+                    .iter()
+                    .any(|item| matches!(item, RegionOrSuccessor::Region { optional: true, .. }))
+                {
+                    return Err("an optional region must be the last region".into());
+                }
+                items.push(RegionOrSuccessor::Region { name, optional });
             }
             "successor" => {
+                if optional {
+                    return Err("successors cannot be optional".into());
+                }
                 // Consume `{}` after the attribute (required for valid Rust syntax)
                 let _body = expect_group(&mut iter, Delimiter::Brace)?;
                 items.push(RegionOrSuccessor::Successor(name));
@@ -843,7 +871,10 @@ mod tests {
             _ => panic!("expected operation"),
         };
         assert_eq!(op.regions.len(), 1);
-        assert!(matches!(&op.regions[0], RegionOrSuccessor::Region(s) if s == "body"));
+        assert!(matches!(
+            &op.regions[0],
+            RegionOrSuccessor::Region { name, optional: false } if name == "body"
+        ));
     }
 
     #[test]
@@ -917,6 +948,82 @@ mod tests {
             _ => panic!("expected operation"),
         };
         assert!(matches!(&op.results, ResultDef::Variadic(s) if s == "results"));
+    }
+
+    #[test]
+    fn test_parse_optional_result_and_region() {
+        let module = parse_test_module(quote! {
+            mod test {
+                fn maybe(cond: ()) -> Option<result> {
+                    #[region(first)]
+                    {}
+                    #[region(body?)]
+                    {}
+                }
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert!(matches!(&op.results, ResultDef::Optional(s) if s == "result"));
+        assert!(matches!(
+            &op.regions[0],
+            RegionOrSuccessor::Region { name, optional: false } if name == "first"
+        ));
+        assert!(matches!(
+            &op.regions[1],
+            RegionOrSuccessor::Region { name, optional: true } if name == "body"
+        ));
+    }
+
+    #[test]
+    fn test_parse_rejects_misplaced_optional_entities() {
+        let not_last = parse_test_module(quote! {
+            mod test {
+                fn f() {
+                    #[region(body?)]
+                    {}
+                    #[region(tail)]
+                    {}
+                }
+            }
+        });
+        assert!(
+            not_last
+                .err()
+                .unwrap()
+                .contains("optional region must be the last region")
+        );
+
+        let successor = parse_test_module(quote! {
+            mod test {
+                fn f() {
+                    #[successor(dest?)]
+                    {}
+                }
+            }
+        });
+        assert!(
+            successor
+                .err()
+                .unwrap()
+                .contains("successors cannot be optional")
+        );
+
+        let rest = parse_test_module(quote! {
+            mod test {
+                #[rest_results]
+                fn f() -> Option<results> {}
+            }
+        });
+        assert!(
+            rest.err()
+                .unwrap()
+                .contains("#[rest_results] is only valid")
+        );
     }
 
     #[test]

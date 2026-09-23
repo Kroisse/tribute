@@ -35,8 +35,10 @@ TrunkIR validation follows the layered model in `new-plans/ir.md`:
   `IsolatedFromAboveOps`. Add new interfaces only when there is an immediate
   generic consumer, not as a speculative hierarchy.
 
-Do not add a separate semantic-contract DSL unless these existing mechanisms
-cannot express a required invariant.
+The declarative operation schema in `#[dialect]` definitions generates
+operation verifiers, builders, and schema descriptors for the
+operation-verifier layer only; it must not encode conversion-boundary or
+whole-IR invariants.
 
 ### Function type representation
 

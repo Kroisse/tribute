@@ -46,11 +46,23 @@ From external crates: `#[trunk_ir::dialect]`.
 
 **Annotations**:
 
-- `#[attr(...)]` — Attributes (metadata stored on operation)
-- `#[region(...)]` — Regions (nested control flow)
+- `#[attr(...)]` — Attributes (metadata stored on operation); `name?: Ty`
+  marks an optional attribute
+- `#[region(...)]` — Regions (nested control flow); `#[region(name?)]` marks
+  the last region optional, e.g. the body of an external function
 - `#[rest]` — Variadic operands
-- `-> result` — Operation produces a result value
+- `-> result` — Operation produces one result; `-> Option<result>` produces
+  zero or one; `#[rest_results] -> results` produces any number
 - `struct` definitions — Generate typed type wrappers
+
+**Operation schema**: every generated operation wrapper exposes
+`DialectOp::SCHEMA`, a static `op_schema::OpSchema` registered by operation
+name. `OpSchema::of(ctx, op)` looks it up for any operation.
+`validate_operation_verifiers` checks each operation's counts, required
+attributes, and attribute kinds against its schema before running
+operation-specific checks, which may then assume the declared shape. Typed
+accessors do not check the schema; for an optional region or result, inspect
+the operation before calling the accessor.
 
 ## Working with IR
 

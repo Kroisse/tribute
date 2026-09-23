@@ -74,6 +74,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let sname = struct_name(&op.name);
     let op_name = &op.name;
     let full_name = format!("{dialect}.{op_name}");
+    let schema = gen_op_schema(crate_path, dialect, op);
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +83,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
         impl #crate_path::ops::DialectOp for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const OP_NAME: &'static str = #op_name;
+            const SCHEMA: &'static #crate_path::op_schema::OpSchema = &#schema;
 
             fn from_op(
                 ctx: &#crate_path::IrContext,
@@ -101,6 +103,66 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
             fn op_ref(&self) -> #crate_path::OpRef {
                 self.0
             }
+        }
+
+        #crate_path::inventory::submit! {
+            #crate_path::op_schema::OpSchemaRegistration(
+                <#sname as #crate_path::ops::DialectOp>::SCHEMA
+            )
+        }
+    }
+}
+
+/// Build the static `OpSchema` expression for an operation.
+fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
+    let op_name = &op.name;
+    let schema_mod = quote!(#crate_path::op_schema);
+
+    let operands = op.operands.iter().map(|operand| {
+        let name = &operand.name;
+        let arity = if operand.variadic {
+            quote!(#schema_mod::Arity::Variadic)
+        } else {
+            quote!(#schema_mod::Arity::One)
+        };
+        quote!(#schema_mod::OperandSchema { name: #name, arity: #arity })
+    });
+
+    let results = match &op.results {
+        ResultDef::None => quote!(#schema_mod::ResultSchema::Fixed(&[])),
+        ResultDef::Single(name) => quote!(#schema_mod::ResultSchema::Fixed(&[#name])),
+        ResultDef::Multi(names) => quote!(#schema_mod::ResultSchema::Fixed(&[#(#names),*])),
+        ResultDef::Variadic(name) => quote!(#schema_mod::ResultSchema::Variadic(#name)),
+        ResultDef::Optional(name) => quote!(#schema_mod::ResultSchema::Optional(#name)),
+    };
+
+    let attributes = op.attrs.iter().map(|attr| {
+        let name = &attr.name;
+        let kind = attr_kind(crate_path, attr.ty);
+        let optional = attr.optional;
+        quote!(#schema_mod::AttributeSchema { name: #name, kind: #kind, optional: #optional })
+    });
+
+    let regions = op.regions.iter().filter_map(|item| match item {
+        RegionOrSuccessor::Region { name, optional } => {
+            Some(quote!(#schema_mod::RegionSchema { name: #name, optional: #optional }))
+        }
+        RegionOrSuccessor::Successor(_) => None,
+    });
+    let successors = op.regions.iter().filter_map(|item| match item {
+        RegionOrSuccessor::Successor(name) => Some(name),
+        RegionOrSuccessor::Region { .. } => None,
+    });
+
+    quote! {
+        #schema_mod::OpSchema {
+            dialect: #dialect,
+            name: #op_name,
+            operands: &[#(#operands),*],
+            results: #results,
+            attributes: &[#(#attributes),*],
+            regions: &[#(#regions),*],
+            successors: &[#(#successors),*],
         }
     }
 }
@@ -188,7 +250,7 @@ fn gen_operand_accessors(crate_path: &TokenStream, operands: &[Operand]) -> Toke
 fn gen_result_accessors(crate_path: &TokenStream, results: &ResultDef) -> TokenStream {
     match results {
         ResultDef::None => quote!(),
-        ResultDef::Single(name) => {
+        ResultDef::Single(name) | ResultDef::Optional(name) => {
             let name_ident = format_ident!("{name}");
             let ty_name = format_ident!("{name}_ty");
             quote! {
@@ -305,7 +367,7 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
 
     for item in regions {
         match item {
-            RegionOrSuccessor::Region(name) => {
+            RegionOrSuccessor::Region { name, .. } => {
                 let name_ident = format_ident!("{name}");
                 let idx = region_idx;
                 methods.push(quote! {
@@ -359,7 +421,7 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
     // Results
     match &op.results {
         ResultDef::None => {}
-        ResultDef::Single(name) => {
+        ResultDef::Single(name) | ResultDef::Optional(name) => {
             let ty_param = format_ident!("{name}_ty");
             params.push(quote!(#ty_param: #crate_path::TypeRef));
             body_stmts.push(quote!(__builder = __builder.result(#ty_param);));
@@ -410,7 +472,7 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
     // Regions and successors
     for item in &op.regions {
         match item {
-            RegionOrSuccessor::Region(name) => {
+            RegionOrSuccessor::Region { name, .. } => {
                 let name_ident = format_ident!("{name}");
                 params.push(quote!(#name_ident: #crate_path::RegionRef));
                 body_stmts.push(quote!(__builder = __builder.region(#name_ident);));
@@ -693,6 +755,25 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
         AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
     }
+}
+
+fn attr_kind(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
+    let kind = match ty {
+        AttrType::Any => quote!(Any),
+        AttrType::Bool => quote!(Bool),
+        AttrType::I32 => quote!(I32),
+        AttrType::I64 => quote!(I64),
+        AttrType::U32 => quote!(U32),
+        AttrType::U64 => quote!(U64),
+        AttrType::F32 => quote!(F32),
+        AttrType::F64 => quote!(F64),
+        AttrType::Type => quote!(Type),
+        AttrType::String => quote!(String),
+        AttrType::Symbol => quote!(Symbol),
+        AttrType::QualifiedName => quote!(QualifiedName),
+        AttrType::Bytes => quote!(Bytes),
+    };
+    quote!(#crate_path::op_schema::AttributeKind::#kind)
 }
 
 fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> TokenStream {
