@@ -9,9 +9,9 @@
 //! Analysis errors describe invalid input IR or an unsupported analysis
 //! boundary, not ordinary source-language diagnostics. A failed computation
 //! is never inserted: a later lookup retries from scratch after the IR is
-//! repaired or changed, while cached results for other analysis types and
-//! targets remain available. This also means the type-erased cache can never
-//! expose a partially constructed result. Unchanged invalid IR is expected to
+//! repaired or changed. With unchanged IR, cached results for other analysis
+//! types and targets remain available. The type-erased cache can never expose
+//! a partially constructed result. Unchanged invalid IR is expected to
 //! fail again; cache type mismatches and caller-contract violations remain
 //! programming errors and panic.
 //!

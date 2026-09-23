@@ -3690,7 +3690,7 @@ mod tests {
 }"#,
         );
         let malformed = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, _)| FuncSig::matches(&ctx, ty).then_some(ty))
             .expect("malformed callable type");
@@ -4094,7 +4094,7 @@ mod tests {
 }"#,
         );
         let never = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
@@ -4197,7 +4197,7 @@ mod tests {
         );
         let loc = location(&mut ctx);
         let i32_ty = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -4586,7 +4586,7 @@ mod tests {
 }"#,
         );
         let i32_ty = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
@@ -4594,7 +4594,7 @@ mod tests {
             })
             .expect("core.i32");
         let ability_ref = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == Symbol::new("core")

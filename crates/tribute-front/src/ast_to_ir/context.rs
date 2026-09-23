@@ -941,7 +941,7 @@ mod tests {
         ctx.convert_logical_type(&mut ir, tuple);
         let tuple_name = ctx.logical_tuple_name(tuple);
         let (_, layout) = ir
-            .types
+            .types()
             .iter()
             .find(|(_, data)| {
                 data.dialect == Symbol::new("adt")

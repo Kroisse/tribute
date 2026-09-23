@@ -2179,7 +2179,7 @@ fn main() {
         );
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == trunk_ir::Symbol::new("core")
@@ -2216,7 +2216,7 @@ fn main() {
         );
         let pointer_type = core_dialect::ptr(&mut ctx).as_type_ref();
         let i32_type = ctx
-            .types
+            .types()
             .iter()
             .find_map(|(ty, data)| {
                 (data.dialect == trunk_ir::Symbol::new("core")
