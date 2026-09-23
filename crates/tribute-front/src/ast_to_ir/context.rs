@@ -513,7 +513,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Continuation { arg, result, .. } => {
                 let arg = self.convert_logical_type(ir, *arg);
                 let result = self.convert_logical_type(ir, *result);
-                ir.types.intern(
+                ir.intern_type(
                     TypeDataBuilder::new(
                         Symbol::new("tribute_control"),
                         Symbol::new("resume_token"),
@@ -617,8 +617,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i32` type.
     pub fn i32_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     /// Get the `core.nil` type.
@@ -628,14 +627,12 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.i1` (bool) type.
     pub fn bool_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
     }
 
     /// Get the `core.f64` type.
     pub fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+        ir.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
     }
 
     /// Get the `core.bytes` type.
@@ -660,7 +657,7 @@ impl<'db> IrLoweringCtx<'db> {
         for &p in params {
             builder = builder.param(p);
         }
-        ir.types.intern(builder.build())
+        ir.intern_type(builder.build())
     }
 
     /// Create an `adt.struct` type with name and fields.
@@ -680,7 +677,7 @@ impl<'db> IrLoweringCtx<'db> {
             })
             .collect();
 
-        ir.types.intern(
+        ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                 .attr("name", Attribute::Symbol(name))
                 .attr("fields", Attribute::List(fields_attr))
@@ -707,7 +704,7 @@ impl<'db> IrLoweringCtx<'db> {
             })
             .collect();
 
-        ir.types.intern(
+        ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
                 .attr("name", Attribute::Symbol(name))
                 .attr("variants", Attribute::List(variants_attr))
@@ -735,7 +732,7 @@ impl<'db> IrLoweringCtx<'db> {
             })
             .collect();
 
-        ir.types.intern(
+        ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
                 .attr("name", Attribute::Symbol(name))
                 .attr("variants", Attribute::List(variants_attr))
@@ -757,7 +754,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: Symbol) -> TypeRef {
-        ir.types.intern(
+        ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(name))
                 .build(),
@@ -806,7 +803,7 @@ mod tests {
     fn test_convert_logical_bound_var_to_any() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -830,7 +827,7 @@ mod tests {
     fn test_convert_logical_types_preserves_recursive_control_shapes() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -878,7 +875,7 @@ mod tests {
             },
         );
         let resume = ctx.convert_logical_type(&mut ir, resume);
-        let resume_data = ir.types.get(resume);
+        let resume_data = ir.types().get(resume);
         assert_eq!(resume_data.dialect, Symbol::new("tribute_control"));
         assert_eq!(resume_data.name, Symbol::new("resume_token"));
 
@@ -1154,7 +1151,7 @@ mod tests {
     fn test_convert_logical_primitives() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -1198,7 +1195,7 @@ mod tests {
     fn test_lookup_function_type() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let name = Symbol::new("foo");
         let body = AstType::new(&db, TypeKind::Int);
         let scheme = TypeScheme::new(&db, vec![], vec![], body);

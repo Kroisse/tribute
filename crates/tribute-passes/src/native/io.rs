@@ -48,7 +48,7 @@ fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
     let enum_name = Symbol::new("enum");
     let name_attr = Symbol::new("name");
     let expected = Symbol::new(READ_LINE_RESULT_TYPE);
-    ctx.types.iter().find_map(|(ty, data)| {
+    ctx.types().iter().find_map(|(ty, data)| {
         (data.dialect == adt
             && data.name == enum_name
             && data.attrs.get_symbol(name_attr) == Some(expected))
@@ -93,8 +93,7 @@ fn has_function(ctx: &IrContext, block: trunk_ir::BlockRef, name: &str) -> bool 
 }
 
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
 }
 
 struct NativeWritePattern;

@@ -75,7 +75,7 @@ impl Analysis for StructuredControlAnalysis {
             }
             let results = ir.op_results(op);
             if let [result] = results {
-                let ty = ir.types.get(ir.value_ty(*result));
+                let ty = ir.types().get(ir.value_ty(*result));
                 if ty.dialect == "core" && ty.name == "never" && !ir.has_uses(*result) {
                     analysis.unused_never_controls.insert(op);
                 }

@@ -57,8 +57,7 @@ struct ClifTypes {
 impl ClifTypes {
     fn intern(ctx: &mut IrContext) -> Self {
         let mk = |ctx: &mut IrContext, name: &'static str| {
-            ctx.types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
         };
         Self {
             ptr: mk(ctx, "ptr"),
@@ -145,7 +144,7 @@ pub fn generate_rtti(
         return rtti_map;
     };
 
-    let loc = Location::new(ctx.paths.intern("<rtti>".to_string()), Span::new(0, 0));
+    let loc = Location::new(ctx.intern_path("<rtti>".to_string()), Span::new(0, 0));
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -487,7 +486,7 @@ pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, Typ
         .iter()
         .map(|(name, ty)| A::List(vec![A::Symbol(Symbol::new(name)), A::Type(*ty)]))
         .collect();
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr(Symbol::new("fields"), A::List(fields_list))
             .build(),
@@ -768,14 +767,13 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
     }
 
     /// Build a module containing a function that creates a struct via adt.struct_new.

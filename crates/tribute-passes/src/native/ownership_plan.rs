@@ -191,7 +191,7 @@ impl NativeOwnershipPlan {
                 )
             });
         }
-        let data = ctx.types.get(ty);
+        let data = ctx.types().get(ty);
         if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
             return Err(OwnershipPlanError::new(format!(
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
@@ -204,7 +204,7 @@ impl NativeOwnershipPlan {
             .managed_layouts
             .iter()
             .copied()
-            .filter(|layout| ctx.types.get(*layout).attrs.get_symbol("name") == Some(name));
+            .filter(|layout| ctx.types().get(*layout).attrs.get_symbol("name") == Some(name));
         let layout = layouts.next().ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref has no planned allocation layout")
         })?;
@@ -342,7 +342,7 @@ fn is_typed_managed_reference(
     if managed_layouts.contains(&ty) {
         return true;
     }
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     (data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref"))
         || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
         || (data.dialect == Symbol::new("tribute_rt")
@@ -354,7 +354,7 @@ fn is_managed_value(ctx: &IrContext, value: ValueRef, managed_layouts: &HashSet<
 }
 
 fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
 }
 
@@ -588,12 +588,12 @@ fn collect_and_validate_managed_layouts(
     });
 
     while let Some(typeref) = pending_typerefs.pop() {
-        let Some(name) = ctx.types.get(typeref).attrs.get_symbol("name") else {
+        let Some(name) = ctx.types().get(typeref).attrs.get_symbol("name") else {
             return Err(OwnershipPlanError::new(
                 "adt.typeref lacks nominal identity",
             ));
         };
-        if !ctx.types.get(typeref).params.is_empty() {
+        if !ctx.types().get(typeref).params.is_empty() {
             return Err(OwnershipPlanError::new(format!(
                 "adt.typeref @{name} has unexpected parameters"
             )));
@@ -626,7 +626,7 @@ fn index_nominal_layout(
     ty: TypeRef,
     nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
 ) {
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     if data.dialect == Symbol::new("adt")
         && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
         && let Some(name) = data.attrs.get_symbol("name")
@@ -650,7 +650,7 @@ fn collect_reachable_type_contract(
     if !visited_types.insert(ty) {
         return;
     }
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     index_nominal_layout(ctx, ty, nominal_layouts);
     if (data.dialect == Symbol::new("adt"))
         && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
@@ -727,7 +727,7 @@ fn collect_reachable_attribute_type_contract(
 
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
-        let data = ctx.types.get(ty);
+        let data = ctx.types().get(ty);
         (data.dialect == Symbol::new("adt")).then(|| data.attrs.get_symbol("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
@@ -755,7 +755,7 @@ fn closure_layout_compatible(
     expected: TypeRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> bool {
-    let actual_data = ctx.types.get(actual);
+    let actual_data = ctx.types().get(actual);
     if actual_data.dialect != Symbol::new("closure")
         || actual_data.name != Symbol::new("closure")
         || !managed_layouts.contains(&expected)
@@ -766,7 +766,7 @@ fn closure_layout_compatible(
         return false;
     };
     matches!(fields.as_slice(), [(_, code), (_, env)] if {
-        let code = ctx.types.get(*code);
+        let code = ctx.types().get(*code);
         code.dialect == Symbol::new("core")
             && code.name == Symbol::new("i32")
             && is_anyref_type(ctx, *env)
@@ -959,7 +959,7 @@ fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
         let Some(result) = callable.single_result(ctx) else {
             return false;
         };
-        let result = ctx.types.get(result);
+        let result = ctx.types().get(result);
         result.dialect == Symbol::new("core") && result.name == Symbol::new("never")
     })
 }
@@ -1203,7 +1203,7 @@ fn validate_into_raw_transfer_action(
     let Some(closure_layout) = closure_layout else {
         return false;
     };
-    let result_ty = ctx.types.get(ctx.value_ty(*result));
+    let result_ty = ctx.types().get(ctx.value_ty(*result));
     *source == action.value
         && ctx.value_ty(*source) == closure_layout
         && is_managed_value(ctx, *source, managed_layouts)

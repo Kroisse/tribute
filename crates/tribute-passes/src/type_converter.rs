@@ -25,12 +25,11 @@ use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::types::TypeDataBuilder;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(dialect, name).build())
+    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: Symbol, name: Symbol) -> bool {
-    ctx.types.is_dialect(ty, dialect, name)
+    ctx.types().is_dialect(ty, dialect, name)
 }
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -303,7 +302,7 @@ mod tests {
                 let target = crate::wasm::type_converter::closure_adt_type(&mut ctx);
                 assert_eq!(ctx.value_ty(arg), target);
                 let signature = ctx.op(tail).attributes.get_type("signature").unwrap();
-                assert_eq!(ctx.types.get(signature).params[0], target);
+                assert_eq!(ctx.types().get(signature).params[0], target);
             } else {
                 assert!(
                     func::TailCallIndirect::matches(&ctx, tail),
@@ -325,10 +324,10 @@ mod tests {
         let value = ctx.block_args(block)[0];
         let anyref = ctx.value_ty(value);
         let canonical = crate::closure_lower::closure_struct_type_ref(&mut ctx);
-        let mut near = ctx.types.get(canonical).clone();
+        let mut near = ctx.types().get(canonical).clone();
         near.attrs
             .insert(Symbol::new("unrelated"), Attribute::Bool(true));
-        let near = ctx.types.intern(near);
+        let near = ctx.intern_type(near);
         let tc = generic_type_converter(&mut ctx);
         let location: Location = ctx.op(function.op_ref()).location;
         assert!(
@@ -353,7 +352,7 @@ mod tests {
     }
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
     }
 
@@ -362,7 +361,7 @@ mod tests {
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(
+        ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(Symbol::new("String")))
                 .build(),
@@ -370,7 +369,7 @@ mod tests {
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(
+        ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
                 .attr("name", Attribute::Symbol(Symbol::new("Payload")))
                 .build(),

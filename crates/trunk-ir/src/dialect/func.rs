@@ -127,7 +127,7 @@ pub struct FuncSig(TypeRef);
 impl FuncSig {
     /// Validate a name-matching `func.func_sig`, including both delimiter counts.
     pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
-        let data = ctx.types.get(ty);
+        let data = ctx.types().get(ty);
         debug_assert!(data.dialect == DIALECT_NAME() && data.name == FUNC_SIG());
 
         let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)?;
@@ -149,7 +149,7 @@ impl FuncSig {
     }
 
     fn counts(self, ctx: &IrContext) -> (usize, usize) {
-        let data = ctx.types.get(self.0);
+        let data = ctx.types().get(self.0);
         let num_inputs = read_count(&data.attrs, NUM_INPUTS_ATTR)
             .expect("validated func.func_sig must retain a valid num_inputs attribute");
         let num_results = read_count(&data.attrs, NUM_RESULTS_ATTR)
@@ -166,12 +166,12 @@ impl FuncSig {
 
     pub fn inputs<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
         let (num_inputs, _) = self.counts(ctx);
-        &ctx.types.get(self.0).params[..num_inputs]
+        &ctx.types().get(self.0).params[..num_inputs]
     }
 
     pub fn results<'a>(&self, ctx: &'a IrContext) -> &'a [TypeRef] {
         let (num_inputs, num_results) = self.counts(ctx);
-        &ctx.types.get(self.0).params[num_inputs..num_inputs + num_results]
+        &ctx.types().get(self.0).params[num_inputs..num_inputs + num_results]
     }
 
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
@@ -183,7 +183,7 @@ impl FuncSig {
         &self,
         ctx: &'a IrContext,
     ) -> impl Iterator<Item = (&'a Symbol, &'a Attribute)> {
-        ctx.types.get(self.0).attrs.iter().filter(|(key, _)| {
+        ctx.types().get(self.0).attrs.iter().filter(|(key, _)| {
             **key != Symbol::new(NUM_INPUTS_ATTR) && **key != Symbol::new(NUM_RESULTS_ATTR)
         })
     }
@@ -267,7 +267,7 @@ pub fn func_sig_with_attrs(
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
-    let ty = ctx.types.intern(
+    let ty = ctx.intern_type(
         builder
             .attr(NUM_INPUTS_ATTR, Attribute::from(num_inputs))
             .attr(NUM_RESULTS_ATTR, Attribute::from(num_results))
@@ -572,7 +572,7 @@ fn print_func(
         .attributes
         .get_type("type")
         .is_some_and(|ty| {
-            h.ctx().types.get(ty).attrs.keys().any(|key| {
+            h.ctx().types().get(ty).attrs.keys().any(|key| {
                 *key != crate::Symbol::new(crate::dialect::func::NUM_INPUTS_ATTR)
                     && *key != crate::Symbol::new(crate::dialect::func::NUM_RESULTS_ATTR)
             })

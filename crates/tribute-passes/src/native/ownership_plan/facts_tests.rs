@@ -106,7 +106,7 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
 
     assert!(
         cache
-            .get_cached::<NativeOwnershipFunctionFacts>(op)
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
             .is_none()
     );
     let first = cache
@@ -125,7 +125,7 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
     // Invalidating only the dependent keeps the reusable prerequisite.
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_some()
     );
 
@@ -133,7 +133,7 @@ fn repeated_lookups_reuse_facts_and_invalidation_recomputes_them() {
     cache.invalidate::<NativeOwnershipModuleFacts>(module.op());
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_none()
     );
     let cascaded = cache
@@ -169,7 +169,7 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     assert!(cache.get::<NativeOwnershipFunctionFacts>(&ctx, op).is_err());
     assert!(
         cache
-            .get_cached::<NativeOwnershipFunctionFacts>(op)
+            .get_cached::<NativeOwnershipFunctionFacts>(&ctx, op)
             .is_none()
     );
     // A retry revalidates from scratch instead of reusing a partial result.
@@ -200,7 +200,7 @@ fn nested_functions_depend_on_the_outermost_module_facts() {
     // so no narrower inner-module entry is ever published.
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(module.op())
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, module.op())
             .is_some()
     );
     let mut inner = None;
@@ -212,7 +212,7 @@ fn nested_functions_depend_on_the_outermost_module_facts() {
     let inner = inner.expect("nested module");
     assert!(
         cache
-            .get_cached::<NativeOwnershipModuleFacts>(inner)
+            .get_cached::<NativeOwnershipModuleFacts>(&ctx, inner)
             .is_none()
     );
 }

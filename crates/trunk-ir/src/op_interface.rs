@@ -1128,7 +1128,7 @@ inventory::collect!(TypeAliasHint);
 
 /// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     let dialect = data.dialect;
     for hint in inventory::iter::<TypeAliasHint> {
         if dialect.with_str(|s| s == hint.dialect)

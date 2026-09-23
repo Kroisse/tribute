@@ -47,7 +47,7 @@ struct ArenaIrBuilder<'a> {
 
 impl<'a> ArenaIrBuilder<'a> {
     fn new(ctx: &'a mut IrContext) -> Self {
-        let path = ctx.paths.intern("textual-ir".to_owned());
+        let path = ctx.intern_path("textual-ir".to_owned());
         let location = Location::new(path, crate::location::Span::new(0, 0));
         Self {
             ctx,
@@ -101,7 +101,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 for (k, v) in attrs {
                     builder = builder.attr(k, v);
                 }
-                Ok(self.ctx.types.intern(builder.build()))
+                Ok(self.ctx.intern_type(builder.build()))
             }
             RawType::Function {
                 dialect,
@@ -298,7 +298,7 @@ impl<'a> ArenaIrBuilder<'a> {
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
-        Ok(self.ctx.types.intern(
+        Ok(self.ctx.intern_type(
             builder
                 .attr(
                     crate::dialect::func::NUM_INPUTS_ATTR,
@@ -329,7 +329,7 @@ impl<'a> ArenaIrBuilder<'a> {
             }
             RawAttribute::Unit => Attribute::Unit,
             RawAttribute::Location(path, start, end) => {
-                let path_ref = self.ctx.paths.intern(path.clone());
+                let path_ref = self.ctx.intern_path(path.clone());
                 Attribute::Location(Location::new(
                     path_ref,
                     crate::location::Span::new(*start, *end),
@@ -523,11 +523,11 @@ impl<'a> ArenaIrBuilder<'a> {
             let pt = self.build_type(param_ty)?;
             if bt != pt {
                 let (bd, bn) = {
-                    let d = self.ctx.types.get(bt);
+                    let d = self.ctx.types().get(bt);
                     (d.dialect, d.name)
                 };
                 let (pd, pn) = {
-                    let d = self.ctx.types.get(pt);
+                    let d = self.ctx.types().get(pt);
                     (d.dialect, d.name)
                 };
                 return Err(ParseError {
@@ -824,13 +824,12 @@ mod tests {
     }
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb".to_owned());
         Location::new(path, crate::location::Span::new(0, 0))
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
@@ -947,9 +946,8 @@ core.module @test {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        let i1_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
 
         // Entry block with param

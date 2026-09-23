@@ -37,8 +37,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 // =============================================================================
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(dialect, name).build())
+    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
 // =============================================================================
@@ -46,7 +45,7 @@ fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
 // =============================================================================
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: Symbol, name: Symbol) -> bool {
-    ctx.types.is_dialect(ty, dialect, name)
+    ctx.types().is_dialect(ty, dialect, name)
 }
 
 // =============================================================================
@@ -70,7 +69,7 @@ fn make_adt_struct_type(
             .collect(),
     );
 
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(name))
             .attr("fields", fields_attr)
@@ -127,7 +126,7 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type has the `is_variant` attribute set to true.
 fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    ctx.types.get(ty).attrs.get_bool("is_variant") == Some(true)
+    ctx.types().get(ty).attrs.get_bool("is_variant") == Some(true)
 }
 
 /// Check if a type is a struct-like reference type.
@@ -746,15 +745,15 @@ mod tests {
         let shared = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let target = closure_adt_type(&mut ctx);
         let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
-        let mut near = ctx.types.get(shared).clone();
+        let mut near = ctx.types().get(shared).clone();
         near.attrs
             .insert(Symbol::new("unrelated"), Attribute::Bool(true));
-        let near = ctx.types.intern(near);
+        let near = ctx.intern_type(near);
         let converter = wasm_type_converter(&mut ctx);
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let data = ctx.types.get(target);
+        let data = ctx.types().get(target);
         let Attribute::List(fields) = data.attrs.get("fields").unwrap() else {
             panic!("fields")
         };
@@ -764,7 +763,7 @@ mod tests {
         let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
         let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
         assert_eq!(
-            ctx.types.get(target).attrs.get("fields"),
+            ctx.types().get(target).attrs.get("fields"),
             Some(&Attribute::List(vec![
                 Attribute::List(vec![
                     Attribute::Symbol(Symbol::new("table_idx")),

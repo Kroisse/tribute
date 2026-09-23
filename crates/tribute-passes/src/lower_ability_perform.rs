@@ -302,7 +302,7 @@ mod tests {
 
     fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
         use tribute_core::calling_convention::*;
-        let answer = ctx.types.intern(
+        let answer = ctx.intern_type(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
         let evidence = ability::evidence_adt_type_ref(ctx);

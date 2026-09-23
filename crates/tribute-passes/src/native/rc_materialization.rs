@@ -166,7 +166,7 @@ fn allocation_size_for_type(
     // Zero is a dispatch-only dynamic-size signal: header RTTI must resolve it
     // to an exact release function before deallocation. It is never a shallow
     // fallback and is not inferred from physical definitions.
-    let data = ctx.types.get(ty);
+    let data = ctx.types().get(ty);
     if data.dialect == Symbol::new("tribute_rt")
         && matches!(data.name, name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
     {

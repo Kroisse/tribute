@@ -327,7 +327,7 @@ fn assert_source_allocation_field_releases(ir: &str) {
         let Ok(retain) = tribute_rt::Retain::from_op(&ctx, op) else {
             continue;
         };
-        let ty = ctx.types.get(ctx.value_ty(retain.result(&ctx)));
+        let ty = ctx.types().get(ctx.value_ty(retain.result(&ctx)));
         let kind = if ty
             .attrs
             .get_symbol("name")
@@ -337,7 +337,7 @@ fn assert_source_allocation_field_releases(ir: &str) {
         } else if ty
             .attrs
             .get_type(tribute_core::calling_convention::CPS_CONTINUATION_FRAME_RESULT_ATTR)
-            .is_some_and(|result| ctx.types.get(result).name == "i32")
+            .is_some_and(|result| ctx.types().get(result).name == "i32")
         {
             "frame"
         } else {

@@ -203,7 +203,7 @@ impl<'db> TypedModule<'db> {
         ir: &mut IrContext,
         source_uri: &str,
     ) -> FrontendIrModule {
-        let path = ir.paths.intern(source_uri.to_owned());
+        let path = ir.intern_path(source_uri.to_owned());
         self.lower_module(db, ir, path)
     }
 }
@@ -232,7 +232,7 @@ mod tests {
     fn test_context_creation() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let span_map = SpanMap::default();
         let ctx = IrLoweringCtx::new(
             &db,
@@ -278,7 +278,7 @@ mod tests {
     fn test_scope_guard_cleanup() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -310,7 +310,7 @@ mod tests {
     fn test_scope_guard_cleanup_on_early_return() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -344,7 +344,7 @@ mod tests {
     fn test_context_location() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("test.trb".to_owned());
+        let path = ir.intern_path("test.trb".to_owned());
         let span_map = SpanMap::default();
         let ctx = IrLoweringCtx::new(
             &db,

@@ -29,10 +29,10 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
 }
 
 fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
-    let list_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
-    ctx.types.intern(
+    let list_ty = ctx.intern_type(
+        TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
+    );
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(Symbol::new("__native_list_node")))
             .attr(
@@ -126,9 +126,8 @@ fn lower_observation(
     ctx.block_mut(trap_block).parent_region = Some(region);
     ctx.block_mut(projection_block).parent_region = Some(region);
 
-    let bool_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+    let bool_ty =
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
     let empty = adt::ref_is_null(ctx, location, list, bool_ty);
     let branch = cf::cond_br(
         ctx,

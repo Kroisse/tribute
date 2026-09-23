@@ -24,8 +24,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 // ============================================================================
 
 fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
 #[derive(Debug)]
@@ -69,7 +68,7 @@ fn final_handle_dispatch_shape(
         op,
         source_location: format!(
             "{}:{}:{}",
-            ctx.paths.get(data.location.path),
+            ctx.paths().get(data.location.path),
             data.location.span.start,
             data.location.span.end
         ),
@@ -91,7 +90,7 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch requires a prompt-tag operand".into(),
         ));
     };
-    let prompt_ty = ctx.types.get(ctx.value_ty(prompt_tag));
+    let prompt_ty = ctx.types().get(ctx.value_ty(prompt_tag));
     if prompt_ty.dialect != Symbol::new("core") || prompt_ty.name != Symbol::new("i32") {
         return Err(error(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
@@ -119,7 +118,7 @@ fn final_handle_dispatch_shape(
         let Attribute::Type(ability_ref) = ability_ref else {
             return Err(error("every ability_refs entry must be a type".into()));
         };
-        let ty = ctx.types.get(*ability_ref);
+        let ty = ctx.types().get(*ability_ref);
         if ty.dialect != Symbol::new("core") || ty.name != Symbol::new("ability_ref") {
             return Err(error(
                 "every ability_refs entry must be a core.ability_ref type".into(),
@@ -332,12 +331,12 @@ mod tests {
     fn test_compute_ability_id() {
         let mut ctx = IrContext::new();
 
-        let state_ref = ctx.types.intern(
+        let state_ref = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         );
-        let console_ref = ctx.types.intern(
+        let console_ref = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::new("Console")))
                 .build(),
@@ -347,7 +346,7 @@ mod tests {
         let console_id = ability::compute_ability_id(&ctx, console_ref);
 
         // Same ability should have same ID (interning gives same TypeRef)
-        let state_ref2 = ctx.types.intern(
+        let state_ref2 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
@@ -363,18 +362,17 @@ mod tests {
     fn test_compute_ability_id_with_type_params() {
         let mut ctx = IrContext::new();
 
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
-        let state_i32 = ctx.types.intern(
+        let state_i32 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .param(i32_ty)
                 .build(),
         );
 
-        let state_no_params = ctx.types.intern(
+        let state_no_params = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),

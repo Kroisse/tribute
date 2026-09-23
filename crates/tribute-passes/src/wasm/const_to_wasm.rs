@@ -175,7 +175,7 @@ pub fn validate_for_wasm(
             });
             return;
         };
-        let ty = ctx.types.get(result_ty);
+        let ty = ctx.types().get(result_ty);
         if ty.dialect != wasm_dialect::DIALECT_NAME() || ty.name != Symbol::new("anyref") {
             result = Err(ConstValidationError::InvalidStringResultType {
                 actual: format!("{}.{}", ty.dialect, ty.name),
@@ -248,8 +248,7 @@ impl RewritePattern for StringConstPattern {
 
         let location = ctx.op(op).location;
         let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
         let bytes = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
         let result_ty = ctx.op_result_types(op)[0];
         let leaf = adt::variant_new(
@@ -313,8 +312,7 @@ impl RewritePattern for BytesConstPattern {
 
         let location = ctx.op(op).location;
         let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Create wasm.bytes_from_data operation
         let new_op = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
@@ -513,8 +511,7 @@ mod tests {
         let mut missing_data_ctx = IrContext::new();
         let missing_data_module = string_module(&mut missing_data_ctx, &["hello"]);
         let placeholder_ty = missing_data_ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
+            .intern_type(TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum")).build());
         lower(
             &mut missing_data_ctx,
             missing_data_module,

@@ -267,7 +267,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .inputs(ctx)
                         .iter()
                         .map(|t| {
-                            let td = ctx.types.get(*t);
+                            let td = ctx.types().get(*t);
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
@@ -289,7 +289,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .inputs(ctx)
                     .iter()
                     .map(|t| {
-                        let td = ctx.types.get(*t);
+                        let td = ctx.types().get(*t);
                         format!("{}.{}", td.dialect, td.name)
                     })
                     .collect();
@@ -328,8 +328,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
 // =============================================================================
 
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
@@ -733,7 +732,7 @@ mod tests {
         assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), arrayref);
         assert_eq!(struct_get.result_ty(&ctx), arrayref);
         assert_eq!(
-            ctx.types
+            ctx.types()
                 .get(struct_get.r#type(&ctx))
                 .attrs
                 .get_symbol("name"),

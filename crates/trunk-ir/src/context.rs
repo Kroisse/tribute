@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
@@ -81,11 +82,15 @@ pub struct RegionData {
 // IrContext
 // ============================================================================
 
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 /// Arena-based mutable IR context.
 ///
 /// Owns all IR entities and provides methods for creating, querying,
 /// and mutating them. Use-chains are automatically maintained.
 pub struct IrContext {
+    identity: u64,
+    revision: u64,
     ops: PrimaryMap<OpRef, OperationData>,
     values: PrimaryMap<ValueRef, ValueData>,
     blocks: PrimaryMap<BlockRef, BlockData>,
@@ -95,8 +100,8 @@ pub struct IrContext {
     uses: SecondaryMap<ValueRef, SmallVec<[Use; 2]>>,
 
     /// Type and path interners.
-    pub types: TypeInterner,
-    pub paths: PathInterner,
+    types: TypeInterner,
+    paths: PathInterner,
 
     /// Backing pools for EntityList storage.
     value_pool: ListPool<ValueRef>,
@@ -121,7 +126,14 @@ pub struct IrContext {
 impl IrContext {
     /// Create a new empty IR context.
     pub fn new() -> Self {
+        let identity = NEXT_CONTEXT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .expect("IrContext identity exhausted");
         Self {
+            identity,
+            revision: 0,
             ops: PrimaryMap::new(),
             values: PrimaryMap::new(),
             blocks: PrimaryMap::new(),
@@ -140,7 +152,15 @@ impl IrContext {
         }
     }
 
-    /// Read interned types through the context API.
+    pub(crate) fn analysis_stamp(&self) -> (u64, u64) {
+        (self.identity, self.revision)
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.checked_add(1).expect("IR revision exhausted");
+    }
+
+    /// Read interned types without granting mutable access to the IR.
     pub fn types(&self) -> &TypeInterner {
         &self.types
     }
@@ -150,19 +170,39 @@ impl IrContext {
         self.types.get(ty)
     }
 
-    /// Read interned paths through the context API.
+    /// Read interned paths without granting mutable access to the IR.
     pub fn paths(&self) -> &PathInterner {
         &self.paths
     }
 
-    /// Intern a type through the context API.
+    /// Intern a type, advancing the revision only for a new entry.
     pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
+        if let Some(ty) = self.types.lookup(&data) {
+            return ty;
+        }
+        self.bump_revision();
         self.types.intern(data)
     }
 
-    /// Intern a path through the context API.
+    /// Intern a path, advancing the revision only for a new entry.
     pub fn intern_path(&mut self, path: String) -> PathRef {
+        if let Some(existing) = self.paths.lookup(&path) {
+            return existing;
+        }
+        self.bump_revision();
         self.paths.intern(path)
+    }
+
+    /// Conservatively mark the IR changed before returning mutable type access.
+    pub fn types_mut(&mut self) -> &mut TypeInterner {
+        self.bump_revision();
+        &mut self.types
+    }
+
+    /// Conservatively mark the IR changed before returning mutable path access.
+    pub fn paths_mut(&mut self) -> &mut PathInterner {
+        self.bump_revision();
+        &mut self.paths
     }
 
     // ========================================================================
@@ -217,6 +257,10 @@ impl IrContext {
 
     /// Register a type alias. If a name is already registered, it is replaced.
     pub fn register_type_alias(&mut self, name: Symbol, ty: TypeRef) {
+        if self.type_alias_by_name.get(&name) == Some(&ty) {
+            return;
+        }
+        self.bump_revision();
         if let Some(old_ty) = self.type_alias_by_name.insert(name, ty) {
             // Remove old reverse mapping
             self.type_alias_by_type.remove(&old_ty);
@@ -274,6 +318,7 @@ impl IrContext {
 
         let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
 
+        self.bump_revision();
         let op = self.ops.push(data);
 
         // Back-link owned regions to this operation
@@ -318,6 +363,7 @@ impl IrContext {
     /// **Warning**: Modifying operands directly will desync the use-chain.
     /// Prefer `replace_all_uses` or re-creating the operation.
     pub fn op_mut(&mut self, op: OpRef) -> &mut OperationData {
+        self.bump_revision();
         &mut self.ops[op]
     }
 
@@ -333,6 +379,10 @@ impl IrContext {
 
     /// Set the type of the i-th result of an operation.
     pub fn set_op_result_type(&mut self, op: OpRef, index: u32, new_ty: TypeRef) {
+        if self.op_result_types(op)[index as usize] == new_ty {
+            return;
+        }
+        self.bump_revision();
         self.ops[op].results.as_mut_slice(&mut self.type_pool)[index as usize] = new_ty;
     }
 
@@ -342,6 +392,7 @@ impl IrContext {
         if old_val == new_val {
             return;
         }
+        self.bump_revision();
         self.uses[old_val].retain(|u| !(u.user == op && u.operand_index == index));
         self.ops[op].operands.as_mut_slice(&mut self.value_pool)[index as usize] = new_val;
         self.uses[new_val].push(Use {
@@ -353,6 +404,7 @@ impl IrContext {
     /// Append an operand to an operation's operand list.
     pub fn push_op_operand(&mut self, op: OpRef, val: ValueRef) {
         let index = self.ops[op].operands.len(&self.value_pool) as u32;
+        self.bump_revision();
         self.ops[op].operands.push(val, &mut self.value_pool);
         self.uses[val].push(Use {
             user: op,
@@ -371,6 +423,7 @@ impl IrContext {
         );
 
         let removed = old_operands[index_usize];
+        self.bump_revision();
         self.uses[removed].retain(|u| !(u.user == op && u.operand_index == index));
 
         for (old_idx, &val) in old_operands.iter().enumerate().skip(index_usize + 1) {
@@ -442,6 +495,7 @@ impl IrContext {
             );
         }
 
+        self.bump_revision();
         // Clear operand uses for the whole subtree (op + all descendants in its
         // regions), so a disposed region-bearing op leaves no stale uses on
         // values defined outside its body. `walk_op` visits `op` first, then
@@ -499,6 +553,7 @@ impl IrContext {
     /// Create a new block and allocate argument values for it.
     pub fn create_block(&mut self, data: BlockData) -> BlockRef {
         let num_args = data.args.len();
+        self.bump_revision();
         let block = self.blocks.push(data);
 
         // Allocate block argument values
@@ -521,6 +576,7 @@ impl IrContext {
 
     /// Get mutable reference to block data.
     pub fn block_mut(&mut self, b: BlockRef) -> &mut BlockData {
+        self.bump_revision();
         &mut self.blocks[b]
     }
 
@@ -537,6 +593,7 @@ impl IrContext {
     /// Add a new argument to an existing block and return its `ValueRef`.
     pub fn add_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
         let index = self.blocks[block].args.len() as u32;
+        self.bump_revision();
         self.blocks[block].args.push(arg);
         let v = self.values.push(ValueData {
             def: ValueDef::BlockArg(block, index),
@@ -552,6 +609,7 @@ impl IrContext {
     /// argument. Existing `ValueRef`s remain valid — only their `ValueDef`
     /// indices are updated.
     pub fn prepend_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
+        self.bump_revision();
         // Shift existing block arg ValueDef indices by +1
         let existing_args = self.block_arg_values[block].as_slice(&self.value_pool);
         let existing_refs: SmallVec<[ValueRef; 8]> = existing_args.into();
@@ -583,6 +641,10 @@ impl IrContext {
 
     /// Set the type of a block argument.
     pub fn set_block_arg_type(&mut self, block: BlockRef, index: u32, new_ty: TypeRef) {
+        if self.blocks[block].args[index as usize].ty == new_ty {
+            return;
+        }
+        self.bump_revision();
         self.blocks[block].args[index as usize].ty = new_ty;
     }
 
@@ -598,6 +660,7 @@ impl IrContext {
              remove it from the old block first",
             self.ops[op].parent_block.unwrap(),
         );
+        self.bump_revision();
         self.ops[op].parent_block = Some(block);
         self.blocks[block].ops.push(op);
     }
@@ -615,12 +678,13 @@ impl IrContext {
              remove it from the old block first",
             self.ops[op].parent_block.unwrap(),
         );
-        let ops = &mut self.blocks[block].ops;
-        let pos = ops
+        let pos = self.blocks[block]
+            .ops
             .iter()
             .position(|&o| o == before)
             .expect("insert_op_before: `before` op not found in block");
-        ops.insert(pos, op);
+        self.bump_revision();
+        self.blocks[block].ops.insert(pos, op);
         self.ops[op].parent_block = Some(block);
     }
 
@@ -628,6 +692,7 @@ impl IrContext {
     ///
     /// Only clears the operation's `parent_block` if it matches the given block.
     pub fn remove_op_from_block(&mut self, block: BlockRef, op: OpRef) {
+        self.bump_revision();
         self.blocks[block].ops.retain(|o| *o != op);
         if self.ops[op].parent_block == Some(block) {
             self.ops[op].parent_block = None;
@@ -655,6 +720,7 @@ impl IrContext {
     ///
     /// Panics if any block in `data.blocks` already belongs to another region.
     pub fn create_region(&mut self, data: RegionData) -> RegionRef {
+        self.bump_revision();
         let region = self.regions.push(data);
 
         // Set parent_region on all blocks in this region
@@ -678,7 +744,9 @@ impl IrContext {
     /// from the parent operation's region list. Does nothing if the region
     /// has no parent.
     pub fn detach_region(&mut self, region: RegionRef) {
-        if let Some(parent_op) = self.regions[region].parent_op.take() {
+        if let Some(parent_op) = self.regions[region].parent_op {
+            self.bump_revision();
+            self.regions[region].parent_op = None;
             self.ops[parent_op].regions.retain(|r| *r != region);
         }
     }
@@ -690,6 +758,7 @@ impl IrContext {
 
     /// Get mutable reference to region data.
     pub fn region_mut(&mut self, r: RegionRef) -> &mut RegionData {
+        self.bump_revision();
         &mut self.regions[r]
     }
 
@@ -857,6 +926,7 @@ impl IrContext {
         if old == new {
             return;
         }
+        self.bump_revision();
         // Take the old use list
         let old_uses = std::mem::take(&mut self.uses[old]);
 
@@ -1001,13 +1071,12 @@ mod tests {
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new("core", "i32").build())
+        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
     }
 
     #[test]
@@ -1270,9 +1339,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
 
         // Create a block with 2 args of type i32
         let block = ctx.create_block(BlockData {
@@ -1356,9 +1423,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
 
         let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
             .result(i32_ty)
@@ -1385,9 +1450,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = i32_type(&mut ctx);
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new("core", "f64").build());
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
 
         let block = ctx.create_block(BlockData {
             location: loc,

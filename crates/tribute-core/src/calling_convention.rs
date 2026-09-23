@@ -101,7 +101,7 @@ pub fn cps_continuation_frame_ref_type(
     name: Symbol,
     result: TypeRef,
 ) -> TypeRef {
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
             .attr("name", Attribute::Symbol(name))
             .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
@@ -111,7 +111,7 @@ pub fn cps_continuation_frame_ref_type(
 
 /// Read result-index metadata only from an explicit continuation-frame type.
 pub fn cps_continuation_frame_result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
-    let data = ctx.types.get(frame);
+    let data = ctx.types().get(frame);
     (data.dialect == Symbol::new("adt")
         && matches!(data.name, name if name == Symbol::new("typeref") || name == Symbol::new("struct")))
     .then(|| data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR))
@@ -126,7 +126,7 @@ pub fn cps_continuation_frame_layout_type(
     done: TypeRef,
     dispatch: TypeRef,
 ) -> TypeRef {
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(name))
             .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
@@ -220,7 +220,7 @@ pub fn physical_closure_function_type(
     if get_physical_closure_convention(ctx, closure) != Some(convention) {
         return None;
     }
-    let [function] = ctx.types.get(closure).params.as_slice() else {
+    let [function] = ctx.types().get(closure).params.as_slice() else {
         return None;
     };
     let callable = func::FuncSig::from_type_ref(ctx, *function)?;
@@ -271,7 +271,7 @@ pub fn physical_closure_type_with_environment_index(
     convention: CallingConvention,
     environment_index: usize,
 ) -> TypeRef {
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
             .param(function)
             .attr(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128))
@@ -288,7 +288,7 @@ pub fn get_physical_closure_convention(
     ctx: &IrContext,
     closure: TypeRef,
 ) -> Option<CallingConvention> {
-    let data = ctx.types.get(closure);
+    let data = ctx.types().get(closure);
     if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
         return None;
     }
@@ -301,7 +301,7 @@ pub fn get_physical_closure_convention(
 
 /// Read the exact environment slot from a convention-proven closure type.
 pub fn get_physical_closure_environment_index(ctx: &IrContext, closure: TypeRef) -> Option<usize> {
-    let data = ctx.types.get(closure);
+    let data = ctx.types().get(closure);
     if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
         return None;
     }
@@ -360,15 +360,14 @@ mod tests {
     #[test]
     fn result_indexed_continuation_frame_builders_preserve_exact_types_and_provenance() {
         let mut ctx = IrContext::new();
-        let evidence = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("ability"), Symbol::new("evidence")).build());
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let anyref = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build());
+        let evidence = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("ability"), Symbol::new("evidence")).build(),
+        );
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let anyref = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
+        );
         let frame =
             cps_continuation_frame_ref_type(&mut ctx, Symbol::new("ContinuationFrameI32"), i32_ty);
         let done = cps_done_type(&mut ctx, i32_ty);
@@ -394,7 +393,7 @@ mod tests {
             Some(i32_ty)
         );
         assert_eq!(
-            ctx.types.get(layout).attrs.get("fields"),
+            ctx.types().get(layout).attrs.get("fields"),
             Some(&Attribute::List(vec![
                 Attribute::List(vec![
                     Attribute::Symbol(Symbol::new("done")),
@@ -420,7 +419,7 @@ mod tests {
         ] {
             let function = cps_closure_function_type(&ctx, closure).expect("exact CPS closure");
             assert_eq!(
-                ctx.types.get(function).params.as_slice(),
+                ctx.types().get(function).params.as_slice(),
                 expected.as_slice()
             );
             assert_eq!(
@@ -435,7 +434,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let never = core::never(&mut ctx).as_type_ref();
         let function = func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let missing_environment = ctx.types.intern(
+        let missing_environment = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .attr(
@@ -444,7 +443,7 @@ mod tests {
                 )
                 .build(),
         );
-        let extra_outer_parameter = ctx.types.intern(
+        let extra_outer_parameter = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .param(never)
@@ -455,7 +454,7 @@ mod tests {
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(0))
                 .build(),
         );
-        let out_of_range_environment = ctx.types.intern(
+        let out_of_range_environment = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
                 .param(function)
                 .attr(
@@ -465,7 +464,7 @@ mod tests {
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
                 .build(),
         );
-        let unmarked_frame = ctx.types.intern(
+        let unmarked_frame = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(Symbol::new("ContinuationFrame")))
                 .build(),

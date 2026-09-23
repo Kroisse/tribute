@@ -211,7 +211,7 @@ fn lower_single_lambda(
 
     let mut all_param_tys = orig_param_types.clone();
     all_param_tys.insert(environment_index, anyref_ty);
-    let mut type_attrs = ctx.types.get(function_ty).attrs.clone();
+    let mut type_attrs = ctx.types().get(function_ty).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     let func_ty = func::func_sig_with_attrs(
@@ -456,7 +456,7 @@ fn make_adt_struct_type(
         })
         .collect();
 
-    ctx.types.intern(
+    ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(name))
             .attr("fields", Attribute::List(fields_attr))
@@ -516,8 +516,7 @@ mod tests {
     }
 
     fn make_i32_ty(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     #[test]
@@ -687,7 +686,7 @@ mod tests {
                 closure_type =
                     closure_type.attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(index));
             }
-            let lambda_ty = ctx.types.intern(closure_type.build());
+            let lambda_ty = ctx.intern_type(closure_type.build());
             let lambda = closure::lambda(
                 &mut ctx,
                 loc,

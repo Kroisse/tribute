@@ -212,9 +212,8 @@ fn build_entrypoint(
     tribute_main: TributeMainAbi<'_>,
     sanitize: bool,
 ) -> OpRef {
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i32_ty =
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
     let nil_ty = core::nil(ctx).as_type_ref();
 
     // Build func type: () -> i32
@@ -317,14 +316,13 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb".to_owned());
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
     fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     fn nil_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {

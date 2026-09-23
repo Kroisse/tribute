@@ -45,7 +45,7 @@ mod tests {
     fn test_arith_const_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         // Create i32.const with value attribute
         let op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
@@ -68,7 +68,7 @@ mod tests {
     fn test_func_call_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         // Create two values to use as arguments: use arith.const to produce them
         let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
@@ -102,7 +102,7 @@ mod tests {
     fn test_func_return_no_result() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
         let v1 = c1.result(&ctx);
@@ -160,7 +160,7 @@ mod tests {
     fn test_scf_if_with_two_regions() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let cond = cond_op.result(&ctx);
@@ -205,7 +205,7 @@ mod tests {
     fn test_clif_brif_with_successors() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let cond = cond_op.result(&ctx);
@@ -270,7 +270,7 @@ mod tests {
     fn test_from_op_wrong_dialect() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
 
@@ -287,7 +287,7 @@ mod tests {
     fn test_matches() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
 
@@ -303,7 +303,7 @@ mod tests {
     fn test_wasm_call_variadic_results() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let call = super::wasm::call(
             &mut ctx,
@@ -329,7 +329,7 @@ mod tests {
     fn test_wasm_call_indirect_mixed_operands() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         // Create values for the call
         let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
@@ -362,7 +362,7 @@ mod tests {
     fn test_result_value_def() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let result = c.result(&ctx);
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn test_array_type_with_param() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
         let arr = super::core::array(&mut ctx, i32_ty);
 
         // element accessor
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_tuple_type_variadic() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
         let func_ty = make_func_type(&mut ctx);
 
         let tup = super::core::tuple(&mut ctx, [i32_ty, func_ty]);
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn test_func_type_variadic() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         // func(i32, i32) -> i32  (no effect)
         let f = super::func::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]);
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_func_type_single_param() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         let f = super::func::func_sig(&mut ctx, [i32_ty], [i32_ty]);
 
@@ -562,17 +562,17 @@ mod tests {
     #[test]
     fn test_func_type_counts_distinguish_the_same_flat_params() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
         let one_input = super::func::func_sig(&mut ctx, [i32_ty], []);
         let one_result = super::func::func_sig(&mut ctx, [], [i32_ty]);
 
         assert_ne!(one_input.as_type_ref(), one_result.as_type_ref());
         assert_eq!(
-            ctx.types.get(one_input.as_type_ref()).params.as_slice(),
+            ctx.types().get(one_input.as_type_ref()).params.as_slice(),
             [i32_ty]
         );
         assert_eq!(
-            ctx.types.get(one_result.as_type_ref()).params.as_slice(),
+            ctx.types().get(one_result.as_type_ref()).params.as_slice(),
             [i32_ty]
         );
         assert_eq!(one_input.inputs(&ctx), [i32_ty]);
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn test_func_type_inputs_zero_one_result() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
         let function = super::func::func_sig(&mut ctx, [], [i32_ty]);
         assert!(function.inputs(&ctx).is_empty());
         assert_eq!(function.results(&ctx), [i32_ty]);
@@ -602,7 +602,7 @@ mod tests {
     #[should_panic(expected = "func.func_sig currently supports at most one result")]
     fn test_func_type_constructor_rejects_multiple_results() {
         let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
         let _ = super::func::func_sig(&mut ctx, [], [i32_ty, i32_ty]);
     }
 

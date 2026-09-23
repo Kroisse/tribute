@@ -1,10 +1,9 @@
 //! Analysis framework for TrunkIR passes.
 //!
-//! [`AnalysisCache`] provides lazy, cached analyses with explicit
-//! invalidation semantics. Types implementing the [`Analysis`] trait are
-//! computed on demand and cached keyed by `(TypeId, OpRef)`; passes that
-//! mutate the IR are expected to call [`AnalysisCache::invalidate`] to
-//! keep downstream consumers correct.
+//! [`AnalysisCache`] provides lazy, cached analyses keyed by `(TypeId, OpRef)`.
+//! Each lookup compares the context identity and IR revision, discarding all
+//! cached results after any observable IR change. Explicit invalidation
+//! remains available for precise removal when the revision is unchanged.
 //!
 //! A lookup either returns a complete cached result or an [`AnalysisError`].
 //! Analysis errors describe invalid input IR or an unsupported analysis
@@ -25,9 +24,8 @@
 //! An [`AnalysisCache`] is owned by the **pipeline orchestrator** for
 //! the duration of one pipeline phase and **injected** into each pass
 //! that needs it. The cache is short-lived — dropped when the phase
-//! returns — so cached [`OpRef`] keys never outlive the [`IrContext`]
-//! they refer to, and the "one cache = one context" invariant holds by
-//! construction rather than by a runtime guard.
+//! returns. Reusing a cache with another [`IrContext`] discards the prior
+//! context's results before lookup.
 //!
 //! The [`AnalysisCache::scope`] helper bundles this pattern:
 //!
@@ -54,7 +52,8 @@
 //! let graph = analyses.get::<CallGraph>(ctx, module.op())?;
 //! // `graph: Arc<CallGraph>` — safe to hold while `ctx` is mutated.
 //! do_some_mutation(ctx);
-//! analyses.invalidate::<CallGraph>(module.op());
+//! let fresh_graph = analyses.get::<CallGraph>(ctx, module.op())?;
+//! // `graph` still describes the old IR; `fresh_graph` describes the new IR.
 //! ```
 //!
 //! # Thread-safety
@@ -257,10 +256,10 @@ struct InProgressAnalysis {
 
 /// Lazy, typed cache of analyses keyed by `(TypeId, OpRef)`.
 ///
-/// See the [module docs](self) for the pipeline-scoped ownership
-/// model and the single-context invariant.
+/// See the [module docs](self) for the pipeline-scoped ownership model.
 #[derive(Default)]
 pub struct AnalysisCache {
+    bound_stamp: Option<(u64, u64)>,
     cache: HashMap<AnalysisKey, Arc<dyn Any + Send + Sync>>,
     /// Computed analysis -> its direct prerequisites.
     dependencies: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
@@ -309,6 +308,7 @@ impl AnalysisCache {
         ctx: &IrContext,
         target: OpRef,
     ) -> Result<Arc<A>, AnalysisError> {
+        self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
         if let Some(entry) = self.cache.get(&key) {
             return Ok(Arc::clone(entry)
@@ -360,7 +360,10 @@ impl AnalysisCache {
     }
 
     /// Return the cached analysis `A` for `target` without computing it.
-    pub fn get_cached<A: Analysis>(&self, target: OpRef) -> Option<Arc<A>> {
+    ///
+    /// A changed revision or context clears the cache and returns `None`.
+    pub fn get_cached<A: Analysis>(&mut self, ctx: &IrContext, target: OpRef) -> Option<Arc<A>> {
+        self.sync_with(ctx);
         let key = AnalysisKey::of::<A>(target);
         self.cache.get(&key).map(|v| {
             Arc::clone(v)
@@ -397,6 +400,7 @@ impl AnalysisCache {
         self.dependencies.clear();
         self.dependents.clear();
         self.in_progress.clear();
+        self.bound_stamp = None;
     }
 
     /// Number of cached analyses (useful for diagnostics/tests).
@@ -407,6 +411,19 @@ impl AnalysisCache {
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+
+    fn sync_with(&mut self, ctx: &IrContext) {
+        let stamp = ctx.analysis_stamp();
+        if self.bound_stamp == Some(stamp) {
+            return;
+        }
+        assert!(
+            self.in_progress.is_empty(),
+            "IR changed during analysis computation"
+        );
+        self.clear();
+        self.bound_stamp = Some(stamp);
     }
 
     fn replace_dependencies(&mut self, key: AnalysisKey, dependencies: HashSet<AnalysisKey>) {
@@ -707,9 +724,9 @@ mod tests {
 
     #[test]
     fn get_cached_returns_none_before_compute() {
-        let (_ctx, op) = test_ctx();
-        let analyses = AnalysisCache::new();
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
+        let (ctx, op) = test_ctx();
+        let mut analyses = AnalysisCache::new();
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
     }
 
     #[test]
@@ -717,7 +734,7 @@ mod tests {
         let (ctx, op) = test_ctx();
         let mut analyses = AnalysisCache::new();
         let _ = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_some());
     }
 
     #[test]
@@ -741,8 +758,8 @@ mod tests {
         assert_eq!(analyses.len(), 2);
 
         analyses.invalidate::<DummyAnalysis>(op);
-        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<OtherAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<OtherAnalysis>(&ctx, op).is_some());
     }
 
     #[test]
@@ -777,7 +794,11 @@ mod tests {
         assert_eq!(error.analysis_type(), type_name::<NonEmptyModuleAnalysis>());
         assert_eq!(error.target(), op);
         assert_eq!(error.source().unwrap().to_string(), "test analysis failed");
-        assert!(analyses.get_cached::<NonEmptyModuleAnalysis>(op).is_none());
+        assert!(
+            analyses
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, op)
+                .is_none()
+        );
         assert!(analyses.is_empty());
 
         // Repair the analysis input before retrying. An unchanged malformed
@@ -827,14 +848,14 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<NonEmptyModuleAnalysis>(empty_module)
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, empty_module)
                 .is_none()
         );
-        assert!(analyses.get_cached::<DummyAnalysis>(module).is_some());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, module).is_some());
         assert!(Arc::ptr_eq(
             &module_analysis,
             &analyses
-                .get_cached::<NonEmptyModuleAnalysis>(module)
+                .get_cached::<NonEmptyModuleAnalysis>(&ctx, module)
                 .unwrap()
         ));
         assert_eq!(analyses.len(), 2);
@@ -868,8 +889,8 @@ mod tests {
         let _ = analyses.get::<MiddleAnalysis>(&ctx, op).unwrap();
 
         analyses.invalidate::<LeafAnalysis>(op);
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<MiddleAnalysis>(op).is_none());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<MiddleAnalysis>(&ctx, op).is_none());
     }
 
     #[test]
@@ -920,9 +941,9 @@ mod tests {
         let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
 
         analyses.invalidate::<RootAnalysis>(op);
-        assert!(analyses.get_cached::<RootAnalysis>(op).is_none());
-        assert!(analyses.get_cached::<MiddleAnalysis>(op).is_some());
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<RootAnalysis>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<MiddleAnalysis>(&ctx, op).is_some());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_some());
         let _ = analyses.get::<RootAnalysis>(&ctx, op).unwrap();
         assert_eq!(ROOT_COMPUTES.load(Ordering::SeqCst), 2);
         assert_eq!(MIDDLE_COMPUTES.load(Ordering::SeqCst), 1);
@@ -951,7 +972,7 @@ mod tests {
         let _ = analyses.get::<ChoiceDependent>(&ctx, outer).unwrap();
         assert!(
             analyses
-                .get_cached::<ChoicePrerequisiteFirst>(first)
+                .get_cached::<ChoicePrerequisiteFirst>(&ctx, first)
                 .is_some()
         );
         ctx.block_mut(block).ops.swap(0, 1);
@@ -960,13 +981,21 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<ChoicePrerequisiteSecond>(second)
+                .get_cached::<ChoicePrerequisiteSecond>(&ctx, second)
                 .is_some()
         );
         analyses.invalidate::<ChoicePrerequisiteFirst>(first);
-        assert!(analyses.get_cached::<ChoiceDependent>(outer).is_some());
+        assert!(
+            analyses
+                .get_cached::<ChoiceDependent>(&ctx, outer)
+                .is_some()
+        );
         analyses.invalidate::<ChoicePrerequisiteSecond>(second);
-        assert!(analyses.get_cached::<ChoiceDependent>(outer).is_none());
+        assert!(
+            analyses
+                .get_cached::<ChoiceDependent>(&ctx, outer)
+                .is_none()
+        );
     }
 
     #[test]
@@ -976,8 +1005,8 @@ mod tests {
         let mut analyses = AnalysisCache::new();
 
         assert!(analyses.get::<FailingDependent>(&ctx, op).is_err());
-        assert!(analyses.get_cached::<FailingDependent>(op).is_none());
-        assert!(analyses.get_cached::<LeafAnalysis>(op).is_some());
+        assert!(analyses.get_cached::<FailingDependent>(&ctx, op).is_none());
+        assert!(analyses.get_cached::<LeafAnalysis>(&ctx, op).is_some());
         assert!(analyses.dependencies.is_empty());
         assert!(analyses.dependents.is_empty());
 
@@ -1010,13 +1039,21 @@ mod tests {
 
         assert!(
             analyses
-                .get_cached::<CrossTargetPrerequisite>(inner)
+                .get_cached::<CrossTargetPrerequisite>(&ctx, inner)
                 .is_none()
         );
-        assert!(analyses.get_cached::<CrossTargetDependent>(outer).is_none());
-        assert!(analyses.get_cached::<OtherAnalysis>(inner).is_none());
-        assert!(analyses.get_cached::<DummyAnalysis>(outer).is_some());
-        assert!(analyses.get_cached::<DummyAnalysis>(unrelated).is_some());
+        assert!(
+            analyses
+                .get_cached::<CrossTargetDependent>(&ctx, outer)
+                .is_none()
+        );
+        assert!(analyses.get_cached::<OtherAnalysis>(&ctx, inner).is_none());
+        assert!(analyses.get_cached::<DummyAnalysis>(&ctx, outer).is_some());
+        assert!(
+            analyses
+                .get_cached::<DummyAnalysis>(&ctx, unrelated)
+                .is_some()
+        );
         assert_eq!(analyses.len(), 2);
         assert!(analyses.dependencies.is_empty());
         assert!(analyses.dependents.is_empty());

@@ -2298,8 +2298,8 @@ fn lower_handler<'db>(
         operation_result,
     );
     declarations.record(declaration, location, ctx.db);
-    let is_never = ir.types.get(operation_result).dialect == Symbol::new("core")
-        && ir.types.get(operation_result).name == Symbol::new("never");
+    let is_never = ir.types().get(operation_result).dialect == Symbol::new("core")
+        && ir.types().get(operation_result).name == Symbol::new("never");
     let mut block_args: Vec<_> = parameter_types
         .iter()
         .map(|ty| BlockArgData {
@@ -2308,7 +2308,7 @@ fn lower_handler<'db>(
         })
         .collect();
     if kind == OpDeclKind::Op && !is_never {
-        let token = ir.types.intern(
+        let token = ir.intern_type(
             trunk_ir::types::TypeDataBuilder::new(
                 Symbol::new("tribute_control"),
                 Symbol::new("resume_token"),
@@ -2387,7 +2387,7 @@ mod tests {
     #[salsa::tracked]
     fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
         let mut ir = IrContext::new();
-        let path = ir.paths.intern("logical.trb".to_owned());
+        let path = ir.intern_path("logical.trb".to_owned());
         let mut ctx = IrLoweringCtx::new(
             db,
             path,

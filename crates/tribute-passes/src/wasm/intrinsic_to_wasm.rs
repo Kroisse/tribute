@@ -38,12 +38,10 @@ fn extract_bytes_fields(
     location: trunk_ir::types::Location,
     bytes_value: ValueRef,
 ) -> (BytesFields, Vec<OpRef>) {
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let i8_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+    let i32_ty =
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i8_ty =
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
     let array_ty = core::array(ctx, i8_ty).as_type_ref();
     let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
 
@@ -131,9 +129,8 @@ impl RewritePattern for BytesLenPattern {
         };
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
         // struct.get to get len field (field 2)
         let get_len = wasm_dialect::struct_get(
@@ -178,12 +175,10 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let index = operands[1]; // i32 (Nat)
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i8_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i8_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
 
         // Get data array ref (field 0)
         let array_ty = core::array(ctx, i8_ty).as_type_ref();
@@ -257,9 +252,8 @@ impl RewritePattern for BytesRangeEqualPattern {
         }
         let location = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let nil_ty = core::nil(ctx).as_type_ref();
         let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
         let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
@@ -442,12 +436,10 @@ impl RewritePattern for BytesConcatPattern {
         let right = operands[1];
 
         let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i8_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let i32_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i8_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
         let bytes_ty = core::bytes(ctx).as_type_ref();
         let array_ty = core::array(ctx, i8_ty).as_type_ref();
         let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();

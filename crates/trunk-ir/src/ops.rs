@@ -109,7 +109,7 @@ pub trait DialectType: Sized + Copy {
     fn as_type_ref(&self) -> TypeRef;
 
     fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-        let data = ctx.types.get(ty);
+        let data = ctx.types().get(ty);
         data.dialect == crate::Symbol::new(Self::DIALECT_NAME)
             && data.name == crate::Symbol::new(Self::TYPE_NAME)
     }

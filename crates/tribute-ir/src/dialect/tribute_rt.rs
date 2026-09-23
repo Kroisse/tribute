@@ -73,8 +73,8 @@ mod tests {
     fn test_box_int_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         // Create a value to box
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
@@ -104,8 +104,8 @@ mod tests {
     fn test_unbox_int_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         // Create a boxed value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -134,7 +134,7 @@ mod tests {
     fn test_retain_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         // Create a ptr value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -163,7 +163,7 @@ mod tests {
     fn test_release_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         // Create a ptr value
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
@@ -191,12 +191,12 @@ mod tests {
     fn test_into_raw_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let managed_ty = ctx.types.intern(
+        let managed_ty = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
                 .attr("name", Attribute::Symbol(Symbol::new("Box")))
                 .build(),
         );
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let ptr_ty = make_ptr_type(ctx.types_mut());
         let value = trunk_ir::dialect::arith::r#const(&mut ctx, loc, managed_ty, Attribute::Int(0))
             .result(&ctx);
 
@@ -215,10 +215,9 @@ mod tests {
     fn test_box_float_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let f64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let f64_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::Int(0));
         let val = c.result(&ctx);
@@ -235,10 +234,9 @@ mod tests {
     fn test_box_bool_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let bool_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
-        let ptr_ty = make_ptr_type(&mut ctx.types);
+        let bool_ty =
+            ctx.intern_type(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
+        let ptr_ty = make_ptr_type(ctx.types_mut());
 
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::Int(1));
         let val = c.result(&ctx);
@@ -254,7 +252,7 @@ mod tests {
     fn test_from_op_wrong_dialect() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx.types);
+        let i32_ty = make_i32_type(ctx.types_mut());
 
         // Create an arith.const — should not match tribute_rt ops
         let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
