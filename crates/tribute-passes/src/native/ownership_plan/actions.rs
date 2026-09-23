@@ -1,11 +1,17 @@
 use super::facts::{
-    FlowKind, NativeOwnershipFunctionFacts, borrowed_owner, is_core_ptr_type,
-    is_internal_closure_layout, root_value,
+    NativeOwnershipFunctionFacts, borrowed_owner, is_core_ptr_type, is_internal_closure_layout,
+    root_value,
 };
 use super::*;
+
+pub(super) struct ActionInputs<'a> {
+    pub facts: &'a NativeOwnershipFunctionFacts,
+    pub liveness: &'a Liveness,
+}
+
 pub(super) fn plan_function_actions(
     ir: &IrContext,
-    facts: &NativeOwnershipFunctionFacts,
+    inputs: ActionInputs<'_>,
     entries: &[EntryOwnership],
     entry_contracts: &HashMap<Symbol, Vec<EntryOwnership>>,
     definitions: &HashMap<Symbol, OpRef>,
@@ -14,7 +20,7 @@ pub(super) fn plan_function_actions(
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
     ActionPlanner::new(
         ir,
-        facts,
+        inputs,
         entries,
         entry_contracts,
         definitions,
@@ -33,20 +39,21 @@ struct ActionPlanner<'a> {
     managed_layouts: &'a HashSet<TypeRef>,
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
-    liveness: Liveness,
+    liveness: &'a Liveness,
     actions: Vec<OwnershipAction>,
 }
 
 impl<'a> ActionPlanner<'a> {
     fn new(
         ir: &'a IrContext,
-        facts: &'a NativeOwnershipFunctionFacts,
+        inputs: ActionInputs<'a>,
         entries: &'a [EntryOwnership],
         entry_contracts: &'a HashMap<Symbol, Vec<EntryOwnership>>,
         definitions: &'a HashMap<Symbol, OpRef>,
         managed_layouts: &'a HashSet<TypeRef>,
         elide_proven_field_borrows: bool,
     ) -> Self {
+        let facts = inputs.facts;
         // The temporary-borrow policy selects which policy-neutral projection
         // facts participate; it never changes the facts themselves.
         let borrowed = if elide_proven_field_borrows {
@@ -54,7 +61,6 @@ impl<'a> ActionPlanner<'a> {
         } else {
             HashMap::new()
         };
-        let liveness = compute_liveness(facts, &borrowed);
         let mut owned = facts.managed_values().clone();
         for (&value, entry) in ir.block_args(facts.cfg().entry()).iter().zip(entries) {
             if *entry == EntryOwnership::Borrowed {
@@ -70,7 +76,7 @@ impl<'a> ActionPlanner<'a> {
             managed_layouts,
             borrowed,
             owned,
-            liveness,
+            liveness: inputs.liveness,
             actions: Vec::new(),
         }
     }
@@ -135,90 +141,6 @@ impl<'a> ActionPlanner<'a> {
         }
         self.plan_final_releases(block, &ops, &transferred);
         Ok(())
-    }
-}
-
-struct Liveness {
-    defs: HashMap<BlockRef, HashSet<ValueRef>>,
-    live_in: HashMap<BlockRef, HashSet<ValueRef>>,
-    live_out: HashMap<BlockRef, HashSet<ValueRef>>,
-}
-
-fn compute_liveness(
-    facts: &NativeOwnershipFunctionFacts,
-    borrowed: &HashMap<ValueRef, ValueRef>,
-) -> Liveness {
-    let cfg = facts.cfg();
-    let managed = facts.managed_values();
-    let aliases = facts.aliases();
-    let blocks = cfg.blocks();
-    let mut uses = HashMap::new();
-    let mut defs = HashMap::new();
-    for &block in blocks {
-        let mut block_uses = HashSet::new();
-        let mut block_defs = HashSet::new();
-        // Replaying the recorded policy-neutral events keeps the scan order
-        // identical to the original direct walk: arguments, then each
-        // operation's operands followed by its results.
-        for event in facts.block_flow(block).events() {
-            match event.kind {
-                FlowKind::Def => {
-                    if managed.contains(&event.root) {
-                        block_defs.insert(event.root);
-                    }
-                }
-                FlowKind::Use => {
-                    let root = event.root;
-                    if managed.contains(&root) && !block_defs.contains(&root) {
-                        block_uses.insert(root);
-                    }
-                    if let Some(owner) = borrowed_owner(borrowed, aliases, root)
-                        && managed.contains(&owner)
-                        && !block_defs.contains(&owner)
-                    {
-                        block_uses.insert(owner);
-                    }
-                }
-            }
-        }
-        uses.insert(block, block_uses);
-        defs.insert(block, block_defs);
-    }
-    let mut live_in = blocks
-        .iter()
-        .map(|&b| (b, HashSet::new()))
-        .collect::<HashMap<_, _>>();
-    let mut live_out = live_in.clone();
-    loop {
-        let mut changed = false;
-        for &block in blocks.iter().rev() {
-            let mut out = HashSet::new();
-            for successor in cfg.successors(block) {
-                out.extend(live_in[successor].iter().copied());
-            }
-            let mut input = uses[&block].clone();
-            input.extend(
-                out.iter()
-                    .filter(|value| !defs[&block].contains(value))
-                    .copied(),
-            );
-            if input != live_in[&block] {
-                live_in.insert(block, input);
-                changed = true;
-            }
-            if out != live_out[&block] {
-                live_out.insert(block, out);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    Liveness {
-        defs,
-        live_in,
-        live_out,
     }
 }
 
