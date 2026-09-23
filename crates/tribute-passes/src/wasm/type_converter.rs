@@ -442,8 +442,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // anyref -> concrete struct type: use ref_cast
-        // This handles cases like closure env or resume wrapper parameters
-        // that are passed as anyref for uniform calling convention.
+        // This handles erased struct slots such as closure environments that are
+        // passed as anyref for a uniform calling convention.
         // We EXCLUDE wasm.anyref as target since that's handled by primitive equivalence.
         let from_is_anyref = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
             || is_type(
