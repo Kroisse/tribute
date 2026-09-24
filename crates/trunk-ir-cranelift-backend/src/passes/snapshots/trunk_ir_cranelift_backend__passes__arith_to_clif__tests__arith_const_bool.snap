@@ -4,9 +4,9 @@ assertion_line: 547
 expression: result
 ---
 core.module @test {
-  func.func @test_fn() -> core.i8 {
-      %0 = clif.iconst {value = 1} : core.bool
-      %1 = clif.iconst {value = 0} : core.bool
+  func.func @test_fn() -> core.i1 {
+      %0 = clif.iconst {value = 1} : core.i1
+      %1 = clif.iconst {value = 0} : core.i1
       func.return %0
   }
 }

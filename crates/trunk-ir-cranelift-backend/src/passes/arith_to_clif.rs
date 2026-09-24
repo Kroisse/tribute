@@ -48,22 +48,26 @@ fn arith_to_clif_target() -> ConversionTarget {
 
 /// Classify a type into the clif lowering category.
 ///
-/// Non-float, non-nil types are lowered as integers; `core` integer types carry
-/// no signedness, so signed conversions are used unless an operation says
-/// otherwise.
-fn type_category(ctx: &IrContext, ty: TypeRef) -> &'static str {
+/// `core` integers and `core.ptr` (a pointer-sized integer in clif) lower as
+/// integers. `core` integer types carry no signedness, so signed conversions
+/// are used unless an operation says otherwise. Other types have no category,
+/// and patterns leave their operations unconverted.
+fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
+    if IntegerLike::matches(ctx, ty) || core::Ptr::matches(ctx, ty) {
+        return Some("int");
+    }
     match FloatLike::width(ctx, ty) {
-        Some(32) => "f32",
-        Some(_) => "f64",
-        None if core::Nil::matches(ctx, ty) => "nil",
-        None => "int",
+        Some(32) => Some("f32"),
+        Some(_) => Some("f64"),
+        None if core::Nil::matches(ctx, ty) => Some("nil"),
+        None => None,
     }
 }
 
 /// Bit width clif uses for an integer-category type.
 ///
-/// `core.i1` is materialized as `i8`; other non-integer handles keep the
-/// historical 32-bit default.
+/// `core.i1` is materialized as `i8`; `core.ptr` keeps the historical 32-bit
+/// default.
 fn clif_int_width(ctx: &IrContext, ty: TypeRef) -> u32 {
     match IntegerLike::width(ctx, ty) {
         Some(1) => 8,
@@ -95,7 +99,9 @@ impl RewritePattern for ArithConstPattern {
             .convert_type(ctx, raw_result_ty)
             .unwrap_or(raw_result_ty);
 
-        let category = type_category(ctx, result_ty);
+        let Some(category) = type_category(ctx, result_ty) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
 
@@ -391,12 +397,16 @@ impl RewritePattern for ArithConversionPattern {
         };
 
         let src_ty = ctx.value_ty(operand);
-        let src_cat = type_category(ctx, src_ty);
+        let Some(src_cat) = type_category(ctx, src_ty) else {
+            return false;
+        };
 
         let Some(dst_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-        let dst_cat = type_category(ctx, dst_ty);
+        let Some(dst_cat) = type_category(ctx, dst_ty) else {
+            return false;
+        };
 
         let loc = ctx.op(op).location;
 
@@ -459,14 +469,46 @@ mod tests {
     fn test_arith_const_bool() {
         let result = run_pass(
             r#"core.module @test {
-  func.func @test_fn() -> core.i8 {
-    %0 = arith.const {value = true} : core.bool
-    %1 = arith.const {value = false} : core.bool
+  func.func @test_fn() -> core.i1 {
+    %0 = arith.const {value = true} : core.i1
+    %1 = arith.const {value = false} : core.i1
     func.return %0
   }
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn pointers_lower_as_integers() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f() {
+    %null = arith.const {value = 0} : core.ptr
+    func.return
+  }
+}"#,
+        );
+        assert!(
+            result.contains("clif.iconst {value = 0} : core.ptr"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn uncategorized_types_fail_the_conversion_boundary() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() {
+    %opaque = arith.const {value = 0} : test.opaque
+    func.return
+  }
+}"#,
+        );
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(format!("{error:?}").contains("IllegalOp"), "{error:?}");
     }
 
     #[test]
