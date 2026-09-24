@@ -222,7 +222,7 @@ fn lower_single_lambda(
     )
     .as_type_ref();
 
-    let func_op = func::Func::builder()
+    let func_op = func::Func::operands()
         .sym_name(lifted_name)
         .r#type(func_ty)
         .regions(func_body_region)
@@ -244,7 +244,7 @@ fn lower_single_lambda(
 
     // Pack captures into env struct (or null).
     let closure_env = if captures.is_empty() {
-        let null_op = adt::RefNull::builder()
+        let null_op = adt::RefNull::operands()
             .r#type(anyref_ty)
             .results(anyref_ty)
             .build(ctx, location);
@@ -602,7 +602,7 @@ mod tests {
         });
         let outer_func_ty =
             func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
-        let outer_func = func::Func::builder()
+        let outer_func = func::Func::operands()
             .sym_name(Symbol::new("test_fn"))
             .r#type(outer_func_ty)
             .regions(outer_body)
@@ -717,7 +717,7 @@ mod tests {
                 parent_op: None,
             });
             let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
-            let outer = func::Func::builder()
+            let outer = func::Func::operands()
                 .sym_name(Symbol::new("test_fn"))
                 .r#type(outer_ty)
                 .regions(outer_body)
@@ -801,7 +801,7 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
-        let outer_func = func::Func::builder()
+        let outer_func = func::Func::operands()
             .sym_name(Symbol::new("test_fn"))
             .r#type(outer_func_ty)
             .regions(outer_body)

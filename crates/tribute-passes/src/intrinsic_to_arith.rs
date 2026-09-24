@@ -342,7 +342,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         // Detach old body region before replacing
         ctx.detach_region(old_body);
 
-        let new_func = func::Func::builder()
+        let new_func = func::Func::operands()
             .sym_name(sym_name)
             .r#type(func_ty)
             .regions(body)

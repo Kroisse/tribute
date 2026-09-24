@@ -316,7 +316,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
-        let import = wasm_dialect::ImportFunc::builder()
+        let import = wasm_dialect::ImportFunc::operands()
             .module(Symbol::new("env"))
             .name(Symbol::new("run"))
             .sym_name(Symbol::new("run"))

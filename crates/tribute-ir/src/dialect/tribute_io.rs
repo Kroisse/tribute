@@ -26,12 +26,12 @@ mod tests {
         let loc = location();
         let ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
         let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let bytes = trunk_ir::dialect::arith::Const::builder()
+        let bytes = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(ty)
             .build(&mut ctx, loc)
             .result(&ctx);
-        let newline = trunk_ir::dialect::arith::Const::builder()
+        let newline = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(bool_ty)
             .build(&mut ctx, loc)
@@ -44,7 +44,7 @@ mod tests {
         assert_eq!(parsed.bytes(&ctx), bytes);
         assert_eq!(parsed.newline(&ctx), newline);
 
-        let read = super::ReadLine::builder().results(ty).build(&mut ctx, loc);
+        let read = super::ReadLine::operands().results(ty).build(&mut ctx, loc);
         assert!(super::ReadLine::from_op(&ctx, read.op_ref()).is_ok());
         assert_eq!(ctx.value_ty(read.result(&ctx)), ty);
     }

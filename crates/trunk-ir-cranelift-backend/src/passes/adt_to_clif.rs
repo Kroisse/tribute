@@ -217,7 +217,7 @@ impl RewritePattern for VariantIsPattern {
         let tag_val = tag_load.result(ctx);
 
         // Compare with expected discriminant
-        let expected = clif::Iconst::builder()
+        let expected = clif::Iconst::operands()
             .value(variant_layout.tag_value as i64)
             .results(i32_ty)
             .build(ctx, loc);
@@ -338,7 +338,7 @@ impl RewritePattern for RefNullPattern {
         }
         let loc = ctx.op(op).location;
         let ptr_ty = core::ptr(ctx).as_type_ref();
-        let iconst_op = clif::Iconst::builder()
+        let iconst_op = clif::Iconst::operands()
             .value(0)
             .results(ptr_ty)
             .build(ctx, loc);
@@ -398,7 +398,7 @@ impl RewritePattern for RefIsNullPattern {
         let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
         let ref_val = ref_is_null.r#ref(ctx);
 
-        let null_op = clif::Iconst::builder()
+        let null_op = clif::Iconst::operands()
             .value(0)
             .results(ptr_ty)
             .build(ctx, loc);

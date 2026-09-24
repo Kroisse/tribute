@@ -37,13 +37,13 @@ mod tests {
         let element_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
         let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let element = trunk_ir::dialect::arith::Const::builder()
+        let element = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(element_ty)
             .build(&mut ctx, loc)
             .result(&ctx);
 
-        let empty = super::Empty::builder()
+        let empty = super::Empty::operands()
             .element_type(element_ty)
             .results(list_ty)
             .build(&mut ctx, loc);

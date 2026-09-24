@@ -496,7 +496,7 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
 // Fluent builder (typed syntax)
 // ============================================================================
 
-/// Generate `Op::operands(..)` / `Op::builder()` and the `OpBuilder` type.
+/// Generate `Op::operands(..)` and the `OpBuilder` type.
 ///
 /// Inputs are grouped by entity kind: operands start the builder, result
 /// types, regions, and successors are each one call, and attributes are set
@@ -681,22 +681,22 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         });
     }
 
-    let entry = if op.operands.is_empty() {
-        quote! {
-            /// Start building this operation.
-            pub fn builder() -> #bname {
-                #bname { operands: ::std::vec::Vec::new(), #(#field_inits)* }
-            }
-        }
+    // Operations without operands start from an empty `operands()` so every
+    // builder has the same entry point.
+    let operands_init = if op.operands.is_empty() {
+        quote!(::std::vec::Vec::new())
     } else {
-        quote! {
-            /// Start building this operation from its operands in
-            /// declaration order.
-            pub fn operands(#(#entry_params),*) -> #bname {
-                let mut __operands = ::std::vec::Vec::new();
-                #(#entry_stmts)*
-                #bname { operands: __operands, #(#field_inits)* }
-            }
+        quote!({
+            let mut __operands = ::std::vec::Vec::new();
+            #(#entry_stmts)*
+            __operands
+        })
+    };
+    let entry = quote! {
+        /// Start building this operation from its operands in declaration
+        /// order.
+        pub fn operands(#(#entry_params),*) -> #bname {
+            #bname { operands: #operands_init, #(#field_inits)* }
         }
     };
     let builder_doc = format!("Builder for `{full_name}`.");

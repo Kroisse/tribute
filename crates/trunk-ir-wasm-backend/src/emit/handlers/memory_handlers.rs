@@ -574,11 +574,11 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let address = wasm_dialect::I32Const::builder()
+        let address = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
             .build(&mut ctx, location);
-        let value = wasm_dialect::I32Const::builder()
+        let value = wasm_dialect::I32Const::operands()
             .value(42)
             .results(i32_ty)
             .build(&mut ctx, location);

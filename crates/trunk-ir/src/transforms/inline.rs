@@ -507,7 +507,7 @@ mod mechanics {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::from_dynamic(name))
             .r#type(fn_ty)
             .regions(body)
@@ -568,7 +568,7 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -613,7 +613,7 @@ mod mechanics {
             &[i32_ty],
             i32_ty,
             |ctx, entry, args| {
-                let one = crate::dialect::arith::Const::builder()
+                let one = crate::dialect::arith::Const::operands()
                     .value(Attribute::Int(1))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -633,7 +633,7 @@ mod mechanics {
         );
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(10))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -696,7 +696,7 @@ mod mechanics {
                 ctx.push_op(then_b, ret_then.op_ref());
 
                 // else: return 0
-                let zero = crate::dialect::arith::Const::builder()
+                let zero = crate::dialect::arith::Const::operands()
                     .value(Attribute::Int(0))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -718,7 +718,7 @@ mod mechanics {
         ctx.block_mut(else_b).parent_region = Some(body);
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(5))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -749,7 +749,7 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -901,7 +901,7 @@ mod pass {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::from_dynamic(name))
             .r#type(fn_ty)
             .regions(body)
@@ -958,7 +958,7 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -1017,7 +1017,7 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::Const::builder()
+            let c = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -1032,12 +1032,12 @@ mod pass {
             .expect("expected type attr");
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
-            let c = func::Constant::builder()
+            let c = func::Constant::operands()
                 .func_ref(Symbol::new("helper"))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let z = crate::dialect::arith::Const::builder()
+            let z = crate::dialect::arith::Const::operands()
                 .value(Attribute::Int(0))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -1076,7 +1076,7 @@ mod pass {
             // Chain 18 arith.const ops + 1 dummy + 1 return = 20 ops
             let mut last = None;
             for i in 0..19 {
-                let c = crate::dialect::arith::Const::builder()
+                let c = crate::dialect::arith::Const::operands()
                     .value(Attribute::Int(i as i128))
                     .results(i32_ty)
                     .build(ctx, loc);
@@ -1126,7 +1126,7 @@ mod pass {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = crate::dialect::arith::Const::builder()
+        let c = crate::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);

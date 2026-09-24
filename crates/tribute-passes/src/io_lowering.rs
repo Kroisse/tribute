@@ -61,7 +61,7 @@ impl RewritePattern for IoCallPattern {
             let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };
-            tribute_io::ReadLine::builder()
+            tribute_io::ReadLine::operands()
                 .results(result_ty)
                 .build(ctx, loc)
                 .op_ref()

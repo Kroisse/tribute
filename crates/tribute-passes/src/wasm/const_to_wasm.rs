@@ -248,7 +248,7 @@ impl RewritePattern for StringConstPattern {
 
         let location = ctx.op(op).location;
         let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
-        let bytes = wasm_dialect::BytesFromData::builder()
+        let bytes = wasm_dialect::BytesFromData::operands()
             .data_idx(data_idx)
             .offset(0)
             .len(len)
@@ -315,7 +315,7 @@ impl RewritePattern for BytesConstPattern {
         let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
 
         // Create wasm.bytes_from_data operation
-        let new_op = wasm_dialect::BytesFromData::builder()
+        let new_op = wasm_dialect::BytesFromData::operands()
             .data_idx(data_idx)
             .offset(0)
             .len(len)

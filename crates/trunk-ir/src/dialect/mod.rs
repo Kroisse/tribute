@@ -46,7 +46,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create i32.const with value attribute
-        let op = super::arith::Const::builder()
+        let op = super::arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -72,11 +72,11 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create two values to use as arguments: use arith.const to produce them
-        let c1 = super::arith::Const::builder()
+        let c1 = super::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let c2 = super::arith::Const::builder()
+        let c2 = super::arith::Const::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -114,7 +114,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = super::arith::Const::builder()
+        let c1 = super::arith::Const::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -156,7 +156,7 @@ mod tests {
         });
 
         // Constructor order: ctx, location, attrs (sym_name, r#type), regions (body)
-        let f = super::func::Func::builder()
+        let f = super::func::Func::operands()
             .sym_name(Symbol::new("main"))
             .r#type(func_ty)
             .regions(region)
@@ -179,7 +179,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::Const::builder()
+        let cond_op = super::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -230,7 +230,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::Const::builder()
+        let cond_op = super::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -269,7 +269,7 @@ mod tests {
         let loc = dummy_location();
 
         // wasm.table has required min and optional max
-        let table_op = super::wasm::Table::builder()
+        let table_op = super::wasm::Table::operands()
             .reftype(Symbol::new("funcref"))
             .min(10)
             .max(Some(100))
@@ -289,7 +289,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
 
-        let table_op = super::wasm::Table::builder()
+        let table_op = super::wasm::Table::operands()
             .reftype(Symbol::new("funcref"))
             .min(5)
             .max(None)
@@ -308,7 +308,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::builder()
+        let c = super::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -328,7 +328,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::builder()
+        let c = super::arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -371,11 +371,11 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create values for the call
-        let c1 = super::arith::Const::builder()
+        let c1 = super::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
-        let c2 = super::arith::Const::builder()
+        let c2 = super::arith::Const::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -402,7 +402,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::Const::builder()
+        let c = super::arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);

@@ -124,7 +124,7 @@ impl RewritePattern for StructNewPattern {
 
         // 1. Compute allocation size (payload + RC header)
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::Iconst::builder()
+        let size_op = clif::Iconst::operands()
             .value(alloc_size as i64)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -140,7 +140,7 @@ impl RewritePattern for StructNewPattern {
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1
-        let rc_one = clif::Iconst::builder()
+        let rc_one = clif::Iconst::operands()
             .value(1)
             .results(self.i32_ty)
             .build(ctx, loc);
@@ -160,7 +160,7 @@ impl RewritePattern for StructNewPattern {
                 ctx.get_type(struct_ty)
             )
         }) as i64;
-        let rtti_val = clif::Iconst::builder()
+        let rtti_val = clif::Iconst::operands()
             .value(rtti_idx)
             .results(self.i32_ty)
             .build(ctx, loc);
@@ -172,7 +172,7 @@ impl RewritePattern for StructNewPattern {
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::Iconst::builder()
+        let hdr_size = clif::Iconst::operands()
             .value(RC_HEADER_SIZE as i64)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -201,7 +201,7 @@ impl RewritePattern for StructNewPattern {
         }
 
         // 7. Identity pass-through
-        let zero_op = clif::Iconst::builder()
+        let zero_op = clif::Iconst::operands()
             .value(0)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -286,7 +286,7 @@ impl RewritePattern for VariantNewPattern {
 
         // 1. Compute allocation size (payload + RC header)
         let alloc_size = enum_layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::Iconst::builder()
+        let size_op = clif::Iconst::operands()
             .value(alloc_size as i64)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -302,7 +302,7 @@ impl RewritePattern for VariantNewPattern {
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1
-        let rc_one = clif::Iconst::builder()
+        let rc_one = clif::Iconst::operands()
             .value(1)
             .results(self.i32_ty)
             .build(ctx, loc);
@@ -321,7 +321,7 @@ impl RewritePattern for VariantNewPattern {
                 enum_ty
             )
         }) as i64;
-        let rtti_val = clif::Iconst::builder()
+        let rtti_val = clif::Iconst::operands()
             .value(rtti_idx)
             .results(self.i32_ty)
             .build(ctx, loc);
@@ -333,7 +333,7 @@ impl RewritePattern for VariantNewPattern {
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::Iconst::builder()
+        let hdr_size = clif::Iconst::operands()
             .value(RC_HEADER_SIZE as i64)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -346,7 +346,7 @@ impl RewritePattern for VariantNewPattern {
         ops.push(payload_ptr.op_ref());
 
         // 6. Store tag at payload + 0
-        let tag_const = clif::Iconst::builder()
+        let tag_const = clif::Iconst::operands()
             .value(variant_layout.tag_value as i64)
             .results(self.i32_ty)
             .build(ctx, loc);
@@ -374,7 +374,7 @@ impl RewritePattern for VariantNewPattern {
         }
 
         // 8. Identity pass-through
-        let zero_op = clif::Iconst::builder()
+        let zero_op = clif::Iconst::operands()
             .value(0)
             .results(self.i64_ty)
             .build(ctx, loc);
@@ -467,7 +467,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("create_struct"))
             .r#type(func_ty)
             .regions(body)

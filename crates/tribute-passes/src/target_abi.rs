@@ -439,7 +439,7 @@ pub fn compose_root_entry_bridge(
         blocks: smallvec![done_entry],
         parent_op: None,
     });
-    let done_function = func::Func::builder()
+    let done_function = func::Func::operands()
         .sym_name(root_done_k)
         .r#type(done_function_ty)
         .regions(done_region)
@@ -467,14 +467,14 @@ pub fn compose_root_entry_bridge(
         ops: smallvec![],
         parent_region: None,
     });
-    let dispatch_unreachable = func::Unreachable::builder().build(ctx, location);
+    let dispatch_unreachable = func::Unreachable::operands().build(ctx, location);
     ctx.push_op(dispatch_entry, dispatch_unreachable.op_ref());
     let dispatch_region = ctx.create_region(RegionData {
         location,
         blocks: smallvec![dispatch_entry],
         parent_op: None,
     });
-    let dispatch_function = func::Func::builder()
+    let dispatch_function = func::Func::operands()
         .sym_name(root_dispatch)
         .r#type(dispatch_function_ty)
         .regions(dispatch_region)
@@ -503,7 +503,7 @@ pub fn compose_root_entry_bridge(
         ops: smallvec![],
         parent_region: None,
     });
-    let initial = arith::Const::builder()
+    let initial = arith::Const::operands()
         .value(Attribute::Unit)
         .results(source_result)
         .build(ctx, location);
@@ -517,7 +517,7 @@ pub fn compose_root_entry_bridge(
         .results(anyref_ty)
         .build(ctx, location);
     ctx.push_op(wrapper_entry, erased_cell.op_ref());
-    let done_constant = func::Constant::builder()
+    let done_constant = func::Constant::operands()
         .func_ref(root_done_k)
         .results(done_callable_ty)
         .build(ctx, location);
@@ -535,7 +535,7 @@ pub fn compose_root_entry_bridge(
     ctx.push_op(wrapper_entry, typed_done.op_ref());
 
     let dispatch_callable_ty = dispatch_callable_function_type(ctx, frame.dispatch)?;
-    let dispatch_constant = func::Constant::builder()
+    let dispatch_constant = func::Constant::operands()
         .func_ref(root_dispatch)
         .results(dispatch_callable_ty)
         .build(ctx, location);
@@ -561,7 +561,7 @@ pub fn compose_root_entry_bridge(
         ctx.block_args(wrapper_entry)[0]
     } else {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let zero = arith::Const::builder()
+        let zero = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(ctx, location);
@@ -597,7 +597,7 @@ pub fn compose_root_entry_bridge(
     });
     let wrapper_ty =
         func::func_sig(ctx, wrapper_params.iter().copied(), [source_result]).as_type_ref();
-    let wrapper = func::Func::builder()
+    let wrapper = func::Func::operands()
         .sym_name(Symbol::new("main"))
         .r#type(wrapper_ty)
         .regions(wrapper_region)

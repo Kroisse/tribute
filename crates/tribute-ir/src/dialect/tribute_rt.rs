@@ -76,7 +76,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a value to box
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -112,7 +112,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a boxed value
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(ptr_ty)
             .build(&mut ctx, loc);
@@ -146,7 +146,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(ptr_ty)
             .build(&mut ctx, loc);
@@ -180,7 +180,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(ptr_ty)
             .build(&mut ctx, loc);
@@ -216,7 +216,7 @@ mod tests {
                 .build(),
         );
         let ptr_ty = make_ptr_type(&mut ctx);
-        let value = trunk_ir::dialect::arith::Const::builder()
+        let value = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(managed_ty)
             .build(&mut ctx, loc)
@@ -242,7 +242,7 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(f64_ty)
             .build(&mut ctx, loc);
@@ -265,7 +265,7 @@ mod tests {
         let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "bool").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(bool_ty)
             .build(&mut ctx, loc);
@@ -287,7 +287,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match tribute_rt ops
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);

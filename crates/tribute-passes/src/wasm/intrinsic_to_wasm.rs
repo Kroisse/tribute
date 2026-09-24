@@ -234,7 +234,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         let right_start =
             wasm_dialect::I32Add::operands(right.offset, operands[3]).build(ctx, location);
         let len = operands[4];
-        let zero = wasm_dialect::I32Const::builder()
+        let zero = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
             .build(ctx, location);
@@ -290,7 +290,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             .build(ctx, location);
         ctx.push_op(loop_block, break_on_mismatch.op_ref());
 
-        let one = wasm_dialect::I32Const::builder()
+        let one = wasm_dialect::I32Const::operands()
             .value(1)
             .results(i32_ty)
             .build(ctx, location);
@@ -299,7 +299,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         ctx.push_op(loop_block, next.op_ref());
         let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, location);
         ctx.push_op(loop_block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::Br::builder().target(0).build(ctx, location);
+        let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, location);
         ctx.push_op(loop_block, continue_loop.op_ref());
 
         let loop_region = ctx.create_region(RegionData {
@@ -322,7 +322,7 @@ impl RewritePattern for BytesRangeEqualPattern {
             blocks: smallvec![outer_block],
             parent_op: None,
         });
-        let compare = wasm_dialect::Block::builder()
+        let compare = wasm_dialect::Block::operands()
             .results([result_ty])
             .regions(outer_region)
             .build(ctx, location);
@@ -368,14 +368,14 @@ fn value_break_region(
         ops: smallvec![],
         parent_region: None,
     });
-    let value = wasm_dialect::I32Const::builder()
+    let value = wasm_dialect::I32Const::operands()
         .value(value)
         .results(i32_ty)
         .build(ctx, location);
     ctx.push_op(block, value.op_ref());
     let yield_value = wasm_dialect::Yield::operands(value.result(ctx)).build(ctx, location);
     ctx.push_op(block, yield_value.op_ref());
-    let break_outer = wasm_dialect::Br::builder().target(2).build(ctx, location);
+    let break_outer = wasm_dialect::Br::operands().target(2).build(ctx, location);
     ctx.push_op(block, break_outer.op_ref());
     ctx.create_region(RegionData {
         location,
@@ -427,7 +427,7 @@ impl RewritePattern for BytesConcatPattern {
             .build(ctx, location);
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = wasm_dialect::I32Const::builder()
+        let zero = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
             .build(ctx, location);

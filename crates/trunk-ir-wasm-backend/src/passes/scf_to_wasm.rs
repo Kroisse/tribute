@@ -399,7 +399,7 @@ impl RewritePattern for ScfSwitchPattern {
             .unwrap_or_else(|| region_with_ops(ctx, loc, vec![]));
         let mut outer_ops = None;
         for (index, (value, body)) in arms.cases.into_iter().rev().enumerate() {
-            let case = wasm_dialect::I32Const::builder()
+            let case = wasm_dialect::I32Const::operands()
                 .value(value)
                 .results(ctx.value_ty(discriminant))
                 .build(ctx, loc);
@@ -422,7 +422,7 @@ impl RewritePattern for ScfSwitchPattern {
             rewriter.insert_op(inserted);
         }
         if self.0.terminal_controls.contains(&op) {
-            let unreachable = wasm_dialect::Unreachable::builder().build(ctx, loc);
+            let unreachable = wasm_dialect::Unreachable::operands().build(ctx, loc);
             rewriter.insert_op(unreachable.op_ref());
         }
         rewriter.erase_op(vec![]);
@@ -558,7 +558,7 @@ impl RewritePattern for ScfLoopPattern {
             parent_op: None,
         });
 
-        let wasm_block = wasm_dialect::Block::builder()
+        let wasm_block = wasm_dialect::Block::operands()
             .results(result_types)
             .regions(block_body)
             .build(ctx, loc);
@@ -647,7 +647,7 @@ impl RewritePattern for ScfContinuePattern {
 
         if values.is_empty() {
             // No loop-carried values -- simple branch
-            let br_op = wasm_dialect::Br::builder().target(1).build(ctx, loc);
+            let br_op = wasm_dialect::Br::operands().target(1).build(ctx, loc);
             rewriter.replace_op(br_op.op_ref());
             return true;
         }
@@ -657,7 +657,7 @@ impl RewritePattern for ScfContinuePattern {
         // local.set for the loop arg followed by br.
         let value = values[0];
         let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
-        let br_op = wasm_dialect::Br::builder().target(1).build(ctx, loc);
+        let br_op = wasm_dialect::Br::operands().target(1).build(ctx, loc);
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());
@@ -695,7 +695,7 @@ impl RewritePattern for ScfBreakPattern {
         let yield_op = wasm_dialect::Yield::operands(value).build(ctx, loc);
 
         // Branch to outer block (depth 2: if=0, loop=1, block=2)
-        let br_op = wasm_dialect::Br::builder().target(2).build(ctx, loc);
+        let br_op = wasm_dialect::Br::operands().target(2).build(ctx, loc);
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());
@@ -718,7 +718,7 @@ fn replace_control(
 ) {
     let replacement = if terminal {
         rewriter.insert_op(lowered);
-        wasm_dialect::Unreachable::builder()
+        wasm_dialect::Unreachable::operands()
             .build(ctx, ctx.op(op).location)
             .op_ref()
     } else {

@@ -504,7 +504,7 @@ impl<'a> WasmLowerer<'a> {
         if self.io_analysis.needs_fd_write {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
-            let op = wasm_dialect::ImportFunc::builder()
+            let op = wasm_dialect::ImportFunc::operands()
                 .module(Symbol::new("wasi_snapshot_preview1"))
                 .name(Symbol::new("fd_write"))
                 .sym_name(Symbol::new("fd_write"))
@@ -523,7 +523,7 @@ impl<'a> WasmLowerer<'a> {
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
             let total_data_size = const_size + io_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
-            let op = wasm_dialect::Memory::builder()
+            let op = wasm_dialect::Memory::operands()
                 .min(required_pages)
                 .max(0)
                 .shared(false)
@@ -547,7 +547,7 @@ impl<'a> WasmLowerer<'a> {
     fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
         // String and Bytes constants share passive data segments.
         for (content, _data_idx, _len) in self.const_analysis.allocations.iter() {
-            let op = wasm_dialect::Data::builder()
+            let op = wasm_dialect::Data::operands()
                 .offset(0)
                 .bytes(Attribute::Bytes(content.as_slice().into()))
                 .passive(true)
@@ -567,7 +567,7 @@ impl<'a> WasmLowerer<'a> {
             && self.memory_plan.has_memory
             && !self.memory_plan.has_exported_memory
         {
-            let op = wasm_dialect::ExportMemory::builder()
+            let op = wasm_dialect::ExportMemory::operands()
                 .name("memory".into())
                 .index(0)
                 .build(ctx, location);
@@ -576,7 +576,7 @@ impl<'a> WasmLowerer<'a> {
         }
 
         if self.main_exports.saw_main && !self.main_exports.main_exported {
-            let op = wasm_dialect::ExportFunc::builder()
+            let op = wasm_dialect::ExportFunc::operands()
                 .name("main".into())
                 .func(Symbol::new("main"))
                 .build(ctx, location);
@@ -588,7 +588,7 @@ impl<'a> WasmLowerer<'a> {
             let start_func = self.build_start_function(ctx, location);
             ctx.push_op(module_block, start_func);
 
-            let export_op = wasm_dialect::ExportFunc::builder()
+            let export_op = wasm_dialect::ExportFunc::operands()
                 .name("_start".into())
                 .func(Symbol::new("_start"))
                 .build(ctx, location);
@@ -618,7 +618,7 @@ impl<'a> WasmLowerer<'a> {
         });
 
         let func_ty = intern_func_type(ctx, vec![], nil_ty);
-        let func_op = wasm_dialect::Func::builder()
+        let func_op = wasm_dialect::Func::operands()
             .sym_name(Symbol::new("_start"))
             .r#type(func_ty)
             .regions(body_region)
@@ -667,7 +667,7 @@ impl<'a> WasmLowerer<'a> {
                     1,
                     "Wasm entrypoint: EvidenceDirect `main` must have one evidence parameter"
                 );
-                let zero = wasm_dialect::I32Const::builder()
+                let zero = wasm_dialect::I32Const::operands()
                     .value(0)
                     .results(i32_ty)
                     .build(ctx, location);
@@ -930,7 +930,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let address = wasm_dialect::I32Const::builder()
+        let address = wasm_dialect::I32Const::operands()
             .value(0)
             .results(i32_ty)
             .build(&mut ctx, location);
@@ -990,7 +990,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = intern_func_type(&mut ctx, vec![], nil_ty);
-        let memory_func = wasm_dialect::Func::builder()
+        let memory_func = wasm_dialect::Func::operands()
             .sym_name(Symbol::new("memory_ops"))
             .r#type(func_ty)
             .regions(body)
@@ -1017,17 +1017,17 @@ mod tests {
         let i32_ty = intern_type(&mut ctx, "core", "i32");
         let nil_ty = intern_type(&mut ctx, "core", "nil");
 
-        let memory = wasm_dialect::Memory::builder()
+        let memory = wasm_dialect::Memory::operands()
             .min(1)
             .max(0)
             .shared(false)
             .memory64(false)
             .build(&mut ctx, location);
-        let export_memory = wasm_dialect::ExportMemory::builder()
+        let export_memory = wasm_dialect::ExportMemory::operands()
             .name("memory".into())
             .index(0)
             .build(&mut ctx, location);
-        let export_main = wasm_dialect::ExportFunc::builder()
+        let export_main = wasm_dialect::ExportFunc::operands()
             .name("main".into())
             .func(Symbol::new("main"))
             .build(&mut ctx, location);
@@ -1053,7 +1053,7 @@ mod tests {
             parent_op: None,
         });
         let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
-        let main = wasm_dialect::Func::builder()
+        let main = wasm_dialect::Func::operands()
             .sym_name(Symbol::new("main"))
             .r#type(main_ty)
             .regions(main_body)

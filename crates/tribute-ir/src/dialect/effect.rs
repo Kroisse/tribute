@@ -113,7 +113,7 @@ mod tests {
         ty: trunk_ir::TypeRef,
         value: i128,
     ) -> trunk_ir::ValueRef {
-        trunk_ir::dialect::arith::Const::builder()
+        trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(value))
             .results(ty)
             .build(ctx, loc)

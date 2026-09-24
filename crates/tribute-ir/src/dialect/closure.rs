@@ -304,7 +304,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create an env value via arith.const
-        let env_op = trunk_ir::dialect::arith::Const::builder()
+        let env_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -340,7 +340,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::Const::builder()
+        let env_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -381,7 +381,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::Const::builder()
+        let env_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -425,7 +425,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a capture value
-        let cap_op = trunk_ir::dialect::arith::Const::builder()
+        let cap_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(7))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -495,7 +495,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match closure ops
-        let c = trunk_ir::dialect::arith::Const::builder()
+        let c = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -511,7 +511,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let env_op = trunk_ir::dialect::arith::Const::builder()
+        let env_op = trunk_ir::dialect::arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);

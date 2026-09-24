@@ -1121,7 +1121,7 @@ impl<'a> Converter<'a> {
         let ret = func::Return::operands([dispatch.result(self.ctx)]).build(self.ctx, location);
         self.ctx.push_op(factory_block, ret.op_ref());
         let factory_region = self.single_block_region(location, factory_block);
-        let factory = func::Func::builder()
+        let factory = func::Func::operands()
             .sym_name(symbol)
             .r#type(factory_type)
             .regions(factory_region)
@@ -1826,13 +1826,13 @@ impl<'a> Converter<'a> {
                 let Some(case_value) = case_value else {
                     return Err(self.malformed_source(case, "scf.case requires a value attribute"));
                 };
-                scf::Case::builder()
+                scf::Case::operands()
                     .value(case_value)
                     .regions(converted_region)
                     .build(self.ctx, case_location)
                     .op_ref()
             } else {
-                scf::Default::builder()
+                scf::Default::operands()
                     .regions(converted_region)
                     .build(self.ctx, case_location)
                     .op_ref()
@@ -2199,7 +2199,7 @@ impl<'a> Converter<'a> {
         }
         let region = self.single_block_region(location, block);
         let adapter_symbol = self.fresh_helper("func_ref_adapter");
-        let adapter = func::Func::builder()
+        let adapter = func::Func::operands()
             .sym_name(adapter_symbol)
             .r#type(adapter_ty)
             .regions(region)
@@ -2409,7 +2409,7 @@ impl<'a> Converter<'a> {
         let ret = func::Return::operands([dispatcher]).build(self.ctx, location);
         self.ctx.push_op(factory_block, ret.op_ref());
         let region = self.single_block_region(location, factory_block);
-        let factory = func::Func::builder()
+        let factory = func::Func::operands()
             .sym_name(symbol)
             .r#type(factory_type)
             .regions(region)
@@ -2591,7 +2591,7 @@ impl<'a> Converter<'a> {
                 self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
-            let case = scf::Case::builder()
+            let case = scf::Case::operands()
                 .value(Attribute::Int(op_index as i128))
                 .regions(case_region)
                 .build(self.ctx, location);
@@ -2605,7 +2605,7 @@ impl<'a> Converter<'a> {
             [args[0], args[1], args[2], args[3], args[4], args[5]],
         )?;
         let foreign_region = self.single_block_region(location, default_block);
-        let default = scf::Default::builder()
+        let default = scf::Default::operands()
             .regions(foreign_region)
             .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
@@ -2647,7 +2647,7 @@ impl<'a> Converter<'a> {
                 )
                 .build(),
         );
-        let not_consumed = arith::Const::builder()
+        let not_consumed = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i1_type)
             .build(self.ctx, location);
@@ -2667,7 +2667,7 @@ impl<'a> Converter<'a> {
         let input = if type_is(self.ctx, input_type, "core", "nil") {
             // Nil has no physical payload: its exact resumption receives the
             // canonical unit instead of an erased runtime value.
-            let unit = arith::Const::builder()
+            let unit = arith::Const::operands()
                 .value(Attribute::Unit)
                 .results(input_type)
                 .build(self.ctx, location);
@@ -2697,12 +2697,12 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, consumed.op_ref());
 
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::Unreachable::builder().build(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
 
         let enter_block = self.make_block(location, &[]);
-        let consumed_true = arith::Const::builder()
+        let consumed_true = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_type)
             .build(self.ctx, location);
@@ -2754,7 +2754,7 @@ impl<'a> Converter<'a> {
         let frame_type = self.frame_types(answer_type).reference;
         let anyref = self.anyref_type();
         let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
-        let unreachable = func::Unreachable::builder().build(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
         let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
@@ -3123,17 +3123,17 @@ impl<'a> Converter<'a> {
                 self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
-            let case = scf::Case::builder()
+            let case = scf::Case::operands()
                 .value(Attribute::Int(op_index as i128))
                 .regions(case_region)
                 .build(self.ctx, location);
             self.ctx.push_op(switch_block, case.op_ref());
         }
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::Unreachable::builder().build(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
-        let default = scf::Default::builder()
+        let default = scf::Default::operands()
             .regions(reject_region)
             .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
@@ -3238,7 +3238,7 @@ impl<'a> Converter<'a> {
 
         let evidence_type = self.evidence_type();
         let i32_type = self.i32_type();
-        let prompt = effect::FreshPromptTag::builder()
+        let prompt = effect::FreshPromptTag::operands()
             .results(i32_type)
             .build(self.ctx, location);
         self.ctx.push_op(block, prompt.op_ref());
@@ -3707,7 +3707,7 @@ impl<'a> Converter<'a> {
             &flow,
         )?;
         let region = self.single_block_region(location, block);
-        let function = func::Func::builder()
+        let function = func::Func::operands()
             .sym_name(symbol)
             .r#type(physical_type)
             .regions(region)
@@ -3918,7 +3918,7 @@ pub fn tribute_control_to_cps(
         parent_op: None,
     });
     let temp_symbol = Symbol::new("__tribute_control_to_cps_candidate");
-    let temp_module = core::Module::builder()
+    let temp_module = core::Module::operands()
         .sym_name(temp_symbol)
         .regions(new_region)
         .build(ctx, module_location);
@@ -5580,7 +5580,7 @@ mod tests {
         let location = ctx.op(module.op()).location;
         let never = core::never(&mut ctx).as_type_ref();
         let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let raw = func::Constant::builder()
+        let raw = func::Constant::operands()
             .func_ref(Symbol::new("raw"))
             .results(raw_type)
             .build(&mut ctx, location);

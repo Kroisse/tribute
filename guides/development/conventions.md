@@ -90,7 +90,7 @@ inputs by kind: operands start it, attributes are set by name, and result
 types, regions, and successors are each one call:
 
 ```rust
-let value = arith::Const::builder()
+let value = arith::Const::operands()
     .value(Attribute::Int(42))
     .results(i32_ty)
     .build(ctx, location);

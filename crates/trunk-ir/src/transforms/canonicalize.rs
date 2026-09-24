@@ -164,7 +164,7 @@ impl RewritePattern for FoldDispatchPattern {
                     [t] => *t,
                     _ => return false,
                 };
-                let new_const = arith::Const::builder()
+                let new_const = arith::Const::operands()
                     .value(attr)
                     .results(result_ty)
                     .build(ctx, loc);

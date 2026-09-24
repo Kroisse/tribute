@@ -151,7 +151,7 @@ pub fn ability_id_const(
     ability_ref: TypeRef,
 ) -> arith::Const {
     let ability_id = compute_ability_id(ctx, ability_ref);
-    arith::Const::builder()
+    arith::Const::operands()
         .value(Attribute::Int(ability_id as i128))
         .results(i32_ty)
         .build(ctx, loc)

@@ -57,7 +57,7 @@ fn box_value(
         .checked_add(RC_HEADER_SIZE)
         .expect("allocation size overflow: payload_size + RC_HEADER_SIZE exceeds u64::MAX");
     let alloc_size_i64 = i64::try_from(alloc_size).expect("allocation size does not fit in i64");
-    let size_op = clif::Iconst::builder()
+    let size_op = clif::Iconst::operands()
         .value(alloc_size_i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -73,7 +73,7 @@ fn box_value(
     ops.push(call_op.op_ref());
 
     // 3. Store refcount = 1
-    let rc_one = clif::Iconst::builder()
+    let rc_one = clif::Iconst::operands()
         .value(1)
         .results(i32_ty)
         .build(ctx, loc);
@@ -85,7 +85,7 @@ fn box_value(
     ops.push(store_rc.op_ref());
 
     // 4. Store rtti_idx
-    let rtti_val = clif::Iconst::builder()
+    let rtti_val = clif::Iconst::operands()
         .value(rtti_idx as i64)
         .results(i32_ty)
         .build(ctx, loc);
@@ -97,7 +97,7 @@ fn box_value(
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::Iconst::builder()
+    let hdr_size = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -117,7 +117,7 @@ fn box_value(
 
     // 7. Identity pass-through so the last op produces the result with the desired type.
     //    Cranelift will optimize away iadd(ptr, 0).
-    let zero_op = clif::Iconst::builder()
+    let zero_op = clif::Iconst::operands()
         .value(0)
         .results(ptr_ty)
         .build(ctx, loc);

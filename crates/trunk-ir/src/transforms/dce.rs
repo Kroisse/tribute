@@ -235,7 +235,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(sym_name)
             .r#type(fn_ty)
             .regions(body_region)
@@ -250,14 +250,14 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // dead: result is never used
-            let _dead = arith::Const::builder()
+            let _dead = arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, _dead.op_ref());
 
             // alive: used by return
-            let alive = arith::Const::builder()
+            let alive = arith::Const::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -305,7 +305,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Chain: a -> b -> c (all unused)
-            let a = arith::Const::builder()
+            let a = arith::Const::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -335,12 +335,12 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::Const::builder()
+            let a = arith::Const::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, a.op_ref());
-            let b = arith::Const::builder()
+            let b = arith::Const::operands()
                 .value(Attribute::Int(2))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -411,7 +411,7 @@ mod tests {
         // Build a func that contains another region (simulated with a generic op)
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::Const::builder()
+            let inner_dead = arith::Const::operands()
                 .value(Attribute::Int(99))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -434,7 +434,7 @@ mod tests {
             // Outer op that owns the inner region (use func.func as container)
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-            let nested_func = func::Func::builder()
+            let nested_func = func::Func::operands()
                 .sym_name(Symbol::new("nested"))
                 .r#type(fn_ty)
                 .regions(inner_region)
@@ -460,7 +460,7 @@ mod tests {
         // This scenario doesn't actually need multiple iterations since
         // reverse sweep handles cascades. But test the config path.
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::Const::builder()
+            let a = arith::Const::operands()
                 .value(Attribute::Int(1))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -486,7 +486,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::Const::builder()
+            let inner_dead = arith::Const::operands()
                 .value(Attribute::Int(99))
                 .results(i32_ty)
                 .build(ctx, loc);
@@ -508,7 +508,7 @@ mod tests {
 
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-            let nested_func = func::Func::builder()
+            let nested_func = func::Func::operands()
                 .sym_name(Symbol::new("nested"))
                 .r#type(fn_ty)
                 .regions(inner_region)

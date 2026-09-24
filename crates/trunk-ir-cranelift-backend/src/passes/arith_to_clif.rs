@@ -106,7 +106,7 @@ impl RewritePattern for ArithConstPattern {
         let value = const_op.value(ctx);
 
         if category == "nil" {
-            let new_op = clif::Iconst::builder()
+            let new_op = clif::Iconst::operands()
                 .value(0)
                 .results(result_ty)
                 .build(ctx, loc);
@@ -119,7 +119,7 @@ impl RewritePattern for ArithConstPattern {
                 let Attribute::FloatBits(v) = value else {
                     return false;
                 };
-                clif::F32const::builder()
+                clif::F32const::operands()
                     .value(f32::from_bits(v as u32))
                     .results(result_ty)
                     .build(ctx, loc)
@@ -129,7 +129,7 @@ impl RewritePattern for ArithConstPattern {
                 let Attribute::FloatBits(v) = value else {
                     return false;
                 };
-                clif::F64const::builder()
+                clif::F64const::operands()
                     .value(f64::from_bits(v))
                     .results(result_ty)
                     .build(ctx, loc)
@@ -140,13 +140,13 @@ impl RewritePattern for ArithConstPattern {
                     let Some(v) = i64::try_from(v).ok() else {
                         return false;
                     };
-                    clif::Iconst::builder()
+                    clif::Iconst::operands()
                         .value(v)
                         .results(result_ty)
                         .build(ctx, loc)
                         .op_ref()
                 }
-                Attribute::Bool(b) => clif::Iconst::builder()
+                Attribute::Bool(b) => clif::Iconst::operands()
                     .value(if b { 1 } else { 0 })
                     .results(result_ty)
                     .build(ctx, loc)

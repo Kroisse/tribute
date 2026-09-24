@@ -309,7 +309,7 @@ fn fluent_builders_group_inputs_by_kind() {
     assert_eq!(labeled.label(&ctx), Some(Symbol::new("l")));
     assert_eq!(labeled.result_ty(&ctx), i32_ty);
 
-    let marker = test_typed::Marker::builder()
+    let marker = test_typed::Marker::operands()
         .results(i1_ty)
         .build(&mut ctx, loc);
 

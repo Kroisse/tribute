@@ -62,7 +62,7 @@ impl RewritePattern for ArithConstPattern {
         };
         if type_name == "nil" {
             let loc = ctx.op(op).location;
-            let nop = wasm_dialect::Nop::builder()
+            let nop = wasm_dialect::Nop::operands()
                 .results(result_ty)
                 .build(ctx, loc);
             rewriter.replace_op(nop.op_ref());
@@ -74,12 +74,12 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => match value {
-                Attribute::Int(v) => wasm_dialect::I32Const::builder()
+                Attribute::Int(v) => wasm_dialect::I32Const::operands()
                     .value(v as i32)
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
-                Attribute::Bool(b) => wasm_dialect::I32Const::builder()
+                Attribute::Bool(b) => wasm_dialect::I32Const::operands()
                     .value(if b { 1 } else { 0 })
                     .results(result_ty)
                     .build(ctx, loc)
@@ -94,7 +94,7 @@ impl RewritePattern for ArithConstPattern {
                     warn!("arith.const: expected Int for i64, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::I64Const::builder()
+                wasm_dialect::I64Const::operands()
                     .value(v as i64)
                     .results(result_ty)
                     .build(ctx, loc)
@@ -105,7 +105,7 @@ impl RewritePattern for ArithConstPattern {
                     warn!("arith.const: expected FloatBits for f32, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::F32Const::builder()
+                wasm_dialect::F32Const::operands()
                     .value(f32::from_bits(v as u32))
                     .results(result_ty)
                     .build(ctx, loc)
@@ -116,7 +116,7 @@ impl RewritePattern for ArithConstPattern {
                     warn!("arith.const: expected FloatBits for f64, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::F64Const::builder()
+                wasm_dialect::F64Const::operands()
                     .value(f64::from_bits(v))
                     .results(result_ty)
                     .build(ctx, loc)
@@ -511,7 +511,7 @@ impl RewritePattern for ArithNegPattern {
             match suffix {
                 "i32" => {
                     let i32_ty = intern_i32_type(ctx);
-                    let zero = wasm_dialect::I32Const::builder()
+                    let zero = wasm_dialect::I32Const::operands()
                         .value(0)
                         .results(i32_ty)
                         .build(ctx, loc);
@@ -524,7 +524,7 @@ impl RewritePattern for ArithNegPattern {
                 }
                 "i64" => {
                     let i64_ty = intern_i64_type(ctx);
-                    let zero = wasm_dialect::I64Const::builder()
+                    let zero = wasm_dialect::I64Const::operands()
                         .value(0)
                         .results(i64_ty)
                         .build(ctx, loc);

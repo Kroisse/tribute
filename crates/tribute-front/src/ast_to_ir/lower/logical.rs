@@ -324,7 +324,7 @@ pub(super) fn lower_module<'db>(
         blocks: trunk_ir::smallvec::smallvec![module_block],
         parent_op: None,
     });
-    let module = core::Module::builder()
+    let module = core::Module::operands()
         .sym_name(module_name)
         .regions(region)
         .build(ir, location);
@@ -1131,7 +1131,7 @@ fn lower_expr<'db>(
     match *expr.kind {
         ExprKind::NatLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::builder()
+            let value = arith::Const::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -1140,7 +1140,7 @@ fn lower_expr<'db>(
         }
         ExprKind::IntLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::builder()
+            let value = arith::Const::operands()
                 .value(Attribute::Int(value as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -1149,7 +1149,7 @@ fn lower_expr<'db>(
         }
         ExprKind::BoolLit(value) => {
             let ty = builder.ctx.bool_type(builder.ir);
-            let value = arith::Const::builder()
+            let value = arith::Const::operands()
                 .value(Attribute::Bool(value))
                 .results(ty)
                 .build(builder.ir, location);
@@ -1158,7 +1158,7 @@ fn lower_expr<'db>(
         }
         ExprKind::FloatLit(value) => {
             let ty = builder.ctx.f64_type(builder.ir);
-            let value = arith::Const::builder()
+            let value = arith::Const::operands()
                 .value(Attribute::FloatBits(value.value().to_bits()))
                 .results(ty)
                 .build(builder.ir, location);
@@ -1168,7 +1168,7 @@ fn lower_expr<'db>(
         ExprKind::Nil => Some(builder.emit_nil(location)),
         ExprKind::RuneLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::Const::builder()
+            let value = arith::Const::operands()
                 .value(Attribute::Int(value as i32 as i128))
                 .results(ty)
                 .build(builder.ir, location);
@@ -1177,7 +1177,7 @@ fn lower_expr<'db>(
         }
         ExprKind::BytesLit(value) => {
             let ty = builder.ctx.bytes_type(builder.ir);
-            let value = adt::BytesConst::builder()
+            let value = adt::BytesConst::operands()
                 .value(value.into())
                 .results(ty)
                 .build(builder.ir, location);
@@ -1186,7 +1186,7 @@ fn lower_expr<'db>(
         }
         ExprKind::StringLit(value) => {
             let ty = builder.ctx.anyref_type(builder.ir);
-            let value = adt::StringConst::builder()
+            let value = adt::StringConst::operands()
                 .value(value)
                 .results(ty)
                 .build(builder.ir, location);
@@ -1449,7 +1449,7 @@ fn lower_list<'db>(
     }
     let element_ty = builder.ctx.convert_logical_type(builder.ir, args[0]);
     let list_ty = expr_type_for_id(builder, id);
-    let empty = list::Empty::builder()
+    let empty = list::Empty::operands()
         .element_type(element_ty)
         .results(list_ty)
         .build(builder.ir, location);
@@ -1767,7 +1767,7 @@ fn build_case_else_region<'db>(
 
 fn emit_bool(builder: &mut IrBuilder<'_, '_>, location: Location, value: bool) -> ValueRef {
     let ty = builder.ctx.bool_type(builder.ir);
-    let op = arith::Const::builder()
+    let op = arith::Const::operands()
         .value(Attribute::Bool(value))
         .results(ty)
         .build(builder.ir, location);
@@ -2427,7 +2427,7 @@ mod tests {
             parent_region: None,
         });
         let anyref = ctx.anyref_type(&mut ir);
-        let value = adt::RefNull::builder()
+        let value = adt::RefNull::operands()
             .r#type(anyref)
             .results(anyref)
             .build(&mut ir, location);

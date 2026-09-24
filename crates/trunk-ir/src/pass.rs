@@ -515,7 +515,7 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        core::Module::builder()
+        core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(region)
             .build(ctx, loc)

@@ -107,7 +107,7 @@ impl RewritePattern for LowerClosureNewArena {
             .expect("closure.new result type must contain a valid func type (from func.constant)");
 
         // Generate: %funcref = func.constant @func_ref : func_type
-        let constant_op = func::Constant::builder()
+        let constant_op = func::Constant::operands()
             .func_ref(func_ref)
             .results(func_ty)
             .build(ctx, loc);

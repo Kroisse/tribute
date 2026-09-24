@@ -134,7 +134,7 @@ fn lower_observation(
     ctx.push_op(block, empty.op_ref());
     ctx.push_op(block, branch.op_ref());
 
-    let trap = func::Unreachable::builder().build(ctx, location);
+    let trap = func::Unreachable::operands().build(ctx, location);
     ctx.push_op(trap_block, trap.op_ref());
 
     let node_ty = node_type(ctx, element_ty);
@@ -164,7 +164,7 @@ impl RewritePattern for EmptyPattern {
         };
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, empty.element_type(ctx));
-        let null = adt::RefNull::builder()
+        let null = adt::RefNull::operands()
             .r#type(node_ty)
             .results(result_ty)
             .build(ctx, ctx.op(op).location);

@@ -86,7 +86,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     /// Emit a nil value (Tribute's unit type).
     pub fn emit_nil(&mut self, location: Location) -> ValueRef {
         let ty = self.ctx.nil_type(self.ir);
-        let op = arith::Const::builder()
+        let op = arith::Const::operands()
             .value(Attribute::Unit)
             .results(ty)
             .build(self.ir, location);

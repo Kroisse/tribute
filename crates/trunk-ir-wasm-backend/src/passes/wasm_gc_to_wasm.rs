@@ -256,7 +256,7 @@ impl RewritePattern for LowerTypedGcPattern {
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let new = wasm::RefNull::builder()
+            let new = wasm::RefNull::operands()
                 .heap_type(ctx.get_type(target).name)
                 .type_idx(self.index(target))
                 .results(old.result_ty(ctx))

@@ -592,7 +592,7 @@ impl RewritePattern for RefNullPattern {
 
         let adt_type = ref_null.r#type(ctx);
 
-        let new_op = wasm_gc_dialect::RefNull::builder()
+        let new_op = wasm_gc_dialect::RefNull::operands()
             .target_type(adt_type)
             .results(result_ty)
             .build(ctx, loc);

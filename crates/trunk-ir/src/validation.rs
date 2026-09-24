@@ -1529,7 +1529,7 @@ mod tests {
         if_op: super::super::refs::OpRef,
     ) -> Module {
         ctx.push_op(entry, if_op);
-        let zero = arith::Const::builder()
+        let zero = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1543,7 +1543,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(ctx, &[], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("bad_if"))
             .r#type(func_ty)
             .regions(body)
@@ -1561,7 +1561,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(ctx, loc);
@@ -1580,14 +1580,14 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::Const::builder()
+        let c0 = arith::Const::operands()
             .value(Attribute::Int(40))
             .results(i32_ty)
             .build(ctx, loc);
         ctx.push_op(entry_block, c0.op_ref());
         let c0_val = c0.result(ctx);
 
-        let c1 = arith::Const::builder()
+        let c1 = arith::Const::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(ctx, loc);
@@ -1608,7 +1608,7 @@ mod tests {
         });
 
         let func_ty = make_func_type(ctx, &[], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("add"))
             .r#type(func_ty)
             .regions(body_region)
@@ -1627,7 +1627,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module = core::Module::builder()
+        let module = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(ctx, loc);
@@ -1656,7 +1656,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::builder()
+        let const_a = arith::Const::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1671,7 +1671,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::Func::builder()
+        let func_a = func::Func::operands()
             .sym_name(Symbol::new("func_a"))
             .r#type(func_ty)
             .regions(body_a)
@@ -1692,7 +1692,7 @@ mod tests {
             blocks: smallvec![entry_b],
             parent_op: None,
         });
-        let func_b = func::Func::builder()
+        let func_b = func::Func::operands()
             .sym_name(Symbol::new("func_b"))
             .r#type(func_ty)
             .regions(body_b)
@@ -1712,7 +1712,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -1752,7 +1752,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
-        let func_a = func::Func::builder()
+        let func_a = func::Func::operands()
             .sym_name(Symbol::new("func_a"))
             .r#type(func_ty)
             .regions(body_a)
@@ -1774,7 +1774,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty_b = make_func_type(&mut ctx, &[], i32_ty);
-        let func_b = func::Func::builder()
+        let func_b = func::Func::operands()
             .sym_name(Symbol::new("func_b"))
             .r#type(func_ty_b)
             .regions(body_b)
@@ -1793,7 +1793,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -1850,7 +1850,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::Const::builder()
+        let c1 = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1872,7 +1872,7 @@ mod tests {
 
         // Create a bool condition
         let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let cond = arith::Const::builder()
+        let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -1899,7 +1899,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("nested_fn"))
             .r#type(func_ty)
             .regions(body)
@@ -1917,7 +1917,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -1944,7 +1944,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::builder()
+        let const_a = arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1958,7 +1958,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::Func::builder()
+        let func_a = func::Func::operands()
             .sym_name(Symbol::new("func_a"))
             .r#type(func_ty)
             .regions(body_a)
@@ -1971,7 +1971,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let local = arith::Const::builder()
+        let local = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1986,7 +1986,7 @@ mod tests {
             blocks: smallvec![entry_b],
             parent_op: None,
         });
-        let func_b = func::Func::builder()
+        let func_b = func::Func::operands()
             .sym_name(Symbol::new("func_b"))
             .r#type(func_ty)
             .regions(body_b)
@@ -2005,7 +2005,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -2037,7 +2037,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::Const::builder()
+        let const_a = arith::Const::operands()
             .value(Attribute::Int(99))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2051,7 +2051,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::Func::builder()
+        let func_a = func::Func::operands()
             .sym_name(Symbol::new("func_a"))
             .r#type(func_ty)
             .regions(body_a)
@@ -2094,7 +2094,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -2131,7 +2131,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let inner_const = arith::Const::builder()
+        let inner_const = arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2155,7 +2155,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_const = arith::Const::builder()
+        let else_const = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2173,7 +2173,7 @@ mod tests {
         });
 
         // Condition
-        let cond_op = arith::Const::builder()
+        let cond_op = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2200,7 +2200,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("bad_scope"))
             .r#type(func_ty)
             .regions(body)
@@ -2218,7 +2218,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -2338,14 +2338,14 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::Const::builder()
+        let c0 = arith::Const::operands()
             .value(Attribute::Int(40))
             .results(i32_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, c0.op_ref());
         let c0_val = c0.result(&ctx);
 
-        let c1 = arith::Const::builder()
+        let c1 = arith::Const::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2366,7 +2366,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("f"))
             .r#type(func_ty)
             .regions(body)
@@ -2384,7 +2384,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(&mut ctx, loc);
@@ -3457,12 +3457,12 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond_a = arith::Const::builder()
+        let cond_a = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, cond_a.op_ref());
-        let cond_b = arith::Const::builder()
+        let cond_b = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -3499,7 +3499,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond = arith::Const::builder()
+        let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -3532,7 +3532,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond = arith::Const::builder()
+        let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -3607,7 +3607,7 @@ mod tests {
         let loop_op = ctx.create_op(loop_data);
         ctx.push_op(entry, loop_op);
 
-        let discriminant = arith::Const::builder()
+        let discriminant = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -3639,7 +3639,7 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("malformed"))
             .r#type(func_ty)
             .regions(body)
@@ -3655,7 +3655,7 @@ mod tests {
             blocks: smallvec![module_block],
             parent_op: None,
         });
-        let module_op = core::Module::builder()
+        let module_op = core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(module_region)
             .build(&mut ctx, loc);

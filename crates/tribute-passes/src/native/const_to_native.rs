@@ -222,7 +222,7 @@ fn emit_bytes_alloc(
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Get rodata address
-    let data_ptr_op = clif::SymbolAddr::builder()
+    let data_ptr_op = clif::SymbolAddr::operands()
         .sym(data_sym)
         .results(ptr_ty)
         .build(ctx, loc);
@@ -230,7 +230,7 @@ fn emit_bytes_alloc(
     let data_ptr = data_ptr_op.result(ctx);
 
     // 2. Length constant
-    let len_op = clif::Iconst::builder()
+    let len_op = clif::Iconst::operands()
         .value(content_len as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -239,7 +239,7 @@ fn emit_bytes_alloc(
 
     // 3. Allocate RC header (8) + TributeBytes payload (ptr=8 + len=8 = 16) = 24 bytes
     let alloc_size = RC_HEADER_SIZE + 16; // ptr(8) + len(8)
-    let size_op = clif::Iconst::builder()
+    let size_op = clif::Iconst::operands()
         .value(alloc_size as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -253,7 +253,7 @@ fn emit_bytes_alloc(
     let raw_ptr = call_op.results(ctx)[0];
 
     // 4. Store RC header: refcount=1, rtti_idx=0
-    let rc_one = clif::Iconst::builder()
+    let rc_one = clif::Iconst::operands()
         .value(1)
         .results(i32_ty)
         .build(ctx, loc);
@@ -263,7 +263,7 @@ fn emit_bytes_alloc(
         .build(ctx, loc);
     ops.push(store_rc.op_ref());
 
-    let rtti_zero = clif::Iconst::builder()
+    let rtti_zero = clif::Iconst::operands()
         .value(0)
         .results(i32_ty)
         .build(ctx, loc);
@@ -274,7 +274,7 @@ fn emit_bytes_alloc(
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw + 8
-    let hdr_size = clif::Iconst::builder()
+    let hdr_size = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -298,7 +298,7 @@ fn emit_bytes_alloc(
 
     // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
     //    rewrite pattern can use as the replacement result.
-    let zero_op = clif::Iconst::builder()
+    let zero_op = clif::Iconst::operands()
         .value(0)
         .results(i64_ty)
         .build(ctx, loc);

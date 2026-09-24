@@ -199,7 +199,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     let location = ctx.op(module.op()).location;
 
     // Create wasm.table for closure functions
-    let table_op = wasm_dialect::Table::builder()
+    let table_op = wasm_dialect::Table::operands()
         .reftype(Symbol::new("funcref"))
         .min(table_size)
         .max(Some(table_size))
@@ -210,7 +210,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     let func_ref_ops: Vec<OpRef> = funcs
         .iter()
         .map(|func_sym| {
-            wasm_dialect::RefFunc::builder()
+            wasm_dialect::RefFunc::operands()
                 .func_name(*func_sym)
                 .results(funcref_ty)
                 .build(ctx, location)
@@ -235,7 +235,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     });
 
     // Create wasm.elem with table 0 and offset 0
-    let elem_op = wasm_dialect::Elem::builder()
+    let elem_op = wasm_dialect::Elem::operands()
         .table(Some(0))
         .offset(Some(0))
         .regions(funcs_region)
@@ -472,7 +472,7 @@ impl RewritePattern for FuncFuncPattern {
         }
 
         let new_op = match body {
-            Some(body) => wasm_dialect::Func::builder()
+            Some(body) => wasm_dialect::Func::operands()
                 .sym_name(sym_name)
                 .r#type(func_type)
                 .regions(body)
@@ -707,7 +707,7 @@ impl RewritePattern for FuncUnreachablePattern {
 
         let loc = ctx.op(op).location;
 
-        let new_op = wasm_dialect::Unreachable::builder().build(ctx, loc);
+        let new_op = wasm_dialect::Unreachable::operands().build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -744,7 +744,7 @@ impl RewritePattern for FuncConstantPattern {
 
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
-        let new_op = wasm_dialect::I32Const::builder()
+        let new_op = wasm_dialect::I32Const::operands()
             .value(table_idx as i32)
             .results(i32_ty)
             .build(ctx, loc);

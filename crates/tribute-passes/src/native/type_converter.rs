@@ -233,7 +233,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
                 ));
             }
             if from_ty == r.core_nil {
-                let null_op = clif::Iconst::builder()
+                let null_op = clif::Iconst::operands()
                     .value(0)
                     .results(ptr_ty)
                     .build(ctx, location);
@@ -309,7 +309,7 @@ fn box_primitive(
 
     // 1. Allocation size (payload + RC header)
     let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = clif::Iconst::builder()
+    let size_op = clif::Iconst::operands()
         .value(alloc_size as i64)
         .results(i64_ty)
         .build(ctx, location);
@@ -324,7 +324,7 @@ fn box_primitive(
     let raw_ptr = call_op.results(ctx)[0];
 
     // 3. Store refcount = 1
-    let rc_one = clif::Iconst::builder()
+    let rc_one = clif::Iconst::operands()
         .value(1)
         .results(i32_ty)
         .build(ctx, location);
@@ -335,7 +335,7 @@ fn box_primitive(
     ops.push(store_rc.op_ref());
 
     // 4. Store rtti_idx = 0
-    let rtti_zero = clif::Iconst::builder()
+    let rtti_zero = clif::Iconst::operands()
         .value(0)
         .results(i32_ty)
         .build(ctx, location);
@@ -346,7 +346,7 @@ fn box_primitive(
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::Iconst::builder()
+    let hdr_size = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, location);
@@ -363,7 +363,7 @@ fn box_primitive(
     ops.push(store_val.op_ref());
 
     // 7. Identity pass-through so the last op produces the payload ptr result
-    let zero_op = clif::Iconst::builder()
+    let zero_op = clif::Iconst::operands()
         .value(0)
         .results(ptr_ty)
         .build(ctx, location);

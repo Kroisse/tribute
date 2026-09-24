@@ -249,7 +249,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(&mut ctx, loc);
@@ -276,7 +276,7 @@ mod tests {
             let i32_ty = i32_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(&mut ctx, loc);
@@ -309,7 +309,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(&mut ctx, loc);

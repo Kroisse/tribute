@@ -239,7 +239,7 @@ fn tag_equals(
     expected: i128,
     i32_ty: TypeRef,
 ) -> (arith::Const, arith::Cmpi) {
-    let constant = arith::Const::builder()
+    let constant = arith::Const::operands()
         .value(Attribute::Int(expected))
         .results(i32_ty)
         .build(ctx, loc);

@@ -203,7 +203,7 @@ fn op_idx_const(
     op_name: Symbol,
 ) -> arith::Const {
     let op_idx = compute_op_idx(ability::ability_name(ctx, ability_ref), Some(op_name));
-    arith::Const::builder()
+    arith::Const::operands()
         .value(Attribute::Int(op_idx as i128))
         .results(i32_ty)
         .build(ctx, loc)

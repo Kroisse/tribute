@@ -176,7 +176,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             });
 
             // Generate null check ops in current_block
-            let null_val = clif::Iconst::builder()
+            let null_val = clif::Iconst::operands()
                 .value(0)
                 .results(ptr_ty)
                 .build(ctx, loc);
@@ -257,7 +257,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             });
 
             // Generate null check ops in current_block
-            let null_val = clif::Iconst::builder()
+            let null_val = clif::Iconst::operands()
                 .value(0)
                 .results(ptr_ty)
                 .build(ctx, loc);
@@ -345,7 +345,7 @@ fn gen_retain_rc_ops(
     i32_ty: TypeRef,
 ) {
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::Iconst::builder()
+    let hdr_sz = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -356,7 +356,7 @@ fn gen_retain_rc_ops(
     ctx.push_op(block, rc_addr.op_ref());
 
     // atomic_rmw add: atomically increment RC
-    let one = clif::Iconst::builder()
+    let one = clif::Iconst::operands()
         .value(1)
         .results(i32_ty)
         .build(ctx, loc);
@@ -383,7 +383,7 @@ fn gen_release_decrement(
     i8_ty: TypeRef,
 ) -> ValueRef {
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::Iconst::builder()
+    let hdr_sz = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -394,7 +394,7 @@ fn gen_release_decrement(
     ctx.push_op(block, rc_addr.op_ref());
 
     // atomic_rmw sub: atomically decrement RC, returns old value
-    let one = clif::Iconst::builder()
+    let one = clif::Iconst::operands()
         .value(1)
         .results(i32_ty)
         .build(ctx, loc);
@@ -429,7 +429,7 @@ fn gen_deep_release_call(
     nil_ty: TypeRef,
 ) {
     // size = iconst(alloc_size)
-    let size = clif::Iconst::builder()
+    let size = clif::Iconst::operands()
         .value(alloc_size as i64)
         .results(i64_ty)
         .build(ctx, loc);

@@ -258,7 +258,7 @@ fn generate_fixed_release_function(
         blocks: smallvec![entry_block],
         parent_op: None,
     });
-    clif::Func::builder()
+    clif::Func::operands()
         .sym_name(Symbol::from_dynamic(&format!(
             "{RELEASE_FN_PREFIX}{rtti_idx}"
         )))
@@ -345,7 +345,7 @@ fn generate_release_function_for_struct(
             parent_op: None,
         });
 
-        let func_op = clif::Func::builder()
+        let func_op = clif::Func::operands()
             .sym_name(Symbol::from_dynamic(&func_name))
             .r#type(func_ty)
             .regions(body)
@@ -391,7 +391,7 @@ fn generate_release_function_for_struct(
             .results(ptr_ty)
             .build(ctx, loc);
         ctx.push_op(check_block, load.op_ref());
-        let null_const = clif::Iconst::builder()
+        let null_const = clif::Iconst::operands()
             .value(0)
             .results(ptr_ty)
             .build(ctx, loc);
@@ -429,7 +429,7 @@ fn generate_release_function_for_struct(
         parent_op: None,
     });
 
-    let func_op = clif::Func::builder()
+    let func_op = clif::Func::operands()
         .sym_name(Symbol::from_dynamic(&func_name))
         .r#type(func_ty)
         .regions(body)
@@ -476,7 +476,7 @@ fn gen_dealloc_and_return_with_size(
 ) {
     use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-    let hdr_sz = clif::Iconst::builder()
+    let hdr_sz = clif::Iconst::operands()
         .value(RC_HEADER_SIZE as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -486,7 +486,7 @@ fn gen_dealloc_and_return_with_size(
         .build(ctx, loc);
     ctx.push_op(block, raw_ptr.op_ref());
 
-    let size_op = clif::Iconst::builder()
+    let size_op = clif::Iconst::operands()
         .value(alloc_size as i64)
         .results(i64_ty)
         .build(ctx, loc);
@@ -590,7 +590,7 @@ fn generate_release_function_for_enum(
     {
         use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-        let hdr_sz = clif::Iconst::builder()
+        let hdr_sz = clif::Iconst::operands()
             .value(RC_HEADER_SIZE as i64)
             .results(i64_ty)
             .build(ctx, loc);
@@ -601,7 +601,7 @@ fn generate_release_function_for_enum(
         ctx.push_op(dealloc_block, raw_ptr.op_ref());
 
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::Iconst::builder()
+        let size_op = clif::Iconst::operands()
             .value(alloc_size as i64)
             .results(i64_ty)
             .build(ctx, loc);
@@ -629,7 +629,7 @@ fn generate_release_function_for_enum(
             blocks: smallvec![entry_block, dealloc_block],
             parent_op: None,
         });
-        let func_op = clif::Func::builder()
+        let func_op = clif::Func::operands()
             .sym_name(Symbol::from_dynamic(&func_name))
             .r#type(func_ty)
             .regions(body)
@@ -681,7 +681,7 @@ fn generate_release_function_for_enum(
                 .results(ptr_ty)
                 .build(ctx, loc);
             ctx.push_op(chk_block, load_op.op_ref());
-            let null_const = clif::Iconst::builder()
+            let null_const = clif::Iconst::operands()
                 .value(0)
                 .results(ptr_ty)
                 .build(ctx, loc);
@@ -728,7 +728,7 @@ fn generate_release_function_for_enum(
             ops: smallvec![],
             parent_region: None,
         });
-        let expected = clif::Iconst::builder()
+        let expected = clif::Iconst::operands()
             .value(vr.tag_value as i64)
             .results(i32_ty)
             .build(ctx, loc);
@@ -750,7 +750,7 @@ fn generate_release_function_for_enum(
 
     // Entry block: check first variant
     let first_vr = &variants_with_ptrs[0];
-    let expected = clif::Iconst::builder()
+    let expected = clif::Iconst::operands()
         .value(first_vr.tag_value as i64)
         .results(i32_ty)
         .build(ctx, loc);
@@ -783,7 +783,7 @@ fn generate_release_function_for_enum(
         blocks: all_blocks.into(),
         parent_op: None,
     });
-    let func_op = clif::Func::builder()
+    let func_op = clif::Func::operands()
         .sym_name(Symbol::from_dynamic(&func_name))
         .r#type(func_ty)
         .regions(body)
@@ -868,7 +868,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("create_struct"))
             .r#type(func_ty)
             .regions(body)
@@ -1061,7 +1061,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("create"))
             .r#type(func_ty)
             .regions(body)

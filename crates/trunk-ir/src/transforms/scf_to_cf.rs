@@ -575,7 +575,7 @@ impl SwitchDispatch<'_> {
                 let is_last = i == cases.len() - 1;
 
                 // Create comparison: discriminant == case_value
-                let case_const = arith::Const::builder()
+                let case_const = arith::Const::operands()
                     .value(case_attr.clone())
                     .results(disc_ty)
                     .build(ctx, loc);
@@ -862,7 +862,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::Const::builder()
+        let cond_const = arith::Const::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(ctx, loc);
@@ -907,7 +907,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::new(name))
             .r#type(fn_ty)
             .regions(body_region)
@@ -929,7 +929,7 @@ mod tests {
         });
 
         // %cond = arith.const true
-        let cond_const = arith::Const::builder()
+        let cond_const = arith::Const::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -942,7 +942,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_val = arith::Const::builder()
+        let then_val = arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -963,7 +963,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_val = arith::Const::builder()
+        let else_val = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -995,7 +995,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(body_region)
@@ -1091,7 +1091,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::Const::builder()
+        let cond_const = arith::Const::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -1138,7 +1138,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(body_region)
@@ -1809,7 +1809,7 @@ mod tests {
         });
 
         // init value
-        let init = arith::Const::builder()
+        let init = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1850,7 +1850,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(func_body)
@@ -1886,7 +1886,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let init = arith::Const::builder()
+        let init = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1921,7 +1921,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(func_body)
@@ -1975,7 +1975,7 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::Const::builder()
+        let disc = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1995,7 +1995,7 @@ mod tests {
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::Case::builder()
+        let case0_op = scf::Case::operands()
             .value(Attribute::Int(0))
             .regions(case0_region)
             .build(&mut ctx, loc);
@@ -2014,7 +2014,7 @@ mod tests {
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::Case::builder()
+        let case1_op = scf::Case::operands()
             .value(Attribute::Int(1))
             .regions(case1_region)
             .build(&mut ctx, loc);
@@ -2033,7 +2033,7 @@ mod tests {
             blocks: smallvec![default_block],
             parent_op: None,
         });
-        let default_op = scf::Default::builder()
+        let default_op = scf::Default::operands()
             .regions(default_region)
             .build(&mut ctx, loc);
 
@@ -2067,7 +2067,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(func_body)
@@ -2106,7 +2106,7 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::Const::builder()
+        let disc = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2126,7 +2126,7 @@ mod tests {
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::Case::builder()
+        let case0_op = scf::Case::operands()
             .value(Attribute::Int(0))
             .regions(case0_region)
             .build(&mut ctx, loc);
@@ -2145,7 +2145,7 @@ mod tests {
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::Case::builder()
+        let case1_op = scf::Case::operands()
             .value(Attribute::Int(1))
             .regions(case1_region)
             .build(&mut ctx, loc);
@@ -2179,7 +2179,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(func_body)
@@ -2217,7 +2217,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let disc = arith::Const::builder()
+        let disc = arith::Const::operands()
             .value(Attribute::Int(0))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2241,7 +2241,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(func_body)
@@ -2267,7 +2267,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let val = arith::Const::builder()
+        let val = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2281,7 +2281,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(body)
@@ -2310,7 +2310,7 @@ mod tests {
             parent_region: None,
         });
 
-        let cond = arith::Const::builder()
+        let cond = arith::Const::operands()
             .value(Attribute::Bool(true))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -2323,7 +2323,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let t_val = arith::Const::builder()
+        let t_val = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2344,7 +2344,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let e_val = arith::Const::builder()
+        let e_val = arith::Const::operands()
             .value(Attribute::Int(2))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -2379,7 +2379,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::Func::builder()
+        let func_op = func::Func::operands()
             .sym_name(Symbol::new("test"))
             .r#type(fn_ty)
             .regions(body)

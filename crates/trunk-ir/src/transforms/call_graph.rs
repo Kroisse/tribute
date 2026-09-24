@@ -356,7 +356,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::from_dynamic(name))
             .r#type(fn_ty)
             .regions(body)
@@ -387,7 +387,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::from_dynamic(name))
             .r#type(fn_ty)
             .regions(body)
@@ -408,7 +408,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = func::Constant::builder()
+        let c = func::Constant::operands()
             .func_ref(Symbol::from_dynamic(target))
             .results(fn_ty)
             .build(ctx, loc);
@@ -420,7 +420,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(Symbol::from_dynamic(name))
             .r#type(fn_ty)
             .regions(body)

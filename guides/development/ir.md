@@ -98,7 +98,7 @@ declarations above:
 
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
-let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::builder()` without operands
+let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
     .predicate(Symbol::new("slt"))          // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
 let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
@@ -140,7 +140,7 @@ let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 Operations are created with their builders:
 
 ```rust
-let c = arith::Const::builder()
+let c = arith::Const::operands()
     .value(Attribute::Int(42))
     .results(i32_ty)
     .build(&mut ctx, loc);

@@ -26,7 +26,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type(builder.ir);
     match &*pattern.kind {
         PatternKind::Wildcard | PatternKind::Bind { .. } | PatternKind::Error => {
-            let op = arith::Const::builder()
+            let op = arith::Const::operands()
                 .value(Attribute::Bool(true))
                 .results(bool_ty)
                 .build(builder.ir, location);
@@ -61,7 +61,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
                 )?);
             }
             let Some((first, rest)) = conditions.split_first() else {
-                let op = arith::Const::builder()
+                let op = arith::Const::operands()
                     .value(Attribute::Bool(true))
                     .results(bool_ty)
                     .build(builder.ir, location);
@@ -186,7 +186,7 @@ fn emit_logical_variant_pattern_check<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let false_value = arith::Const::builder()
+    let false_value = arith::Const::operands()
         .value(Attribute::Bool(false))
         .results(bool_ty)
         .build(builder.ir, location);
@@ -261,7 +261,7 @@ fn emit_logical_list_pattern_suffix<'db>(
                 .build(builder.ir, location)
                 .op_ref()
         } else {
-            arith::Const::builder()
+            arith::Const::operands()
                 .value(Attribute::Bool(true))
                 .results(bool_ty)
                 .build(builder.ir, location)
@@ -275,7 +275,7 @@ fn emit_logical_list_pattern_suffix<'db>(
         .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, empty.op_ref());
-    let true_value = arith::Const::builder()
+    let true_value = arith::Const::operands()
         .value(Attribute::Bool(true))
         .results(bool_ty)
         .build(builder.ir, location);
@@ -336,7 +336,7 @@ fn emit_logical_list_pattern_suffix<'db>(
             ops: Default::default(),
             parent_region: None,
         });
-        let false_value = arith::Const::builder()
+        let false_value = arith::Const::operands()
             .value(Attribute::Bool(false))
             .results(bool_ty)
             .build(nested.ir, location);
@@ -369,7 +369,7 @@ fn emit_logical_list_pattern_suffix<'db>(
         ops: Default::default(),
         parent_region: None,
     });
-    let false_value = arith::Const::builder()
+    let false_value = arith::Const::operands()
         .value(Attribute::Bool(false))
         .results(bool_ty)
         .build(builder.ir, location);
@@ -403,7 +403,7 @@ fn emit_literal_check<'db>(
     match lit {
         LiteralPattern::Nat(n) => {
             let value = super::validate_nat_i31(builder.db(), location, *n)?;
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Int(value as i128))
                 .results(i32_ty)
                 .build(builder.ir, location);
@@ -417,7 +417,7 @@ fn emit_literal_check<'db>(
         }
         LiteralPattern::Int(n) => {
             let value = super::validate_int_i31(builder.db(), location, *n)?;
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Int(value as i128))
                 .results(i32_ty)
                 .build(builder.ir, location);
@@ -430,7 +430,7 @@ fn emit_literal_check<'db>(
             Some(cmp_op.result(builder.ir))
         }
         LiteralPattern::Bool(b) => {
-            let const_op = arith::Const::builder()
+            let const_op = arith::Const::operands()
                 .value(Attribute::Bool(*b))
                 .results(bool_ty)
                 .build(builder.ir, location);

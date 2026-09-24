@@ -930,7 +930,7 @@ mod result_list_tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
-            let callee = Constant::builder()
+            let callee = Constant::operands()
                 .func_ref(Symbol::new("f"))
                 .results(signature)
                 .build(&mut ctx, loc)

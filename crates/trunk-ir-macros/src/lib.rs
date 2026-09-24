@@ -37,7 +37,7 @@ mod parse;
 /// - `struct OpName(OpRef)` — wrapper struct
 /// - `impl DialectOp for OpName` — type-safe matching
 /// - Operand, result, attribute, region/successor accessors
-/// - A builder started by `OpName::operands(..)` (or `OpName::builder()`
+/// - A builder started by `OpName::operands(..)` (empty for operations
 ///   without operands) and finished by `.build(ctx, location)`
 /// - `OpSchema` registration; `#[verify]` on the operation adds a call to
 ///   the wrapper's inherent `verify(self, ctx) -> Result<(), String>` method

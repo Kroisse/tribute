@@ -851,7 +851,7 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        core::Module::builder()
+        core::Module::operands()
             .sym_name(Symbol::new("test"))
             .regions(mod_region)
             .build(ctx, loc)
@@ -875,7 +875,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::builder()
+        let c = arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -888,7 +888,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new("main"))
             .r#type(func_ty)
             .regions(body)
@@ -946,7 +946,7 @@ core.module @test {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new("add"))
             .r#type(func_ty)
             .regions(body)
@@ -977,7 +977,7 @@ core.module @test {
         let param = ctx.block_arg(entry, 0);
 
         // Condition
-        let cond = arith::Const::builder()
+        let cond = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_ty)
             .build(&mut ctx, loc);
@@ -1009,7 +1009,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::Const::builder()
+        let c1 = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1048,7 +1048,7 @@ core.module @test {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new("choose"))
             .r#type(func_ty)
             .regions(body)
@@ -1071,7 +1071,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::builder()
+        let c = arith::Const::operands()
             .value(Attribute::Int(7))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1084,7 +1084,7 @@ core.module @test {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new("pure"))
             .r#type(func_ty)
             .regions(body)
@@ -1109,7 +1109,7 @@ core.module @test {
                 ops: smallvec![],
                 parent_region: None,
             });
-            let c = arith::Const::builder()
+            let c = arith::Const::operands()
                 .value(Attribute::Int(*val))
                 .results(i32_ty)
                 .build(&mut ctx, loc);
@@ -1122,7 +1122,7 @@ core.module @test {
                 blocks: smallvec![entry],
                 parent_op: None,
             });
-            let f = func::Func::builder()
+            let f = func::Func::operands()
                 .sym_name(Symbol::new(name))
                 .r#type(func_ty)
                 .regions(body)
@@ -1148,7 +1148,7 @@ core.module @test {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::Const::builder()
+        let c = arith::Const::operands()
             .value(Attribute::Int(42))
             .results(i32_ty)
             .build(&mut ctx, loc);
@@ -1161,7 +1161,7 @@ core.module @test {
             blocks: smallvec![entry1],
             parent_op: None,
         });
-        let callee = func::Func::builder()
+        let callee = func::Func::operands()
             .sym_name(Symbol::new("callee"))
             .r#type(callee_ty)
             .regions(body1)
@@ -1188,7 +1188,7 @@ core.module @test {
             blocks: smallvec![entry2],
             parent_op: None,
         });
-        let main_fn = func::Func::builder()
+        let main_fn = func::Func::operands()
             .sym_name(Symbol::new("main"))
             .r#type(main_ty)
             .regions(body2)
@@ -1748,7 +1748,7 @@ core.module @test {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new("identity"))
             .r#type(func_ty)
             .regions(body)

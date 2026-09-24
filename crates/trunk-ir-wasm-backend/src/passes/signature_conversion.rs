@@ -55,7 +55,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             new_func_type,
             &converted.inputs,
             |ctx, ty, body| match body {
-                Some(body) => wasm::Func::builder()
+                Some(body) => wasm::Func::operands()
                     .sym_name(sym_name)
                     .r#type(ty)
                     .regions(body)
@@ -156,7 +156,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        wasm::Func::builder()
+        wasm::Func::operands()
             .sym_name(Symbol::new(name))
             .r#type(signature)
             .regions(body)

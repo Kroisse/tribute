@@ -246,7 +246,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             new_func_type,
             &converted.inputs,
             |ctx, ty, body| match body {
-                Some(body) => func::Func::builder()
+                Some(body) => func::Func::operands()
                     .sym_name(sym_name)
                     .r#type(ty)
                     .regions(body)
@@ -342,7 +342,7 @@ mod tests {
             blocks: smallvec![entry_block],
             parent_op: None,
         });
-        let f = func::Func::builder()
+        let f = func::Func::operands()
             .sym_name(Symbol::new(name))
             .r#type(func_type)
             .regions(body)

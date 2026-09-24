@@ -434,7 +434,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(sym_name)
             .r#type(fn_ty)
             .regions(body)
@@ -466,7 +466,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::Func::builder()
+        func::Func::operands()
             .sym_name(sym_name)
             .r#type(fn_ty)
             .regions(body)
@@ -563,7 +563,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_op = func::Constant::builder()
+        let const_op = func::Constant::operands()
             .func_ref(Symbol::new("callback"))
             .results(fn_ty)
             .build(&mut ctx, loc);
@@ -575,7 +575,7 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main = func::Func::builder()
+        let main = func::Func::operands()
             .sym_name(Symbol::new("main"))
             .r#type(fn_ty)
             .regions(body)

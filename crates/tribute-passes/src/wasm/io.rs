@@ -208,7 +208,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         parent_op: None,
     });
     let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
-    func::Func::builder()
+    func::Func::operands()
         .sym_name(Symbol::new(WRITE_HELPER))
         .r#type(fn_ty)
         .regions(body)
@@ -236,7 +236,7 @@ fn ensure_memory(
     ctx.push_op(body, quotient.op_ref());
     let required = wasm_dialect::I32Add::operands(quotient.result(ctx), one).build(ctx, loc);
     ctx.push_op(body, required.op_ref());
-    let current = wasm_dialect::MemorySize::builder()
+    let current = wasm_dialect::MemorySize::operands()
         .memory(0)
         .results(i32_ty)
         .build(ctx, loc);
@@ -256,7 +256,7 @@ fn ensure_memory(
             .results(i32_ty)
             .build(ctx, loc);
         ctx.push_op(block, grown.op_ref());
-        let failed = wasm_dialect::I32Const::builder()
+        let failed = wasm_dialect::I32Const::operands()
             .value(-1)
             .results(i32_ty)
             .build(ctx, loc);
@@ -332,7 +332,7 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
     ctx.push_op(loop_block, next.op_ref());
     let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
     ctx.push_op(loop_block, yield_next.op_ref());
-    let continue_loop = wasm_dialect::Br::builder().target(0).build(ctx, loc);
+    let continue_loop = wasm_dialect::Br::operands().target(0).build(ctx, loc);
     ctx.push_op(loop_block, continue_loop.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
@@ -423,7 +423,7 @@ fn write_loop(
         ctx.push_op(block, next.op_ref());
         let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
         ctx.push_op(block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::Br::builder().target(1).build(ctx, loc);
+        let continue_loop = wasm_dialect::Br::operands().target(1).build(ctx, loc);
         ctx.push_op(block, continue_loop.op_ref());
     });
     let failure = region(ctx, loc, |ctx, block| {
@@ -436,7 +436,7 @@ fn write_loop(
             .target(1)
             .build(ctx, loc);
         ctx.push_op(block, retry_if_interrupted.op_ref());
-        let stop = wasm_dialect::Br::builder().target(2).build(ctx, loc);
+        let stop = wasm_dialect::Br::operands().target(2).build(ctx, loc);
         ctx.push_op(block, stop.op_ref());
     });
     let handle_result = wasm_dialect::If::operands(succeeded.result(ctx))
@@ -475,7 +475,7 @@ fn loop_in_block(
         blocks: smallvec![block],
         parent_op: None,
     });
-    wasm_dialect::Block::builder()
+    wasm_dialect::Block::operands()
         .results([nil_ty])
         .regions(region)
         .build(ctx, loc)
@@ -506,7 +506,7 @@ fn trap_if(
     nil_ty: TypeRef,
 ) {
     let trap = region(ctx, loc, |ctx, block| {
-        let unreachable = wasm_dialect::Unreachable::builder().build(ctx, loc);
+        let unreachable = wasm_dialect::Unreachable::operands().build(ctx, loc);
         ctx.push_op(block, unreachable.op_ref());
     });
     let ok = region(ctx, loc, |_, _| {});
@@ -543,7 +543,7 @@ fn i32_const(
     ty: TypeRef,
     value: i32,
 ) -> ValueRef {
-    let op = wasm_dialect::I32Const::builder()
+    let op = wasm_dialect::I32Const::operands()
         .value(value)
         .results(ty)
         .build(ctx, loc);
