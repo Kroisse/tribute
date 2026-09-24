@@ -55,6 +55,51 @@ From external crates: `#[trunk_ir::dialect]`.
   zero or one; `#[rest_results] -> results` produces any number
 - `struct` definitions — Generate typed type wrappers
 
+**Typed syntax**: an operation may instead declare its entities and type
+constraints in the signature, following
+[the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema):
+
+```rust
+fn cmpi<T: IntegerLike>(
+    predicate: Attr<Symbol>,
+    lhs: Value<T>,
+    rhs: Value<T>,
+) -> Value<impl BoolLike> {}
+
+fn call_indirect<S: clif::FuncSig>(
+    sig: Attr<S::Type>,
+    callee: Value<core::Ptr>,
+    args: Values<S::Inputs>,
+) -> Values<S::Results> {}
+```
+
+- Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`, and
+  `Option<Attr<K>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). Regions and
+  successors keep the `#[region(..)]` / `#[successor(..)]` body form.
+- Bounds are Rust types implementing `type_constraint::TypeConstraint`:
+  `core` scalar categories, macro-defined type wrappers (projections are their
+  declared parameters), and the `func`/`clif`/`wasm` `FuncSig` wrappers
+  (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind projections and
+  conflicting exact bounds fail to compile.
+- An operation uses either the legacy annotations above or the typed syntax,
+  never both. Legacy definitions remain supported and are unconstrained in the
+  schema.
+
+Typed operations generate a builder that groups inputs by entity kind instead
+of a positional constructor:
+
+```rust
+let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::builder()` without operands
+    .predicate(Symbol::new("slt"))        // attributes by name
+    .results(i1_ty)                       // result types
+    .build(loc, ctx);
+```
+
+Result types, regions (`.regions(..)`), and successors (`.successors(..)`) are
+each set in one call, in declaration order. Missing required inputs panic in
+`build`.
+
 **Operation schema**: every generated operation wrapper exposes
 `DialectOp::SCHEMA`, a static `op_schema::OpSchema` registered by operation
 name. `OpSchema::of(ctx, op)` looks it up for any operation.

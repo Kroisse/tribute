@@ -1,0 +1,7 @@
+error: Values<..> requires a type list
+ --> tests/ui/values_requires_list.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -166,6 +166,8 @@ impl std::error::Error for FuncSigTypeError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(crate::TypeRef);
 
+crate::impl_func_sig_constraint!(FuncSig, "clif.func_sig");
+
 impl FuncSig {
     pub(crate) fn validate(
         ctx: &crate::IrContext,

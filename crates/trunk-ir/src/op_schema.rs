@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
+use crate::type_constraint::ConstraintDesc;
 use crate::types::Attribute;
 use crate::{IrContext, OpRef, Symbol};
 
@@ -26,11 +27,15 @@ pub struct OpSchema {
     pub dialect: &'static str,
     /// Operation name within the dialect (e.g., `"addi"`).
     pub name: &'static str,
+    /// Logical type variables declared by the typed syntax.
+    pub type_vars: &'static [TypeVarSchema],
     /// Declared operands in order. At most one entry is variadic, and it is
     /// always the last one.
     pub operands: &'static [OperandSchema],
     /// Declared results.
     pub results: ResultSchema,
+    /// Type constraint on the result segment.
+    pub result_constraint: ValueConstraint,
     /// Declared attributes.
     pub attributes: &'static [AttributeSchema],
     /// Declared regions in order. Only the last region may be optional.
@@ -44,6 +49,53 @@ pub struct OpSchema {
 pub struct OperandSchema {
     pub name: &'static str,
     pub arity: Arity,
+    pub constraint: ValueConstraint,
+}
+
+/// A logical type variable and the intersection of its bounds.
+#[derive(Debug)]
+pub struct TypeVarSchema {
+    pub name: &'static str,
+    pub bounds: &'static [&'static ConstraintDesc],
+}
+
+/// A resolved projection: `type_vars[var].bounds[bound].projections[index]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProjectionRef {
+    pub var: usize,
+    pub bound: usize,
+    pub index: usize,
+}
+
+/// Constraint on one type.
+#[derive(Clone, Copy, Debug)]
+pub enum TypeSpec {
+    /// Unconstrained (`_`, and every legacy entity).
+    Any,
+    /// A named type variable; repeated uses require the same type.
+    Var(usize),
+    /// An anonymous variable (`impl A + B` or a direct bound path).
+    Anon(&'static [&'static ConstraintDesc]),
+    /// A single-type projection of a variable (`T::Input`).
+    Proj(ProjectionRef),
+}
+
+/// Constraint on a type list.
+#[derive(Clone, Copy, Debug)]
+pub enum ListSpec {
+    /// An explicit list (`(T, U)`); its length is exact.
+    Types(&'static [TypeSpec]),
+    /// A list projection of a variable (`S::Inputs`).
+    Proj(ProjectionRef),
+}
+
+/// Type constraint on an operand or result segment.
+#[derive(Clone, Copy, Debug)]
+pub enum ValueConstraint {
+    /// Every value satisfies the same constraint (`Value`, `Variadic`).
+    Each(TypeSpec),
+    /// The values match a type list exactly (`Values`).
+    List(ListSpec),
 }
 
 /// Number of SSA values a declared operand or result entity binds.
@@ -81,6 +133,8 @@ pub struct AttributeSchema {
     pub name: &'static str,
     pub kind: AttributeKind,
     pub optional: bool,
+    /// Type variable bound by an `Attr<S::Type>` attribute.
+    pub binds: Option<usize>,
 }
 
 /// The attribute value domain accepted by a declared attribute.
@@ -355,6 +409,9 @@ static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpSchema>> = LazyLo
     }
     registry
 });
+
+#[cfg(test)]
+mod typed_tests;
 
 #[cfg(test)]
 mod tests {

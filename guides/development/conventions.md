@@ -92,6 +92,16 @@ let value = arith::r#const(ctx, location, i32_ty, Attribute::Int(42));
 let result = value.result(ctx);
 ```
 
+Operations declared with the typed `#[dialect]` syntax use a builder that
+groups inputs by kind:
+
+```rust
+let cmp = arith::Cmpi::operands(lhs, rhs)
+    .predicate(Symbol::new("slt"))
+    .results(i1_ty)
+    .build(location, ctx);
+```
+
 ### Matching Operations
 
 When matching dialect operations, prefer typed wrappers over manual

@@ -1,0 +1,26 @@
+error[E0080]: evaluation panicked: type constraint projection is provided by more than one bound; use `<S as B>::X`
+ --> tests/ui/ambiguous_projection.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::SCHEMA::P` failed inside this call
+  |
+note: inside `resolve_projection`
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/type_constraint.rs
+  |
+  | /                     panic!(
+  | |                         "type constraint projection is provided by more than one bound; use `<S as B>::X`"
+  | |                     );
+  | |_____________________- in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/ui/ambiguous_projection.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

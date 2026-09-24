@@ -61,6 +61,17 @@ fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> 
 /// a property of each operation, not of the type.
 pub struct IntegerLike;
 
+impl crate::type_constraint::TypeConstraint for IntegerLike {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "IntegerLike",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+        };
+}
+
 impl IntegerLike {
     /// The bit width of `ty`, or `None` if it is not an integer type.
     pub fn width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
@@ -75,6 +86,17 @@ impl IntegerLike {
 /// The boolean integer type `core.i1`.
 pub struct BoolLike;
 
+impl crate::type_constraint::TypeConstraint for BoolLike {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "BoolLike",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+        };
+}
+
 impl BoolLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         IntegerLike::width(ctx, ty) == Some(1)
@@ -83,6 +105,17 @@ impl BoolLike {
 
 /// IEEE floating-point types `core.f32` and `core.f64`.
 pub struct FloatLike;
+
+impl crate::type_constraint::TypeConstraint for FloatLike {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "FloatLike",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+        };
+}
 
 impl FloatLike {
     /// The bit width of `ty`, or `None` if it is not a float type.

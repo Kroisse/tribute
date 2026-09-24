@@ -1,0 +1,24 @@
+error[E0080]: evaluation panicked: type variable has two different exact bounds
+ --> tests/ui/conflicting_exact_bounds.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::SCHEMA` failed inside this call
+  |
+note: inside `check_bounds`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/type_constraint.rs
+  |
+  |                     panic!("type variable has two different exact bounds");
+  |                     ------------------------------------------------------ in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/ui/conflicting_exact_bounds.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

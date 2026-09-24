@@ -5,6 +5,9 @@
 use proc_macro2::{Delimiter, Ident, TokenTree};
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
+mod constraint;
+pub use constraint::{ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
+
 // ============================================================================
 // Parsed types
 // ============================================================================
@@ -28,6 +31,15 @@ pub struct OperationDef {
     pub operands: Vec<Operand>,
     pub results: ResultDef,
     pub regions: Vec<RegionOrSuccessor>,
+    pub syntax: Syntax,
+    pub type_vars: Vec<TypeVar>,
+    pub result_constraint: ValueExpr,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Syntax {
+    Legacy,
+    Typed,
 }
 
 pub struct TypeDefData {
@@ -54,6 +66,7 @@ pub struct AttrDef {
     pub raw_ident: Ident,
     pub ty: AttrType,
     pub optional: bool,
+    pub binds: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +93,7 @@ pub struct Operand {
     /// Original ident
     pub raw_ident: Ident,
     pub variadic: bool,
+    pub constraint: ValueExpr,
 }
 
 pub enum ResultDef {
@@ -281,6 +295,7 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
             raw_ident: name_ident,
             ty,
             optional,
+            binds: None,
         });
 
         // Require comma between elements (trailing comma is allowed)
@@ -327,6 +342,10 @@ fn parse_operation(
     let name_ident: Ident =
         Ident::parser(iter).map_err(|e| format!("expected operation name: {e}"))?;
 
+    if constraint::is_typed_operation(iter)? {
+        return constraint::parse_typed_operation(iter, name_ident, attrs, rest_results);
+    }
+
     // Parse operands (with `: type` annotations)
     let paren = expect_group(iter, Delimiter::Parenthesis)?;
     let operands = parse_operands(paren.stream())?;
@@ -365,6 +384,9 @@ fn parse_operation(
         operands,
         results,
         regions,
+        syntax: Syntax::Legacy,
+        type_vars: Vec::new(),
+        result_constraint: ValueExpr::Each(TypeExpr::Any),
     })
 }
 
@@ -416,6 +438,7 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
             name,
             raw_ident: name_ident,
             variadic,
+            constraint: ValueExpr::Each(TypeExpr::Any),
         });
 
         // Require comma between elements (trailing comma is allowed)
@@ -609,6 +632,9 @@ fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
         let param_ident: Ident =
             Ident::parser(iter).map_err(|e| format!("expected type parameter name: {e}"))?;
         let param_name = ident_str(&param_ident);
+        if param_name == "Type" {
+            return Err("type parameter `Type` is reserved for the Type projection".into());
+        }
         if !seen_names.insert(param_name.clone()) {
             return Err(format!("duplicate type parameter: `{param_name}`"));
         }
