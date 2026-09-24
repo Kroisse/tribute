@@ -43,8 +43,14 @@ fn core_scalar_width(ctx: &IrContext, ty: TypeRef, prefix: char) -> Option<u32> 
     }
     data.name.with_str(|s| {
         let digits = s.strip_prefix(prefix)?;
-        // u32::from_str rejects empty input and any sign character, so
-        // `i`, `i+32`, `i-1` all fail here.
+        // Accept only canonical decimal widths: `u32::from_str` alone would
+        // also accept `i+32` and `i032`.
+        let canonical = !digits.is_empty()
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && !digits.starts_with('0');
+        if !canonical {
+            return None;
+        }
         digits.parse().ok()
     })
 }
@@ -307,6 +313,8 @@ mod scalar_category_tests {
             ("core", "i129"),
             ("core", "i"),
             ("core", "i-1"),
+            ("core", "i+32"),
+            ("core", "i032"),
             ("core", "int"),
             ("core", "f32"),
             ("tribute_rt", "i32"),
@@ -335,6 +343,8 @@ mod scalar_category_tests {
         assert_eq!(FloatLike::width(&ctx, f32), Some(32));
         assert_eq!(FloatLike::width(&ctx, f64), Some(64));
         assert!(!FloatLike::matches(&ctx, f16));
+        let f064 = ty(&mut ctx, "core", "f064");
+        assert!(!FloatLike::matches(&ctx, f064));
         assert!(!FloatLike::matches(&ctx, i1));
     }
 }
