@@ -347,9 +347,18 @@ impl CallIndirect {
     }
 }
 
+/// Read the exact signature without assuming the operation passed its schema;
+/// interface queries must fail closed on malformed IR.
+fn exact_indirect_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
+    ctx.op(op)
+        .attributes
+        .get_type("sig")
+        .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
+}
+
 impl IndirectCallLikeModel for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        ctx.op(self.op_ref()).attributes.get_type("sig")
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -359,7 +368,7 @@ impl IndirectCallLikeModel for CallIndirect {
 
 impl IndirectCallLikeModel for ReturnCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        ctx.op(self.op_ref()).attributes.get_type("sig")
+        exact_indirect_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {

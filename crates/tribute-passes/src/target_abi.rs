@@ -1124,18 +1124,21 @@ fn validate_transfers(
         }
         let signature = IndirectCallLikeOps::exact_signature(ctx, op);
         let convention = exact_convention(ctx, op)?;
-        if signature.is_none() && convention.is_none() {
+        // An invalid signature attribute is rejected below, not skipped.
+        let has_signature = ctx.op(op).attributes.contains_key(Symbol::new("signature"));
+        if !has_signature && convention.is_none() {
             continue;
         }
         let convention = convention.ok_or_else(|| {
             TargetAbiError::new("target ABI: indirect signature has no convention metadata")
         })?;
-        let signature = signature.ok_or_else(|| {
-            TargetAbiError::new("target ABI: indirect transfer lacks exact callable signature")
-        })?;
-        let callable = func::FuncSig::from_type_ref(ctx, signature).ok_or_else(|| {
-            TargetAbiError::new("target ABI: indirect callable signature is not func.func_sig")
-        })?;
+        // The interface yields only valid `func.func_sig` contracts.
+        let callable = signature
+            .and_then(|signature| func::FuncSig::from_type_ref(ctx, signature))
+            .ok_or_else(|| {
+                TargetAbiError::new("target ABI: indirect transfer lacks exact callable signature")
+            })?;
+        let signature = callable.as_type_ref();
         let callee = IndirectCallLikeOps::callee(ctx, op)
             .ok_or_else(|| TargetAbiError::new("target ABI: indirect transfer lacks callee"))?;
         let callee_type = ctx.value_ty(callee);
@@ -2235,7 +2238,15 @@ mod tests {
     func.tail_call_indirect %callee {signature = core.i32, tribute.calling_convention = 2}
   }
 }"#,
-                "indirect callable signature is not func.func_sig",
+                "lacks exact callable signature",
+            ),
+            (
+                r#"core.module @test {
+  func.func @run(%callee: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+    func.tail_call_indirect %callee {signature = core.i32}
+  }
+}"#,
+                "indirect signature has no convention metadata",
             ),
             (
                 r#"core.module @test {

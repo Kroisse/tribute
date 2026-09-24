@@ -500,7 +500,10 @@ fn set_indirect_call_signature_attribute(
 /// Read the exact signature without assuming the operation passed its schema;
 /// interface queries must fail closed on malformed IR.
 fn indirect_call_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
-    ctx.op(op).attributes.get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+    ctx.op(op)
+        .attributes
+        .get_type(INDIRECT_CALL_SIGNATURE_ATTR)
+        .filter(|&ty| FuncSig::from_type_ref(ctx, ty).is_some())
 }
 
 /// Remove the `func`-owned exact-signature attribute from copied metadata.
@@ -770,6 +773,30 @@ mod tests {
         );
         assert!(printed.contains("signature = !t0"), "{printed}");
         assert!(!printed.contains("func.indirect_call_signature"));
+    }
+
+    #[test]
+    fn indirect_call_signature_query_rejects_non_signature_types() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%callee: core.ptr, %value: core.i32) {
+    func.call_indirect %callee, %value {signature = core.i32}
+    clif.call_indirect %callee, %value {sig = core.i32}
+    clif.return_call_indirect %callee, %value {sig = core.i32}
+  }
+}"#,
+        );
+        let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
+        let ops = ctx
+            .block(ctx.region(function.body_if_present(&ctx).unwrap()).blocks[0])
+            .ops
+            .to_vec();
+        for op in ops {
+            assert!(IndirectCallLikeOps::get(&ctx, op).is_some());
+            assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, op), None);
+        }
     }
 
     #[test]
