@@ -50,7 +50,7 @@ mod arith {
     fn r#const() -> result {}
 
     // Integer arithmetic
-    fn addi(lhs: (), rhs: ()) -> result {}
+    fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     fn subi(lhs: (), rhs: ()) -> result {}
     fn muli(lhs: (), rhs: ()) -> result {}
     fn divsi(lhs: (), rhs: ()) -> result {}

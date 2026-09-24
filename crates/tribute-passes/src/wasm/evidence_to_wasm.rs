@@ -771,7 +771,7 @@ fn build_lookup_loop_body(
     ctx.push_op(block, bound_check_if.op_ref());
 
     // mid = (low + high) / 2
-    let add_op = wasm_dialect::i32_add(ctx, location, low, high, i32_ty);
+    let add_op = wasm_dialect::I32Add::operands(low, high).build(ctx, location);
     ctx.push_op(block, add_op.op_ref());
     let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
     ctx.push_op(block, two.op_ref());
@@ -840,7 +840,7 @@ fn build_lookup_loop_body(
             });
             let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
             ctx.push_op(ub, one.op_ref());
-            let add_one = wasm_dialect::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
+            let add_one = wasm_dialect::I32Add::operands(mid, one.result(ctx)).build(ctx, location);
             ctx.push_op(ub, add_one.op_ref());
             let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
             ctx.push_op(ub, set_low.op_ref());
@@ -995,7 +995,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     // new_len = old_len + 1
     let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
     ctx.push_op(body_block, one.op_ref());
-    let add_len_op = wasm_dialect::i32_add(ctx, location, old_len, one.result(ctx), i32_ty);
+    let add_len_op = wasm_dialect::I32Add::operands(old_len, one.result(ctx)).build(ctx, location);
     let new_len = add_len_op.result(ctx);
     ctx.push_op(body_block, add_len_op.op_ref());
 
@@ -1090,7 +1090,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         let one2 = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(inner_block, one2.op_ref());
         let dst_offset_op =
-            wasm_dialect::i32_add(ctx, location, insert_idx, one2.result(ctx), i32_ty);
+            wasm_dialect::I32Add::operands(insert_idx, one2.result(ctx)).build(ctx, location);
         ctx.push_op(inner_block, dst_offset_op.op_ref());
         let copy_op = wasm_dialect::array_copy(
             ctx,
@@ -1193,7 +1193,7 @@ fn build_extend_search_loop(
     ctx.push_op(block, br_if_done.op_ref());
 
     // mid = (low + high) / 2
-    let add_op = wasm_dialect::i32_add(ctx, location, low, high, i32_ty);
+    let add_op = wasm_dialect::I32Add::operands(low, high).build(ctx, location);
     ctx.push_op(block, add_op.op_ref());
     let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
     ctx.push_op(block, two.op_ref());
@@ -1234,7 +1234,7 @@ fn build_extend_search_loop(
         });
         let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(inner_block, one.op_ref());
-        let add_one = wasm_dialect::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
+        let add_one = wasm_dialect::I32Add::operands(mid, one.result(ctx)).build(ctx, location);
         ctx.push_op(inner_block, add_one.op_ref());
         let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
         ctx.push_op(inner_block, set_low.op_ref());

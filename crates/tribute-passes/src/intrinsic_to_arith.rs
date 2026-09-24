@@ -112,10 +112,9 @@ impl ArithIntrinsicPattern {
         }
 
         // --- Int (signed) ---
-        binary!("Int::+", |ctx, loc, l, r, ty| arith::addi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
+        binary!("Int::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
+            .build(ctx, loc)
+            .op_ref());
         binary!("Int::-", |ctx, loc, l, r, ty| arith::subi(
             ctx, loc, l, r, ty
         )
@@ -140,10 +139,9 @@ impl ArithIntrinsicPattern {
         cmpi!("Int::>=", "sge");
 
         // --- Nat (unsigned) ---
-        binary!("Nat::+", |ctx, loc, l, r, ty| arith::addi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
+        binary!("Nat::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
+            .build(ctx, loc)
+            .op_ref());
         binary!("Nat::-", |ctx, loc, l, r, ty| arith::subi(
             ctx, loc, l, r, ty
         )

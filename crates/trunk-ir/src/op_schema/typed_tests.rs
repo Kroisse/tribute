@@ -1,7 +1,7 @@
 //! Tests for operations declared with the typed `#[dialect]` syntax.
 
 use super::*;
-use crate::dialect::core::{BoolLike, IntegerLike, Ptr};
+use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
 use crate::printer::print_op;
@@ -55,6 +55,22 @@ mod test_typed {
         fn jump(args: Variadic<_>) {
             #[successor(dest)]
             {}
+        }
+
+        fn widen<T: IntegerLike>(value: Value<T>) -> Values<(T, I32)> {}
+
+        #[verify]
+        fn nonempty(values: Variadic<_>) {}
+
+        fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
+    }
+
+    impl Nonempty {
+        fn verify(self, ctx: &IrContext) -> Result<(), String> {
+            if self.values(ctx).is_empty() {
+                return Err("needs at least one value".into());
+            }
+            Ok(())
         }
     }
 }
@@ -171,7 +187,7 @@ fn typed_schema_records_variables_and_constraints() {
 
 #[test]
 fn legacy_schemas_are_unconstrained() {
-    let schema = crate::dialect::arith::Addi::SCHEMA;
+    let schema = crate::dialect::arith::Subi::SCHEMA;
     assert!(schema.type_vars.is_empty());
     assert!(matches!(
         schema.operands[0].constraint,
@@ -253,35 +269,32 @@ fn fluent_builders_group_inputs_by_kind() {
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty, ptr_ty, i1_ty]);
     let (a, b, callee, cond) = (args[0], args[1], args[2], args[3]);
 
-    let add = test_typed::Add::operands(a, b)
-        .results(i32_ty)
-        .build(loc, &mut ctx);
+    let add = test_typed::Add::operands(a, b).build(&mut ctx, loc);
     assert_eq!(add.lhs(&ctx), a);
     assert_eq!(add.result_ty(&ctx), i32_ty);
 
     let cmp = test_typed::Cmp::operands(a, b)
         .predicate(Symbol::new("slt"))
         .results(i1_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(cmp.predicate(&ctx), Symbol::new("slt"));
     assert!(print_op(&ctx, cmp.op_ref()).contains("predicate = @slt"));
 
     let call = test_typed::Call::operands(callee, [a])
         .sig(sig)
-        .results([i1_ty])
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(call.sig(&ctx), sig);
     assert_eq!(call.args(&ctx), [a]);
-    assert_eq!(call.results(&ctx).len(), 1);
+    assert_eq!(ctx.op_result_types(call.op_ref()), [i1_ty]);
 
-    let ret = test_typed::Ret::operands([a, b]).build(loc, &mut ctx);
+    let ret = test_typed::Ret::operands([a, b]).build(&mut ctx, loc);
     assert_eq!(ret.values(&ctx), [a, b]);
 
     let then_region = empty_region(&mut ctx, loc);
     let declared = test_typed::Select::operands(cond)
         .results(None)
         .regions(then_region, None)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert!(ctx.op_result_types(declared.op_ref()).is_empty());
     assert_eq!(ctx.op(declared.op_ref()).regions.len(), 1);
     assert!(ctx.op(declared.op_ref()).attributes.get("label").is_none());
@@ -292,13 +305,13 @@ fn fluent_builders_group_inputs_by_kind() {
         .label(Symbol::new("l"))
         .results(i32_ty)
         .regions(then_region, else_region)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(labeled.label(&ctx), Some(Symbol::new("l")));
     assert_eq!(labeled.result_ty(&ctx), i32_ty);
 
     let marker = test_typed::Marker::builder()
         .results(i1_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
 
     let dest = ctx.create_block(BlockData {
         location: loc,
@@ -308,7 +321,7 @@ fn fluent_builders_group_inputs_by_kind() {
     });
     let jump = test_typed::Jump::operands([a])
         .successors(dest)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(jump.dest(&ctx), dest);
 
     for op in [
@@ -322,7 +335,7 @@ fn fluent_builders_group_inputs_by_kind() {
         jump.op_ref(),
     ] {
         let schema = OpSchema::of(&ctx, op).expect("typed ops are registered");
-        assert_eq!(schema.verify_structure(&ctx, op), []);
+        assert_eq!(schema.verify(&ctx, op), []);
     }
 }
 
@@ -335,15 +348,223 @@ fn fluent_builder_rejects_missing_required_attribute() {
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
         .results(i32_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
 }
 
 #[test]
-#[should_panic(expected = "test_typed.add: missing result types")]
+#[should_panic(expected = "test_typed.cmp: missing result types")]
 fn fluent_builder_rejects_missing_results() {
     let mut ctx = IrContext::new();
     let loc = location(&mut ctx);
     let i32_ty = scalar(&mut ctx, "i32");
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
-    test_typed::Add::operands(args[0], args[1]).build(loc, &mut ctx);
+    test_typed::Cmp::operands(args[0], args[1])
+        .predicate(Symbol::new("slt"))
+        .build(&mut ctx, loc);
+}
+
+#[test]
+fn fluent_builders_infer_bound_projected_and_fixed_results() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i64_ty = scalar(&mut ctx, "i64");
+    let i32_ty = scalar(&mut ctx, "i32");
+    let i1_ty = scalar(&mut ctx, "i1");
+    let pair_ty = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[i64_ty, pair_ty]);
+
+    let first = test_typed::First::operands(args[1]).build(&mut ctx, loc);
+    assert_eq!(first.result_ty(&ctx), i64_ty);
+
+    let widen = test_typed::Widen::operands(args[0]).build(&mut ctx, loc);
+    assert_eq!(ctx.op_result_types(widen.op_ref()), [i64_ty, i32_ty]);
+    assert_eq!(I32::type_ref(&mut ctx), i32_ty);
+}
+
+#[test]
+#[should_panic(expected = "test_typed.first: P = core.i64 does not provide P::First")]
+fn fluent_builder_rejects_unprojectable_sources() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let i64_ty = scalar(&mut ctx, "i64");
+    let args = block_args(&mut ctx, loc, &[i64_ty]);
+    test_typed::First::operands(args[0]).build(&mut ctx, loc);
+}
+
+#[test]
+#[should_panic(expected = "test_typed.call: cannot infer type variable `S`")]
+fn fluent_builder_rejects_missing_binding_attribute() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
+    let args = block_args(&mut ctx, loc, &[ptr_ty]);
+    test_typed::Call::operands(args[0], []).build(&mut ctx, loc);
+}
+
+fn verify_errors(input: &str) -> String {
+    let mut ctx = IrContext::new();
+    let module = crate::parser::parse_test_module(&mut ctx, input);
+    crate::validation::validate_operation_verifiers(&ctx, module).to_string()
+}
+
+#[test]
+fn verifier_reports_constraints_before_bindings() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: core.f64, %b: core.i32) {
+    %c = test_typed.add %a, %b : core.i32
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains("operand #0 `lhs`: expected T: IntegerLike, found core.f64"),
+        "{text}"
+    );
+    // Binding is checked only after every individual constraint passed.
+    assert!(!text.contains("same type"), "{text}");
+}
+
+#[test]
+fn verifier_reports_binding_mismatches() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: core.i32, %b: core.i64) {
+    %c = test_typed.add %a, %b : core.i32
+    %d = test_typed.add %a, %a : core.i64
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains(
+            "operand #1 `rhs`: expected same type as operand #0 `lhs` (T = core.i32), found core.i64"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "result #0 `result`: expected same type as operand #0 `lhs` (T = core.i32), found core.i64"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn verifier_reports_projection_and_list_mismatches() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%p: test_typed.pair(core.i64, core.i1), %callee: core.ptr, %x: core.i1) {
+    %a = test_typed.first %p : core.i1
+    %b = test_typed.call %callee, %x {sig = func.func_sig<(core.i32) -> core.i1>} : core.i1
+    %c = test_typed.call %callee, %x {sig = core.i32} : core.i1
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains("result #0 `result`: expected P::First = core.i64, found core.i1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("operands `args`: expected S::Inputs = (core.i32), found (core.i1)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("attribute `sig`: expected S: func.func_sig, found core.i32"),
+        "{text}"
+    );
+}
+
+#[test]
+fn verifier_counts_explicit_lists_and_runs_verify_hooks_last() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: core.i32, %b: core.f64) {
+    test_typed.pack %a, %a
+    test_typed.nonempty
+    test_typed.nonempty %b
+    func.return
+  }
+}"#,
+    );
+    assert_eq!(test_typed::Pack::SCHEMA.operand_count().to_string(), "3");
+    assert!(text.contains("test_typed.pack"), "{text}");
+    assert!(text.contains("expected 3 operand(s), found 2"), "{text}");
+    assert!(text.contains("needs at least one value"), "{text}");
+    assert_eq!(
+        text.matches("needs at least one value").count(),
+        1,
+        "{text}"
+    );
+}
+
+#[test]
+fn verifier_rejects_projections_of_unbound_variables() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%x: core.i32) {
+    test_typed.maybe_call %x
+    test_typed.maybe_call %x {sig = func.func_sig<(core.i32) -> core.nil>}
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains("operands `args`: cannot check S::Inputs because `S` is not bound"),
+        "{text}"
+    );
+    assert_eq!(text.matches("test_typed.maybe_call").count(), 1, "{text}");
+}
+
+#[test]
+fn verifier_checks_explicit_list_elements_and_result_segments() {
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: core.i32, %b: core.i64, %c: core.f64, %callee: core.ptr) {
+    %p = test_typed.pack %a, %a, %c : core.nil
+    %q = test_typed.pack %a, %b, %a : core.nil
+    %r = test_typed.call %callee, %a, %b {sig = func.func_sig<(core.i32, core.i64) -> core.i1>} : core.i32
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains("operand #2 `elements`: expected IntegerLike, found core.f64"),
+        "{text}"
+    );
+    assert!(
+        text.contains("operand #1 `elements`: expected same type as operand #0 `elements`"),
+        "{text}"
+    );
+    assert!(
+        text.contains("results `results`: expected S::Results = (core.i1), found (core.i32)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn scalar_bounds_match_one_core_type_and_verify_wasm_add() {
+    let mut ctx = IrContext::new();
+    let i32_ty = I32::type_ref(&mut ctx);
+    let i64_ty = crate::dialect::core::I64::type_ref(&mut ctx);
+    assert!(I32::matches(&ctx, i32_ty));
+    assert!(!I32::matches(&ctx, i64_ty));
+    let f64_ty = scalar(&mut ctx, "f64");
+    assert!(crate::dialect::core::F64::matches(&ctx, f64_ty));
+
+    let text = verify_errors(
+        r#"core.module @m {
+  func.func @f(%a: core.i32, %b: core.i1) {
+    %c = wasm.i32_add %a, %b : core.i32
+    %d = arith.addi %a, %a : core.i32
+    func.return
+  }
+}"#,
+    );
+    assert!(
+        text.contains("wasm.i32_add") && text.contains("expected core.i32, found core.i1"),
+        "{text}"
+    );
+    assert!(!text.contains("arith.addi"), "{text}");
 }

@@ -111,8 +111,9 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let index_ext = trunk_ir::dialect::arith::extend(ctx, loc, index, ptr_ty);
         rewriter.insert_op(index_ext.op_ref());
 
-        // Compute address: data_ptr + index
-        let addr = trunk_ir::dialect::arith::addi(
+        // Compute address: data_ptr + index. `arith.addi` is integer-only,
+        // so pointer arithmetic uses `clif.iadd` like the other native passes.
+        let addr = trunk_ir::dialect::clif::iadd(
             ctx,
             loc,
             data_ptr.result(ctx),

@@ -58,10 +58,14 @@ From external crates: `#[trunk_ir::dialect]`.
 **Typed syntax**: an operation may instead declare its entities and type
 constraints in the signature, following
 [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
-The examples below are illustrative; the existing `arith` and `clif`
-operations still use the legacy annotations.
+`arith.addi` and `wasm.i32_add` use it; the other examples below are
+illustrative.
 
 ```rust
+fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+
+fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
+
 fn cmpi<T: IntegerLike>(
     predicate: Attr<Symbol>,
     lhs: Value<T>,
@@ -80,34 +84,48 @@ fn call_indirect<S: clif::FuncSig>(
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). Regions and
   successors keep the `#[region(..)]` / `#[successor(..)]` body form.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
-  `core` scalar categories, macro-defined type wrappers (projections are their
-  declared parameters), and the `func`/`clif`/`wasm` `FuncSig` wrappers
-  (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind projections and
-  conflicting exact bounds fail to compile.
+  `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`), exact
+  `core` scalars (`I1`–`I64`, `F32`, `F64`), macro-defined type wrappers
+  (projections are their declared parameters), and the `func`/`clif`/`wasm`
+  `FuncSig` wrappers (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind
+  projections and conflicting exact bounds fail to compile.
+- A bound written directly in a result, without `impl`, is that one fixed
+  type (`-> Value<I32>`); it must denote exactly one type.
+- `#[verify]` on an operation calls an inherent
+  `verify(self, ctx: &IrContext) -> Result<(), String>` method that you
+  define on its wrapper, and reserves the entity name `verify`. It checks
+  what the schema cannot express and runs only after every generated check
+  passed.
 - An operation uses either the legacy annotations above or the typed syntax,
   never both. Legacy definitions remain supported and are unconstrained in the
   schema.
 
 Typed operations generate a builder that groups inputs by entity kind instead
-of a positional constructor. For the `cmpi` declaration above:
+of a positional constructor. For the declarations above:
 
 ```rust
+let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = Cmpi::operands(lhs, rhs)        // or `Op::builder()` without operands
     .predicate(Symbol::new("slt"))        // attributes by name
-    .results(i1_ty)                       // result types
-    .build(loc, ctx);
+    .results(i1_ty)                       // result types that are not inferred
+    .build(ctx, loc);
 ```
 
-Result types, regions (`.regions(..)`), and successors (`.successors(..)`) are
-each set in one call, in declaration order. Missing required inputs panic in
-`build`.
+The builder infers result types that are fixed types, variables bound by a
+single operand or a required attribute, or projections of such variables;
+`.results(..)` exists only when they are not all inferred. Result types,
+regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
+one call, in declaration order. Missing required inputs panic in `build`; the
+builder does not check input types.
 
 **Operation schema**: every generated operation wrapper exposes
 `DialectOp::SCHEMA`, a static `op_schema::OpSchema` registered by operation
 name. `OpSchema::of(ctx, op)` looks it up for any operation.
-`validate_operation_verifiers` checks each operation's counts, required
-attributes, and attribute kinds against its schema before running
-operation-specific checks, which may then assume the declared shape. Typed
+`validate_operation_verifiers` runs `OpSchema::verify` on each operation:
+counts and attributes, individual type constraints, variable bindings, then
+projections and type lists, and finally the `#[verify]` hook, each stage only
+if the earlier ones passed. Remaining operation-specific checks run afterwards
+and may assume the declared shape. Typed
 accessors do not check the schema; for an optional region or result, inspect
 the operation before calling the accessor.
 

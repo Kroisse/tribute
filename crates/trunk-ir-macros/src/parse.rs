@@ -34,6 +34,9 @@ pub struct OperationDef {
     pub syntax: Syntax,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
+    /// `#[verify]`: call the wrapper's inherent `verify(self, ctx)` method
+    /// after the schema checks. Holds the attribute's span for diagnostics.
+    pub verify: Option<proc_macro2::Span>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -185,8 +188,10 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
 fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut op_attrs = Vec::new();
     let mut rest_results = false;
+    let mut verify = None;
 
-    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)], #[rest_results]
+    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
+    // #[rest_results], #[verify]
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
@@ -205,6 +210,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 rest_results = true;
             }
+            OuterAttr::Verify(span) => {
+                if verify.is_some() {
+                    return Err("duplicate #[verify] on the same operation".into());
+                }
+                verify = Some(span);
+            }
         }
     }
 
@@ -213,12 +224,19 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 
     match kw.to_string().as_str() {
         "fn" => {
-            let op = parse_operation(iter, op_attrs, rest_results)?;
+            let mut op = parse_operation(iter, op_attrs, rest_results)?;
+            if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
+                return Err("#[verify] reserves the name `verify` for the verifier method".into());
+            }
+            op.verify = verify;
             Ok(DialectItem::Operation(op))
         }
         "struct" => {
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
+            }
+            if verify.is_some() {
+                return Err("#[verify] is not allowed on struct items".into());
             }
             let td = parse_struct_def(iter, op_attrs)?;
             Ok(DialectItem::TypeDef(td))
@@ -231,9 +249,32 @@ enum OuterAttr {
     Doc,
     OpAttrs(Vec<AttrDef>),
     RestResults,
+    Verify(proc_macro2::Span),
 }
 
-/// Parse `#[...]` — either `#[doc = "..."]`, `#[attr(...)]`, or `#[rest_results]`.
+/// Names of an operation's entities, each of which becomes an accessor.
+fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
+    let results: Vec<&str> = match &op.results {
+        ResultDef::None => Vec::new(),
+        ResultDef::Single(name) | ResultDef::Variadic(name) | ResultDef::Optional(name) => {
+            vec![name]
+        }
+        ResultDef::Multi(names) => names.iter().map(String::as_str).collect(),
+    };
+    op.operands
+        .iter()
+        .map(|operand| operand.name.as_str())
+        .chain(op.attrs.iter().map(|attr| attr.name.as_str()))
+        .chain(op.regions.iter().map(|item| match item {
+            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor(name) => {
+                name.as_str()
+            }
+        }))
+        .chain(results)
+}
+
+/// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`, or
+/// `#[verify]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -257,8 +298,12 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[rest_results]")?;
             Ok(OuterAttr::RestResults)
         }
+        "verify" => {
+            expect_consumed(&inner, "#[verify]")?;
+            Ok(OuterAttr::Verify(ident.span()))
+        }
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, or `rest_results`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, or `verify`"
         )),
     }
 }
@@ -387,6 +432,7 @@ fn parse_operation(
         syntax: Syntax::Legacy,
         type_vars: Vec::new(),
         result_constraint: ValueExpr::Each(TypeExpr::Any),
+        verify: None,
     })
 }
 
@@ -1262,6 +1308,70 @@ mod tests {
             result.is_err(),
             "should reject trailing tokens in #[rest_results]"
         );
+    }
+
+    #[test]
+    fn test_verify_marks_operations() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[verify]
+                fn checked(x: ()) {}
+                fn plain(xs: Variadic<_>) {}
+            }
+        })
+        .unwrap();
+        let flags: Vec<bool> = module
+            .items
+            .iter()
+            .map(|item| match item {
+                DialectItem::Operation(op) => op.verify.is_some(),
+                DialectItem::TypeDef(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(flags, [true, false]);
+
+        for (item, expected) in [
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        #[verify]
+                        fn op() {}
+                    }
+                ),
+                "duplicate #[verify]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        struct Ty;
+                    }
+                ),
+                "#[verify] is not allowed on struct items",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify(x)]
+                        fn op() {}
+                    }
+                ),
+                "#[verify]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        fn op(verify: ()) {}
+                    }
+                ),
+                "reserves the name `verify`",
+            ),
+        ] {
+            let err = parse_test_module(item).err().expect("should fail");
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
     }
 
     #[test]

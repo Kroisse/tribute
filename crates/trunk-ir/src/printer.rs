@@ -1141,7 +1141,7 @@ mod tests {
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
-        let add = arith::addi(&mut ctx, loc, v1, v2, i32_ty);
+        let add = arith::Addi::operands(v1, v2).build(&mut ctx, loc);
         // Printer assigns names based on what it sees - standalone op print
         // only numbers the result of THIS op since it can't see c1/c2
         let output = print_op(&ctx, add.op_ref());
@@ -1177,7 +1177,7 @@ mod tests {
         // x + y
         let x = ctx.block_arg(entry_block, 0);
         let y = ctx.block_arg(entry_block, 1);
-        let add = arith::addi(&mut ctx, loc, x, y, i32_ty);
+        let add = arith::Addi::operands(x, y).build(&mut ctx, loc);
         ctx.push_op(entry_block, add.op_ref());
 
         // return result
@@ -1820,7 +1820,7 @@ core.module @test {
         ctx.push_op(entry, c2.op_ref());
         let v2 = c2.result(&ctx);
 
-        let add = arith::addi(&mut ctx, loc, v1, v1, i32_ty);
+        let add = arith::Addi::operands(v1, v1).build(&mut ctx, loc);
         ctx.push_op(entry, add.op_ref());
 
         // RAUW: replace v1 with v2
