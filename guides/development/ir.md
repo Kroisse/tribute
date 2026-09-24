@@ -57,7 +57,9 @@ From external crates: `#[trunk_ir::dialect]`.
 
 **Typed syntax**: an operation may instead declare its entities and type
 constraints in the signature, following
-[the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema):
+[the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
+The examples below are illustrative; the existing `arith` and `clif`
+operations still use the legacy annotations.
 
 ```rust
 fn cmpi<T: IntegerLike>(
@@ -87,10 +89,10 @@ fn call_indirect<S: clif::FuncSig>(
   schema.
 
 Typed operations generate a builder that groups inputs by entity kind instead
-of a positional constructor:
+of a positional constructor. For the `cmpi` declaration above:
 
 ```rust
-let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::builder()` without operands
+let cmp = Cmpi::operands(lhs, rhs)        // or `Op::builder()` without operands
     .predicate(Symbol::new("slt"))        // attributes by name
     .results(i1_ty)                       // result types
     .build(loc, ctx);
