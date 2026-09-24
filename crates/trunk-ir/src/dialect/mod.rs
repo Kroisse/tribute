@@ -46,7 +46,10 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create i32.const with value attribute
-        let op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let op = super::arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op
         let op2 =
@@ -69,13 +72,22 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create two values to use as arguments: use arith.const to produce them
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
+        let c1 = super::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
+        let c2 = super::arith::Const::builder()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
         // Create func.call with variadic args
-        let call = super::func::call(&mut ctx, loc, [v1, v2], [i32_ty], Symbol::new("add"));
+        let call = super::func::Call::operands([v1, v2])
+            .callee(Symbol::new("add"))
+            .results([i32_ty])
+            .build(&mut ctx, loc);
 
         // Verify from_op
         let call2 =
@@ -102,11 +114,14 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
+        let c1 = super::arith::Const::builder()
+            .value(Attribute::Int(99))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let v1 = c1.result(&ctx);
 
         // func.return has no result, variadic operands
-        let ret = super::func::r#return(&mut ctx, loc, [v1]);
+        let ret = super::func::Return::operands([v1]).build(&mut ctx, loc);
 
         let ret2 =
             super::func::Return::from_op(&ctx, ret.op_ref()).expect("should match func.return");
@@ -141,7 +156,11 @@ mod tests {
         });
 
         // Constructor order: ctx, location, attrs (sym_name, r#type), regions (body)
-        let f = super::func::func(&mut ctx, loc, Symbol::new("main"), func_ty, region);
+        let f = super::func::Func::builder()
+            .sym_name(Symbol::new("main"))
+            .r#type(func_ty)
+            .regions(region)
+            .build(&mut ctx, loc);
 
         // Verify from_op
         let f2 = super::func::Func::from_op(&ctx, f.op_ref()).expect("should match func.func");
@@ -160,7 +179,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let cond_op = super::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let cond = cond_op.result(&ctx);
 
         // Create then and else regions
@@ -188,7 +210,10 @@ mod tests {
             parent_op: None,
         });
 
-        let if_op = super::scf::r#if(&mut ctx, loc, cond, i32_ty, then_region, else_region);
+        let if_op = super::scf::If::operands(cond)
+            .results(i32_ty)
+            .regions(then_region, else_region)
+            .build(&mut ctx, loc);
 
         assert_eq!(if_op.cond(&ctx), cond);
         assert_eq!(if_op.then_region(&ctx), then_region);
@@ -205,7 +230,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let cond_op = super::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let cond = cond_op.result(&ctx);
 
         // Create successor blocks
@@ -222,7 +250,9 @@ mod tests {
             parent_region: None,
         });
 
-        let brif = super::clif::brif(&mut ctx, loc, cond, then_dest, else_dest);
+        let brif = super::clif::Brif::operands(cond)
+            .successors(then_dest, else_dest)
+            .build(&mut ctx, loc);
 
         assert_eq!(brif.cond(&ctx), cond);
         assert_eq!(brif.then_dest(&ctx), then_dest);
@@ -278,7 +308,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c = super::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         // Try to match as func.call — should fail
         let err = super::func::Call::from_op(&ctx, c.op_ref());
@@ -295,7 +328,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c = super::arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         assert!(super::arith::Const::matches(&ctx, c.op_ref()));
         assert!(!super::func::Call::matches(&ctx, c.op_ref()));
@@ -335,8 +371,14 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create values for the call
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
+        let c1 = super::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
+        let c2 = super::arith::Const::builder()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
@@ -360,7 +402,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c = super::arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let result = c.result(&ctx);
 
         match ctx.value_def(result) {

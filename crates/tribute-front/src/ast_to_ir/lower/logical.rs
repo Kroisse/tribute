@@ -324,7 +324,10 @@ pub(super) fn lower_module<'db>(
         blocks: trunk_ir::smallvec::smallvec![module_block],
         parent_op: None,
     });
-    let module = core::module(ir, location, module_name, region);
+    let module = core::Module::builder()
+        .sym_name(module_name)
+        .regions(region)
+        .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
     FrontendIrModule {
         module: IrModule::new(ir, module.op_ref()).expect("valid core.module operation"),
@@ -751,14 +754,11 @@ fn lower_struct_accessors<'db>(
             ops: Default::default(),
             parent_region: None,
         });
-        let field_value = adt::struct_get(
-            ir,
-            location,
-            ir.block_arg(entry, 0),
-            field_type,
-            layout_type,
-            index as u32,
-        );
+        let field_value = adt::StructGet::operands(ir.block_arg(entry, 0))
+            .r#type(layout_type)
+            .field(index as u32)
+            .results(field_type)
+            .build(ir, location);
         ir.push_op(entry, field_value.op_ref());
         let field_result = field_value.result(ir);
         op(ir, entry, location, "return", |builder| {
@@ -1131,54 +1131,65 @@ fn lower_expr<'db>(
     match *expr.kind {
         ExprKind::NatLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::r#const(builder.ir, location, ty, Attribute::Int(value as i128));
+            let value = arith::Const::builder()
+                .value(Attribute::Int(value as i128))
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::IntLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::r#const(builder.ir, location, ty, Attribute::Int(value as i128));
+            let value = arith::Const::builder()
+                .value(Attribute::Int(value as i128))
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::BoolLit(value) => {
             let ty = builder.ctx.bool_type(builder.ir);
-            let value = arith::r#const(builder.ir, location, ty, Attribute::Bool(value));
+            let value = arith::Const::builder()
+                .value(Attribute::Bool(value))
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::FloatLit(value) => {
             let ty = builder.ctx.f64_type(builder.ir);
-            let value = arith::r#const(
-                builder.ir,
-                location,
-                ty,
-                Attribute::FloatBits(value.value().to_bits()),
-            );
+            let value = arith::Const::builder()
+                .value(Attribute::FloatBits(value.value().to_bits()))
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::Nil => Some(builder.emit_nil(location)),
         ExprKind::RuneLit(value) => {
             let ty = builder.ctx.i32_type(builder.ir);
-            let value = arith::r#const(
-                builder.ir,
-                location,
-                ty,
-                Attribute::Int(value as i32 as i128),
-            );
+            let value = arith::Const::builder()
+                .value(Attribute::Int(value as i32 as i128))
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::BytesLit(value) => {
             let ty = builder.ctx.bytes_type(builder.ir);
-            let value = adt::bytes_const(builder.ir, location, ty, value.into());
+            let value = adt::BytesConst::builder()
+                .value(value.into())
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
         ExprKind::StringLit(value) => {
             let ty = builder.ctx.anyref_type(builder.ir);
-            let value = adt::string_const(builder.ir, location, ty, value);
+            let value = adt::StringConst::builder()
+                .value(value)
+                .results(ty)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, value.op_ref());
             Some(value.result(builder.ir))
         }
@@ -1230,7 +1241,7 @@ fn lower_expr<'db>(
                     crate::ast::BinOpKind::Or => emit_bool(&mut inner, location, true),
                 }
             };
-            let then_yield = scf::r#yield(builder.ir, location, [then_value]);
+            let then_yield = scf::Yield::operands([then_value]).build(builder.ir, location);
             builder.ir.push_op(then_block, then_yield.op_ref());
             let then_region = builder.ir.create_region(RegionData {
                 location,
@@ -1250,14 +1261,17 @@ fn lower_expr<'db>(
                     crate::ast::BinOpKind::Or => lower_expr(&mut inner, rhs, declarations)?,
                 }
             };
-            let else_yield = scf::r#yield(builder.ir, location, [else_value]);
+            let else_yield = scf::Yield::operands([else_value]).build(builder.ir, location);
             builder.ir.push_op(else_block, else_yield.op_ref());
             let else_region = builder.ir.create_region(RegionData {
                 location,
                 blocks: trunk_ir::smallvec::smallvec![else_block],
                 parent_op: None,
             });
-            let branch = scf::r#if(builder.ir, location, lhs, bool_ty, then_region, else_region);
+            let branch = scf::If::operands(lhs)
+                .results(bool_ty)
+                .regions(then_region, else_region)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, branch.op_ref());
             Some(branch.result(builder.ir))
         }
@@ -1377,7 +1391,11 @@ fn lower_constructor<'db>(
         ctor.ty,
     );
     let values = super::expr::cast_variant_args(builder, location, values, type_attr, variant);
-    let variant = adt::variant_new(builder.ir, location, values, result_ty, type_attr, variant);
+    let variant = adt::VariantNew::operands(values)
+        .r#type(type_attr)
+        .tag(variant)
+        .results(result_ty)
+        .build(builder.ir, location);
     builder.ir.push_op(builder.block, variant.op_ref());
     Some(variant.result(builder.ir))
 }
@@ -1396,7 +1414,10 @@ fn lower_tuple<'db>(
     let (_, type_attr) = super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, id)
         .unwrap_or_else(|| panic!("missing typechecked tuple layout"));
     let result_ty = expr_type_for_id(builder, id);
-    let tuple = adt::struct_new(builder.ir, location, values, result_ty, type_attr);
+    let tuple = adt::StructNew::operands(values)
+        .r#type(type_attr)
+        .results(result_ty)
+        .build(builder.ir, location);
     builder.ir.push_op(builder.block, tuple.op_ref());
     Some(tuple.result(builder.ir))
 }
@@ -1428,11 +1449,17 @@ fn lower_list<'db>(
     }
     let element_ty = builder.ctx.convert_logical_type(builder.ir, args[0]);
     let list_ty = expr_type_for_id(builder, id);
-    let empty = list::empty(builder.ir, location, list_ty, element_ty);
+    let empty = list::Empty::builder()
+        .element_type(element_ty)
+        .results(list_ty)
+        .build(builder.ir, location);
     builder.ir.push_op(builder.block, empty.op_ref());
     let mut value = empty.result(builder.ir);
     for element in values.into_iter().rev() {
-        let prepend = list::prepend(builder.ir, location, element, value, list_ty, element_ty);
+        let prepend = list::Prepend::operands(element, value)
+            .element_type(element_ty)
+            .results(list_ty)
+            .build(builder.ir, location);
         builder.ir.push_op(builder.block, prepend.op_ref());
         value = prepend.result(builder.ir);
     }
@@ -1487,20 +1514,20 @@ fn lower_record<'db>(
             // only after normal typechecking; use layout metadata directly.
             let field_types = trunk_ir::adt_layout::get_struct_fields(builder.ir, layout)
                 .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
-            let get = adt::struct_get(
-                builder.ir,
-                location,
-                base,
-                field_types[index].1,
-                layout,
-                index as u32,
-            );
+            let get = adt::StructGet::operands(base)
+                .r#type(layout)
+                .field(index as u32)
+                .results(field_types[index].1)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, get.op_ref());
             ordered.push(get.result(builder.ir));
         }
     }
     let result_ty = expr_type_for_id(builder, id);
-    let record = adt::struct_new(builder.ir, location, ordered, result_ty, layout);
+    let record = adt::StructNew::operands(ordered)
+        .r#type(layout)
+        .results(result_ty)
+        .build(builder.ir, location);
     builder.ir.push_op(builder.block, record.op_ref());
     Some(record.result(builder.ir))
 }
@@ -1578,14 +1605,10 @@ fn lower_case_chain<'db>(
                 exhaustive,
                 declarations,
             )?;
-            let branch = scf::r#if(
-                builder.ir,
-                location,
-                condition,
-                result_ty,
-                then_region,
-                else_region,
-            );
+            let branch = scf::If::operands(condition)
+                .results(result_ty)
+                .regions(then_region, else_region)
+                .build(builder.ir, location);
             builder.ir.push_op(builder.block, branch.op_ref());
             Some(branch.result(builder.ir))
         }
@@ -1661,14 +1684,10 @@ fn build_case_arm_region<'db>(
                 exhaustive,
                 declarations,
             )?;
-            let branch = scf::r#if(
-                nested.ir,
-                location,
-                condition,
-                result_ty,
-                then_region,
-                else_region,
-            );
+            let branch = scf::If::operands(condition)
+                .results(result_ty)
+                .regions(then_region, else_region)
+                .build(nested.ir, location);
             nested.ir.push_op(nested.block, branch.op_ref());
             branch.result(nested.ir)
         } else {
@@ -1676,7 +1695,7 @@ fn build_case_arm_region<'db>(
         }
     };
     let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::r#yield(ir, location, [value]);
+    let yield_op = scf::Yield::operands([value]).build(ir, location);
     ir.push_op(block, yield_op.op_ref());
     Some(ir.create_region(RegionData {
         location,
@@ -1701,7 +1720,7 @@ fn build_case_body_region<'db>(
     });
     let value = lower_expr(&mut IrBuilder::new(ctx, ir, block), body, declarations)?;
     let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::r#yield(ir, location, [value]);
+    let yield_op = scf::Yield::operands([value]).build(ir, location);
     ir.push_op(block, yield_op.op_ref());
     Some(ir.create_region(RegionData {
         location,
@@ -1737,7 +1756,7 @@ fn build_case_else_region<'db>(
         declarations,
     )?;
     let value = IrBuilder::new(ctx, ir, block).cast_if_needed(location, value, result_ty);
-    let yield_op = scf::r#yield(ir, location, [value]);
+    let yield_op = scf::Yield::operands([value]).build(ir, location);
     ir.push_op(block, yield_op.op_ref());
     Some(ir.create_region(RegionData {
         location,
@@ -1748,7 +1767,10 @@ fn build_case_else_region<'db>(
 
 fn emit_bool(builder: &mut IrBuilder<'_, '_>, location: Location, value: bool) -> ValueRef {
     let ty = builder.ctx.bool_type(builder.ir);
-    let op = arith::r#const(builder.ir, location, ty, Attribute::Bool(value));
+    let op = arith::Const::builder()
+        .value(Attribute::Bool(value))
+        .results(ty)
+        .build(builder.ir, location);
     builder.ir.push_op(builder.block, op.op_ref());
     op.result(builder.ir)
 }
@@ -2405,7 +2427,10 @@ mod tests {
             parent_region: None,
         });
         let anyref = ctx.anyref_type(&mut ir);
-        let value = adt::ref_null(&mut ir, location, anyref, anyref);
+        let value = adt::RefNull::builder()
+            .r#type(anyref)
+            .results(anyref)
+            .build(&mut ir, location);
         ir.push_op(block, value.op_ref());
         let value = value.result(&ir);
         let parameter = ctx.adt_typeref(&mut ir, Symbol::new("String"));

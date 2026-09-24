@@ -255,14 +255,11 @@ impl RewritePattern for StringConstPattern {
             .results(bytes_ty)
             .build(ctx, location);
         let result_ty = ctx.op_result_types(op)[0];
-        let leaf = adt::variant_new(
-            ctx,
-            location,
-            [bytes.result(ctx)],
-            result_ty,
-            string_enum_ty,
-            Symbol::new("Leaf"),
-        );
+        let leaf = adt::VariantNew::operands([bytes.result(ctx)])
+            .r#type(string_enum_ty)
+            .tag(Symbol::new("Leaf"))
+            .results(result_ty)
+            .build(ctx, location);
 
         rewriter.insert_op(bytes.op_ref());
         rewriter.replace_op(leaf.op_ref());

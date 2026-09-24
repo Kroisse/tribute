@@ -365,11 +365,18 @@ fn generate_release_function_for_struct(
             ops: smallvec![],
             parent_region: None,
         });
-        let reload = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+        let reload = clif::Load::operands(payload_ptr)
+            .offset(offset)
+            .results(ptr_ty)
+            .build(ctx, loc);
         ctx.push_op(release_block, reload.op_ref());
-        let release = tribute_rt::release(ctx, loc, reload.result(ctx), 0);
+        let release = tribute_rt::Release::operands(reload.result(ctx))
+            .alloc_size(0)
+            .build(ctx, loc);
         ctx.push_op(release_block, release.op_ref());
-        let jump = clif::jump(ctx, loc, [], next_block);
+        let jump = clif::Jump::operands([])
+            .successors(next_block)
+            .build(ctx, loc);
         ctx.push_op(release_block, jump.op_ref());
 
         // Check block: load field, null check, branch
@@ -379,20 +386,24 @@ fn generate_release_function_for_struct(
             ops: smallvec![],
             parent_region: None,
         });
-        let load = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+        let load = clif::Load::operands(payload_ptr)
+            .offset(offset)
+            .results(ptr_ty)
+            .build(ctx, loc);
         ctx.push_op(check_block, load.op_ref());
-        let null_const = clif::iconst(ctx, loc, ptr_ty, 0);
+        let null_const = clif::Iconst::builder()
+            .value(0)
+            .results(ptr_ty)
+            .build(ctx, loc);
         ctx.push_op(check_block, null_const.op_ref());
-        let is_null = clif::icmp(
-            ctx,
-            loc,
-            load.result(ctx),
-            null_const.result(ctx),
-            i8_ty,
-            Symbol::new("eq"),
-        );
+        let is_null = clif::Icmp::operands(load.result(ctx), null_const.result(ctx))
+            .cond(Symbol::new("eq"))
+            .results(i8_ty)
+            .build(ctx, loc);
         ctx.push_op(check_block, is_null.op_ref());
-        let brif = clif::brif(ctx, loc, is_null.result(ctx), next_block, release_block);
+        let brif = clif::Brif::operands(is_null.result(ctx))
+            .successors(next_block, release_block)
+            .build(ctx, loc);
         ctx.push_op(check_block, brif.op_ref());
 
         blocks_after_entry.push(release_block);
@@ -465,12 +476,20 @@ fn gen_dealloc_and_return_with_size(
 ) {
     use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-    let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::Iconst::builder()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ctx.push_op(block, hdr_sz.op_ref());
-    let raw_ptr = clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
+    let raw_ptr = clif::Isub::operands(payload_ptr, hdr_sz.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
     ctx.push_op(block, raw_ptr.op_ref());
 
-    let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+    let size_op = clif::Iconst::builder()
+        .value(alloc_size as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ctx.push_op(block, size_op.op_ref());
 
     let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
@@ -479,7 +498,7 @@ fn gen_dealloc_and_return_with_size(
         .build(ctx, loc);
     ctx.push_op(block, dealloc_call.op_ref());
 
-    let ret_op = clif::r#return(ctx, loc, []);
+    let ret_op = clif::Return::operands([]).build(ctx, loc);
     ctx.push_op(block, ret_op.op_ref());
 }
 
@@ -571,13 +590,21 @@ fn generate_release_function_for_enum(
     {
         use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 
-        let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+        let hdr_sz = clif::Iconst::builder()
+            .value(RC_HEADER_SIZE as i64)
+            .results(i64_ty)
+            .build(ctx, loc);
         ctx.push_op(dealloc_block, hdr_sz.op_ref());
-        let raw_ptr = clif::isub(ctx, loc, payload_ptr, hdr_sz.result(ctx), ptr_ty);
+        let raw_ptr = clif::Isub::operands(payload_ptr, hdr_sz.result(ctx))
+            .results(ptr_ty)
+            .build(ctx, loc);
         ctx.push_op(dealloc_block, raw_ptr.op_ref());
 
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+        let size_op = clif::Iconst::builder()
+            .value(alloc_size as i64)
+            .results(i64_ty)
+            .build(ctx, loc);
         ctx.push_op(dealloc_block, size_op.op_ref());
 
         let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
@@ -586,13 +613,15 @@ fn generate_release_function_for_enum(
             .build(ctx, loc);
         ctx.push_op(dealloc_block, dealloc_call.op_ref());
 
-        let ret_op = clif::r#return(ctx, loc, []);
+        let ret_op = clif::Return::operands([]).build(ctx, loc);
         ctx.push_op(dealloc_block, ret_op.op_ref());
     }
 
     if variants_with_ptrs.is_empty() {
         // No managed fields: entry jumps straight to dealloc
-        let jump = clif::jump(ctx, loc, [], dealloc_block);
+        let jump = clif::Jump::operands([])
+            .successors(dealloc_block)
+            .build(ctx, loc);
         ctx.push_op(entry_block, jump.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -626,11 +655,18 @@ fn generate_release_function_for_enum(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let reload = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+            let reload = clif::Load::operands(payload_ptr)
+                .offset(offset)
+                .results(ptr_ty)
+                .build(ctx, loc);
             ctx.push_op(rel_block, reload.op_ref());
-            let release_op = tribute_rt::release(ctx, loc, reload.result(ctx), 0);
+            let release_op = tribute_rt::Release::operands(reload.result(ctx))
+                .alloc_size(0)
+                .build(ctx, loc);
             ctx.push_op(rel_block, release_op.op_ref());
-            let jump = clif::jump(ctx, loc, [], next_block);
+            let jump = clif::Jump::operands([])
+                .successors(next_block)
+                .build(ctx, loc);
             ctx.push_op(rel_block, jump.op_ref());
 
             // Check block: load field, null check, branch
@@ -640,20 +676,24 @@ fn generate_release_function_for_enum(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let load_op = clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+            let load_op = clif::Load::operands(payload_ptr)
+                .offset(offset)
+                .results(ptr_ty)
+                .build(ctx, loc);
             ctx.push_op(chk_block, load_op.op_ref());
-            let null_const = clif::iconst(ctx, loc, ptr_ty, 0);
+            let null_const = clif::Iconst::builder()
+                .value(0)
+                .results(ptr_ty)
+                .build(ctx, loc);
             ctx.push_op(chk_block, null_const.op_ref());
-            let is_null = clif::icmp(
-                ctx,
-                loc,
-                load_op.result(ctx),
-                null_const.result(ctx),
-                i8_ty,
-                Symbol::new("eq"),
-            );
+            let is_null = clif::Icmp::operands(load_op.result(ctx), null_const.result(ctx))
+                .cond(Symbol::new("eq"))
+                .results(i8_ty)
+                .build(ctx, loc);
             ctx.push_op(chk_block, is_null.op_ref());
-            let brif = clif::brif(ctx, loc, is_null.result(ctx), next_block, rel_block);
+            let brif = clif::Brif::operands(is_null.result(ctx))
+                .successors(next_block, rel_block)
+                .build(ctx, loc);
             ctx.push_op(chk_block, brif.op_ref());
 
             extra_blocks.push(rel_block);
@@ -672,7 +712,10 @@ fn generate_release_function_for_enum(
     let num_variants = variants_with_ptrs.len();
 
     // Load tag in entry block
-    let tag_load = clif::load(ctx, loc, payload_ptr, i32_ty, 0);
+    let tag_load = clif::Load::operands(payload_ptr)
+        .offset(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(entry_block, tag_load.op_ref());
     let tag_val = tag_load.result(ctx);
 
@@ -685,24 +728,19 @@ fn generate_release_function_for_enum(
             ops: smallvec![],
             parent_region: None,
         });
-        let expected = clif::iconst(ctx, loc, i32_ty, vr.tag_value as i64);
+        let expected = clif::Iconst::builder()
+            .value(vr.tag_value as i64)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(check_block, expected.op_ref());
-        let cmp_op = clif::icmp(
-            ctx,
-            loc,
-            tag_val,
-            expected.result(ctx),
-            i8_ty,
-            Symbol::new("eq"),
-        );
+        let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
+            .cond(Symbol::new("eq"))
+            .results(i8_ty)
+            .build(ctx, loc);
         ctx.push_op(check_block, cmp_op.op_ref());
-        let brif_op = clif::brif(
-            ctx,
-            loc,
-            cmp_op.result(ctx),
-            release_blocks[i],
-            next_else_block,
-        );
+        let brif_op = clif::Brif::operands(cmp_op.result(ctx))
+            .successors(release_blocks[i], next_else_block)
+            .build(ctx, loc);
         ctx.push_op(check_block, brif_op.op_ref());
 
         next_else_block = check_block;
@@ -712,24 +750,19 @@ fn generate_release_function_for_enum(
 
     // Entry block: check first variant
     let first_vr = &variants_with_ptrs[0];
-    let expected = clif::iconst(ctx, loc, i32_ty, first_vr.tag_value as i64);
+    let expected = clif::Iconst::builder()
+        .value(first_vr.tag_value as i64)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(entry_block, expected.op_ref());
-    let cmp_op = clif::icmp(
-        ctx,
-        loc,
-        tag_val,
-        expected.result(ctx),
-        i8_ty,
-        Symbol::new("eq"),
-    );
+    let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
+        .cond(Symbol::new("eq"))
+        .results(i8_ty)
+        .build(ctx, loc);
     ctx.push_op(entry_block, cmp_op.op_ref());
-    let brif_op = clif::brif(
-        ctx,
-        loc,
-        cmp_op.result(ctx),
-        release_blocks[0],
-        next_else_block,
-    );
+    let brif_op = clif::Brif::operands(cmp_op.result(ctx))
+        .successors(release_blocks[0], next_else_block)
+        .build(ctx, loc);
     ctx.push_op(entry_block, brif_op.op_ref());
 
     // Assemble blocks: entry, tag check_blocks, variant null-check/release blocks, dealloc.
@@ -827,7 +860,7 @@ mod tests {
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 
-        let ret = func::r#return(ctx, loc, [struct_result]);
+        let ret = func::Return::operands([struct_result]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -835,7 +868,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("create_struct"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -1016,7 +1053,7 @@ mod tests {
         let sn2_result = ctx.op_result(sn2_ref, 0);
         ctx.push_op(entry, sn2_ref);
 
-        let ret = func::r#return(&mut ctx, loc, [sn2_result]);
+        let ret = func::Return::operands([sn2_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -1024,7 +1061,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("create"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("create"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let module_block = ctx.create_block(BlockData {
             location: loc,

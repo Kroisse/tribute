@@ -378,7 +378,9 @@ impl PatternApplicator {
                 && target_ty != raw_ty
             {
                 let loc = ctx.op(op).location;
-                let cast = core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
+                let cast = core::UnrealizedConversionCast::operands(operand)
+                    .results(target_ty)
+                    .build(ctx, loc);
                 let cast_ref = cast.op_ref();
                 let cast_result = cast.result(ctx);
                 ctx.insert_op_before(block, op, cast_ref);

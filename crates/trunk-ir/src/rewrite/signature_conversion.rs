@@ -246,7 +246,12 @@ impl RewritePattern for FuncSignatureConversionPattern {
             new_func_type,
             &converted.inputs,
             |ctx, ty, body| match body {
-                Some(body) => func::func(ctx, loc, sym_name, ty, body).op_ref(),
+                Some(body) => func::Func::builder()
+                    .sym_name(sym_name)
+                    .r#type(ty)
+                    .regions(body)
+                    .build(ctx, loc)
+                    .op_ref(),
                 None => {
                     make_bodyless_function_op(ctx, loc, crate::Symbol::new("func"), sym_name, ty)
                 }
@@ -337,7 +342,11 @@ mod tests {
             blocks: smallvec![entry_block],
             parent_op: None,
         });
-        let f = func::func(ctx, loc, Symbol::new(name), func_type, body);
+        let f = func::Func::builder()
+            .sym_name(Symbol::new(name))
+            .r#type(func_type)
+            .regions(body)
+            .build(ctx, loc);
         f.op_ref()
     }
 

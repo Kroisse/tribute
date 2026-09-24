@@ -3153,7 +3153,10 @@ mod tests {
             ctx.push_op(body_block, *op);
         }
         let body = region(ctx, loc, body_block);
-        let module = core::module(ctx, loc, Symbol::new("test"), body);
+        let module = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(body)
+            .build(ctx, loc);
         Module::new(ctx, module.op_ref()).expect("core.module")
     }
 

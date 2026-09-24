@@ -28,47 +28,41 @@ crate::register_pure_op!(adt.bytes_const);
 
 #[trunk_ir::dialect]
 mod adt {
-    #[attr(r#type: Type)]
-    fn struct_new(#[rest] fields: ()) -> result {}
+    fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, field: u32)]
-    fn struct_get(r#ref: ()) -> result {}
+    fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, field: u32)]
-    fn struct_set(r#ref: (), value: ()) {}
+    fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    #[attr(r#type: Type, tag: Symbol)]
-    fn variant_new(#[rest] fields: ()) -> result {}
+    fn variant_new(r#type: Attr<Type>, tag: Attr<Symbol>, fields: Variadic<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, tag: Symbol)]
-    fn variant_is(r#ref: ()) -> result {}
+    fn variant_is(r#type: Attr<Type>, tag: Attr<Symbol>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, tag: Symbol)]
-    fn variant_cast(r#ref: ()) -> result {}
+    fn variant_cast(r#type: Attr<Type>, tag: Attr<Symbol>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, tag: Symbol, field: u32)]
-    fn variant_get(r#ref: ()) -> result {}
+    fn variant_get(
+        r#type: Attr<Type>,
+        tag: Attr<Symbol>,
+        field: Attr<u32>,
+        r#ref: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(r#type: Type)]
-    fn array_new(#[rest] elements: ()) -> result {}
+    fn array_new(r#type: Attr<Type>, elements: Variadic<_>) -> Value<_> {}
 
-    fn array_get(r#ref: (), index: ()) -> result {}
+    fn array_get(r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    fn array_set(r#ref: (), index: (), value: ()) {}
+    fn array_set(r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
 
-    fn array_len(r#ref: ()) -> result {}
+    fn array_len(r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn ref_null() -> result {}
+    fn ref_null(r#type: Attr<Type>) -> Value<_> {}
 
-    fn ref_is_null(r#ref: ()) -> result {}
+    fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn ref_cast(r#ref: ()) -> result {}
+    fn ref_cast(r#type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(value: String)]
-    fn string_const() -> result {}
+    fn string_const(value: Attr<String>) -> Value<_> {}
 
-    #[attr(value: Bytes)]
-    fn bytes_const() -> result {}
+    fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }

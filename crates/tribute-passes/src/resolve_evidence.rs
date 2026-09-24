@@ -247,13 +247,10 @@ fn resolve_delimiters(
                 {
                     ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
-                    let prompt = func::call(
-                        ctx,
-                        location,
-                        std::iter::empty::<ValueRef>(),
-                        [i32_ty],
-                        Symbol::new("__tribute_next_tag"),
-                    );
+                    let prompt = func::Call::operands(std::iter::empty::<ValueRef>())
+                        .callee(Symbol::new("__tribute_next_tag"))
+                        .results([i32_ty])
+                        .build(ctx, location);
                     let resolved = prompt.result(ctx);
                     ctx.insert_op_before(block, op, prompt.op_ref());
                     ctx.replace_all_uses(prompt_tag, resolved);
@@ -262,16 +259,15 @@ fn resolve_delimiters(
                 }
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
                 for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
-                    let extend = effect::extend(
-                        ctx,
-                        location,
+                    let extend = effect::Extend::operands(
                         current_ev,
                         prompt_tag,
                         tr_dispatch,
                         handler_dispatch,
-                        evidence_ty,
-                        ability_ref,
-                    );
+                    )
+                    .ability_ref(ability_ref)
+                    .results(evidence_ty)
+                    .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());
                 }

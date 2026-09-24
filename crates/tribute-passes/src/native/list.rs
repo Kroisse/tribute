@@ -125,14 +125,12 @@ fn lower_observation(
     ctx.block_mut(projection_block).parent_region = Some(region);
 
     let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-    let empty = adt::ref_is_null(ctx, location, list, bool_ty);
-    let branch = cf::cond_br(
-        ctx,
-        location,
-        empty.result(ctx),
-        trap_block,
-        projection_block,
-    );
+    let empty = adt::RefIsNull::operands(list)
+        .results(bool_ty)
+        .build(ctx, location);
+    let branch = cf::CondBr::operands(empty.result(ctx))
+        .successors(trap_block, projection_block)
+        .build(ctx, location);
     ctx.push_op(block, empty.op_ref());
     ctx.push_op(block, branch.op_ref());
 
@@ -140,8 +138,14 @@ fn lower_observation(
     ctx.push_op(trap_block, trap.op_ref());
 
     let node_ty = node_type(ctx, element_ty);
-    let projection = adt::struct_get(ctx, location, list, result_ty, node_ty, field_index);
-    let continue_with = cf::br(ctx, location, [projection.result(ctx)], continuation);
+    let projection = adt::StructGet::operands(list)
+        .r#type(node_ty)
+        .field(field_index)
+        .results(result_ty)
+        .build(ctx, location);
+    let continue_with = cf::Br::operands([projection.result(ctx)])
+        .successors(continuation)
+        .build(ctx, location);
     ctx.push_op(projection_block, projection.op_ref());
     ctx.push_op(projection_block, continue_with.op_ref());
 }
@@ -160,7 +164,10 @@ impl RewritePattern for EmptyPattern {
         };
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, empty.element_type(ctx));
-        let null = adt::ref_null(ctx, ctx.op(op).location, result_ty, node_ty);
+        let null = adt::RefNull::builder()
+            .r#type(node_ty)
+            .results(result_ty)
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(null.op_ref());
         true
     }
@@ -180,13 +187,10 @@ impl RewritePattern for PrependPattern {
         };
         let result_ty = ctx.op_result_types(op)[0];
         let node_ty = node_type(ctx, prepend.element_type(ctx));
-        let node = adt::struct_new(
-            ctx,
-            ctx.op(op).location,
-            [prepend.element(ctx), prepend.tail(ctx)],
-            result_ty,
-            node_ty,
-        );
+        let node = adt::StructNew::operands([prepend.element(ctx), prepend.tail(ctx)])
+            .r#type(node_ty)
+            .results(result_ty)
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(node.op_ref());
         true
     }
@@ -205,7 +209,9 @@ impl RewritePattern for IsEmptyPattern {
             return false;
         };
         let result_ty = ctx.op_result_types(op)[0];
-        let check = adt::ref_is_null(ctx, ctx.op(op).location, is_empty.list(ctx), result_ty);
+        let check = adt::RefIsNull::operands(is_empty.list(ctx))
+            .results(result_ty)
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(check.op_ref());
         true
     }

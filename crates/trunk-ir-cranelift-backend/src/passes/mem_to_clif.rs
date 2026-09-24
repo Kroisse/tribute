@@ -54,7 +54,11 @@ impl RewritePattern for MemLoadPattern {
         let Ok(offset) = i32::try_from(load_op.offset(ctx)) else {
             return false;
         };
-        let new_op = clif::load(ctx, loc, ptr, result_ty, offset).op_ref();
+        let new_op = clif::Load::operands(ptr)
+            .offset(offset)
+            .results(result_ty)
+            .build(ctx, loc)
+            .op_ref();
         rewriter.replace_op(new_op);
         true
     }
@@ -79,7 +83,10 @@ impl RewritePattern for MemStorePattern {
             return false;
         };
         // clif.store operand order: (value, addr)
-        let new_op = clif::store(ctx, loc, value, ptr, offset).op_ref();
+        let new_op = clif::Store::operands(value, ptr)
+            .offset(offset)
+            .build(ctx, loc)
+            .op_ref();
         rewriter.replace_op(new_op);
         true
     }

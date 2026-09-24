@@ -2,20 +2,15 @@
 
 #[trunk_ir::dialect]
 mod list {
-    #[attr(element_type: Type)]
-    fn empty() -> result {}
+    fn empty(element_type: Attr<Type>) -> Value<_> {}
 
-    #[attr(element_type: Type)]
-    fn prepend(element: (), tail: ()) -> result {}
+    fn prepend(element_type: Attr<Type>, element: Value<_>, tail: Value<_>) -> Value<_> {}
 
-    #[attr(element_type: Type)]
-    fn is_empty(list: ()) -> result {}
+    fn is_empty(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
-    #[attr(element_type: Type)]
-    fn head(list: ()) -> result {}
+    fn head(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 
-    #[attr(element_type: Type)]
-    fn tail(list: ()) -> result {}
+    fn tail(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "empty") }
@@ -42,17 +37,34 @@ mod tests {
         let element_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
         let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let element =
-            trunk_ir::dialect::arith::r#const(&mut ctx, loc, element_ty, Attribute::Int(1))
-                .result(&ctx);
+        let element = trunk_ir::dialect::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(element_ty)
+            .build(&mut ctx, loc)
+            .result(&ctx);
 
-        let empty = super::empty(&mut ctx, loc, list_ty, element_ty);
+        let empty = super::Empty::builder()
+            .element_type(element_ty)
+            .results(list_ty)
+            .build(&mut ctx, loc);
         let empty_value = empty.result(&ctx);
-        let prepend = super::prepend(&mut ctx, loc, element, empty_value, list_ty, element_ty);
+        let prepend = super::Prepend::operands(element, empty_value)
+            .element_type(element_ty)
+            .results(list_ty)
+            .build(&mut ctx, loc);
         let list_value = prepend.result(&ctx);
-        let is_empty = super::is_empty(&mut ctx, loc, list_value, bool_ty, element_ty);
-        let head = super::head(&mut ctx, loc, list_value, element_ty, element_ty);
-        let tail = super::tail(&mut ctx, loc, list_value, list_ty, element_ty);
+        let is_empty = super::IsEmpty::operands(list_value)
+            .element_type(element_ty)
+            .results(bool_ty)
+            .build(&mut ctx, loc);
+        let head = super::Head::operands(list_value)
+            .element_type(element_ty)
+            .results(element_ty)
+            .build(&mut ctx, loc);
+        let tail = super::Tail::operands(list_value)
+            .element_type(element_ty)
+            .results(list_ty)
+            .build(&mut ctx, loc);
 
         assert!(super::Empty::from_op(&ctx, empty.op_ref()).is_ok());
         assert!(super::Prepend::from_op(&ctx, prepend.op_ref()).is_ok());

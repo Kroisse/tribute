@@ -82,7 +82,7 @@ pub fn inline_single_call(
             .op(call_op)
             .parent_block
             .ok_or(InlineError::CallOpDetached)?;
-        let new_ret = func::r#return(ctx, call_loc, ret_values);
+        let new_ret = func::Return::operands(ret_values).build(ctx, call_loc);
         ctx.insert_op_before(caller_block, call_op, new_ret.op_ref());
         // tail call is a terminator (no results), so erasing it clears its
         // operand use-chain without dangling-result concerns. #710
@@ -436,7 +436,9 @@ impl RewritePattern for InlineCallSite {
         };
 
         if is_tail {
-            let new_ret = func::r#return(ctx, call_loc, ret_values).op_ref();
+            let new_ret = func::Return::operands(ret_values)
+                .build(ctx, call_loc)
+                .op_ref();
             rewriter.replace_op(new_ret);
         } else {
             rewriter.erase_op(ret_values);
@@ -505,7 +507,12 @@ mod mechanics {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+        func::Func::builder()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn build_simple_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> OpRef {
@@ -561,22 +568,22 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            let ret = func::Return::operands([c.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [result]);
+            let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
 
@@ -606,7 +613,10 @@ mod mechanics {
             &[i32_ty],
             i32_ty,
             |ctx, entry, args| {
-                let one = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
+                let one = crate::dialect::arith::Const::builder()
+                    .value(Attribute::Int(1))
+                    .results(i32_ty)
+                    .build(ctx, loc);
                 ctx.push_op(entry, one.op_ref());
                 let add_data =
                     OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("add"))
@@ -617,18 +627,24 @@ mod mechanics {
                 let add = ctx.create_op(add_data);
                 ctx.push_op(entry, add);
                 let add_result = ctx.op_results(add)[0];
-                let ret = func::r#return(ctx, loc, [add_result]);
+                let ret = func::Return::operands([add_result]).build(ctx, loc);
                 ctx.push_op(entry, ret.op_ref());
             },
         );
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(10));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(10))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let call = func::call(ctx, loc, [c.result(ctx)], [i32_ty], Symbol::new("helper"));
+            let call = func::Call::operands([c.result(ctx)])
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [result]);
+            let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
 
@@ -670,17 +686,22 @@ mod mechanics {
                     ops: smallvec![],
                     parent_region: None,
                 });
-                let cond_br = cf::cond_br(ctx, loc, args[0], then_b, else_b);
+                let cond_br = cf::CondBr::operands(args[0])
+                    .successors(then_b, else_b)
+                    .build(ctx, loc);
                 ctx.push_op(entry, cond_br.op_ref());
 
                 // then: return x
-                let ret_then = func::r#return(ctx, loc, [args[0]]);
+                let ret_then = func::Return::operands([args[0]]).build(ctx, loc);
                 ctx.push_op(then_b, ret_then.op_ref());
 
                 // else: return 0
-                let zero = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+                let zero = crate::dialect::arith::Const::builder()
+                    .value(Attribute::Int(0))
+                    .results(i32_ty)
+                    .build(ctx, loc);
                 ctx.push_op(else_b, zero.op_ref());
-                let ret_else = func::r#return(ctx, loc, [zero.result(ctx)]);
+                let ret_else = func::Return::operands([zero.result(ctx)]).build(ctx, loc);
                 ctx.push_op(else_b, ret_else.op_ref());
             },
         );
@@ -697,12 +718,18 @@ mod mechanics {
         ctx.block_mut(else_b).parent_region = Some(body);
 
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(5));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(5))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let call = func::call(ctx, loc, [c.result(ctx)], [i32_ty], Symbol::new("helper"));
+            let call = func::Call::operands([c.result(ctx)])
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [result]);
+            let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
 
@@ -722,13 +749,18 @@ mod mechanics {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            let ret = func::Return::operands([c.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let tc = func::tail_call(ctx, loc, std::iter::empty(), Symbol::new("helper"));
+            let tc = func::TailCall::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .build(ctx, loc);
             ctx.push_op(entry, tc.op_ref());
         });
 
@@ -758,21 +790,18 @@ mod mechanics {
             &[i32_ty],
             i32_ty,
             |ctx, entry, args| {
-                let ret = func::r#return(ctx, loc, [args[0]]);
+                let ret = func::Return::operands([args[0]]).build(ctx, loc);
                 ctx.push_op(entry, ret.op_ref());
             },
         );
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(), // no operands
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let result = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [result]);
+            let ret = func::Return::operands([result]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
 
@@ -872,7 +901,12 @@ mod pass {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+        func::Func::builder()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
@@ -924,22 +958,22 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            let ret = func::Return::operands([c.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);
@@ -957,10 +991,13 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let f = build_func(&mut ctx, loc, "f", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(ctx, loc, std::iter::empty(), [i32_ty], Symbol::new("f"));
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("f"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![f]);
@@ -980,9 +1017,12 @@ mod pass {
         let i32_ty = i32_type(&mut ctx);
 
         let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
-            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            let c = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            let ret = func::Return::operands([c.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let helper_fn_ty = ctx
@@ -992,25 +1032,28 @@ mod pass {
             .expect("expected type attr");
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
-            let c = func::constant(ctx, loc, helper_fn_ty, Symbol::new("helper"));
+            let c = func::Constant::builder()
+                .func_ref(Symbol::new("helper"))
+                .results(helper_fn_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let z = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+            let z = crate::dialect::arith::Const::builder()
+                .value(Attribute::Int(0))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, z.op_ref());
-            let ret = func::r#return(ctx, loc, [z.result(ctx)]);
+            let ret = func::Return::operands([z.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![helper, other, main]);
@@ -1033,38 +1076,35 @@ mod pass {
             // Chain 18 arith.const ops + 1 dummy + 1 return = 20 ops
             let mut last = None;
             for i in 0..19 {
-                let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(i as i128));
+                let c = crate::dialect::arith::Const::builder()
+                    .value(Attribute::Int(i as i128))
+                    .results(i32_ty)
+                    .build(ctx, loc);
                 ctx.push_op(entry, c.op_ref());
                 last = Some(c.result(ctx));
             }
-            let ret = func::r#return(ctx, loc, [last.unwrap()]);
+            let ret = func::Return::operands([last.unwrap()]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         // Two call sites so single-call-site rule doesn't trigger.
         let a = build_func(&mut ctx, loc, "a", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let b = build_func(&mut ctx, loc, "b", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![helper, a, b]);
@@ -1086,10 +1126,13 @@ mod pass {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = crate::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c = crate::dialect::arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let c_result = c.result(&ctx);
         ctx.push_op(entry, c.op_ref());
-        let ret = func::r#return(&mut ctx, loc, [c_result]);
+        let ret = func::Return::operands([c_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
@@ -1107,16 +1150,13 @@ mod pass {
         let helper = ctx.create_op(helper_data);
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::new("helper"),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::new("helper"))
+                .results([i32_ty])
+                .build(ctx, loc);
             let r = call.result(ctx);
             ctx.push_op(entry, call.op_ref());
-            let ret = func::r#return(ctx, loc, [r]);
+            let ret = func::Return::operands([r]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);

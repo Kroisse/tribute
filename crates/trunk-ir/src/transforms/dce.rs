@@ -235,7 +235,12 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, sym_name, fn_ty, body_region).op_ref()
+        func::Func::builder()
+            .sym_name(sym_name)
+            .r#type(fn_ty)
+            .regions(body_region)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     #[test]
@@ -245,13 +250,19 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // dead: result is never used
-            let _dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            let _dead = arith::Const::builder()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, _dead.op_ref());
 
             // alive: used by return
-            let alive = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
+            let alive = arith::Const::builder()
+                .value(Attribute::Int(1))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, alive.op_ref());
-            let ret = func::r#return(ctx, loc, [alive.result(ctx)]);
+            let ret = func::Return::operands([alive.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -277,7 +288,7 @@ mod tests {
             let call_op = ctx.create_op(call_data);
             ctx.push_op(entry, call_op);
 
-            let ret = func::r#return(ctx, loc, std::iter::empty());
+            let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -294,7 +305,10 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Chain: a -> b -> c (all unused)
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
+            let a = arith::Const::builder()
+                .value(Attribute::Int(1))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, a.op_ref());
 
             let b = arith::Addi::operands(a.result(ctx), a.result(ctx)).build(ctx, loc);
@@ -303,7 +317,7 @@ mod tests {
             let c = arith::Addi::operands(b.result(ctx), a.result(ctx)).build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
 
-            let ret = func::r#return(ctx, loc, std::iter::empty());
+            let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -321,13 +335,19 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
+            let a = arith::Const::builder()
+                .value(Attribute::Int(1))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, a.op_ref());
-            let b = arith::r#const(ctx, loc, i32_ty, Attribute::Int(2));
+            let b = arith::Const::builder()
+                .value(Attribute::Int(2))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, b.op_ref());
             let c = arith::Addi::operands(a.result(ctx), b.result(ctx)).build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
-            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            let ret = func::Return::operands([c.result(ctx)]).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -391,7 +411,10 @@ mod tests {
         // Build a func that contains another region (simulated with a generic op)
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(99));
+            let inner_dead = arith::Const::builder()
+                .value(Attribute::Int(99))
+                .results(i32_ty)
+                .build(ctx, loc);
             let inner_block = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],
@@ -399,7 +422,7 @@ mod tests {
                 parent_region: None,
             });
             ctx.push_op(inner_block, inner_dead.op_ref());
-            let inner_ret = func::r#return(ctx, loc, std::iter::empty());
+            let inner_ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(inner_block, inner_ret.op_ref());
 
             let inner_region = ctx.create_region(RegionData {
@@ -411,10 +434,14 @@ mod tests {
             // Outer op that owns the inner region (use func.func as container)
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-            let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
+            let nested_func = func::Func::builder()
+                .sym_name(Symbol::new("nested"))
+                .r#type(fn_ty)
+                .regions(inner_region)
+                .build(ctx, loc);
             ctx.push_op(entry, nested_func.op_ref());
 
-            let ret = func::r#return(ctx, loc, std::iter::empty());
+            let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -433,9 +460,12 @@ mod tests {
         // This scenario doesn't actually need multiple iterations since
         // reverse sweep handles cascades. But test the config path.
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
+            let a = arith::Const::builder()
+                .value(Attribute::Int(1))
+                .results(i32_ty)
+                .build(ctx, loc);
             ctx.push_op(entry, a.op_ref());
-            let ret = func::r#return(ctx, loc, std::iter::empty());
+            let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);
@@ -456,7 +486,10 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(99));
+            let inner_dead = arith::Const::builder()
+                .value(Attribute::Int(99))
+                .results(i32_ty)
+                .build(ctx, loc);
             let inner_block = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],
@@ -464,7 +497,7 @@ mod tests {
                 parent_region: None,
             });
             ctx.push_op(inner_block, inner_dead.op_ref());
-            let inner_ret = func::r#return(ctx, loc, std::iter::empty());
+            let inner_ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(inner_block, inner_ret.op_ref());
 
             let inner_region = ctx.create_region(RegionData {
@@ -475,10 +508,14 @@ mod tests {
 
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-            let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
+            let nested_func = func::Func::builder()
+                .sym_name(Symbol::new("nested"))
+                .r#type(fn_ty)
+                .regions(inner_region)
+                .build(ctx, loc);
             ctx.push_op(entry, nested_func.op_ref());
 
-            let ret = func::r#return(ctx, loc, std::iter::empty());
+            let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
             ctx.push_op(entry, ret.op_ref());
         });
         let module = build_module(&mut ctx, loc, vec![func_op]);

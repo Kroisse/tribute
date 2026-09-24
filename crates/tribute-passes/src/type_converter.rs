@@ -130,7 +130,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
         if to_ty == tribute_rt_anyref {
             // Int/Nat/I32 → any: use tribute_rt.box_int
             if from_ty == tribute_rt_int || from_ty == tribute_rt_nat || from_ty == core_i32 {
-                let box_op = tribute_rt::box_int(ctx, location, value, tribute_rt_anyref);
+                let box_op = tribute_rt::BoxInt::operands(value)
+                    .results(tribute_rt_anyref)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -139,7 +141,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // Bool/I1 → any: use tribute_rt.box_bool
             if from_ty == tribute_rt_bool || from_ty == core_i1 {
-                let box_op = tribute_rt::box_bool(ctx, location, value, tribute_rt_anyref);
+                let box_op = tribute_rt::BoxBool::operands(value)
+                    .results(tribute_rt_anyref)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -148,7 +152,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // Float/F64 → any: use tribute_rt.box_float
             if from_ty == tribute_rt_float || from_ty == core_f64 {
-                let box_op = tribute_rt::box_float(ctx, location, value, tribute_rt_anyref);
+                let box_op = tribute_rt::BoxFloat::operands(value)
+                    .results(tribute_rt_anyref)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -167,7 +173,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
         if from_ty == tribute_rt_anyref {
             // any → Int/I32: use tribute_rt.unbox_int
             if to_ty == tribute_rt_int || to_ty == core_i32 {
-                let unbox_op = tribute_rt::unbox_int(ctx, location, value, to_ty);
+                let unbox_op = tribute_rt::UnboxInt::operands(value)
+                    .results(to_ty)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: unbox_op.result(ctx),
                     ops: vec![unbox_op.op_ref()],
@@ -176,7 +184,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // any → Nat: use tribute_rt.unbox_nat
             if to_ty == tribute_rt_nat {
-                let unbox_op = tribute_rt::unbox_nat(ctx, location, value, to_ty);
+                let unbox_op = tribute_rt::UnboxNat::operands(value)
+                    .results(to_ty)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: unbox_op.result(ctx),
                     ops: vec![unbox_op.op_ref()],
@@ -185,7 +195,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // any → Bool/I1: use tribute_rt.unbox_bool
             if to_ty == tribute_rt_bool || to_ty == core_i1 {
-                let unbox_op = tribute_rt::unbox_bool(ctx, location, value, to_ty);
+                let unbox_op = tribute_rt::UnboxBool::operands(value)
+                    .results(to_ty)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: unbox_op.result(ctx),
                     ops: vec![unbox_op.op_ref()],
@@ -194,7 +206,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // any → Float/F64: use tribute_rt.unbox_float
             if to_ty == tribute_rt_float || to_ty == core_f64 {
-                let unbox_op = tribute_rt::unbox_float(ctx, location, value, to_ty);
+                let unbox_op = tribute_rt::UnboxFloat::operands(value)
+                    .results(to_ty)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: unbox_op.result(ctx),
                     ops: vec![unbox_op.op_ref()],

@@ -7,13 +7,12 @@ crate::register_isolated_op!(core.module);
 
 #[trunk_ir::dialect]
 mod core {
-    #[attr(sym_name: Symbol)]
-    fn module() {
+    fn module(sym_name: Attr<Symbol>) {
         #[region(body)]
         {}
     }
 
-    fn unrealized_conversion_cast(value: ()) -> result {}
+    fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
 
     struct Nil;
     struct Never;

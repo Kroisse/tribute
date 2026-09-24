@@ -1529,9 +1529,12 @@ mod tests {
         if_op: super::super::refs::OpRef,
     ) -> Module {
         ctx.push_op(entry, if_op);
-        let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+        let zero = arith::Const::builder()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(entry, zero.op_ref());
-        let ret = func::r#return(ctx, loc, [zero.result(ctx)]);
+        let ret = func::Return::operands([zero.result(ctx)]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -1540,7 +1543,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(ctx, &[], i32_ty);
-        let func_op = func::func(ctx, loc, Symbol::new("bad_if"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("bad_if"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -1554,7 +1561,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(ctx, loc);
         Module::new(ctx, module_op.op_ref()).unwrap()
     }
 
@@ -1570,11 +1580,17 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(40));
+        let c0 = arith::Const::builder()
+            .value(Attribute::Int(40))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(entry_block, c0.op_ref());
         let c0_val = c0.result(ctx);
 
-        let c1 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(2));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(entry_block, c1.op_ref());
         let c1_val = c1.result(ctx);
 
@@ -1582,7 +1598,7 @@ mod tests {
         ctx.push_op(entry_block, add_op.op_ref());
         let sum = add_op.result(ctx);
 
-        let ret = func::r#return(ctx, loc, [sum]);
+        let ret = func::Return::operands([sum]).build(ctx, loc);
         ctx.push_op(entry_block, ret.op_ref());
 
         let body_region = ctx.create_region(RegionData {
@@ -1592,7 +1608,11 @@ mod tests {
         });
 
         let func_ty = make_func_type(ctx, &[], i32_ty);
-        let func_op = func::func(ctx, loc, Symbol::new("add"), func_ty, body_region);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("add"))
+            .r#type(func_ty)
+            .regions(body_region)
+            .build(ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -1607,7 +1627,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module = core::module(ctx, loc, Symbol::new("test"), mod_region);
+        let module = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(ctx, loc);
 
         Module::new(ctx, module.op_ref()).unwrap()
     }
@@ -1633,10 +1656,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
+        let const_a = arith::Const::builder()
+            .value(Attribute::Int(99))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry_a, const_a.op_ref());
         let stale_value = const_a.result(&ctx);
-        let ret_a = func::r#return(&mut ctx, loc, [stale_value]);
+        let ret_a = func::Return::operands([stale_value]).build(&mut ctx, loc);
         ctx.push_op(entry_a, ret_a.op_ref());
 
         let body_a = ctx.create_region(RegionData {
@@ -1645,7 +1671,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::func(&mut ctx, loc, Symbol::new("func_a"), func_ty, body_a);
+        let func_a = func::Func::builder()
+            .sym_name(Symbol::new("func_a"))
+            .r#type(func_ty)
+            .regions(body_a)
+            .build(&mut ctx, loc);
 
         // func_b uses stale_value from func_a
         let entry_b = ctx.create_block(BlockData {
@@ -1654,7 +1684,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret_b = func::r#return(&mut ctx, loc, [stale_value]);
+        let ret_b = func::Return::operands([stale_value]).build(&mut ctx, loc);
         ctx.push_op(entry_b, ret_b.op_ref());
 
         let body_b = ctx.create_region(RegionData {
@@ -1662,7 +1692,11 @@ mod tests {
             blocks: smallvec![entry_b],
             parent_op: None,
         });
-        let func_b = func::func(&mut ctx, loc, Symbol::new("func_b"), func_ty, body_b);
+        let func_b = func::Func::builder()
+            .sym_name(Symbol::new("func_b"))
+            .r#type(func_ty)
+            .regions(body_b)
+            .build(&mut ctx, loc);
 
         // module
         let mod_block = ctx.create_block(BlockData {
@@ -1678,7 +1712,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -1706,7 +1743,7 @@ mod tests {
             parent_region: None,
         });
         let stale_block_arg = ctx.block_arg(entry_a, 0);
-        let ret_a = func::r#return(&mut ctx, loc, [stale_block_arg]);
+        let ret_a = func::Return::operands([stale_block_arg]).build(&mut ctx, loc);
         ctx.push_op(entry_a, ret_a.op_ref());
 
         let body_a = ctx.create_region(RegionData {
@@ -1715,7 +1752,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
-        let func_a = func::func(&mut ctx, loc, Symbol::new("func_a"), func_ty, body_a);
+        let func_a = func::Func::builder()
+            .sym_name(Symbol::new("func_a"))
+            .r#type(func_ty)
+            .regions(body_a)
+            .build(&mut ctx, loc);
 
         // func_b uses the block arg from func_a
         let entry_b = ctx.create_block(BlockData {
@@ -1724,7 +1765,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret_b = func::r#return(&mut ctx, loc, [stale_block_arg]);
+        let ret_b = func::Return::operands([stale_block_arg]).build(&mut ctx, loc);
         ctx.push_op(entry_b, ret_b.op_ref());
 
         let body_b = ctx.create_region(RegionData {
@@ -1733,7 +1774,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty_b = make_func_type(&mut ctx, &[], i32_ty);
-        let func_b = func::func(&mut ctx, loc, Symbol::new("func_b"), func_ty_b, body_b);
+        let func_b = func::Func::builder()
+            .sym_name(Symbol::new("func_b"))
+            .r#type(func_ty_b)
+            .regions(body_b)
+            .build(&mut ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -1748,7 +1793,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -1802,7 +1850,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
         let sum = arith::Addi::operands(param, c1_val).build(&mut ctx, loc);
@@ -1821,7 +1872,10 @@ mod tests {
 
         // Create a bool condition
         let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        let cond = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond.op_ref());
         let cond_val = cond.result(&ctx);
 
@@ -1836,7 +1890,7 @@ mod tests {
         ctx.push_op(entry, if_op);
         let if_result = ctx.op_result(if_op, 0);
 
-        let ret = func::r#return(&mut ctx, loc, [if_result]);
+        let ret = func::Return::operands([if_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -1845,7 +1899,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
-        let func_op = func::func(&mut ctx, loc, Symbol::new("nested_fn"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("nested_fn"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -1859,7 +1917,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -1883,10 +1944,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let const_a = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry_a, const_a.op_ref());
         let value_from_a = const_a.result(&ctx);
-        let ret_a = func::r#return(&mut ctx, loc, [value_from_a]);
+        let ret_a = func::Return::operands([value_from_a]).build(&mut ctx, loc);
         ctx.push_op(entry_a, ret_a.op_ref());
         let body_a = ctx.create_region(RegionData {
             location: loc,
@@ -1894,7 +1958,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::func(&mut ctx, loc, Symbol::new("func_a"), func_ty, body_a);
+        let func_a = func::Func::builder()
+            .sym_name(Symbol::new("func_a"))
+            .r#type(func_ty)
+            .regions(body_a)
+            .build(&mut ctx, loc);
 
         // func_b uses value_from_a (stale!)
         let entry_b = ctx.create_block(BlockData {
@@ -1903,19 +1971,26 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let local = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let local = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry_b, local.op_ref());
         let local_val = local.result(&ctx);
         let add_op = arith::Addi::operands(value_from_a, local_val).build(&mut ctx, loc);
         ctx.push_op(entry_b, add_op.op_ref());
-        let ret_b = func::r#return(&mut ctx, loc, [value_from_a]);
+        let ret_b = func::Return::operands([value_from_a]).build(&mut ctx, loc);
         ctx.push_op(entry_b, ret_b.op_ref());
         let body_b = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry_b],
             parent_op: None,
         });
-        let func_b = func::func(&mut ctx, loc, Symbol::new("func_b"), func_ty, body_b);
+        let func_b = func::Func::builder()
+            .sym_name(Symbol::new("func_b"))
+            .r#type(func_ty)
+            .regions(body_b)
+            .build(&mut ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -1930,7 +2005,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -1959,10 +2037,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
+        let const_a = arith::Const::builder()
+            .value(Attribute::Int(99))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry_a, const_a.op_ref());
         let stale_value = const_a.result(&ctx);
-        let ret_a = func::r#return(&mut ctx, loc, [stale_value]);
+        let ret_a = func::Return::operands([stale_value]).build(&mut ctx, loc);
         ctx.push_op(entry_a, ret_a.op_ref());
         let body_a = ctx.create_region(RegionData {
             location: loc,
@@ -1970,7 +2051,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_a = func::func(&mut ctx, loc, Symbol::new("func_a"), func_ty, body_a);
+        let func_a = func::Func::builder()
+            .sym_name(Symbol::new("func_a"))
+            .r#type(func_ty)
+            .regions(body_a)
+            .build(&mut ctx, loc);
 
         // func_b (wasm.func) uses stale_value from func_a
         let entry_b = ctx.create_block(BlockData {
@@ -1979,7 +2064,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret_b = func::r#return(&mut ctx, loc, [stale_value]);
+        let ret_b = func::Return::operands([stale_value]).build(&mut ctx, loc);
         ctx.push_op(entry_b, ret_b.op_ref());
         let body_b = ctx.create_region(RegionData {
             location: loc,
@@ -2009,7 +2094,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -2043,7 +2131,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let inner_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let inner_const = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(then_block, inner_const.op_ref());
         let inner_val = inner_const.result(&ctx);
         let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -2064,7 +2155,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let else_const = arith::Const::builder()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(else_block, else_const.op_ref());
         let else_val = else_const.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -2079,7 +2173,10 @@ mod tests {
         });
 
         // Condition
-        let cond_op = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        let cond_op = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond_op.op_ref());
         let cond = cond_op.result(&ctx);
 
@@ -2094,7 +2191,7 @@ mod tests {
         ctx.push_op(entry, if_op);
 
         // BUG: outer block uses %inner_val which is defined only inside the then region
-        let ret = func::r#return(&mut ctx, loc, [inner_val]);
+        let ret = func::Return::operands([inner_val]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -2103,7 +2200,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::func(&mut ctx, loc, Symbol::new("bad_scope"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("bad_scope"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -2117,7 +2218,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
@@ -2193,7 +2297,9 @@ mod tests {
                 };
                 assert!(validate_use_chains(&ctx, module).is_ok());
                 let loc = test_location(&mut ctx);
-                let user = func::r#return(&mut ctx, loc, [value]).op_ref();
+                let user = func::Return::operands([value])
+                    .build(&mut ctx, loc)
+                    .op_ref();
                 match placement {
                     "other_module" => {
                         let other = crate::parser::parse_test_module(
@@ -2232,11 +2338,17 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(40));
+        let c0 = arith::Const::builder()
+            .value(Attribute::Int(40))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c0.op_ref());
         let c0_val = c0.result(&ctx);
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c1.op_ref());
         let c1_val = c1.result(&ctx);
 
@@ -2245,7 +2357,7 @@ mod tests {
         ctx.push_op(entry, add.op_ref());
         let add_val = add.result(&ctx);
 
-        let ret = func::r#return(&mut ctx, loc, [add_val]);
+        let ret = func::Return::operands([add_val]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -2254,7 +2366,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::func(&mut ctx, loc, Symbol::new("f"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("f"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let mod_block = ctx.create_block(BlockData {
             location: loc,
@@ -2268,7 +2384,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         // Validate before RAUW
@@ -3338,9 +3457,15 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond_a = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        let cond_a = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond_a.op_ref());
-        let cond_b = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(0));
+        let cond_b = arith::Const::builder()
+            .value(Attribute::Int(0))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond_b.op_ref());
 
         let then_region = single_block_yield_region(&mut ctx, loc, []);
@@ -3374,7 +3499,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        let cond = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond.op_ref());
         let then_region = single_block_yield_region(&mut ctx, loc, []);
         let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
@@ -3404,7 +3532,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
+        let cond = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond.op_ref());
 
         let then_a = ctx.create_block(BlockData {
@@ -3476,7 +3607,10 @@ mod tests {
         let loop_op = ctx.create_op(loop_data);
         ctx.push_op(entry, loop_op);
 
-        let discriminant = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let discriminant = arith::Const::builder()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, discriminant.op_ref());
         let switch_body = ctx.create_block(BlockData {
             location: loc,
@@ -3497,7 +3631,7 @@ mod tests {
         let switch_op = ctx.create_op(switch_data);
         ctx.push_op(entry, switch_op);
 
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
@@ -3505,7 +3639,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let func_op = func::func(&mut ctx, loc, Symbol::new("malformed"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("malformed"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
         let module_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -3517,7 +3655,10 @@ mod tests {
             blocks: smallvec![module_block],
             parent_op: None,
         });
-        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), module_region);
+        let module_op = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(module_region)
+            .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_operation_verifiers(&ctx, module);

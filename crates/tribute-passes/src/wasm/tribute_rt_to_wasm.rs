@@ -252,7 +252,10 @@ impl RewritePattern for BoxFloatPattern {
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         // adt.struct_new creates BoxedF64 struct with the f64 value
-        let struct_op = adt::struct_new(ctx, location, vec![value], anyref_ty, boxed_f64_ty);
+        let struct_op = adt::StructNew::operands(vec![value])
+            .r#type(boxed_f64_ty)
+            .results(anyref_ty)
+            .build(ctx, location);
 
         rewriter.replace_op(struct_op.op_ref());
         true
@@ -286,11 +289,18 @@ impl RewritePattern for UnboxFloatPattern {
         let f64_ty = f64_type(ctx);
 
         // Cast anyref to BoxedF64 struct first
-        let cast_op = adt::ref_cast(ctx, location, value, boxed_f64_ty, boxed_f64_ty);
+        let cast_op = adt::RefCast::operands(value)
+            .r#type(boxed_f64_ty)
+            .results(boxed_f64_ty)
+            .build(ctx, location);
         let cast_result = cast_op.result(ctx);
 
         // adt.struct_get extracts field 0 (the f64 value) from BoxedF64
-        let get_op = adt::struct_get(ctx, location, cast_result, f64_ty, boxed_f64_ty, 0);
+        let get_op = adt::StructGet::operands(cast_result)
+            .r#type(boxed_f64_ty)
+            .field(0)
+            .results(f64_ty)
+            .build(ctx, location);
 
         rewriter.insert_op(cast_op.op_ref());
         rewriter.replace_op(get_op.op_ref());

@@ -6,12 +6,9 @@ crate::register_pure_op!(mem.data);
 
 #[trunk_ir::dialect]
 mod mem {
-    #[attr(bytes: any)]
-    fn data() -> result {}
+    fn data(bytes: Attr<_>) -> Value<_> {}
 
-    #[attr(offset: u32)]
-    fn load(ptr: ()) -> result {}
+    fn load(offset: Attr<u32>, ptr: Value<_>) -> Value<_> {}
 
-    #[attr(offset: u32)]
-    fn store(ptr: (), value: ()) {}
+    fn store(offset: Attr<u32>, ptr: Value<_>, value: Value<_>) {}
 }

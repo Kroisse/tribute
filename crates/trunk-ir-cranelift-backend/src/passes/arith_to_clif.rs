@@ -106,7 +106,10 @@ impl RewritePattern for ArithConstPattern {
         let value = const_op.value(ctx);
 
         if category == "nil" {
-            let new_op = clif::iconst(ctx, loc, result_ty, 0);
+            let new_op = clif::Iconst::builder()
+                .value(0)
+                .results(result_ty)
+                .build(ctx, loc);
             rewriter.replace_op(new_op.op_ref());
             return true;
         }
@@ -116,24 +119,38 @@ impl RewritePattern for ArithConstPattern {
                 let Attribute::FloatBits(v) = value else {
                     return false;
                 };
-                clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
+                clif::F32const::builder()
+                    .value(f32::from_bits(v as u32))
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref()
             }
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
                     return false;
                 };
-                clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
+                clif::F64const::builder()
+                    .value(f64::from_bits(v))
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref()
             }
             _ => match value {
                 Attribute::Int(v) => {
                     let Some(v) = i64::try_from(v).ok() else {
                         return false;
                     };
-                    clif::iconst(ctx, loc, result_ty, v).op_ref()
+                    clif::Iconst::builder()
+                        .value(v)
+                        .results(result_ty)
+                        .build(ctx, loc)
+                        .op_ref()
                 }
-                Attribute::Bool(b) => {
-                    clif::iconst(ctx, loc, result_ty, if b { 1 } else { 0 }).op_ref()
-                }
+                Attribute::Bool(b) => clif::Iconst::builder()
+                    .value(if b { 1 } else { 0 })
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             },
         };
@@ -168,27 +185,60 @@ impl RewritePattern for ArithBinOpPattern {
         let name = data.name;
 
         let new_op = if name == Symbol::new("addi") {
-            clif::iadd(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Iadd::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("addf") {
-            clif::fadd(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Fadd::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("subi") {
-            clif::isub(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Isub::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("subf") {
-            clif::fsub(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Fsub::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("muli") {
-            clif::imul(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Imul::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("mulf") {
-            clif::fmul(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Fmul::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("divsi") {
-            clif::sdiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Sdiv::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("divui") {
-            clif::udiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Udiv::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("divf") {
-            clif::fdiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Fdiv::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("remsi") {
-            clif::srem(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Srem::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("remui") {
-            clif::urem(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Urem::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else {
             return false;
         };
@@ -215,7 +265,10 @@ fn finalize_cmp(
         rewriter.replace_op(cmp_op);
     } else {
         rewriter.insert_op(cmp_op);
-        let ext_op = clif::uextend(ctx, loc, cmp_result, result_ty).op_ref();
+        let ext_op = clif::Uextend::operands(cmp_result)
+            .results(result_ty)
+            .build(ctx, loc)
+            .op_ref();
         rewriter.replace_op(ext_op);
     }
 }
@@ -242,7 +295,10 @@ impl RewritePattern for ArithCmpPattern {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
             let cond = cmpi.predicate(ctx);
-            let cmp_op = clif::icmp(ctx, loc, lhs, rhs, i8_ty, cond);
+            let cmp_op = clif::Icmp::operands(lhs, rhs)
+                .cond(cond)
+                .results(i8_ty)
+                .build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,
@@ -268,7 +324,10 @@ impl RewritePattern for ArithCmpPattern {
                 "oge" => Symbol::new("ge"),
                 _ => predicate,
             };
-            let cmp_op = clif::fcmp(ctx, loc, lhs, rhs, i8_ty, cond);
+            let cmp_op = clif::Fcmp::operands(lhs, rhs)
+                .cond(cond)
+                .results(i8_ty)
+                .build(ctx, loc);
             finalize_cmp(
                 ctx,
                 loc,
@@ -301,11 +360,21 @@ impl RewritePattern for ArithNegPattern {
 
         if let Ok(negi) = arith::Negi::from_op(ctx, op) {
             let operand = negi.operand(ctx);
-            rewriter.replace_op(clif::ineg(ctx, loc, operand, ty).op_ref());
+            rewriter.replace_op(
+                clif::Ineg::operands(operand)
+                    .results(ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+            );
             true
         } else if let Ok(negf) = arith::Negf::from_op(ctx, op) {
             let operand = negf.operand(ctx);
-            rewriter.replace_op(clif::fneg(ctx, loc, operand, ty).op_ref());
+            rewriter.replace_op(
+                clif::Fneg::operands(operand)
+                    .results(ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+            );
             true
         } else {
             false
@@ -348,17 +417,35 @@ impl RewritePattern for ArithBitwisePattern {
         let loc = ctx.op(op).location;
 
         let new_op = if name == Symbol::new("and") {
-            clif::band(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Band::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("or") {
-            clif::bor(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Bor::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("xor") {
-            clif::bxor(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Bxor::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("shl") {
-            clif::ishl(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Ishl::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("shr") {
-            clif::sshr(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Sshr::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if name == Symbol::new("shru") {
-            clif::ushr(ctx, loc, lhs, rhs, result_ty).op_ref()
+            clif::Ushr::operands(lhs, rhs)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else {
             return false;
         };
@@ -414,31 +501,61 @@ impl RewritePattern for ArithConversionPattern {
             match (src_cat, dst_cat) {
                 ("int", "int") => {
                     if clif_int_width(ctx, dst_ty) > clif_int_width(ctx, src_ty) {
-                        clif::sextend(ctx, loc, operand, dst_ty).op_ref()
+                        clif::Sextend::operands(operand)
+                            .results(dst_ty)
+                            .build(ctx, loc)
+                            .op_ref()
                     } else {
-                        clif::ireduce(ctx, loc, operand, dst_ty).op_ref()
+                        clif::Ireduce::operands(operand)
+                            .results(dst_ty)
+                            .build(ctx, loc)
+                            .op_ref()
                     }
                 }
                 _ => return false,
             }
         } else if name == Symbol::new("trunc") {
             match (src_cat, dst_cat) {
-                ("f32" | "f64", "int") => clif::fcvt_to_sint(ctx, loc, operand, dst_ty).op_ref(),
-                ("int", "int") => clif::ireduce(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32" | "f64", "int") => clif::FcvtToSint::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("int", "int") => clif::Ireduce::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("extend") {
             match (src_cat, dst_cat) {
-                ("int", "int") => clif::sextend(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "f64") => clif::fpromote(ctx, loc, operand, dst_ty).op_ref(),
+                ("int", "int") => clif::Sextend::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "f64") => clif::Fpromote::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("convert") {
             match (src_cat, dst_cat) {
-                ("int", "f32" | "f64") => clif::fcvt_from_sint(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32" | "f64", "int") => clif::fcvt_to_sint(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "f64") => clif::fpromote(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "f32") => clif::fdemote(ctx, loc, operand, dst_ty).op_ref(),
+                ("int", "f32" | "f64") => clif::FcvtFromSint::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32" | "f64", "int") => clif::FcvtToSint::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "f64") => clif::Fpromote::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "f32") => clif::Fdemote::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else {

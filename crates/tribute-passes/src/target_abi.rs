@@ -422,18 +422,28 @@ pub fn compose_root_entry_bridge(
         parent_region: None,
     });
     let done_args = ctx.block_args(done_entry).to_vec();
-    let cell = adt::ref_cast(ctx, location, done_args[0], cell_ty, cell_ty);
+    let cell = adt::RefCast::operands(done_args[0])
+        .r#type(cell_ty)
+        .results(cell_ty)
+        .build(ctx, location);
     ctx.push_op(done_entry, cell.op_ref());
-    let store = adt::struct_set(ctx, location, cell.result(ctx), done_args[1], cell_ty, 0);
+    let store = adt::StructSet::operands(cell.result(ctx), done_args[1])
+        .r#type(cell_ty)
+        .field(0)
+        .build(ctx, location);
     ctx.push_op(done_entry, store.op_ref());
-    let done_return = func::r#return(ctx, location, []);
+    let done_return = func::Return::operands([]).build(ctx, location);
     ctx.push_op(done_entry, done_return.op_ref());
     let done_region = ctx.create_region(RegionData {
         location,
         blocks: smallvec![done_entry],
         parent_op: None,
     });
-    let done_function = func::func(ctx, location, root_done_k, done_function_ty, done_region);
+    let done_function = func::Func::builder()
+        .sym_name(root_done_k)
+        .r#type(done_function_ty)
+        .regions(done_region)
+        .build(ctx, location);
     set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
     ctx.op_mut(done_function.op_ref()).attributes.insert(
         Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
@@ -464,13 +474,11 @@ pub fn compose_root_entry_bridge(
         blocks: smallvec![dispatch_entry],
         parent_op: None,
     });
-    let dispatch_function = func::func(
-        ctx,
-        location,
-        root_dispatch,
-        dispatch_function_ty,
-        dispatch_region,
-    );
+    let dispatch_function = func::Func::builder()
+        .sym_name(root_dispatch)
+        .r#type(dispatch_function_ty)
+        .regions(dispatch_region)
+        .build(ctx, location);
     set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
     ctx.op_mut(dispatch_function.op_ref()).attributes.insert(
         Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
@@ -495,87 +503,92 @@ pub fn compose_root_entry_bridge(
         ops: smallvec![],
         parent_region: None,
     });
-    let initial = arith::r#const(ctx, location, source_result, Attribute::Unit);
+    let initial = arith::Const::builder()
+        .value(Attribute::Unit)
+        .results(source_result)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, initial.op_ref());
-    let cell_new = adt::struct_new(ctx, location, [initial.result(ctx)], cell_ty, cell_ty);
+    let cell_new = adt::StructNew::operands([initial.result(ctx)])
+        .r#type(cell_ty)
+        .results(cell_ty)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, cell_new.op_ref());
-    let erased_cell =
-        core::unrealized_conversion_cast(ctx, location, cell_new.result(ctx), anyref_ty);
+    let erased_cell = core::UnrealizedConversionCast::operands(cell_new.result(ctx))
+        .results(anyref_ty)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, erased_cell.op_ref());
-    let done_constant = func::constant(ctx, location, done_callable_ty, root_done_k);
+    let done_constant = func::Constant::builder()
+        .func_ref(root_done_k)
+        .results(done_callable_ty)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, done_constant.op_ref());
     let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-    let done_closure = adt::struct_new(
-        ctx,
-        location,
-        [done_constant.result(ctx), erased_cell.result(ctx)],
-        closure_struct_ty,
-        closure_struct_ty,
-    );
+    let done_closure =
+        adt::StructNew::operands([done_constant.result(ctx), erased_cell.result(ctx)])
+            .r#type(closure_struct_ty)
+            .results(closure_struct_ty)
+            .build(ctx, location);
     ctx.push_op(wrapper_entry, done_closure.op_ref());
-    let typed_done =
-        core::unrealized_conversion_cast(ctx, location, done_closure.result(ctx), frame.done);
+    let typed_done = core::UnrealizedConversionCast::operands(done_closure.result(ctx))
+        .results(frame.done)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, typed_done.op_ref());
 
     let dispatch_callable_ty = dispatch_callable_function_type(ctx, frame.dispatch)?;
-    let dispatch_constant = func::constant(ctx, location, dispatch_callable_ty, root_dispatch);
+    let dispatch_constant = func::Constant::builder()
+        .func_ref(root_dispatch)
+        .results(dispatch_callable_ty)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, dispatch_constant.op_ref());
-    let dispatch_closure = adt::struct_new(
-        ctx,
-        location,
-        [dispatch_constant.result(ctx), erased_cell.result(ctx)],
-        closure_struct_ty,
-        closure_struct_ty,
-    );
+    let dispatch_closure =
+        adt::StructNew::operands([dispatch_constant.result(ctx), erased_cell.result(ctx)])
+            .r#type(closure_struct_ty)
+            .results(closure_struct_ty)
+            .build(ctx, location);
     ctx.push_op(wrapper_entry, dispatch_closure.op_ref());
-    let typed_dispatch = core::unrealized_conversion_cast(
-        ctx,
-        location,
-        dispatch_closure.result(ctx),
-        frame.dispatch,
-    );
+    let typed_dispatch = core::UnrealizedConversionCast::operands(dispatch_closure.result(ctx))
+        .results(frame.dispatch)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, typed_dispatch.op_ref());
-    let frame_value = adt::struct_new(
-        ctx,
-        location,
-        [typed_done.result(ctx), typed_dispatch.result(ctx)],
-        frame.reference,
-        frame.layout,
-    );
+    let frame_value =
+        adt::StructNew::operands([typed_done.result(ctx), typed_dispatch.result(ctx)])
+            .r#type(frame.layout)
+            .results(frame.reference)
+            .build(ctx, location);
     ctx.push_op(wrapper_entry, frame_value.op_ref());
 
     let evidence = if export_convention == CallingConvention::EvidenceDirect {
         ctx.block_args(wrapper_entry)[0]
     } else {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let zero = arith::r#const(ctx, location, i32_ty, Attribute::Int(0));
+        let zero = arith::Const::builder()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(wrapper_entry, zero.op_ref());
-        let empty = adt::array_new(ctx, location, [zero.result(ctx)], evidence_ty, evidence_ty);
+        let empty = adt::ArrayNew::operands([zero.result(ctx)])
+            .r#type(evidence_ty)
+            .results(evidence_ty)
+            .build(ctx, location);
         ctx.push_op(wrapper_entry, empty.op_ref());
         empty.result(ctx)
     };
-    let worker_call = func::call(
-        ctx,
-        location,
-        [evidence, frame_value.result(ctx)],
-        [],
-        cps_main,
-    );
+    let worker_call = func::Call::operands([evidence, frame_value.result(ctx)])
+        .callee(cps_main)
+        .results([])
+        .build(ctx, location);
     set_root_convention(ctx, worker_call.op_ref(), CallingConvention::Cps);
     ctx.op_mut(worker_call.op_ref())
         .attributes
         .insert(Symbol::new(ROOT_CPS_CALL_ATTR), Attribute::Bool(true));
     ctx.push_op(wrapper_entry, worker_call.op_ref());
-    let completed = adt::struct_get(
-        ctx,
-        location,
-        cell_new.result(ctx),
-        source_result,
-        cell_ty,
-        0,
-    );
+    let completed = adt::StructGet::operands(cell_new.result(ctx))
+        .r#type(cell_ty)
+        .field(0)
+        .results(source_result)
+        .build(ctx, location);
     ctx.push_op(wrapper_entry, completed.op_ref());
-    let wrapper_return = func::r#return(ctx, location, [completed.result(ctx)]);
+    let wrapper_return = func::Return::operands([completed.result(ctx)]).build(ctx, location);
     ctx.push_op(wrapper_entry, wrapper_return.op_ref());
     let wrapper_region = ctx.create_region(RegionData {
         location,
@@ -584,13 +597,11 @@ pub fn compose_root_entry_bridge(
     });
     let wrapper_ty =
         func::func_sig(ctx, wrapper_params.iter().copied(), [source_result]).as_type_ref();
-    let wrapper = func::func(
-        ctx,
-        location,
-        Symbol::new("main"),
-        wrapper_ty,
-        wrapper_region,
-    );
+    let wrapper = func::Func::builder()
+        .sym_name(Symbol::new("main"))
+        .r#type(wrapper_ty)
+        .regions(wrapper_region)
+        .build(ctx, location);
     set_root_convention(ctx, wrapper.op_ref(), export_convention);
 
     ctx.push_op(module_block, done_function.op_ref());

@@ -164,7 +164,10 @@ impl RewritePattern for FoldDispatchPattern {
                     [t] => *t,
                     _ => return false,
                 };
-                let new_const = arith::r#const(ctx, loc, result_ty, attr);
+                let new_const = arith::Const::builder()
+                    .value(attr)
+                    .results(result_ty)
+                    .build(ctx, loc);
                 rewriter.replace_op(new_const.op_ref());
                 true
             }

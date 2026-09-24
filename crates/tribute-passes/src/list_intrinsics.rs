@@ -130,14 +130,10 @@ impl RewritePattern for PrependCallPattern {
         };
         let (element, tail, result_ty) = (*element, *tail, *result_ty);
         let element_ty = ctx.value_ty(element);
-        let prepend = list::prepend(
-            ctx,
-            ctx.op(op).location,
-            element,
-            tail,
-            result_ty,
-            element_ty,
-        );
+        let prepend = list::Prepend::operands(element, tail)
+            .element_type(element_ty)
+            .results(result_ty)
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(prepend.op_ref());
         true
     }

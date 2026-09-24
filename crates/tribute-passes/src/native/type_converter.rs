@@ -233,7 +233,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
                 ));
             }
             if from_ty == r.core_nil {
-                let null_op = clif::iconst(ctx, location, ptr_ty, 0);
+                let null_op = clif::Iconst::builder()
+                    .value(0)
+                    .results(ptr_ty)
+                    .build(ctx, location);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: null_op.result(ctx),
                     ops: vec![null_op.op_ref()],
@@ -245,21 +248,30 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         let from_is_ptr_or_any = from_ty == r.core_ptr || from_ty == r.tribute_rt_anyref;
         if from_is_ptr_or_any {
             if to_ty == r.core_i32 || to_ty == r.tribute_rt_int {
-                let load = clif::load(ctx, location, value, r.core_i32, 0);
+                let load = clif::Load::operands(value)
+                    .offset(0)
+                    .results(r.core_i32)
+                    .build(ctx, location);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
             }
             if to_ty == r.core_i64 {
-                let load = clif::load(ctx, location, value, r.core_i64, 0);
+                let load = clif::Load::operands(value)
+                    .offset(0)
+                    .results(r.core_i64)
+                    .build(ctx, location);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
             }
             if to_ty == r.core_f64 {
-                let load = clif::load(ctx, location, value, r.core_f64, 0);
+                let load = clif::Load::operands(value)
+                    .offset(0)
+                    .results(r.core_f64)
+                    .build(ctx, location);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
@@ -297,7 +309,10 @@ fn box_primitive(
 
     // 1. Allocation size (payload + RC header)
     let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = clif::iconst(ctx, location, i64_ty, alloc_size as i64);
+    let size_op = clif::Iconst::builder()
+        .value(alloc_size as i64)
+        .results(i64_ty)
+        .build(ctx, location);
     ops.push(size_op.op_ref());
 
     // 2. Allocate heap memory
@@ -309,49 +324,53 @@ fn box_primitive(
     let raw_ptr = call_op.results(ctx)[0];
 
     // 3. Store refcount = 1
-    let rc_one = clif::iconst(ctx, location, i32_ty, 1);
+    let rc_one = clif::Iconst::builder()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, location);
     ops.push(rc_one.op_ref());
-    let store_rc = clif::store(
-        ctx,
-        location,
-        rc_one.result(ctx),
-        raw_ptr,
-        REFCOUNT_OFFSET as i32,
-    );
+    let store_rc = clif::Store::operands(rc_one.result(ctx), raw_ptr)
+        .offset(REFCOUNT_OFFSET as i32)
+        .build(ctx, location);
     ops.push(store_rc.op_ref());
 
     // 4. Store rtti_idx = 0
-    let rtti_zero = clif::iconst(ctx, location, i32_ty, 0);
+    let rtti_zero = clif::Iconst::builder()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, location);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = clif::store(
-        ctx,
-        location,
-        rtti_zero.result(ctx),
-        raw_ptr,
-        RTTI_IDX_OFFSET as i32,
-    );
+    let store_rtti = clif::Store::operands(rtti_zero.result(ctx), raw_ptr)
+        .offset(RTTI_IDX_OFFSET as i32)
+        .build(ctx, location);
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::iconst(ctx, location, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size = clif::Iconst::builder()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, location);
     ops.push(hdr_size.op_ref());
-    let payload_ptr = clif::iadd(ctx, location, raw_ptr, hdr_size.result(ctx), ptr_ty);
+    let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, location);
     ops.push(payload_ptr.op_ref());
 
     // 6. Store value at payload offset 0
-    let store_val = clif::store(ctx, location, value, payload_ptr.result(ctx), 0);
+    let store_val = clif::Store::operands(value, payload_ptr.result(ctx))
+        .offset(0)
+        .build(ctx, location);
     ops.push(store_val.op_ref());
 
     // 7. Identity pass-through so the last op produces the payload ptr result
-    let zero_op = clif::iconst(ctx, location, ptr_ty, 0);
+    let zero_op = clif::Iconst::builder()
+        .value(0)
+        .results(ptr_ty)
+        .build(ctx, location);
     ops.push(zero_op.op_ref());
-    let identity_op = clif::iadd(
-        ctx,
-        location,
-        payload_ptr.result(ctx),
-        zero_op.result(ctx),
-        ptr_ty,
-    );
+    let identity_op = clif::Iadd::operands(payload_ptr.result(ctx), zero_op.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, location);
     ops.push(identity_op.op_ref());
 
     trunk_ir::rewrite::type_converter::MaterializeResult {

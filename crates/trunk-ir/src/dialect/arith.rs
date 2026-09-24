@@ -46,25 +46,24 @@ crate::register_pure_op!(arith.convert);
 
 #[trunk_ir::dialect]
 mod arith {
-    #[attr(value: any)]
-    fn r#const() -> result {}
+    fn r#const(value: Attr<_>) -> Value<_> {}
 
     // Integer arithmetic
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    fn subi(lhs: (), rhs: ()) -> result {}
-    fn muli(lhs: (), rhs: ()) -> result {}
-    fn divsi(lhs: (), rhs: ()) -> result {}
-    fn divui(lhs: (), rhs: ()) -> result {}
-    fn remsi(lhs: (), rhs: ()) -> result {}
-    fn remui(lhs: (), rhs: ()) -> result {}
-    fn negi(operand: ()) -> result {}
+    fn subi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn muli(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn divsi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn divui(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn remsi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn remui(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn negi(operand: Value<_>) -> Value<_> {}
 
     // Float arithmetic
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    fn subf(lhs: (), rhs: ()) -> result {}
-    fn mulf(lhs: (), rhs: ()) -> result {}
-    fn divf(lhs: (), rhs: ()) -> result {}
-    fn negf(operand: ()) -> result {}
+    fn subf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn mulf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn divf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn negf(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
     fn cmpi<T: IntegerLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
@@ -73,18 +72,18 @@ mod arith {
     fn cmpf<T: FloatLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
-    fn and(lhs: (), rhs: ()) -> result {}
-    fn or(lhs: (), rhs: ()) -> result {}
-    fn xor(lhs: (), rhs: ()) -> result {}
-    fn shl(value: (), amount: ()) -> result {}
-    fn shr(value: (), amount: ()) -> result {}
-    fn shru(value: (), amount: ()) -> result {}
+    fn and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn shl(value: Value<_>, amount: Value<_>) -> Value<_> {}
+    fn shr(value: Value<_>, amount: Value<_>) -> Value<_> {}
+    fn shru(value: Value<_>, amount: Value<_>) -> Value<_> {}
 
     // Conversions
-    fn cast(operand: ()) -> result {}
-    fn trunc(operand: ()) -> result {}
-    fn extend(operand: ()) -> result {}
-    fn convert(operand: ()) -> result {}
+    fn cast(operand: Value<_>) -> Value<_> {}
+    fn trunc(operand: Value<_>) -> Value<_> {}
+    fn extend(operand: Value<_>) -> Value<_> {}
+    fn convert(operand: Value<_>) -> Value<_> {}
 }
 
 // =========================================================================

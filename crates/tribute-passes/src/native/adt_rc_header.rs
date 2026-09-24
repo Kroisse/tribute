@@ -124,7 +124,10 @@ impl RewritePattern for StructNewPattern {
 
         // 1. Compute allocation size (payload + RC header)
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::iconst(ctx, loc, self.i64_ty, alloc_size as i64);
+        let size_op = clif::Iconst::builder()
+            .value(alloc_size as i64)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let size_val = size_op.result(ctx);
         ops.push(size_op.op_ref());
 
@@ -137,10 +140,15 @@ impl RewritePattern for StructNewPattern {
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1
-        let rc_one = clif::iconst(ctx, loc, self.i32_ty, 1);
+        let rc_one = clif::Iconst::builder()
+            .value(1)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         let rc_one_val = rc_one.result(ctx);
         ops.push(rc_one.op_ref());
-        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, REFCOUNT_OFFSET as i32);
+        let store_rc = clif::Store::operands(rc_one_val, raw_ptr)
+            .offset(REFCOUNT_OFFSET as i32)
+            .build(ctx, loc);
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
@@ -152,17 +160,27 @@ impl RewritePattern for StructNewPattern {
                 ctx.get_type(struct_ty)
             )
         }) as i64;
-        let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
+        let rtti_val = clif::Iconst::builder()
+            .value(rtti_idx)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
-        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, RTTI_IDX_OFFSET as i32);
+        let store_rtti = clif::Store::operands(rtti_val_v, raw_ptr)
+            .offset(RTTI_IDX_OFFSET as i32)
+            .build(ctx, loc);
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::iconst(ctx, loc, self.i64_ty, RC_HEADER_SIZE as i64);
+        let hdr_size = clif::Iconst::builder()
+            .value(RC_HEADER_SIZE as i64)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let hdr_size_val = hdr_size.result(ctx);
         ops.push(hdr_size.op_ref());
-        let payload_ptr = clif::iadd(ctx, loc, raw_ptr, hdr_size_val, self.ptr_ty);
+        let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size_val)
+            .results(self.ptr_ty)
+            .build(ctx, loc);
         let payload_val = payload_ptr.result(ctx);
         ops.push(payload_ptr.op_ref());
 
@@ -176,16 +194,23 @@ impl RewritePattern for StructNewPattern {
         );
         for (i, &field_val) in fields.iter().enumerate() {
             let offset = layout.field_offsets[i] as i32;
-            let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
+            let store_op = clif::Store::operands(field_val, payload_val)
+                .offset(offset)
+                .build(ctx, loc);
             ops.push(store_op.op_ref());
         }
 
         // 7. Identity pass-through
-        let zero_op = clif::iconst(ctx, loc, self.i64_ty, 0);
+        let zero_op = clif::Iconst::builder()
+            .value(0)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let zero_val = zero_op.result(ctx);
         ops.push(zero_op.op_ref());
 
-        let identity_op = clif::iadd(ctx, loc, payload_val, zero_val, self.ptr_ty);
+        let identity_op = clif::Iadd::operands(payload_val, zero_val)
+            .results(self.ptr_ty)
+            .build(ctx, loc);
         ops.push(identity_op.op_ref());
 
         let last = ops.pop().unwrap();
@@ -261,7 +286,10 @@ impl RewritePattern for VariantNewPattern {
 
         // 1. Compute allocation size (payload + RC header)
         let alloc_size = enum_layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::iconst(ctx, loc, self.i64_ty, alloc_size as i64);
+        let size_op = clif::Iconst::builder()
+            .value(alloc_size as i64)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let size_val = size_op.result(ctx);
         ops.push(size_op.op_ref());
 
@@ -274,10 +302,15 @@ impl RewritePattern for VariantNewPattern {
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1
-        let rc_one = clif::iconst(ctx, loc, self.i32_ty, 1);
+        let rc_one = clif::Iconst::builder()
+            .value(1)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         let rc_one_val = rc_one.result(ctx);
         ops.push(rc_one.op_ref());
-        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, REFCOUNT_OFFSET as i32);
+        let store_rc = clif::Store::operands(rc_one_val, raw_ptr)
+            .offset(REFCOUNT_OFFSET as i32)
+            .build(ctx, loc);
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
@@ -288,25 +321,40 @@ impl RewritePattern for VariantNewPattern {
                 enum_ty
             )
         }) as i64;
-        let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
+        let rtti_val = clif::Iconst::builder()
+            .value(rtti_idx)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
-        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, RTTI_IDX_OFFSET as i32);
+        let store_rtti = clif::Store::operands(rtti_val_v, raw_ptr)
+            .offset(RTTI_IDX_OFFSET as i32)
+            .build(ctx, loc);
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::iconst(ctx, loc, self.i64_ty, RC_HEADER_SIZE as i64);
+        let hdr_size = clif::Iconst::builder()
+            .value(RC_HEADER_SIZE as i64)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let hdr_size_val = hdr_size.result(ctx);
         ops.push(hdr_size.op_ref());
-        let payload_ptr = clif::iadd(ctx, loc, raw_ptr, hdr_size_val, self.ptr_ty);
+        let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size_val)
+            .results(self.ptr_ty)
+            .build(ctx, loc);
         let payload_val = payload_ptr.result(ctx);
         ops.push(payload_ptr.op_ref());
 
         // 6. Store tag at payload + 0
-        let tag_const = clif::iconst(ctx, loc, self.i32_ty, variant_layout.tag_value as i64);
+        let tag_const = clif::Iconst::builder()
+            .value(variant_layout.tag_value as i64)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         let tag_val = tag_const.result(ctx);
         ops.push(tag_const.op_ref());
-        let store_tag = clif::store(ctx, loc, tag_val, payload_val, 0);
+        let store_tag = clif::Store::operands(tag_val, payload_val)
+            .offset(0)
+            .build(ctx, loc);
         ops.push(store_tag.op_ref());
 
         // 7. Store each field at its computed offset (relative to payload + fields_offset)
@@ -319,16 +367,23 @@ impl RewritePattern for VariantNewPattern {
         );
         for (i, &field_val) in fields.iter().enumerate() {
             let offset = (enum_layout.fields_offset + variant_layout.field_offsets[i]) as i32;
-            let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
+            let store_op = clif::Store::operands(field_val, payload_val)
+                .offset(offset)
+                .build(ctx, loc);
             ops.push(store_op.op_ref());
         }
 
         // 8. Identity pass-through
-        let zero_op = clif::iconst(ctx, loc, self.i64_ty, 0);
+        let zero_op = clif::Iconst::builder()
+            .value(0)
+            .results(self.i64_ty)
+            .build(ctx, loc);
         let zero_val = zero_op.result(ctx);
         ops.push(zero_op.op_ref());
 
-        let identity_op = clif::iadd(ctx, loc, payload_val, zero_val, self.ptr_ty);
+        let identity_op = clif::Iadd::operands(payload_val, zero_val)
+            .results(self.ptr_ty)
+            .build(ctx, loc);
         ops.push(identity_op.op_ref());
 
         let last = ops.pop().unwrap();
@@ -404,7 +459,7 @@ mod tests {
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
 
-        let ret = func::r#return(ctx, loc, [struct_result]);
+        let ret = func::Return::operands([struct_result]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -412,7 +467,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+        let func_op = func::Func::builder()
+            .sym_name(Symbol::new("create_struct"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
 
         // Build module
         let module_block = ctx.create_block(BlockData {

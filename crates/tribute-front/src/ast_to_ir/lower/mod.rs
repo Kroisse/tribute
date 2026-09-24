@@ -86,7 +86,10 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     /// Emit a nil value (Tribute's unit type).
     pub fn emit_nil(&mut self, location: Location) -> ValueRef {
         let ty = self.ctx.nil_type(self.ir);
-        let op = arith::r#const(self.ir, location, ty, Attribute::Unit);
+        let op = arith::Const::builder()
+            .value(Attribute::Unit)
+            .results(ty)
+            .build(self.ir, location);
         self.ir.push_op(self.block, op.op_ref());
         op.result(self.ir)
     }
@@ -105,7 +108,9 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         }
 
         // Insert unrealized_conversion_cast
-        let cast_op = core::unrealized_conversion_cast(self.ir, location, value, target_ty);
+        let cast_op = core::UnrealizedConversionCast::operands(value)
+            .results(target_ty)
+            .build(self.ir, location);
         self.ir.push_op(self.block, cast_op.op_ref());
         cast_op.result(self.ir)
     }

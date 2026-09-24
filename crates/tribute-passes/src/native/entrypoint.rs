@@ -228,12 +228,18 @@ fn build_entrypoint(
 
     // Initialize ASan before anything else
     if sanitize {
-        let asan_call = func::call(ctx, loc, [], [nil_ty], Symbol::new("__asan_init"));
+        let asan_call = func::Call::operands([])
+            .callee(Symbol::new("__asan_init"))
+            .results([nil_ty])
+            .build(ctx, loc);
         ctx.push_op(entry_block, asan_call.op_ref());
     }
 
     // Initialize runtime TLS before any ability use
-    let init_call = func::call(ctx, loc, [], [nil_ty], Symbol::new("__tribute_init"));
+    let init_call = func::Call::operands([])
+        .callee(Symbol::new("__tribute_init"))
+        .results([nil_ty])
+        .build(ctx, loc);
     ctx.push_op(entry_block, init_call.op_ref());
 
     let main_args = match tribute_main.convention {
@@ -250,13 +256,10 @@ fn build_entrypoint(
                 1,
                 "entrypoint: EvidenceDirect `main` must have exactly one evidence parameter"
             );
-            let empty_evidence = func::call(
-                ctx,
-                loc,
-                [],
-                [tribute_main.parameter_types[0]],
-                Symbol::new(evidence_abi::EMPTY),
-            );
+            let empty_evidence = func::Call::operands([])
+                .callee(Symbol::new(evidence_abi::EMPTY))
+                .results([tribute_main.parameter_types[0]])
+                .build(ctx, loc);
             ctx.push_op(entry_block, empty_evidence.op_ref());
             vec![empty_evidence.result(ctx)]
         }
@@ -268,21 +271,21 @@ fn build_entrypoint(
     };
 
     // Call _tribute_main — its source-level result is ignored.
-    let main_call = func::call(
-        ctx,
-        loc,
-        main_args,
-        [tribute_main.return_type],
-        Symbol::new("_tribute_main"),
-    );
+    let main_call = func::Call::operands(main_args)
+        .callee(Symbol::new("_tribute_main"))
+        .results([tribute_main.return_type])
+        .build(ctx, loc);
     set_calling_convention(ctx, main_call.op_ref(), tribute_main.convention);
     ctx.push_op(entry_block, main_call.op_ref());
 
     // Return exit code 0
-    let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+    let zero = arith::Const::builder()
+        .value(Attribute::Int(0))
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(entry_block, zero.op_ref());
 
-    let ret = func::r#return(ctx, loc, [zero.result(ctx)]);
+    let ret = func::Return::operands([zero.result(ctx)]).build(ctx, loc);
     ctx.push_op(entry_block, ret.op_ref());
 
     // Create body region
@@ -296,7 +299,11 @@ fn build_entrypoint(
     // NOTE: No "abi" attribute here — `abi` marks extern (imported) functions.
     // The Cranelift backend treats functions named "main" as Export linkage,
     // but functions with `abi` attribute are treated as Import and skipped.
-    let main_func = func::func(ctx, loc, Symbol::new("main"), func_ty, body);
+    let main_func = func::Func::builder()
+        .sym_name(Symbol::new("main"))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, loc);
     set_calling_convention(ctx, main_func.op_ref(), CallingConvention::Direct);
 
     main_func.op_ref()
@@ -340,9 +347,12 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c42 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+        let c42 = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(entry, c42.op_ref());
-        let ret = func::r#return(ctx, loc, [c42.result(ctx)]);
+        let ret = func::Return::operands([c42.result(ctx)]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -350,7 +360,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main_fn = func::func(ctx, loc, Symbol::new("main"), func_ty, body);
+        let main_fn = func::Func::builder()
+            .sym_name(Symbol::new("main"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -393,14 +407,18 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = func::r#return(ctx, loc, []);
+        let ret = func::Return::operands([]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main_fn = func::func(ctx, loc, Symbol::new("main"), func_ty, body);
+        let main_fn = func::Func::builder()
+            .sym_name(Symbol::new("main"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
         set_calling_convention(ctx, main_fn.op_ref(), CallingConvention::EvidenceDirect);
 
         let module_block = ctx.create_block(BlockData {
@@ -478,10 +496,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [c1_val]);
+        let ret = func::Return::operands([c1_val]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -489,7 +510,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let helper_fn = func::func(&mut ctx, loc, Symbol::new("helper"), func_ty, body);
+        let helper_fn = func::Func::builder()
+            .sym_name(Symbol::new("helper"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         // Build module
         let module_block = ctx.create_block(BlockData {
@@ -540,7 +565,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = func::r#return(&mut ctx, loc, []);
+        let ret = func::Return::operands([]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -548,7 +573,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main_fn = func::func(&mut ctx, loc, Symbol::new("main"), func_ty, body);
+        let main_fn = func::Func::builder()
+            .sym_name(Symbol::new("main"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let module_block = ctx.create_block(BlockData {
             location: loc,

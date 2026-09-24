@@ -115,22 +115,22 @@ impl ArithIntrinsicPattern {
         binary!("Int::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::-", |ctx, loc, l, r, ty| arith::subi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Int::*", |ctx, loc, l, r, ty| arith::muli(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Int::/", |ctx, loc, l, r, ty| arith::divsi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Int::%", |ctx, loc, l, r, ty| arith::remsi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
+        binary!("Int::-", |ctx, loc, l, r, ty| arith::Subi::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Int::*", |ctx, loc, l, r, ty| arith::Muli::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Int::/", |ctx, loc, l, r, ty| arith::Divsi::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Int::%", |ctx, loc, l, r, ty| arith::Remsi::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
         cmpi!("Int::==", "eq");
         cmpi!("Int::!=", "ne");
         cmpi!("Int::<", "slt");
@@ -142,22 +142,22 @@ impl ArithIntrinsicPattern {
         binary!("Nat::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::-", |ctx, loc, l, r, ty| arith::subi(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Nat::*", |ctx, loc, l, r, ty| arith::muli(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Nat::/", |ctx, loc, l, r, ty| arith::divui(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Nat::%", |ctx, loc, l, r, ty| arith::remui(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
+        binary!("Nat::-", |ctx, loc, l, r, ty| arith::Subi::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Nat::*", |ctx, loc, l, r, ty| arith::Muli::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Nat::/", |ctx, loc, l, r, ty| arith::Divui::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Nat::%", |ctx, loc, l, r, ty| arith::Remui::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
         cmpi!("Nat::==", "eq");
         cmpi!("Nat::!=", "ne");
         cmpi!("Nat::<", "ult");
@@ -171,18 +171,18 @@ impl ArithIntrinsicPattern {
         )
         .build(ctx, loc)
         .op_ref());
-        binary!("Float::-", |ctx, loc, l, r, ty| arith::subf(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Float::*", |ctx, loc, l, r, ty| arith::mulf(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
-        binary!("Float::/", |ctx, loc, l, r, ty| arith::divf(
-            ctx, loc, l, r, ty
-        )
-        .op_ref());
+        binary!("Float::-", |ctx, loc, l, r, ty| arith::Subf::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Float::*", |ctx, loc, l, r, ty| arith::Mulf::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Float::/", |ctx, loc, l, r, ty| arith::Divf::operands(l, r)
+            .results(ty)
+            .build(ctx, loc)
+            .op_ref());
         cmpf!("Float::==", "oeq");
         cmpf!("Float::!=", "une");
         cmpf!("Float::<", "olt");
@@ -330,7 +330,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         ctx.push_op(body_block, result_op);
 
         let result_val = ctx.op_results(result_op)[0];
-        let ret_op = func::r#return(ctx, loc, [result_val]);
+        let ret_op = func::Return::operands([result_val]).build(ctx, loc);
         ctx.push_op(body_block, ret_op.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -342,7 +342,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         // Detach old body region before replacing
         ctx.detach_region(old_body);
 
-        let new_func = func::func(ctx, loc, sym_name, func_ty, body).op_ref();
+        let new_func = func::Func::builder()
+            .sym_name(sym_name)
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref();
         // Do NOT copy the "intrinsic" abi — this is now a real function
         rewriter.replace_op(new_func);
         true

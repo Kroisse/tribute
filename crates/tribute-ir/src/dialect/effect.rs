@@ -9,7 +9,7 @@
 mod effect {
     /// Allocate the runtime-unique prompt token for one dynamic handler
     /// installation. `resolve_evidence` lowers this before target lowering.
-    fn fresh_prompt_tag() -> result {}
+    fn fresh_prompt_tag() -> Value<_> {}
 
     /// Extend the current evidence with a handler for one ability.
     ///
@@ -18,15 +18,26 @@ mod effect {
     /// - `prompt_tag`: runtime tag associated with the handler installation.
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
     /// - `handler_dispatch`: full CPS dispatch closure, or null.
-    #[attr(ability_ref: Type)]
-    fn extend(evidence: (), prompt_tag: (), tr_dispatch_fn: (), handler_dispatch: ()) -> result {}
+    fn extend(
+        ability_ref: Attr<Type>,
+        evidence: Value<_>,
+        prompt_tag: Value<_>,
+        tr_dispatch_fn: Value<_>,
+        handler_dispatch: Value<_>,
+    ) -> Value<_> {
+    }
 
     /// Dispatch a tail-resumptive `fn` ability operation.
     ///
     /// The operation carries ability identity and operation name as attributes,
     /// while the backend chooses the concrete lookup and callable layout.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn dispatch_tail(evidence: (), payload: ()) -> result {}
+    fn dispatch_tail(
+        ability_ref: Attr<Type>,
+        op_name: Attr<Symbol>,
+        evidence: Value<_>,
+        payload: Value<_>,
+    ) -> Value<_> {
+    }
 
     /// Dispatch a general CPS `op` ability operation.
     ///
@@ -34,8 +45,16 @@ mod effect {
     /// types. `payload` is the single packed operation argument value. The
     /// operation is resultless: backend lowering performs the final proper tail
     /// transfer.
-    #[attr(ability_ref: Type, op_name: Symbol, answer_type: Type)]
-    fn dispatch_cps(evidence: (), dispatch: (), resume: (), payload: ()) {}
+    fn dispatch_cps(
+        ability_ref: Attr<Type>,
+        op_name: Attr<Symbol>,
+        answer_type: Attr<Type>,
+        evidence: Value<_>,
+        dispatch: Value<_>,
+        resume: Value<_>,
+        payload: Value<_>,
+    ) {
+    }
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
@@ -94,7 +113,11 @@ mod tests {
         ty: trunk_ir::TypeRef,
         value: i128,
     ) -> trunk_ir::ValueRef {
-        trunk_ir::dialect::arith::r#const(ctx, loc, ty, Attribute::Int(value)).result(ctx)
+        trunk_ir::dialect::arith::Const::builder()
+            .value(Attribute::Int(value))
+            .results(ty)
+            .build(ctx, loc)
+            .result(ctx)
     }
 
     #[test]
@@ -111,16 +134,10 @@ mod tests {
         let tr_dispatch_fn = const_i32(&mut ctx, loc, ptr_ty, 0);
         let handler_dispatch = const_i32(&mut ctx, loc, ptr_ty, 1);
 
-        let op = super::extend(
-            &mut ctx,
-            loc,
-            evidence,
-            prompt_tag,
-            tr_dispatch_fn,
-            handler_dispatch,
-            evidence_ty,
-            ability,
-        );
+        let op = super::Extend::operands(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
+            .ability_ref(ability)
+            .results(evidence_ty)
+            .build(&mut ctx, loc);
         let wrapper = super::Extend::from_op(&ctx, op.op_ref()).expect("effect.extend matches");
 
         assert_eq!(wrapper.evidence(&ctx), evidence);
@@ -143,26 +160,16 @@ mod tests {
         let dispatch = const_i32(&mut ctx, loc, anyref_ty, 2);
         let resume = const_i32(&mut ctx, loc, anyref_ty, 3);
 
-        let tail = super::dispatch_tail(
-            &mut ctx,
-            loc,
-            evidence,
-            payload,
-            anyref_ty,
-            ability,
-            Symbol::new("print"),
-        );
-        let cps = super::dispatch_cps(
-            &mut ctx,
-            loc,
-            evidence,
-            dispatch,
-            resume,
-            payload,
-            ability,
-            Symbol::new("get"),
-            anyref_ty,
-        );
+        let tail = super::DispatchTail::operands(evidence, payload)
+            .ability_ref(ability)
+            .op_name(Symbol::new("print"))
+            .results(anyref_ty)
+            .build(&mut ctx, loc);
+        let cps = super::DispatchCps::operands(evidence, dispatch, resume, payload)
+            .ability_ref(ability)
+            .op_name(Symbol::new("get"))
+            .answer_type(anyref_ty)
+            .build(&mut ctx, loc);
 
         let tail_wrapper =
             super::DispatchTail::from_op(&ctx, tail.op_ref()).expect("effect.dispatch_tail");

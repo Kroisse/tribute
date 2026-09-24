@@ -1125,7 +1125,10 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let output = print_op(&ctx, c.op_ref());
         assert_eq!(output, "%0 = arith.const {value = 42} : core.i32\n");
     }
@@ -1136,8 +1139,14 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
+        let c2 = arith::Const::builder()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
@@ -1182,7 +1191,7 @@ mod tests {
 
         // return result
         let result = add.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [result]);
+        let ret = func::Return::operands([result]).build(&mut ctx, loc);
         ctx.push_op(entry_block, ret.op_ref());
 
         // Region
@@ -1193,7 +1202,11 @@ mod tests {
         });
 
         // Function
-        let f = func::func(&mut ctx, loc, Symbol::new("add"), func_ty, body);
+        let f = func::Func::builder()
+            .sym_name(Symbol::new("add"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         let output = print_op(&ctx, f.op_ref());
         assert!(output.contains("func.func @add"));
@@ -1218,11 +1231,14 @@ mod tests {
             parent_region: None,
         });
 
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c.op_ref());
 
         let result = c.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [result]);
+        let ret = func::Return::operands([result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -1230,7 +1246,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let f = func::func(&mut ctx, loc, Symbol::new("main"), func_ty, body);
+        let f = func::Func::builder()
+            .sym_name(Symbol::new("main"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
 
         // Module
         let mod_block = ctx.create_block(BlockData {
@@ -1246,7 +1266,10 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        let module = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(&mut ctx, loc);
 
         let output = print_module(&ctx, module.op_ref());
         assert!(output.contains("core.module @test"));
@@ -1273,7 +1296,7 @@ mod tests {
             parent_region: None,
         });
         let x = ctx.block_arg(inner_entry, 0);
-        let ret_inner = func::r#return(&mut ctx, loc, [x]);
+        let ret_inner = func::Return::operands([x]).build(&mut ctx, loc);
         ctx.push_op(inner_entry, ret_inner.op_ref());
 
         let inner_body = ctx.create_region(RegionData {
@@ -1281,7 +1304,11 @@ mod tests {
             blocks: smallvec![inner_entry],
             parent_op: None,
         });
-        let inner_func = func::func(&mut ctx, loc, Symbol::new("get_x"), func_ty, inner_body);
+        let inner_func = func::Func::builder()
+            .sym_name(Symbol::new("get_x"))
+            .r#type(func_ty)
+            .regions(inner_body)
+            .build(&mut ctx, loc);
 
         // Inner module: core.module @Point { func.func @get_x ... }
         let inner_mod_block = ctx.create_block(BlockData {
@@ -1297,7 +1324,10 @@ mod tests {
             blocks: smallvec![inner_mod_block],
             parent_op: None,
         });
-        let inner_module = core::module(&mut ctx, loc, Symbol::new("Point"), inner_mod_region);
+        let inner_module = core::Module::builder()
+            .sym_name(Symbol::new("Point"))
+            .regions(inner_mod_region)
+            .build(&mut ctx, loc);
 
         // Outer function: fn make() -> i32 { return 1; }
         let outer_entry = ctx.create_block(BlockData {
@@ -1306,10 +1336,13 @@ mod tests {
             ops: Default::default(),
             parent_region: None,
         });
-        let one = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let one = arith::Const::builder()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(outer_entry, one.op_ref());
         let one_val = one.result(&ctx);
-        let ret_outer = func::r#return(&mut ctx, loc, [one_val]);
+        let ret_outer = func::Return::operands([one_val]).build(&mut ctx, loc);
         ctx.push_op(outer_entry, ret_outer.op_ref());
 
         let outer_body = ctx.create_region(RegionData {
@@ -1318,7 +1351,11 @@ mod tests {
             parent_op: None,
         });
         let make_func_ty = make_func_type(&mut ctx, &[], i32_ty);
-        let outer_func = func::func(&mut ctx, loc, Symbol::new("make"), make_func_ty, outer_body);
+        let outer_func = func::Func::builder()
+            .sym_name(Symbol::new("make"))
+            .r#type(make_func_ty)
+            .regions(outer_body)
+            .build(&mut ctx, loc);
 
         // Outer module: core.module @test { core.module @Point { ... }  func.func @make ... }
         let outer_mod_block = ctx.create_block(BlockData {
@@ -1335,7 +1372,10 @@ mod tests {
             blocks: smallvec![outer_mod_block],
             parent_op: None,
         });
-        let outer_module = core::module(&mut ctx, loc, Symbol::new("test"), outer_mod_region);
+        let outer_module = core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(outer_mod_region)
+            .build(&mut ctx, loc);
 
         let output = print_module(&ctx, outer_module.op_ref());
         insta::assert_snapshot!(output);
@@ -1454,7 +1494,11 @@ mod tests {
             blocks: smallvec![mod_block],
             parent_op: None,
         });
-        core::module(ctx, loc, Symbol::new("test"), mod_region).op_ref()
+        core::Module::builder()
+            .sym_name(Symbol::new("test"))
+            .regions(mod_region)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     /// Helper: build a function that takes a param and returns it.
@@ -1475,7 +1519,7 @@ mod tests {
             parent_region: None,
         });
         let arg = ctx.block_arg(entry, 0);
-        let ret = func::r#return(ctx, loc, [arg]);
+        let ret = func::Return::operands([arg]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
@@ -1483,7 +1527,12 @@ mod tests {
             parent_op: None,
         });
         let func_ty = make_func_type(ctx, &[param_ty], ret_ty);
-        func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body).op_ref()
+        func::Func::builder()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     #[test]
@@ -1812,11 +1861,17 @@ core.module @test {
             parent_region: None,
         });
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c1 = arith::Const::builder()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c1.op_ref());
         let v1 = c1.result(&ctx);
 
-        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
+        let c2 = arith::Const::builder()
+            .value(Attribute::Int(99))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, c2.op_ref());
         let v2 = c2.result(&ctx);
 

@@ -104,30 +104,37 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
         // Load data pointer from TributeBytes (offset 0)
-        let data_ptr = mem::load(ctx, loc, bytes, ptr_ty, 0);
+        let data_ptr = mem::Load::operands(bytes)
+            .offset(0)
+            .results(ptr_ty)
+            .build(ctx, loc);
         rewriter.insert_op(data_ptr.op_ref());
 
         // Extend index (Nat = i32) to pointer width (i64)
-        let index_ext = trunk_ir::dialect::arith::extend(ctx, loc, index, ptr_ty);
+        let index_ext = trunk_ir::dialect::arith::Extend::operands(index)
+            .results(ptr_ty)
+            .build(ctx, loc);
         rewriter.insert_op(index_ext.op_ref());
 
         // Compute address: data_ptr + index. `arith.addi` is integer-only,
         // so pointer arithmetic uses `clif.iadd` like the other native passes.
-        let addr = trunk_ir::dialect::clif::iadd(
-            ctx,
-            loc,
-            data_ptr.result(ctx),
-            index_ext.result(ctx),
-            ptr_ty,
-        );
+        let addr =
+            trunk_ir::dialect::clif::Iadd::operands(data_ptr.result(ctx), index_ext.result(ctx))
+                .results(ptr_ty)
+                .build(ctx, loc);
         rewriter.insert_op(addr.op_ref());
 
         // Load byte (i8) from computed address
-        let byte_val = mem::load(ctx, loc, addr.result(ctx), i8_ty, 0);
+        let byte_val = mem::Load::operands(addr.result(ctx))
+            .offset(0)
+            .results(i8_ty)
+            .build(ctx, loc);
         rewriter.insert_op(byte_val.op_ref());
 
         // Zero-extend i8 → result type (Nat = i32)
-        let extended = trunk_ir::dialect::arith::extend(ctx, loc, byte_val.result(ctx), result_ty);
+        let extended = trunk_ir::dialect::arith::Extend::operands(byte_val.result(ctx))
+            .results(result_ty)
+            .build(ctx, loc);
         rewriter.replace_op(extended.op_ref());
 
         true

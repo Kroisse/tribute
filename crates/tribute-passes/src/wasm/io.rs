@@ -109,13 +109,10 @@ impl RewritePattern for WritePattern {
         let Ok(write) = tribute_io::Write::from_op(ctx, op) else {
             return false;
         };
-        let call = func::call(
-            ctx,
-            ctx.op(op).location,
-            [write.bytes(ctx), write.newline(ctx)],
-            [ctx.op_result_types(op)[0]],
-            Symbol::new(WRITE_HELPER),
-        );
+        let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
+            .callee(Symbol::new(WRITE_HELPER))
+            .results([ctx.op_result_types(op)[0]])
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
         true
     }
@@ -202,7 +199,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
 
     let writes = write_loop(ctx, loc, zero, total.result(ctx), analysis, i32_ty, nil_ty);
     ctx.push_op(body, writes);
-    let ret = func::r#return(ctx, loc, []);
+    let ret = func::Return::operands([]).build(ctx, loc);
     ctx.push_op(body, ret.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -211,7 +208,12 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         parent_op: None,
     });
     let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
-    func::func(ctx, loc, Symbol::new(WRITE_HELPER), fn_ty, body).op_ref()
+    func::Func::builder()
+        .sym_name(Symbol::new(WRITE_HELPER))
+        .r#type(fn_ty)
+        .regions(body)
+        .build(ctx, loc)
+        .op_ref()
 }
 
 fn ensure_memory(
