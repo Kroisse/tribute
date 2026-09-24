@@ -58,7 +58,8 @@ From external crates: `#[trunk_ir::dialect]`.
 **Typed syntax**: an operation may instead declare its entities and type
 constraints in the signature, following
 [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
-`arith.addi` and `wasm.i32_add` use it; the other examples below are
+`arith.addi`, `arith.addf`, `arith.cmpi`, `arith.cmpf`, `wasm.i32_add`, and
+`tribute_control.resume` use it; the `call_indirect` example below is
 illustrative.
 
 ```rust
@@ -70,7 +71,12 @@ fn cmpi<T: IntegerLike>(
     predicate: Attr<Symbol>,
     lhs: Value<T>,
     rhs: Value<T>,
-) -> Value<impl BoolLike> {}
+) -> Value<I1> {}
+
+fn resume<T: ResumeToken>(
+    resume_token: Value<T>,
+    value: Value<T::Input>,
+) -> Value<T::Answer> {}
 
 fn call_indirect<S: clif::FuncSig>(
     sig: Attr<S::Type>,
@@ -105,15 +111,16 @@ of a positional constructor. For the declarations above:
 
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
-let cmp = Cmpi::operands(lhs, rhs)        // or `Op::builder()` without operands
-    .predicate(Symbol::new("slt"))        // attributes by name
-    .results(i1_ty)                       // result types that are not inferred
-    .build(ctx, loc);
+let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::builder()` without operands
+    .predicate(Symbol::new("slt"))          // attributes by name
+    .build(ctx, loc);                       // result is `core.i1`
+let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 ```
 
 The builder infers result types that are fixed types, variables bound by a
 single operand or a required attribute, or projections of such variables;
-`.results(..)` exists only when they are not all inferred. Result types,
+`.results(..)` exists only when they are not all inferred, as for
+`-> Value<impl BoolLike>`. Result types,
 regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
 one call, in declaration order. Missing required inputs panic in `build`; the
 builder does not check input types.
