@@ -58,9 +58,9 @@ From external crates: `#[trunk_ir::dialect]`.
 **Typed syntax**: an operation may instead declare its entities and type
 constraints in the signature, following
 [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
-`arith.addi`, `arith.addf`, `arith.cmpi`, `arith.cmpf`, `wasm.i32_add`, and
-`tribute_control.resume` use it; the `call_indirect` example below is
-illustrative.
+`arith.addi`/`addf`/`cmpi`/`cmpf`, `wasm.i32_add`, every `tribute_control`
+operation, the `func` indirect calls, and `clif.func`, `clif.call`, and the
+`clif` indirect calls use it. For example:
 
 ```rust
 fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
@@ -78,9 +78,10 @@ fn resume<T: ResumeToken>(
     value: Value<T::Input>,
 ) -> Value<T::Answer> {}
 
-fn call_indirect<S: clif::FuncSig>(
-    sig: Attr<S::Type>,
-    callee: Value<core::Ptr>,
+#[verify]
+fn call_indirect<S: FuncSig>(
+    signature: Attr<S::Type>,
+    callee: Value<_>,
     args: Values<S::Inputs>,
 ) -> Values<S::Results> {}
 ```
@@ -132,9 +133,13 @@ name. `OpSchema::of(ctx, op)` looks it up for any operation.
 counts and attributes, individual type constraints, variable bindings, then
 projections and type lists, and finally the `#[verify]` hook, each stage only
 if the earlier ones passed. Remaining operation-specific checks run afterwards
-and may assume the declared shape. Typed
-accessors do not check the schema; for an optional region or result, inspect
-the operation before calling the accessor.
+and may assume the declared shape. The `tribute_control` local validator and
+the native backend boundary (`validate_clif_ir`) run the schema the same way
+before their own checks, so those checks cover only what the schema cannot
+express, such as symbol lookups, enclosing callables, and region contents.
+Typed accessors do not check the schema; for an optional region or result,
+inspect the operation before calling the accessor. Interface queries that may
+see unverified IR read attributes fallibly instead.
 
 ## Working with IR
 
