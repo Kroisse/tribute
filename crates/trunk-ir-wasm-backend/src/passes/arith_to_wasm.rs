@@ -146,9 +146,14 @@ impl RewritePattern for ArithBinOpPattern {
 
         let new_op = if name == Symbol::new("addi") {
             match suffix {
-                "i32" => wasm_dialect::I32Add::operands(lhs, rhs)
-                    .build(ctx, loc)
-                    .op_ref(),
+                // `wasm.i32_add` is declared on `core.i32` and infers that
+                // result. Narrower integers have no defined wrap-around
+                // representation here, so they stay unlowered.
+                "i32" if core::I32::matches(ctx, result_ty) => {
+                    wasm_dialect::I32Add::operands(lhs, rhs)
+                        .build(ctx, loc)
+                        .op_ref()
+                }
                 "i64" => wasm_dialect::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
@@ -614,6 +619,32 @@ core.module @test {
             assert!(output.contains(op), "{op} should remain:\n{output}");
         }
         assert!(!output.contains("wasm.i32"), "{output}");
+    }
+
+    #[test]
+    fn narrow_integer_addition_is_left_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+core.module @test {
+  func.func @f(%a: core.i8, %b: core.i8, %c: core.i32, %d: core.i32) {
+    %narrow = arith.addi %a, %b : core.i8
+    %wide = arith.addi %c, %d : core.i32
+    func.return
+  }
+}
+"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains("arith.addi %0, %1 : core.i8"),
+            "i8 addition should remain:\n{output}"
+        );
+        assert_eq!(output.matches("wasm.i32_add").count(), 1, "{output}");
     }
 
     #[test]
