@@ -3,21 +3,25 @@
 use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
+use itertools::Itertools;
 
 #[trunk_ir::dialect]
 mod clif {
     // Module
-    #[attr(sym_name: Symbol, r#type: Type)]
-    fn func() {
-        #[region(body)]
+    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
+        #[region(body?)]
         {}
     }
 
-    #[attr(callee: Symbol)]
-    fn call(#[rest] args: ()) -> result {}
+    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
-    #[attr(sig: Type)]
-    fn call_indirect(callee: (), #[rest] args: ()) -> result {}
+    #[verify]
+    fn call_indirect<S: FuncSig>(
+        sig: Attr<S::Type>,
+        callee: Value<_>,
+        args: Values<S::Inputs>,
+    ) -> Variadic<_> {
+    }
 
     fn r#return(#[rest] values: ()) {}
 
@@ -85,8 +89,12 @@ mod clif {
     #[attr(callee: Symbol)]
     fn return_call(#[rest] args: ()) {}
 
-    #[attr(sig: Type)]
-    fn return_call_indirect(callee: (), #[rest] args: ()) {}
+    fn return_call_indirect<S: FuncSig>(
+        sig: Attr<S::Type>,
+        callee: Value<_>,
+        args: Values<S::Inputs>,
+    ) {
+    }
 
     // Memory
     #[attr(offset: i32)]
@@ -310,9 +318,38 @@ pub fn func_sig_with_attrs(
     FuncSig(ty)
 }
 
+impl CallIndirect {
+    /// Results match the signature's result list, or its projection without
+    /// zero-width `core.nil` slots, which the emitter does not materialize.
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        let signature =
+            FuncSig::from_type_ref(ctx, self.sig(ctx)).expect("schema-verified clif.func_sig");
+        let expected = signature.results(ctx);
+        let actual = ctx.op_result_types(self.op_ref());
+        let runtime = expected
+            .iter()
+            .copied()
+            .filter(|&ty| !crate::dialect::core::Nil::matches(ctx, ty));
+        if actual == expected || actual.iter().copied().eq(runtime) {
+            return Ok(());
+        }
+        Err(format!(
+            "results ({}) match neither the signature results ({}) nor their runtime projection",
+            actual
+                .iter()
+                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .format(", "),
+            expected
+                .iter()
+                .map(|&ty| crate::printer::print_type(ctx, ty))
+                .format(", "),
+        ))
+    }
+}
+
 impl IndirectCallLikeModel for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        Some(self.sig(ctx))
+        ctx.op(self.op_ref()).attributes.get_type("sig")
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -322,7 +359,7 @@ impl IndirectCallLikeModel for CallIndirect {
 
 impl IndirectCallLikeModel for ReturnCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        Some(self.sig(ctx))
+        ctx.op(self.op_ref()).attributes.get_type("sig")
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {

@@ -423,13 +423,10 @@ fn gen_deep_release_call(
     ctx.push_op(block, size.op_ref());
 
     // call @__tribute_deep_release(payload_ptr, size)
-    let call = clif::call(
-        ctx,
-        loc,
-        [payload_ptr, size.result(ctx)],
-        nil_ty,
-        Symbol::new(DEEP_RELEASE_FN),
-    );
+    let call = clif::Call::operands([payload_ptr, size.result(ctx)])
+        .callee(Symbol::new(DEEP_RELEASE_FN))
+        .results([nil_ty])
+        .build(ctx, loc);
     ctx.push_op(block, call.op_ref());
 
     // jump to continue block

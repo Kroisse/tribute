@@ -11,6 +11,7 @@ use trunk_ir::Symbol;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
+use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -84,22 +85,12 @@ fn collect_clif_function_signatures(
 ) {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
-            if clif::Func::matches(ctx, op) {
-                let Some(name) = ctx.op(op).attributes.get_symbol("sym_name") else {
-                    errors.push("clif.func requires a symbol name".into());
-                    continue;
-                };
-                let Some(signature) = ctx
-                    .op(op)
-                    .attributes
-                    .get_type("type")
-                    .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty))
-                else {
-                    errors.push(format!(
-                        "clif.func @{name} requires a valid clif.func_sig type"
-                    ));
-                    continue;
-                };
+            // Malformed functions are reported by their schema.
+            if clif::Func::matches(ctx, op) && clif::Func::SCHEMA.verify(ctx, op).is_empty() {
+                let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
+                let name = function.sym_name(ctx);
+                let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
+                    .expect("schema-verified clif.func_sig");
                 if functions.insert(name, signature).is_some() {
                     errors.push(format!(
                         "clif.func @{name} has a duplicate symbol definition"
@@ -223,43 +214,15 @@ fn check_direct_return_types(
     );
 }
 
-fn signature_for_exact_indirect(
-    ctx: &IrContext,
-    op: OpRef,
-    errors: &mut Vec<String>,
-) -> Option<clif::FuncSig> {
-    let signature = ctx.op(op).attributes.get_type("sig");
-    let valid = signature.and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
-    if valid.is_none() {
-        errors.push(format!(
-            "clif.{} requires a valid exact clif.func_sig",
-            ctx.op(op).name
-        ));
-    }
-    valid
-}
-
 fn validate_clif_function(
     ctx: &IrContext,
     op: OpRef,
     errors: &mut Vec<String>,
 ) -> Option<clif::FuncSig> {
-    clif::Func::from_op(ctx, op).ok()?;
-    let Some(name) = ctx.op(op).attributes.get_symbol("sym_name") else {
-        errors.push("clif.func requires a symbol name".into());
-        return None;
-    };
-    let signature = ctx
-        .op(op)
-        .attributes
-        .get_type("type")
-        .and_then(|ty| clif::FuncSig::from_type_ref(ctx, ty));
-    let Some(signature) = signature else {
-        errors.push(format!(
-            "clif.func @{name} requires a valid clif.func_sig type"
-        ));
-        return None;
-    };
+    let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
+    let name = function.sym_name(ctx);
+    let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
+        .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
     match classify_callable_body(ctx, op) {
         Err(error) => errors.push(format!("clif.func @{name}: {error}")),
@@ -298,6 +261,27 @@ fn validate_clif_region(
 ) {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
+            // Operation-specific checks below assume the declared schema.
+            if let Some(schema) = OpSchema::of(ctx, op) {
+                let violations = schema.verify(ctx, op);
+                if !violations.is_empty() {
+                    let data = ctx.op(op);
+                    errors.extend(
+                        violations.iter().map(|violation| {
+                            format!("{}.{}: {violation}", data.dialect, data.name)
+                        }),
+                    );
+                    let nested_owner = if clif::Func::matches(ctx, op) {
+                        None
+                    } else {
+                        owner
+                    };
+                    for &nested in &data.regions {
+                        validate_clif_region(ctx, nested, nested_owner, functions, errors);
+                    }
+                    continue;
+                }
+            }
             if clif::Func::matches(ctx, op) {
                 let function = validate_clif_function(ctx, op, errors);
                 for &body in &ctx.op(op).regions {
@@ -317,28 +301,6 @@ fn validate_clif_region(
                         ctx,
                         op,
                         operands,
-                        signature.inputs(ctx),
-                        "call argument",
-                        errors,
-                    );
-                    check_call_result_types(
-                        ctx,
-                        op,
-                        signature.results(ctx),
-                        "call result list",
-                        errors,
-                    );
-                }
-            } else if clif::CallIndirect::matches(ctx, op) {
-                if operands.is_empty() {
-                    errors.push("clif.call_indirect requires a callee operand".into());
-                }
-                if let Some(signature) = signature_for_exact_indirect(ctx, op, errors) {
-                    let args = operands.get(1..).unwrap_or_default();
-                    check_value_types(
-                        ctx,
-                        op,
-                        args,
                         signature.inputs(ctx),
                         "call argument",
                         errors,
@@ -388,26 +350,15 @@ fn validate_clif_region(
                     );
                     continue;
                 };
-                if operands.is_empty() {
-                    errors.push("clif.return_call_indirect requires a callee operand".into());
-                }
-                if let Some(signature) = signature_for_exact_indirect(ctx, op, errors) {
-                    let args = operands.get(1..).unwrap_or_default();
-                    check_value_types(
-                        ctx,
-                        op,
-                        args,
-                        signature.inputs(ctx),
-                        "tail argument",
-                        errors,
-                    );
-                    if runtime_types(ctx, caller.results(ctx))
-                        != runtime_types(ctx, signature.results(ctx))
-                    {
-                        errors.push(
-                            "clif.return_call_indirect caller/callee result lists differ".into(),
-                        );
-                    }
+                let signature = clif::ReturnCallIndirect::from_op(ctx, op)
+                    .ok()
+                    .and_then(|call| clif::FuncSig::from_type_ref(ctx, call.sig(ctx)))
+                    .expect("schema-verified clif.return_call_indirect");
+                if runtime_types(ctx, caller.results(ctx))
+                    != runtime_types(ctx, signature.results(ctx))
+                {
+                    errors
+                        .push("clif.return_call_indirect caller/callee result lists differ".into());
                 }
             }
 
@@ -512,7 +463,7 @@ mod tests {
 }"#,
         );
         assert!(
-            error.contains("@bad requires a valid clif.func_sig type"),
+            error.contains("clif.func: attribute `type`: expected S: clif.func_sig"),
             "{error}"
         );
     }
@@ -539,7 +490,7 @@ mod tests {
             "{error}"
         );
         assert!(
-            error.contains("clif.call_indirect call result list mismatch"),
+            error.contains("clif.call_indirect: results (core.i64, core.i32) match neither"),
             "{error}"
         );
     }
@@ -584,7 +535,7 @@ mod tests {
             "{error}"
         );
         assert!(
-            error.contains("clif.call_indirect call argument #0 type mismatch: expected core.ptr, found tribute_rt.anyref"),
+            error.contains("clif.call_indirect: operands `args`: expected S::Inputs = (core.ptr), found (tribute_rt.anyref)"),
             "{error}"
         );
         assert!(
@@ -615,7 +566,10 @@ mod tests {
   }
   clif.func @bad_tail() { clif.return_call {callee = @tail_target} }
   clif.func @bad_indirect_tail(%callee: core.ptr, %value: core.i32) {
-    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i64) -> core.i32>}
+    clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i64) -> ()>}
+  }
+  clif.func @bad_indirect_tail_result(%callee: core.ptr) {
+    clif.return_call_indirect %callee {sig = clif.func_sig<() -> core.i32>}
   }
 }"#,
         );
@@ -632,7 +586,9 @@ mod tests {
             "{error}"
         );
         assert!(
-            error.contains("clif.return_call_indirect tail argument #0 type mismatch"),
+            error.contains(
+                "clif.return_call_indirect: operands `args`: expected S::Inputs = (core.i64), found (core.i32)"
+            ),
             "{error}"
         );
         assert!(

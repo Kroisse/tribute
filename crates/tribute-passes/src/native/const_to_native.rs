@@ -236,15 +236,12 @@ fn emit_bytes_alloc(
     let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
     ops.push(size_op.op_ref());
 
-    let call_op = clif::call(
-        ctx,
-        loc,
-        [size_op.result(ctx)],
-        ptr_ty,
-        Symbol::new(ALLOC_FN),
-    );
+    let call_op = clif::Call::operands([size_op.result(ctx)])
+        .callee(Symbol::new(ALLOC_FN))
+        .results([ptr_ty])
+        .build(ctx, loc);
     ops.push(call_op.op_ref());
-    let raw_ptr = call_op.result(ctx);
+    let raw_ptr = call_op.results(ctx)[0];
 
     // 4. Store RC header: refcount=1, rtti_idx=0
     let rc_one = clif::iconst(ctx, loc, i32_ty, 1);
