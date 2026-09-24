@@ -1,12 +1,21 @@
-error[E0599]: no associated function or constant named `verify` found for struct `Probe` in the current scope
+error[E0277]: `Probe` is declared with `#[verify]` but has no inherent `verify` method
  --> tests/ui/missing_verify_method.rs:4:11
   |
-2 |     #[trunk_ir::dialect]
-  |     -------------------- associated function or constant `verify` not found for this struct
-3 |     mod d {
 4 |         #[verify]
-  |           ^^^^^^ associated function or constant not found in `Probe`
+  |           ^^^^^^ `#[verify]` requires this method
   |
-  = help: items from traits can only be used if the trait is implemented and in scope
-  = note: the following trait defines an item `verify`, perhaps you need to implement it:
-          candidate #1: `winnow::parser::Parser`
+help: the trait `trunk_ir::op_schema::__private::VerifyMethodMissing` is not implemented for `Probe`
+ --> tests/ui/missing_verify_method.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  = note: define `impl Probe { fn verify(self, ctx: &IrContext) -> Result<(), String> { .. } }`
+note: required by a bound in `trunk_ir::op_schema::__private::VerifyFallback::verify`
+ --> src/op_schema.rs
+  |
+  |         fn verify(self, _ctx: &IrContext) -> Result<(), String>
+  |            ------ required by a bound in this associated function
+  |         where
+  |             Self: VerifyMethodMissing,
+  |                   ^^^^^^^^^^^^^^^^^^^ required by this bound in `VerifyFallback::verify`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

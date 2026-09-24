@@ -172,8 +172,12 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
     // The span points a missing `verify` method at the `#[verify]` attribute.
     let verifier = match op.verify {
         Some(span) => {
-            let sname = struct_name(&op.name);
-            quote_spanned!(span=> Some(|ctx, op| #sname::verify(#sname(op), ctx)))
+            let mut sname = struct_name(&op.name);
+            sname.set_span(span);
+            quote_spanned!(span=> Some(|ctx, op| {
+                use #crate_path::op_schema::__private::VerifyFallback as _;
+                #sname::verify(#sname(op), ctx)
+            }))
         }
         None => quote!(None),
     };
