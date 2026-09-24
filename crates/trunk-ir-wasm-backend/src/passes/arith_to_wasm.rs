@@ -13,8 +13,9 @@ use tracing::warn;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
+use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -56,7 +57,9 @@ impl RewritePattern for ArithConstPattern {
         };
 
         // Handle nil type constants specially
-        let type_name = type_suffix(ctx, Some(result_ty));
+        let Some(type_name) = type_suffix(ctx, result_ty) else {
+            return false;
+        };
         if type_name == "nil" {
             let loc = ctx.op(op).location;
             let nop = wasm_dialect::nop(ctx, loc, result_ty);
@@ -135,7 +138,9 @@ impl RewritePattern for ArithBinOpPattern {
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
-        let suffix = type_suffix(ctx, Some(result_ty));
+        let Some(suffix) = type_suffix(ctx, result_ty) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
         let name = data.name;
 
@@ -236,8 +241,9 @@ impl RewritePattern for ArithCmpPattern {
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let predicate = cmpi.predicate(ctx);
-            let operand_ty = Some(ctx.value_ty(lhs));
-            let suffix = type_suffix_opt(ctx, operand_ty);
+            let Some(suffix) = type_suffix(ctx, ctx.value_ty(lhs)) else {
+                return false;
+            };
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
@@ -260,8 +266,9 @@ impl RewritePattern for ArithCmpPattern {
             true
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let predicate = cmpf.predicate(ctx);
-            let operand_ty = Some(ctx.value_ty(lhs));
-            let suffix = type_suffix_opt(ctx, operand_ty);
+            let Some(suffix) = type_suffix(ctx, ctx.value_ty(lhs)) else {
+                return false;
+            };
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
@@ -300,28 +307,34 @@ impl RewritePattern for ArithNegPattern {
         let loc = ctx.op(op).location;
 
         if let Ok(negf) = arith::Negf::from_op(ctx, op) {
-            let result_types = ctx.op_result_types(op);
-            let result_ty = result_types.first().copied();
-            let suffix = type_suffix(ctx, result_ty);
+            let Some(&result_ty) = ctx.op_result_types(op).first() else {
+                return false;
+            };
+            let Some(suffix) = type_suffix(ctx, result_ty) else {
+                return false;
+            };
             let operand = negf.operand(ctx);
 
             match suffix {
                 "f32" => {
-                    let f32_ty = result_ty.unwrap_or_else(|| intern_f32_type(ctx));
-                    rewriter.replace_op(wasm_dialect::f32_neg(ctx, loc, operand, f32_ty).op_ref());
+                    rewriter
+                        .replace_op(wasm_dialect::f32_neg(ctx, loc, operand, result_ty).op_ref());
                     true
                 }
                 "f64" => {
-                    let f64_ty = result_ty.unwrap_or_else(|| intern_f64_type(ctx));
-                    rewriter.replace_op(wasm_dialect::f64_neg(ctx, loc, operand, f64_ty).op_ref());
+                    rewriter
+                        .replace_op(wasm_dialect::f64_neg(ctx, loc, operand, result_ty).op_ref());
                     true
                 }
                 _ => false,
             }
         } else if let Ok(negi) = arith::Negi::from_op(ctx, op) {
-            let result_types = ctx.op_result_types(op);
-            let result_ty = result_types.first().copied();
-            let suffix = type_suffix(ctx, result_ty);
+            let Some(&result_ty) = ctx.op_result_types(op).first() else {
+                return false;
+            };
+            let Some(suffix) = type_suffix(ctx, result_ty) else {
+                return false;
+            };
             let operand = negi.operand(ctx);
 
             match suffix {
@@ -384,38 +397,46 @@ impl RewritePattern for ArithBitwisePattern {
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
-        let suffix = type_suffix(ctx, Some(result_ty));
+        let Some(suffix) = type_suffix(ctx, result_ty) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
 
         let new_op = if name == Symbol::new("and") {
             match suffix {
                 "i64" => wasm_dialect::i64_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else if name == Symbol::new("or") {
             match suffix {
                 "i64" => wasm_dialect::i64_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else if name == Symbol::new("xor") {
             match suffix {
                 "i64" => wasm_dialect::i64_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else if name == Symbol::new("shl") {
             match suffix {
                 "i64" => wasm_dialect::i64_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else if name == Symbol::new("shr") {
             match suffix {
                 "i64" => wasm_dialect::i64_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else if name == Symbol::new("shru") {
             match suffix {
                 "i64" => wasm_dialect::i64_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => wasm_dialect::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else {
             return false;
@@ -457,14 +478,18 @@ impl RewritePattern for ArithConversionPattern {
             return false;
         };
         let src_ty = ctx.value_ty(operand);
-        let src_suffix = type_suffix(ctx, Some(src_ty));
+        let Some(src_suffix) = type_suffix(ctx, src_ty) else {
+            return false;
+        };
 
         // Get destination type from result
         let result_types = ctx.op_result_types(op);
         let Some(&dst_ty) = result_types.first() else {
             return false;
         };
-        let dst_suffix = type_suffix(ctx, Some(dst_ty));
+        let Some(dst_suffix) = type_suffix(ctx, dst_ty) else {
+            return false;
+        };
 
         let loc = ctx.op(op).location;
 
@@ -528,53 +553,20 @@ impl RewritePattern for ArithConversionPattern {
 // Helpers
 // ============================================================================
 
-/// Get the wasm type suffix from a TypeRef.
-pub(crate) fn type_suffix(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
-    match ty {
-        Some(t) => type_suffix_opt(ctx, Some(t)),
-        None => {
-            #[cfg(debug_assertions)]
-            warn!("No type in arith_to_wasm, defaulting to i32");
-            "i32"
-        }
+/// Get the wasm value type suffix for an arith operand or result type.
+///
+/// Integers up to 32 bits use `i32`, 64-bit integers use `i64`, and `core`
+/// floats use their own suffix. Other types have no suffix, and patterns
+/// leave their operations unconverted so the conversion boundary rejects them.
+pub(crate) fn type_suffix(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
+    if let Some(width) = FloatLike::width(ctx, ty) {
+        return Some(if width == 32 { "f32" } else { "f64" });
     }
-}
-
-fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
-    match ty {
-        Some(t) => {
-            let data = ctx.get_type(t);
-            let name = data.name;
-            if name == Symbol::new("i32") {
-                "i32"
-            } else if name == Symbol::new("i64") {
-                "i64"
-            } else if name == Symbol::new("f32") {
-                "f32"
-            } else if name == Symbol::new("f64") {
-                "f64"
-            } else if name == Symbol::new("i1")
-                || name == Symbol::new("int")
-                || name == Symbol::new("nat")
-                || name == Symbol::new("bool")
-            {
-                "i32"
-            } else if name == Symbol::new("nil") {
-                "nil"
-            } else {
-                #[cfg(debug_assertions)]
-                warn!(
-                    "Unknown type '{}' in arith_to_wasm, defaulting to i32",
-                    name
-                );
-                "i32"
-            }
-        }
-        None => {
-            #[cfg(debug_assertions)]
-            warn!("No type in arith_to_wasm, defaulting to i32");
-            "i32"
-        }
+    match IntegerLike::width(ctx, ty) {
+        Some(64) => Some("i64"),
+        Some(width) if width <= 32 => Some("i32"),
+        _ if core::Nil::matches(ctx, ty) => Some("nil"),
+        _ => None,
     }
 }
 
@@ -590,23 +582,37 @@ pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
 }
 
-/// Intern a core.f32 type.
-pub(crate) fn intern_f32_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new("core", "f32").build())
-}
-
-/// Intern a core.f64 type.
-pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new("core", "f64").build())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+
+    #[test]
+    fn uncategorized_types_are_left_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+core.module @test {
+  func.func @f(%a: test.opaque, %b: test.opaque, %x: core.f64, %y: core.f64) {
+    %c = arith.const {value = 0} : test.opaque
+    %sum = arith.addi %a, %b : test.opaque
+    %bits = arith.and %x, %y : core.f64
+    func.return
+  }
+}
+"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        for op in ["arith.const", "arith.addi", "arith.and"] {
+            assert!(output.contains(op), "{op} should remain:\n{output}");
+        }
+        assert!(!output.contains("wasm.i32"), "{output}");
+    }
 
     #[test]
     fn lowers_i32_unsigned_less_than() {

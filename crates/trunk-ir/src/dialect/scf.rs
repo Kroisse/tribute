@@ -492,7 +492,8 @@ inventory::submit! {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::arith::{const_int_value, core_int_width};
+use crate::dialect::arith::const_int_value;
+use crate::dialect::core::BoolLike;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::FoldResult;
@@ -519,7 +520,7 @@ pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     // `core.i1`. Without this, an `arith.const value=2 : core.i32`
     // wired into the cond slot would be treated as truthy here,
     // burning the dead branch before the validator gets to reject it.
-    if core_int_width(ctx, ctx.value_ty(cond)) != Some(1) {
+    if !BoolLike::matches(ctx, ctx.value_ty(cond)) {
         return None;
     }
     let cond_value = const_int_value(ctx, cond)?;
